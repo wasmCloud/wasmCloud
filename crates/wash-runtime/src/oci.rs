@@ -27,8 +27,24 @@
 //! }
 //! ```
 
+mod client;
+mod coalescer;
+use client::{TrustId, TrustSnapshot, pull_client};
+mod credentials;
+mod disk_cache;
+#[cfg(test)]
+#[path = "../tests/common/oci_ca.rs"]
+mod test_ca;
+#[cfg(test)]
+#[path = "../tests/common/oci_registry.rs"]
+mod test_registry;
+use coalescer::Coalescer;
+use credentials::CredentialResolver;
+#[cfg(test)]
+use credentials::cached_credentials;
+use disk_cache::CacheManager;
+
 use anyhow::{Context, Result, anyhow, bail};
-use docker_credential::{CredentialRetrievalError, DockerCredential, get_credential};
 use oci_client::{
     Reference,
     client::{Certificate, CertificateEncoding, Client, ClientConfig, ClientProtocol},
@@ -40,7 +56,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 use tracing::{debug, instrument, warn};
@@ -219,8 +235,8 @@ fn validate_ca_bundle(data: &[u8]) -> Result<()> {
 /// would be ignored there. Loading them when neither is set would only repeat
 /// the OS store the verifier already trusts.
 ///
-/// Read on every call, as the Linux verifier does, so a rotated bundle is
-/// trusted by the next pull without restarting a long-running host.
+/// Read for each pull's trust snapshot and each new push client, so changes
+/// apply to subsequent operations without waiting for a cached client to expire.
 fn env_ca_certificates() -> Vec<Certificate> {
     if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
         return Vec::new();
@@ -322,7 +338,12 @@ pub struct OciConfig {
     pub credentials: Option<(String, String)>,
     /// Whether to allow insecure registries (HTTP instead of HTTPS)
     pub insecure: bool,
-    /// Cache directory override
+    /// Cache directory override. Entries are scoped to resolved credentials,
+    /// HTTP/HTTPS and configured extra roots; changing that scope requires
+    /// fetching the artifact again. Legacy cache
+    /// entries without this scope are not reused, and [`cleanup_cache`] removes
+    /// them. Entry names are keyed with a random secret the cache creates in
+    /// `cache.key` (owner-only on Unix); removing it orphans every entry.
     pub cache_dir: Option<PathBuf>,
     /// Timeout for OCI operations (pull, push, etc.)
     /// If None, uses default timeout from oci-client
@@ -369,236 +390,8 @@ impl OciConfig {
     }
 }
 
-/// Cache manager for OCI artifacts
-struct CacheManager {
-    cache_dir: PathBuf,
-}
-
-impl CacheManager {
-    /// Create a new cache manager with the specified cache directory
-    fn new(cache_dir: PathBuf) -> Self {
-        Self { cache_dir }
-    }
-
-    /// Expire old artifacts from the cache
-    async fn expire_artifacts(&self, age: Duration) -> Result<()> {
-        // walk the cache directory, looking for artifact dirs
-        // and remove those older than the specified age
-        let mut dir_entries = match tokio::fs::read_dir(&self.cache_dir).await {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e).context("failed to read cache directory"),
-        };
-        while let Some(entry) = dir_entries
-            .next_entry()
-            .await
-            .context("failed to read cache entry")?
-        {
-            let metadata = entry
-                .metadata()
-                .await
-                .context("failed to read cache entry metadata")?;
-            if let Ok(modified) = metadata.modified() {
-                let modified_duration = modified
-                    .elapsed()
-                    .context("failed to compute modified duration")?;
-                if modified_duration > age {
-                    debug!(path = %entry.path().display(), "expiring cached artifact");
-                    tokio::fs::remove_dir_all(entry.path())
-                        .await
-                        .context("failed to remove expired cache entry")?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Get the cache directory for a given OCI reference
-    fn get_cache_dir(&self, reference: &str) -> PathBuf {
-        // Hash for uniqueness, but keep the reference in the path for readability
-        let mut hasher = Sha256::new();
-        hasher.update(reference.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
-        let short_hash = &hash[..8];
-
-        // Sanitize the reference for filesystem use
-        let sanitized = reference.replace(['/', ':', '@'], "_");
-
-        // Directory: <cache_dir>/<sanitized_reference>_<short_hash>/
-        self.cache_dir.join(format!("{sanitized}_{short_hash}"))
-    }
-
-    /// Get the cache path for the component .wasm data
-    fn get_component_path(&self, reference: &str) -> PathBuf {
-        let cache_dir = self.get_cache_dir(reference);
-
-        // Use the last segment as the artifact name (after last '/')
-        let artifact_name = reference
-            .rsplit('/')
-            .next()
-            .unwrap_or("artifact")
-            .replace([':', '@'], "_");
-
-        cache_dir.join(format!("{artifact_name}.wasm"))
-    }
-
-    /// Get the cache path for the digest file
-    fn get_digest_path(&self, reference: &str) -> PathBuf {
-        let cache_dir = self.get_cache_dir(reference);
-        cache_dir.join("digest")
-    }
-
-    /// Check if an artifact is cached (both component and digest must exist)
-    async fn is_cached(&self, reference: &str) -> bool {
-        let component_path = self.get_component_path(reference);
-        let digest_path = self.get_digest_path(reference);
-        tokio::fs::metadata(&component_path).await.is_ok()
-            && tokio::fs::metadata(&digest_path).await.is_ok()
-    }
-
-    /// Read cached artifact, returning (component_data, digest)
-    async fn read_cached(&self, reference: &str) -> Result<(Vec<u8>, String)> {
-        let component_path = self.get_component_path(reference);
-        let digest_path = self.get_digest_path(reference);
-
-        debug!(component_path = %component_path.display(), digest_path = %digest_path.display(), "reading cached artifact");
-
-        let component_data = tokio::fs::read(&component_path).await.with_context(|| {
-            format!(
-                "failed to read cached component at {}",
-                component_path.display()
-            )
-        })?;
-
-        let digest = tokio::fs::read_to_string(&digest_path)
-            .await
-            .with_context(|| {
-                format!("failed to read cached digest at {}", digest_path.display())
-            })?;
-
-        Ok((component_data, digest.trim().to_string()))
-    }
-
-    /// Write artifact and digest to cache
-    async fn write_to_cache(&self, reference: &str, data: &[u8], digest: &str) -> Result<()> {
-        let component_path = self.get_component_path(reference);
-        let digest_path = self.get_digest_path(reference);
-
-        debug!(component_path = %component_path.display(), digest_path = %digest_path.display(), "writing to cache");
-
-        // Create cache directory
-        let cache_dir = self.get_cache_dir(reference);
-        tokio::fs::create_dir_all(&cache_dir)
-            .await
-            .with_context(|| format!("failed to create cache directory {}", cache_dir.display()))?;
-
-        // Write component data
-        tokio::fs::write(&component_path, data)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to write component to cache at {}",
-                    component_path.display()
-                )
-            })?;
-
-        // Write digest
-        tokio::fs::write(&digest_path, digest)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to write digest to cache at {}",
-                    digest_path.display()
-                )
-            })?;
-
-        Ok(())
-    }
-}
-
-/// Credential resolver that implements the precedence: explicit → docker creds → anonymous
-struct CredentialResolver {
-    explicit_credentials: Option<(String, String)>,
-}
-
-impl CredentialResolver {
-    fn new(explicit_credentials: Option<(String, String)>) -> Self {
-        Self {
-            explicit_credentials,
-        }
-    }
-
-    /// Resolve credentials for a given registry
-    #[instrument(skip(self), fields(registry = %registry))]
-    async fn resolve_credentials(&self, registry: &str) -> RegistryAuth {
-        // First, try explicit credentials
-        if let Some((username, password)) = &self.explicit_credentials {
-            debug!("using explicit credentials");
-            return RegistryAuth::Basic(username.clone(), password.clone());
-        }
-
-        // Next, try docker credential helper
-        match self.get_docker_credentials(registry).await {
-            Ok(Some(auth)) => {
-                debug!("using docker credential helper");
-                return auth;
-            }
-            Ok(None) => debug!("no docker credentials found"),
-            Err(e) => warn!(error = %e, "failed to retrieve docker credentials"),
-        }
-
-        // Fall back to anonymous
-        debug!("Using anonymous access");
-        RegistryAuth::Anonymous
-    }
-
-    /// Attempt to retrieve credentials from docker credential helper
-    async fn get_docker_credentials(&self, registry: &str) -> Result<Option<RegistryAuth>> {
-        match get_credential(registry) {
-            Ok(DockerCredential::UsernamePassword(user, pass)) => {
-                Ok(Some(RegistryAuth::Basic(user, pass)))
-            }
-            Ok(DockerCredential::IdentityToken(_)) => {
-                bail!("docker credential helper returned identity token, which is not supported")
-            }
-            // No credentials configured is the ordinary case for a host that
-            // pulls anonymously, not a problem to report.
-            Err(
-                CredentialRetrievalError::ConfigNotFound
-                | CredentialRetrievalError::NoCredentialConfigured,
-            ) => Ok(None),
-            // `docker_credential` reports an absent `~/.docker/config.json` as
-            // `ConfigReadError`, not `ConfigNotFound`: `ConfigNotFound` means
-            // there is no home directory at all, while an absent file, an
-            // unreadable one, and one that does not parse all flatten into this
-            // variant. Only the first is ordinary — a host with `HOME` set and
-            // no docker config is the normal case in a container — so the file
-            // itself is what separates "nothing to use" from "something is
-            // wrong with what you configured".
-            Err(CredentialRetrievalError::ConfigReadError) => {
-                match docker_config_path() {
-                    Some(path) if path.is_file() => warn!(
-                        path = %path.display(),
-                        "docker config exists but could not be read or parsed; pulling anonymously"
-                    ),
-                    _ => debug!("no docker config; pulling anonymously"),
-                }
-                Ok(None)
-            }
-            // Edge case for macOS, shows as an error when really it's just not found
-            Err(CredentialRetrievalError::HelperFailure { stdout, .. })
-                if stdout.contains("credentials not found in native keychain") =>
-            {
-                Ok(None)
-            }
-            Err(e) => Err(anyhow!("docker credential retrieval error: {e}")),
-        }
-    }
-}
-
 /// OCI pull policy
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OciPullPolicy {
     /// ️ Always pull the component from the registry
     Always,
@@ -655,86 +448,289 @@ impl std::str::FromStr for OciPullPolicy {
 ///     Ok(())
 /// }
 /// ```
-#[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
 pub async fn pull_component(
     reference: &str,
     config: OciConfig,
     pull_policy: OciPullPolicy,
 ) -> Result<(Vec<u8>, String)> {
-    // Parse OCI reference
-    let reference_parsed = Reference::try_from(reference)
-        .with_context(|| format!("invalid OCI reference: {reference}"))?;
+    let (bytes, digest) = pull_component_bytes(reference, config, pull_policy).await?;
+    Ok((bytes.to_vec(), digest))
+}
 
-    // Configure OCI client
-    let client_config = ClientConfig {
-        protocol: if config.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        extra_root_certificates: extra_ca_certificates(),
-        ..Default::default()
-    };
+/// [`pull_component`] without the copy into a `Vec`.
+///
+/// Concurrent pulls of one reference with the same credentials and settings
+/// are folded into one. Except for `Always`, its result answers the same
+/// request for [`PULL_REUSE`] after it finishes: a host restoring workloads
+/// from a few images would otherwise read each image from disk and ask the
+/// registry for its digest once per workload.
+#[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
+pub(crate) async fn pull_component_bytes(
+    reference: &str,
+    config: OciConfig,
+    pull_policy: OciPullPolicy,
+) -> Result<(bytes::Bytes, String)> {
+    // Boxed so the pull's state machine (credentials, trust, the coalescer and
+    // the registry client) lives on the heap rather than in every caller's
+    // future. A CLI's `async fn main` holds all of its subcommands' futures at
+    // once, on a main thread whose stack is 1 MiB on Windows.
+    Box::pin(with_pull_timeout(reference, config.timeout, async {
+        let reference_parsed = Reference::try_from(reference)
+            .with_context(|| format!("invalid OCI reference: {reference}"))?;
 
-    let client = oci_client(client_config)?;
+        let auth = CredentialResolver::new(config.credentials.clone())
+            .resolve_credentials(reference_parsed.registry())
+            .await;
+        let trust = TrustSnapshot::load().await?;
 
-    // Setup credential resolver
-    let credential_resolver = CredentialResolver::new(config.credentials);
-    let auth = credential_resolver
-        .resolve_credentials(reference_parsed.registry())
-        .await;
+        // Everything that can change what a pull returns, or whether it may
+        // return at all, is in the key. The credentials above all: a result one
+        // caller was authorised to fetch must never answer a caller who was not.
+        let key = PullKey {
+            reference: reference.to_string(),
+            auth: AuthId::of(&auth),
+            insecure: config.insecure,
+            cache_dir: config.cache_dir.clone(),
+            pull_policy: pull_policy.clone(),
+            timeout: config.timeout,
+            trust: trust.id,
+        };
+        let pulled = pull_coalescer()
+            .run_with_reuse(key, pull_policy != OciPullPolicy::Always, || {
+                Box::pin(pull_uncoalesced(
+                    reference,
+                    &reference_parsed,
+                    &config,
+                    &auth,
+                    &pull_policy,
+                    &trust,
+                ))
+            })
+            .await?;
+        Ok((pulled.bytes.clone(), pulled.digest.clone()))
+    }))
+    .await
+}
 
+/// The caller's deadline includes credential resolution, cache I/O and waiting
+/// for another pull. Taking over a cancelled initializer never resets it.
+async fn with_pull_timeout<T>(
+    reference: &str,
+    timeout: Option<Duration>,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, work).await.with_context(|| {
+            format!("timeout pulling component from {reference} after {timeout:?}")
+        })?,
+        None => work.await,
+    }
+}
+
+/// What one pull produced, shared by every caller it answered.
+struct Pulled {
+    bytes: bytes::Bytes,
+    digest: String,
+}
+
+/// How long a finished pull answers identical requests: long enough to fold a
+/// burst of starts of one image into one pull, short enough that a re-pushed
+/// tag is seen almost at once.
+const PULL_REUSE: Duration = Duration::from_secs(5);
+
+/// The longest a pull still in flight is joined by identical requests. Past it
+/// a new caller starts its own pull rather than wait on one that may be stuck.
+const PULL_JOIN: Duration = Duration::from_secs(600);
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PullKey {
+    reference: String,
+    auth: AuthId,
+    insecure: bool,
+    cache_dir: Option<PathBuf>,
+    pull_policy: OciPullPolicy,
+    /// A caller joining a pull waits as long as that pull is allowed to take,
+    /// so callers that set different timeouts must not wait on each other.
+    timeout: Option<Duration>,
+    trust: TrustId,
+}
+
+/// Which credentials a pull or a client uses, without holding the secret.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct AuthId([u8; 32]);
+
+impl AuthId {
+    fn of(auth: &RegistryAuth) -> Self {
+        let mut hasher = Sha256::new();
+        // Length-prefixed, so no two different credentials hash the same bytes.
+        let mut field = |bytes: &[u8]| {
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        };
+        match auth {
+            RegistryAuth::Anonymous => field(b"anonymous"),
+            RegistryAuth::Basic(user, password) => {
+                field(b"basic");
+                field(user.as_bytes());
+                field(password.as_bytes());
+            }
+            RegistryAuth::Bearer(token) => {
+                field(b"bearer");
+                field(token.as_bytes());
+            }
+        }
+        Self(hasher.finalize().into())
+    }
+}
+
+fn pull_coalescer() -> &'static Coalescer<PullKey, Arc<Pulled>> {
+    static PULLS: OnceLock<Coalescer<PullKey, Arc<Pulled>>> = OnceLock::new();
+    // Bounded by the bytes finished pulls hold, not their count: each keeps
+    // its whole component for the reuse window, and a burst of large images
+    // would otherwise all stay resident. Pulls in flight are not counted and
+    // never refused: they hold only what their callers are waiting on.
+    PULLS.get_or_init(|| {
+        Coalescer::with_min_weight(
+            PULL_REUSE_BYTES,
+            PULL_JOIN,
+            PULL_REUSE,
+            PULL_ENTRY_WEIGHT,
+            |pulled| {
+                u32::try_from(pulled.bytes.len())
+                    .unwrap_or(u32::MAX)
+                    .saturating_add(PULL_ENTRY_WEIGHT)
+            },
+        )
+    })
+}
+
+/// The most component bytes finished pulls hold for reuse at once.
+const PULL_REUSE_BYTES: u64 = 256 * 1024 * 1024;
+/// Account for keys and bookkeeping even when a result holds few bytes.
+/// This also limits the cache to about 16k small results. Moka's
+/// maintenance is eventual; this is a retention target, not a strict RSS cap.
+const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
+
+/// Bound synchronous client and trust-store work without blocking Tokio's
+/// worker threads. A cancelled caller does not release a running task's permit.
+///
+/// Docker credential helpers run on their own limiter (see
+/// `credentials.rs`), so a helper that hangs cannot hold these permits.
+async fn blocking_io<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    static LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
+    blocking_on(&LIMIT, work).await
+}
+
+/// Run `work` on Tokio's blocking pool once `limit` grants a permit, which the
+/// task holds until `work` returns.
+async fn blocking_on<T: Send + 'static>(
+    limit: &'static tokio::sync::Semaphore,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let permit = limit
+        .acquire()
+        .await
+        .context("OCI blocking-work limiter closed")?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .context("OCI blocking task failed")?
+}
+
+/// One pull as [`pull_component`] documents it, with nothing shared but the
+/// client.
+async fn pull_uncoalesced(
+    reference: &str,
+    reference_parsed: &Reference,
+    config: &OciConfig,
+    auth: &RegistryAuth,
+    pull_policy: &OciPullPolicy,
+    trust: &TrustSnapshot,
+) -> Result<Arc<Pulled>> {
     // Initialize cache manager
-    let cache_manager = config
-        .cache_dir
-        .as_ref()
-        .map(|dir| CacheManager::new(dir.clone()));
+    let cache_manager = match &config.cache_dir {
+        Some(dir) => Some(
+            CacheManager::open(dir.clone(), auth, config.insecure, trust.id)
+                .await
+                .context("failed to open the OCI cache")?,
+        ),
+        None => None,
+    };
     if let Some(cache_manager) = &cache_manager {
         // Check cache first
-        if pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
+        if *pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
             debug!("Found cached artifact");
             let (component_data, digest) = cache_manager.read_cached(reference).await?;
 
-            let fetched_digest = client
-                .fetch_manifest_digest(&reference_parsed, &auth)
+            // Never explicitly requests offline reuse. The cache key covers
+            // configured extra roots, but cannot encode all native trust-store
+            // policies or changes to the registry's authorization decisions.
+            // Entries are shared by user, so the password must be the one the
+            // registry last accepted for this entry.
+            if *pull_policy == OciPullPolicy::Never {
+                if !cache_manager.credential_matches(reference).await {
+                    bail!(
+                        "component is cached for this user under other credentials, and pull \
+                         policy 'Never' cannot check these with the registry; pull it once \
+                         with another policy"
+                    );
+                }
+                return Ok(Arc::new(Pulled {
+                    bytes: component_data.into(),
+                    digest,
+                }));
+            }
+
+            // Even a pinned digest must pass the caller's current registry
+            // authorization and TLS policy before a disk entry can be reused.
+            let fetched_digest = pull_client(reference_parsed, config.insecure, auth, trust)
+                .await?
+                .fetch_manifest_digest(reference_parsed, auth)
                 .await?;
 
             if digest == fetched_digest {
-                return Ok((component_data, digest));
+                // The registry has just accepted these credentials, e.g. a
+                // rotated password: let Never reuse the entry with them.
+                if !cache_manager.credential_matches(reference).await
+                    && let Err(error) = cache_manager.record_credential(reference).await
+                {
+                    warn!(%error, "failed to record revalidated OCI cache credentials");
+                }
+                return Ok(Arc::new(Pulled {
+                    bytes: component_data.into(),
+                    digest,
+                }));
             }
 
             debug!("Cached artifact expired; pulling new component version");
         }
     }
 
-    if pull_policy == OciPullPolicy::Never {
+    if *pull_policy == OciPullPolicy::Never {
         bail!("component not found in cache and pull policy is 'Never'");
     }
 
-    // Pull the component using oci-client
-    let pull_future = client.pull(
-        &reference_parsed,
-        &auth,
+    let client = pull_client(reference_parsed, config.insecure, auth, trust).await?;
+
+    // Pull the component using oci-client. Boxed: its future is large, and
+    // would otherwise sit inline in the coalesced pull's.
+    let pull_future = Box::pin(client.pull(
+        reference_parsed,
+        auth,
         vec![
             WASM_LAYER_MEDIA_TYPE,
             #[allow(deprecated)]
             WASMCLOUD_MEDIA_TYPE,
         ],
-    );
+    ));
 
-    // Apply timeout if configured, otherwise just await the pull
-    let image_data = if let Some(timeout) = config.timeout {
-        tokio::time::timeout(timeout, pull_future)
-            .await
-            .with_context(|| {
-                format!("timeout pulling component from {reference} after {timeout:?}")
-            })?
-            .with_context(|| format!("failed to pull component from {reference}"))?
-    } else {
-        pull_future
-            .await
-            .with_context(|| format!("failed to pull component from {reference}"))?
-    };
+    let image_data = pull_future
+        .await
+        .with_context(|| format!("failed to pull component from {reference}"))?;
 
     // Extract the component bytes from the first layer
     let component_data = image_data
@@ -760,8 +756,10 @@ pub async fn pull_component(
             .with_context(|| "failed to cache component")?;
     }
 
-    // oci-client 0.17 hands back layer data as `Bytes`; callers expect `Vec<u8>`.
-    Ok((component_data.to_vec(), digest))
+    Ok(Arc::new(Pulled {
+        bytes: component_data,
+        digest,
+    }))
 }
 
 /// Push a WebAssembly component to an OCI registry
@@ -827,18 +825,9 @@ pub async fn push_component(
         .resolve_credentials(reference_parsed.registry())
         .await;
 
-    // Configure OCI client
-    let client_config = ClientConfig {
-        protocol: if config.insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        extra_root_certificates: extra_ca_certificates(),
-        ..Default::default()
-    };
-
-    let client = oci_client(client_config)?;
+    // Use one trust snapshot for the client and any disk entry it publishes.
+    let trust = TrustSnapshot::load().await?;
+    let client = oci_client(trust.client_config(config.insecure)?)?;
 
     // Create the WebAssembly configuration and layer using oci-wasm
     let (wasm_config, image_layer) = WasmConfig::from_raw_component(component_data.to_vec(), None)
@@ -915,7 +904,9 @@ pub async fn push_component(
     };
     // Cache the pushed component with its digest
     if let Some(cache_dir) = config.cache_dir {
-        let cache_manager = CacheManager::new(cache_dir);
+        let cache_manager = CacheManager::open(cache_dir, &auth, config.insecure, trust.id)
+            .await
+            .context("failed to open the OCI cache")?;
         cache_manager
             .write_to_cache(reference, component_data, &digest)
             .await
@@ -958,14 +949,328 @@ pub async fn validate_component(data: &[u8]) -> Result<()> {
 /// Cleanup cached OCI artifacts
 #[instrument(skip(cache_dir))]
 pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result<()> {
-    let cache_manager = CacheManager::new(cache_dir.as_ref().to_path_buf());
-    cache_manager.expire_artifacts(age).await
+    disk_cache::expire_artifacts(cache_dir.as_ref(), age).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Open `gate` once `joined` holds, so work held at the gate is provably
+    /// still in flight while every caller joins it.
+    async fn open_once(joined: impl Fn() -> bool, gate: &tokio::sync::watch::Sender<bool>) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !joined() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("every caller joins the flight");
+        gate.send_replace(true);
+    }
+
+    #[tokio::test]
+    async fn failed_and_oversized_pulls_have_bounded_retention() {
+        let cache: Coalescer<String, u32> = Coalescer::with_min_weight(
+            16 * u64::from(PULL_ENTRY_WEIGHT),
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            PULL_ENTRY_WEIGHT,
+            |size| *size,
+        );
+        for index in 0..256 {
+            assert!(
+                cache
+                    .run(format!("registry/image-{index}"), || async {
+                        anyhow::bail!("unavailable")
+                    })
+                    .await
+                    .is_err()
+            );
+        }
+        cache.finished.run_pending_tasks();
+        assert_eq!(cache.finished.entry_count(), 0);
+        assert_eq!(cache.in_flight_count(), 0);
+        assert_eq!(
+            cache
+                .run("oversized".into(), || async { Ok(u32::MAX) })
+                .await
+                .unwrap(),
+            u32::MAX
+        );
+        cache.finished.run_pending_tasks();
+        assert!(!cache.finished.contains_key("oversized"));
+        assert_eq!(cache.in_flight_count(), 0);
+    }
+
+    /// Requests in flight are never refused for space: a full reuse cache,
+    /// here one too small to hold any result, must not stop coalescing.
+    #[tokio::test]
+    async fn a_full_reuse_cache_still_coalesces() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(1, Duration::from_secs(60), Duration::from_secs(60), |_| {
+                u32::MAX
+            });
+        let runs = AtomicUsize::new(0);
+        let (open, gate) = tokio::sync::watch::channel(false);
+        let work = || async {
+            runs.fetch_add(1, Ordering::SeqCst);
+            gate.clone().wait_for(|open| *open).await.unwrap();
+            Ok(1)
+        };
+        let (a, b, c, ()) = tokio::join!(
+            coalescer.run("ref", work),
+            coalescer.run("ref", work),
+            coalescer.run("ref", work),
+            open_once(|| coalescer.waiters(&"ref") == 3, &open),
+        );
+        assert_eq!((a.unwrap(), b.unwrap(), c.unwrap()), (1, 1, 1));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn credential_misses_coalesce_without_blocking_the_runtime() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache: &'static Coalescer<String, RegistryAuth> = Box::leak(Box::new(Coalescer::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+            |_| 1,
+        )));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let first = tokio::spawn(cached_credentials(cache, "registry".into(), {
+            let runs = Arc::clone(&runs);
+            move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                let _ = started.send(());
+                wait.recv_timeout(Duration::from_secs(2))?;
+                Ok(RegistryAuth::Basic("user".into(), "secret".into()))
+            }
+        }));
+        ready.await.unwrap();
+        let second = tokio::spawn(cached_credentials(cache, "registry".into(), {
+            let runs = Arc::clone(&runs);
+            move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Ok(RegistryAuth::Anonymous)
+            }
+        }));
+        // On a current-thread runtime the second caller cannot join while the
+        // helper blocks, unless the helper runs on the bounded blocking pool.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while cache.waiters(&"registry".to_string()) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the second caller joins while the helper blocks");
+        release.send(()).unwrap();
+        let expected = AuthId::of(&first.await.unwrap().unwrap());
+        assert!(expected == AuthId::of(&second.await.unwrap().unwrap()));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+        assert!(
+            cached_credentials(cache, "broken".into(), || bail!("bad config"))
+                .await
+                .is_err()
+        );
+        assert!(
+            cached_credentials(cache, "broken".into(), || Ok(RegistryAuth::Anonymous))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_leader_does_not_extend_the_waiters_deadline() {
+        let coalescer = Arc::new(Coalescer::<&str, u32>::new(
+            16,
+            Duration::from_secs(60),
+            Duration::from_secs(5),
+            |_| 1,
+        ));
+        let deadline = Some(Duration::from_secs(30));
+        let began = tokio::time::Instant::now();
+        let leader = tokio::spawn({
+            let coalescer = Arc::clone(&coalescer);
+            async move {
+                with_pull_timeout("ref", deadline, coalescer.run("ref", std::future::pending)).await
+            }
+        });
+        tokio::task::yield_now().await;
+        let waiter = tokio::spawn(async move {
+            with_pull_timeout("ref", deadline, coalescer.run("ref", std::future::pending)).await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(29)).await;
+        leader.abort();
+        let _ = leader.await;
+        let error = waiter.await.unwrap().unwrap_err();
+        assert!(error.is::<tokio::time::error::Elapsed>());
+        assert_eq!(began.elapsed(), Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn fresh_pulls_share_active_work_but_never_completed_results() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let coalescer = Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let runs = AtomicUsize::new(0);
+        let (open, gate) = tokio::sync::watch::channel(false);
+        let work = || async {
+            let value = runs.fetch_add(1, Ordering::SeqCst);
+            gate.clone().wait_for(|open| *open).await.unwrap();
+            Ok(value)
+        };
+        let (a, b, ()) = tokio::join!(
+            coalescer.run_with_reuse("ref", false, work),
+            coalescer.run_with_reuse("ref", false, work),
+            open_once(|| coalescer.waiters(&"ref") == 2, &open),
+        );
+        assert_eq!(a.unwrap(), 0);
+        assert_eq!(b.unwrap(), 0);
+        assert_eq!(
+            coalescer.run_with_reuse("ref", false, work).await.unwrap(),
+            1
+        );
+        // Nothing could reuse an `Always` result, so none is kept.
+        coalescer.finished.run_pending_tasks();
+        assert_eq!(coalescer.finished.entry_count(), 0);
+        assert_eq!(coalescer.in_flight_count(), 0);
+    }
     use tempfile::TempDir;
+
+    /// Identical requests in flight together do the work once and all get its
+    /// answer; a different request does its own.
+    #[tokio::test]
+    async fn concurrent_identical_pulls_run_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let runs = AtomicUsize::new(0);
+        let (open, gate) = tokio::sync::watch::channel(false);
+        let work = |value| {
+            let runs = &runs;
+            let mut gate = gate.clone();
+            move || async move {
+                runs.fetch_add(1, Ordering::SeqCst);
+                gate.wait_for(|open| *open).await.unwrap();
+                Ok(value)
+            }
+        };
+
+        let (a, b, c, ()) = tokio::join!(
+            coalescer.run("ref", work(1)),
+            coalescer.run("ref", work(2)),
+            coalescer.run("other", work(3)),
+            open_once(
+                || coalescer.waiters(&"ref") == 2 && coalescer.waiters(&"other") == 1,
+                &open,
+            ),
+        );
+        assert_eq!((a.unwrap(), b.unwrap(), c.unwrap()), (1, 1, 3));
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+    }
+
+    /// Finished results are bounded by their weight, not their count, so a
+    /// burst of large pulls cannot all stay resident for the reuse window.
+    #[tokio::test]
+    async fn finished_results_are_bounded_by_weight() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(10, Duration::from_secs(60), Duration::from_secs(60), |v| *v);
+        for key in ["a", "b", "c"] {
+            assert_eq!(coalescer.run(key, || async { Ok(8) }).await.unwrap(), 8);
+        }
+        coalescer.finished.run_pending_tasks();
+        assert!(
+            coalescer.finished.weighted_size() <= 10,
+            "three results of 8 cannot all fit in 10: {}",
+            coalescer.finished.weighted_size()
+        );
+    }
+
+    /// Every caller sharing a failure gets its whole chain, not just the top
+    /// message: the cause underneath is usually the part worth reading.
+    #[tokio::test]
+    async fn a_shared_failure_keeps_its_chain() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let err = coalescer
+            .run("ref", || async {
+                Err(anyhow!("certificate not trusted").context("pulling ref"))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(format!("{err:#}"), "pulling ref: certificate not trusted");
+        assert_eq!(err.chain().count(), 2);
+    }
+
+    /// A failure answers the requests waiting on it rather than letting each
+    /// retry in turn, but the next request after it tries again at once.
+    #[tokio::test]
+    async fn a_failed_pull_answers_only_its_waiters() {
+        let coalescer: Coalescer<&str, u32> =
+            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+
+        let (open, gate) = tokio::sync::watch::channel(false);
+        let (a, b, ()) = tokio::join!(
+            coalescer.run("ref", || async {
+                gate.clone().wait_for(|open| *open).await.unwrap();
+                bail!("registry unreachable")
+            }),
+            coalescer.run("ref", || async { Ok(7) }),
+            open_once(|| coalescer.waiters(&"ref") == 2, &open),
+        );
+        assert!(a.unwrap_err().to_string().contains("registry unreachable"));
+        assert!(b.unwrap_err().to_string().contains("registry unreachable"));
+
+        assert_eq!(coalescer.run("ref", || async { Ok(7) }).await.unwrap(), 7);
+    }
+
+    /// Different credentials never share a pull or a client.
+    #[test]
+    fn credentials_are_part_of_the_identity() {
+        let basic = |user: &str, password: &str| {
+            AuthId::of(&RegistryAuth::Basic(user.to_string(), password.to_string()))
+        };
+        assert!(basic("a", "b") == basic("a", "b"));
+        assert!(basic("a", "b") != basic("a", "c"));
+        assert!(basic("ab", "") != basic("a", "b"));
+        assert!(basic("a", "b") != AuthId::of(&RegistryAuth::Anonymous));
+        assert!(AuthId::of(&RegistryAuth::Bearer("t".into())) != basic("t", ""));
+    }
+
+    /// Never serves a pinned entry offline: the host here does not resolve,
+    /// so any request would fail.
+    #[tokio::test]
+    async fn never_reuses_a_digest_pinned_entry_offline() {
+        let temp_dir = TempDir::new().unwrap();
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let reference = format!("registry.invalid/ns/component@{digest}");
+        CacheManager::open(
+            temp_dir.path().to_path_buf(),
+            &RegistryAuth::Basic("user".into(), "secret".into()),
+            false,
+            TrustSnapshot::load().await.unwrap().id,
+        )
+        .await
+        .unwrap()
+        .write_to_cache(&reference, b"cached bytes", &digest)
+        .await
+        .unwrap();
+
+        // Explicit credentials, so no docker credential helper runs either.
+        let mut config = OciConfig::new_with_credentials("user", "secret");
+        config.cache_dir = Some(temp_dir.path().to_path_buf());
+        let (bytes, pulled_digest) = pull_component(&reference, config, OciPullPolicy::Never)
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"cached bytes");
+        assert_eq!(pulled_digest, digest);
+    }
 
     /// Where the docker config is looked for has to match `docker_credential`'s
     /// own rule, since telling an absent config from an unparseable one is done
@@ -1227,25 +1532,36 @@ mod tests {
         assert!(config.insecure);
     }
 
-    #[test]
-    fn test_cache_manager_path_generation() {
+    #[tokio::test]
+    async fn test_cache_manager_path_generation() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_manager = CacheManager::new(temp_dir.path().to_path_buf());
+        let cache_manager = CacheManager::open(
+            temp_dir.path().to_path_buf(),
+            &RegistryAuth::Anonymous,
+            false,
+            TrustSnapshot::load().await.unwrap().id,
+        )
+        .await
+        .unwrap();
 
         let reference = "localhost:5000/test:latest";
-        let component_path = cache_manager.get_component_path(reference);
-        let digest_path = cache_manager.get_digest_path(reference);
+        let entry_path = cache_manager.get_entry_path(reference);
 
-        assert!(component_path.starts_with(temp_dir.path()));
-        assert!(component_path.extension().unwrap() == "wasm");
-        assert!(digest_path.starts_with(temp_dir.path()));
-        assert!(digest_path.file_name().unwrap() == "digest");
+        assert!(entry_path.starts_with(cache_manager.get_cache_dir(reference)));
+        assert!(entry_path.file_name().unwrap() == "entry");
     }
 
     #[tokio::test]
     async fn test_cache_manager_operations() {
         let temp_dir = TempDir::new().unwrap();
-        let cache_manager = CacheManager::new(temp_dir.path().to_path_buf());
+        let cache_manager = CacheManager::open(
+            temp_dir.path().to_path_buf(),
+            &RegistryAuth::Anonymous,
+            false,
+            TrustSnapshot::load().await.unwrap().id,
+        )
+        .await
+        .unwrap();
 
         let reference = "localhost:5000/test:v1.0.0";
         let test_data = b"test component data";

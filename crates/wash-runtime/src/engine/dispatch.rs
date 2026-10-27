@@ -279,6 +279,7 @@ async fn serve_alone(
             .await
         })
         .await
+        .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
         .map_err(|e| anyhow::anyhow!("dispatched call store faulted: {e:#}"))?
 }
 
@@ -1364,7 +1365,10 @@ async fn build_instance(
 ) -> Option<anyhow::Result<ComponentInstance>> {
     let build = async {
         let mut store = workload.new_store(component_id).await?;
-        let instance = pre.instantiate_async(&mut store).await?;
+        let instance = pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
         anyhow::Ok(ComponentInstance { store, instance })
     };
     tokio::select! {

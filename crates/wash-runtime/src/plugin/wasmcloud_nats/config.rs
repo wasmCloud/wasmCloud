@@ -423,6 +423,16 @@ impl NatsConfig {
         if limits.subscription_capacity_bytes == 0 {
             bail!("`subscription-capacity-bytes` must be greater than zero");
         }
+        // Each sizes a semaphore or a bounded channel, which panic above this.
+        const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
+        for (key, value) in [
+            ("max-in-flight", limits.max_in_flight),
+            ("subscription-capacity", limits.subscription_capacity),
+        ] {
+            if value > MAX_PERMITS {
+                bail!("`{key}` must be at most {MAX_PERMITS}, got {value}");
+            }
+        }
 
         let tls = TlsConfig {
             ca: get(cfg, "tls-ca").map(PathBuf::from),
@@ -1044,6 +1054,28 @@ mod tests {
                 err.to_string().contains("greater than zero"),
                 "{key}: {err}"
             );
+        }
+    }
+
+    /// Workload config, so a huge value must fail the bind rather than panic
+    /// the host in `Semaphore::new` or `mpsc::channel`.
+    #[test]
+    fn limits_above_what_a_semaphore_holds_fail() {
+        let max = tokio::sync::Semaphore::MAX_PERMITS;
+        for key in ["max-in-flight", "subscription-capacity"] {
+            for value in [(max + 1).to_string(), usize::MAX.to_string()] {
+                let err = NatsConfig::from_map(&map(&[
+                    ("servers", "nats://localhost:4222"),
+                    (key, &value),
+                ]))
+                .unwrap_err();
+                assert!(err.to_string().contains("at most"), "{key}={value}: {err}");
+            }
+            NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                (key, &max.to_string()),
+            ]))
+            .unwrap_or_else(|e| panic!("{key}={max}: {e}"));
         }
     }
 

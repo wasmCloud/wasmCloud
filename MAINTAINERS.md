@@ -7,7 +7,6 @@ mention _all_ maintainers of a particular aspect of the project.
 Maintainers of projects that are not in this monorepo can be found in their respective repositories,
 including:
 
-- [wadm](https://github.com/wasmCloud/wadm/blob/main/MAINTAINERS.md)
 - [wasmcloud-operator](https://github.com/wasmCloud/wasmcloud-operator/blob/main/MAINTAINERS.md)
 - [wasmcloud.com](https://github.com/wasmCloud/wasmcloud.com/blob/main/MAINTAINERS.md)
 - [typescript](https://github.com/wasmCloud/typescript) — TypeScript SDKs,

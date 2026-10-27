@@ -33,9 +33,9 @@ workspace = true
 
 [features]
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements", "wasmcloud-nats"]
-oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
+oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:hmac", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
-washlet = ["oci"]
+washlet = ["oci", "dep:nkeys"]
 wasi-config = []
 wasi-logging = []
 wasi-blobstore = ["dep:sha2", "dep:object_store"]
@@ -72,6 +72,7 @@ chrono = { workspace = true }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
 futures = { workspace = true }
+hmac = { workspace = true, optional = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
@@ -79,6 +80,7 @@ humantime = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }
+imbl = { workspace = true }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
 object_store = { workspace = true, optional = true }
@@ -160,14 +162,20 @@ ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { workspace = true }
 
+# `proc_pid_rusage`, for the process footprint `max-process-memory` is held
+# against: RSS understates a macOS process whose pages were compressed.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 # wasi-webgpu dependencies (optional, behind 'wasi-webgpu' feature). Pulled in
 # only on platforms where the `wasi_webgpu` plugin module compiles: wgpu-hal
 # fails to build on Windows and s390x, so the deps are gated to match the
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
-wasi-webgpu-wasmtime = { version = "0.3", optional = true }
+wasi-webgpu-wasmtime = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
+bench-tools = { path = "../bench-tools" }
 tokio = { workspace = true, features = ["full"] }
 # `testing` brings in `InMemoryMetricExporter`, which is how the guest memory
 # budget's OTel instruments are asserted against a real collection rather than
@@ -196,6 +204,10 @@ criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 # Cargo.lock. The bench host's provision.yml installs it, and
 # scripts/bench/run-bench.sh installs a matching one when the lock moves.
 gungraun = "0.20.0"
+
+# The scale_density bench pins itself to its CPU limit and reads CPU time.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["thread", "time"] }
 
 # Integration tests that build a host through `tests/common`'s standard
 # plugin set (in-memory blobstore + keyvalue, tracing logger, dynamic
@@ -353,6 +365,12 @@ harness = false
 
 [[bench]]
 name = "wasmtime_serve"
+harness = false
+
+# Ramps warm and scale-to-zero HTTP workloads to max-process-memory; see the
+# module docs for the knobs.
+[[bench]]
+name = "scale_density"
 harness = false
 
 # Requires `--features host-component-plugins`, plus valgrind and a

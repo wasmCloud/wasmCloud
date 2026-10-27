@@ -44,7 +44,7 @@ use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
 use crate::engine::instance_driver::{InstanceJob, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
-use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
+use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
@@ -86,6 +86,8 @@ pub(crate) struct ComponentCtxTemplate {
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// The host-wide guest memory budget this component's stores draw on.
     guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// The workload deploy's trap-hint flag.
+    trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
@@ -101,6 +103,7 @@ impl ComponentCtxTemplate {
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
             guest_memory: metadata.guest_memory.clone(),
+            trap_hint_logged: metadata.trap_hint_logged.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -159,6 +162,7 @@ pub(crate) struct EphemeralLinkedCall {
     /// this call ends up running in.
     pub(crate) pre: InstancePre<SharedCtx>,
     pub(crate) engine: wasmtime::Engine,
+    pub(crate) stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// See [`crate::host::http::live_handler`] for why this is weak.
     pub(crate) http_handler: crate::host::HostRef,
     /// The meter of the host this call runs on; see
@@ -218,26 +222,28 @@ pub(crate) fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
 /// bridge-safe. (A `resource` crosses only the host-component-plugin bridge,
 /// where a plugin-side registry exists — see
 /// [`crate::engine::store::resource_bridge`].)
-fn type_is_bridge_safe(ty: &Type) -> bool {
+fn type_is_bridge_safe(ty: &Type, payloads: &super::stream_payload::StreamPayloads) -> bool {
     if !carries_cross_store_handle(ty) {
         return true;
     }
     match ty {
-        Type::Stream(st) => st.ty().is_some_and(|e| bridgeable_element_type(&e)),
-        Type::Future(ft) => ft.ty().is_some_and(|e| bridgeable_element_type(&e)),
-        Type::List(t) => type_is_bridge_safe(&t.ty()),
-        Type::FixedLengthList(t) => type_is_bridge_safe(&t.ty()),
-        Type::Option(t) => type_is_bridge_safe(&t.ty()),
-        Type::Tuple(t) => t.types().all(|t| type_is_bridge_safe(&t)),
-        Type::Record(t) => t.fields().all(|f| type_is_bridge_safe(&f.ty)),
+        Type::Stream(st) => st.ty().is_some_and(|e| payloads.supports(&e)),
+        Type::Future(ft) => ft.ty().is_none_or(|e| payloads.supports(&e)),
+        Type::List(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::FixedLengthList(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::Option(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::Tuple(t) => t.types().all(|t| type_is_bridge_safe(&t, payloads)),
+        Type::Record(t) => t.fields().all(|f| type_is_bridge_safe(&f.ty, payloads)),
         Type::Variant(t) => t
             .cases()
-            .all(|c| c.ty.is_none_or(|t| type_is_bridge_safe(&t))),
+            .all(|c| c.ty.is_none_or(|t| type_is_bridge_safe(&t, payloads))),
         Type::Result(t) => {
-            t.ok().is_none_or(|t| type_is_bridge_safe(&t))
-                && t.err().is_none_or(|t| type_is_bridge_safe(&t))
+            t.ok().is_none_or(|t| type_is_bridge_safe(&t, payloads))
+                && t.err().is_none_or(|t| type_is_bridge_safe(&t, payloads))
         }
-        Type::Map(t) => type_is_bridge_safe(&t.key()) && type_is_bridge_safe(&t.value()),
+        Type::Map(t) => {
+            type_is_bridge_safe(&t.key(), payloads) && type_is_bridge_safe(&t.value(), payloads)
+        }
         // resource (own/borrow) / error-context: not relocatable here.
         _ => false,
     }
@@ -247,16 +253,42 @@ fn type_is_bridge_safe(ty: &Type) -> bool {
 /// [`func_is_bridge_safe`], for a caller holding params and results separately
 /// rather than as one [`ComponentFunc`].
 #[cfg(feature = "host-component-plugins")]
-pub(crate) fn types_are_bridge_safe(tys: &[Type]) -> bool {
-    tys.iter().all(type_is_bridge_safe)
+pub(crate) fn types_are_bridge_safe(
+    tys: &[Type],
+    payloads: &super::stream_payload::StreamPayloads,
+) -> bool {
+    tys.iter().all(|ty| type_is_bridge_safe(ty, payloads))
 }
 
 /// Whether every param/result of `func_ty` is [`type_is_bridge_safe`], so a call
 /// carrying a `stream<T>`/`future<T>` can still run in an ephemeral store (with
 /// relocation) instead of being pinned to the shared store.
-pub(crate) fn func_is_bridge_safe(func_ty: &ComponentFunc) -> bool {
-    func_ty.params().all(|(_, ty)| type_is_bridge_safe(&ty))
-        && func_ty.results().all(|ty| type_is_bridge_safe(&ty))
+pub(crate) fn func_is_bridge_safe(
+    func_ty: &ComponentFunc,
+    payloads: &super::stream_payload::StreamPayloads,
+) -> bool {
+    func_ty
+        .params()
+        .all(|(_, ty)| type_is_bridge_safe(&ty, payloads))
+        && func_ty
+            .results()
+            .all(|ty| type_is_bridge_safe(&ty, payloads))
+}
+
+/// Copy a component's manifest environment into a WASI CLI context.
+///
+/// Shared by the store template and [`crate::engine::command`], which rebuilds
+/// the CLI context to give one invocation its own arguments and streams and
+/// must end up with the same variables.
+pub(crate) fn apply_environment(
+    builder: &mut WasiCtxBuilder,
+    environment: &std::collections::HashMap<String, String>,
+) {
+    let pairs = environment
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    builder.envs(&pairs);
 }
 
 async fn build_ctx_from_template(
@@ -267,18 +299,8 @@ async fn build_ctx_from_template(
     is_service: bool,
 ) -> anyhow::Result<Ctx> {
     let mut wasi_ctx_builder = WasiCtxBuilder::new();
-    wasi_ctx_builder
-        .envs(
-            template
-                .local_resources
-                .environment
-                .iter()
-                .map(|kv| (kv.0.as_str(), kv.1.as_str()))
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .inherit_stdout()
-        .inherit_stderr();
+    apply_environment(&mut wasi_ctx_builder, &template.local_resources.environment);
+    wasi_ctx_builder.inherit_stdout().inherit_stderr();
 
     let kind = if is_service {
         sockets::policy::GuestKind::Service
@@ -317,11 +339,13 @@ async fn build_ctx_from_template(
     let mut ctx = ctx_builder.build();
     ctx.volume_mounts = all_volume_mounts.to_vec();
     ctx.store_id = store_id.to_string().into();
+    ctx.trap_hint_logged = Arc::clone(&template.trap_hint_logged);
     Ok(ctx)
 }
 
 pub(crate) async fn new_store_from_templates(
     engine: &wasmtime::Engine,
+    stream_payloads: &Arc<super::stream_payload::StreamPayloads>,
     http_handler: &crate::host::HostRef,
     active: &ComponentCtxTemplate,
     linked: &[ComponentCtxTemplate],
@@ -342,6 +366,7 @@ pub(crate) async fn new_store_from_templates(
     )
     .await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
+    shared_ctx.stream_payloads = Arc::clone(stream_payloads);
 
     for linked in linked {
         let linked_ctx =
@@ -368,12 +393,15 @@ pub(crate) async fn new_store_from_templates(
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {
         store.data_mut().set_active_ctx(linked_id)?;
-        let instantiate_result = linked_pre.instantiate_async(&mut store).await;
+        let instantiate_result = linked_pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e));
         store.data_mut().set_active_ctx(&active_id)?;
-        let instance = instantiate_result.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to instantiate linked component '{linked_id}' in ephemeral store: {e}"
-            )
+        // Context rather than a new error, so the pool refusal and its remedy
+        // stay in the chain underneath.
+        let instance = instantiate_result.with_context(|| {
+            format!("failed to instantiate linked component '{linked_id}' in ephemeral store")
         })?;
         store
             .data_mut()
@@ -475,6 +503,7 @@ async fn new_ephemeral_store(
 
     let store = new_store_from_templates(
         &call.engine,
+        &call.stream_payloads,
         &call.http_handler,
         &active,
         &linked,
@@ -659,13 +688,16 @@ async fn invoke_ephemeral_relocated(
         // included.
         let drain_flag = Arc::clone(&call_flag);
         let _abandoned = store.data().abandoned.watch(call_flag);
-        let instance = match callee_pre.instantiate_async(&mut store).await {
-            Ok(i) => i,
-            Err(e) => {
-                let _ = ready_tx.send(Err(e));
-                return;
-            }
-        };
+        let instance =
+            match callee_pre.instantiate_async(&mut store).await.map_err(|e| {
+                crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+            }) {
+                Ok(i) => i,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
         let _ = store
             .run_concurrent(async move |accessor| {
                 let ready = async {
@@ -747,7 +779,8 @@ async fn invoke_ephemeral_relocated(
                 }
                 Ok::<(), wasmtime::Error>(())
             })
-            .await;
+            .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e));
     }));
 
     let relocated = call
@@ -878,7 +911,13 @@ async fn invoke_ephemeral_plain(
             let mut store = new_ephemeral_store(ephemeral_call)
                 .await
                 .map_err(|e| wasmtime::format_err!("new ephemeral store creation failed: {e:#}"))?;
-            let instance = ephemeral_call.pre.instantiate_async(&mut store).await?;
+            let instance = ephemeral_call
+                .pre
+                .instantiate_async(&mut store)
+                .await
+                .map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })?;
             ComponentInstance { store, instance }
         }
     };
@@ -928,6 +967,7 @@ async fn invoke_ephemeral_plain(
                 Ok::<Vec<Val>, wasmtime::Error>(results_buf)
             })
             .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
             .map_err(|e| wasmtime::format_err!("{e:#}"))
             .and_then(|inner| inner)
     }));

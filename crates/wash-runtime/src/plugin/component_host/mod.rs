@@ -354,13 +354,6 @@ impl ComponentHostPlugin {
             Arc::clone(&allowed_host_loopback_ports),
             &socket_policy,
         );
-        if egress_policy.disabled_loopback_grants() {
-            warn!(
-                plugin_id = id,
-                "host component plugin declares allowedHostLoopbackPorts, but host-loopback \
-                 access is disabled; enable the host socket policy"
-            );
-        }
         // Each direct bind is claimed from the host's one port table as it is
         // collected, so two plugins declaring the same real address fail here,
         // with both holders named, rather than at the second plugin's bind with
@@ -404,8 +397,13 @@ impl ComponentHostPlugin {
         let native_plugins = native_only(&native_plugins);
         let (component, base_linker) = engine.prepare_host_component(wasm)?;
         let (exports, lifecycle) = introspect_capability_exports(id, &component)?;
-        let workload_imports =
-            classify_workload_imports(id, &component, &exports, &native_plugins)?;
+        let workload_imports = classify_workload_imports(
+            id,
+            &component,
+            &exports,
+            &native_plugins,
+            engine.stream_payloads(),
+        )?;
         // A plugin has to participate in one direction or the other: serve a
         // capability a workload imports, or call an interface a workload
         // exports. A plugin doing only the latter is a legitimate shape — a
@@ -1080,6 +1078,11 @@ fn is_base_wasi(wit: &WitInterface) -> bool {
 /// single-component workload purely to reuse `bind_plugins`'s matching and
 /// rollback logic — never by writing `config` to a file the plugin reads.
 ///
+/// Natives file that bind-time state under the synthetic workload's id, which
+/// is the plugin id. It cannot collide with a real workload's state because
+/// the host refuses to start a workload whose id is a registered plugin id
+/// (`Host::workload_reserve`).
+///
 /// `native_plugins` must already exclude every [`ComponentHostPlugin`] (this
 /// plugin's own natural self-imports are handled separately, before this
 /// runs): a loading plugin may depend on host natives fully, but never on
@@ -1154,9 +1157,13 @@ async fn link_native_imports(
         UnresolvedWorkload::new(id, id, id, None, [plugin_component], native_imports);
     // No operator bindings: a plugin's own native imports are configured by the
     // plugin entry's `config`, delivered through `on-workload-bind`, not by a
-    // workload naming a binding.
+    // workload naming a binding. That config is the operator's, so it may set
+    // the keys a native plugin keeps from workloads under `deny`. It is also
+    // shared by every import, so no one native's closed schema can judge it.
+    let operator_config = crate::plugin::PluginBindings::new()
+        .with_default_workload_config(crate::plugin::WorkloadConfigPolicy::Allow);
     synthetic
-        .bind_plugins(native_plugins, &crate::plugin::PluginBindings::new())
+        .bind_plugins(native_plugins, &operator_config)
         .await
         .with_context(|| {
             format!("failed to resolve native capability imports for plugin '{id}'")
@@ -1248,6 +1255,7 @@ fn classify_workload_imports(
     component: &Component,
     exports: &[ExportedInterface],
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    payloads: &crate::engine::stream_payload::StreamPayloads,
 ) -> anyhow::Result<Vec<ExportedInterface>> {
     let imports = introspect_imports(component)?;
     if !declares_workload_calls(&imports) {
@@ -1286,11 +1294,16 @@ fn classify_workload_imports(
         // that exports the interface.
         for func in &imported.funcs {
             anyhow::ensure!(
-                crate::engine::linked_call::types_are_bridge_safe(&func.param_tys)
-                    && crate::engine::linked_call::types_are_bridge_safe(&func.result_tys),
+                crate::engine::linked_call::types_are_bridge_safe(&func.param_tys, payloads)
+                    && crate::engine::linked_call::types_are_bridge_safe(
+                        &func.result_tys,
+                        payloads
+                    ),
                 "host component plugin '{id}' imports {}#{} for a workload to export, but its \
                  signature carries a handle that cannot cross the boundary between a plugin's \
-                 store and a workload's; only plain values, `stream<T>`, and `future<T>` can",
+                 store and a workload's; only plain values, `stream<T>`, and `future<T>` can; \
+                 a `stream<T>`/`future<T>` of an application-defined payload needs \
+                 `Engine::stream_payloads().register`",
                 imported.name,
                 func.name
             );
@@ -2018,6 +2031,7 @@ fn build_plugin_store(
             .with_resource_registry()
             .with_guest_memory(engine.guest_memory()),
     );
+    store.data_mut().stream_payloads = engine.stream_payloads().clone();
     // The other half of the same requirement: on a fuel-metering engine a store
     // starts with no fuel, and calling a guest without fuel traps. See
     // `new_store_from_templates`, which does this for every workload store.
@@ -2398,6 +2412,40 @@ mod tests {
         }
     }
 
+    /// Claims `url` for the operator, as the multiplexed builtins do, and
+    /// records the config it was bound with.
+    #[derive(Default)]
+    struct HostOwnedUrlPlugin {
+        seen_config: Mutex<Option<HashMap<String, String>>>,
+    }
+
+    #[async_trait]
+    impl HostPlugin for HostOwnedUrlPlugin {
+        fn id(&self) -> &'static str {
+            "host-owned-url-test-plugin"
+        }
+
+        fn world(&self) -> WitWorld {
+            WitWorld {
+                imports: HashSet::from([WitInterface::from("test:probe/marker@0.1.0")]),
+                exports: HashSet::new(),
+            }
+        }
+
+        fn binding_schema(&self) -> crate::plugin::BindingSchema {
+            crate::plugin::BindingSchema::with_host_owned_keys(["url"])
+        }
+
+        async fn on_workload_item_bind<'a>(
+            &self,
+            _item: &mut WorkloadItem<'a>,
+            interfaces: WitInterfaces<'_>,
+        ) -> anyhow::Result<()> {
+            *self.seen_config.lock().unwrap() = interfaces.iter().next().map(|i| i.config.clone());
+            Ok(())
+        }
+    }
+
     /// `wasmcloud:secrets/store@2.1.0` under `label` (`None` for plain).
     fn secrets_store(label: Option<&str>) -> WitInterface {
         let mut wit = WitInterface::from("wasmcloud:secrets/store@2.1.0");
@@ -2518,12 +2566,16 @@ mod tests {
         let recorder = Arc::new(IdRecordingPlugin::default());
         let native_plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
             HashMap::from([(recorder.id(), recorder as Arc<dyn HostPlugin>)]);
-        Ok(
-            classify_workload_imports("test-plugin", &component, exports, &native_plugins)?
-                .into_iter()
-                .map(|imported| imported.name.to_string())
-                .collect(),
-        )
+        Ok(classify_workload_imports(
+            "test-plugin",
+            &component,
+            exports,
+            &native_plugins,
+            &Default::default(),
+        )?
+        .into_iter()
+        .map(|imported| imported.name.to_string())
+        .collect())
     }
 
     /// The `wasmcloud:host/workload-call` import every opted-in plugin
@@ -2834,5 +2886,38 @@ mod tests {
             Some(plugin_id),
             "native plugin must see the plugin's own id, not a synthetic bind-time UUID"
         );
+    }
+
+    /// A plugin entry's `config` is the operator's, so it reaches a native
+    /// import even where that native keeps the key from workloads.
+    #[tokio::test]
+    async fn a_plugins_own_config_sets_keys_a_native_keeps_from_workloads() {
+        let wat = r#"
+            (component
+                (import "test:probe/marker@0.1.0" (instance))
+            )
+        "#;
+        let wasm = wat::parse_str(wat).expect("failed to parse WAT");
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let component = Component::new(engine.inner(), &wasm).expect("failed to compile");
+
+        let native = Arc::new(HostOwnedUrlPlugin::default());
+        let native_plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(native.id(), Arc::clone(&native) as Arc<dyn HostPlugin>)]);
+        let config = HashMap::from([("url".to_string(), "redis://cache:6379".to_string())]);
+
+        link_native_imports(
+            &engine,
+            "host-owned-url-test-plugin-instance",
+            &component,
+            Linker::new(engine.inner()),
+            &HashSet::new(),
+            &native_plugins,
+            &config,
+        )
+        .await
+        .expect("the plugin's own config is operator config");
+
+        assert_eq!(native.seen_config.lock().unwrap().as_ref(), Some(&config));
     }
 }

@@ -59,7 +59,10 @@ macro_rules! handler_pre {
                 &self,
                 store: &mut crate::wasmtime::Store<SharedCtx>,
             ) -> anyhow::Result<$proxy> {
-                Ok($proxy(self.0.instantiate_async(store).await?))
+                let instance = self.0.instantiate_async(&mut *store).await.map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })?;
+                Ok($proxy(instance))
             }
         }
     };
@@ -85,7 +88,8 @@ impl JsProxy {
                     .call_handle_message(accessor, handle)
                     .await
             })
-            .await?
+            .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))?
     }
 }
 
@@ -285,12 +289,12 @@ async fn build_instance(
         created = workload.new_store(component_id) => created?,
         _ = cancel_token.cancelled() => return Ok(None),
     };
-    let instance = tokio::select! {
-        instantiated = target.pre.instantiate_async(&mut store) => {
-            instantiated.map_err(|e| anyhow::anyhow!("{e:#}"))?
-        }
+    let instantiated = tokio::select! {
+        instantiated = target.pre.instantiate_async(&mut store) => instantiated,
         _ = cancel_token.cancelled() => return Ok(None),
     };
+    let instance = instantiated
+        .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
     Ok(Some((store, instance)))
 }
 

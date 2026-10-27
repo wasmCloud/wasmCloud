@@ -250,6 +250,53 @@ fn extract_pool_size(url: &Url) -> usize {
         .unwrap_or(DEFAULT_POOL_SIZE)
 }
 
+/// Check every address `config` would dial, as `tokio_postgres` picks them: a
+/// `hostaddr` is dialed in place of its `host`, and a single port applies to
+/// every host. A unix socket has no host for `allowedHosts` to name.
+fn check_egress(
+    config: &tokio_postgres::Config,
+    policy: &crate::plugin::PluginEgressPolicy,
+) -> anyhow::Result<()> {
+    let hosts = config.get_hosts();
+    let hostaddrs = config.get_hostaddrs();
+    let ports = config.get_ports();
+    for i in 0..hosts.len().max(hostaddrs.len()) {
+        let port = ports
+            .get(i)
+            .or_else(|| ports.first())
+            .copied()
+            .unwrap_or(5432);
+        match (hostaddrs.get(i), hosts.get(i)) {
+            (Some(addr), _) => policy.check_host_port("postgres", &addr.to_string(), port)?,
+            (None, Some(tokio_postgres::config::Host::Tcp(host))) => {
+                policy.check_host_port("postgres", host, port)?
+            }
+            #[cfg(unix)]
+            (None, Some(tokio_postgres::config::Host::Unix(path))) => bail!(
+                "postgres endpoint {path:?} is a unix socket, which allowedHosts cannot permit"
+            ),
+            (None, None) => {}
+        }
+    }
+    Ok(())
+}
+
+/// The one database an unnamed import's resolved config selects. A workload
+/// that leaves `database` unset under `deny` takes the operator's whole
+/// ceiling, which names one database only when the operator listed one.
+fn component_database(config: &HashMap<String, String>) -> anyhow::Result<String> {
+    let Some(database) = config.get("database") else {
+        bail!("wasmcloud:postgres requires a 'database' config parameter")
+    };
+    if database.contains(',') {
+        bail!(
+            "wasmcloud:postgres `database` resolves to several databases ({database}); set \
+             `database` to one of them in the workload's config"
+        );
+    }
+    Ok(database.clone())
+}
+
 /// Determine whether TLS is required based on the sslmode URL parameter.
 fn extract_tls_requirement(url: &Url) -> bool {
     url.query_pairs()
@@ -463,7 +510,12 @@ impl<'a> prepared::Host for ActiveCtx<'a> {
         match client.execute_raw(&stmt, param_refs).await {
             Ok(n) => Ok(Ok(n)),
             Err(e) => Ok(Err(PreparedStatementExecError::QueryError(
-                QueryError::Unexpected(format!("execute failed: {}", pg_error_string(&e))),
+                match wrong_type_message(&e) {
+                    Some(msg) => QueryError::InvalidParams(msg),
+                    None => {
+                        QueryError::Unexpected(format!("execute failed: {}", pg_error_string(&e)))
+                    }
+                },
             ))),
         }
     }
@@ -482,6 +534,18 @@ fn pg_error_string(e: &tokio_postgres::Error) -> String {
     }
 }
 
+/// The `WrongType` a parameter encoder raised, if that is why `e` happened.
+///
+/// `tokio_postgres` wraps an encoder failure as a `ToSql` error whose `Display`
+/// drops the cause, so the guest would see only "error serializing parameter N".
+/// Returns the full message, naming the parameter and the types involved.
+fn wrong_type_message(e: &tokio_postgres::Error) -> Option<String> {
+    let cause = std::error::Error::source(e)?;
+    cause
+        .is::<postgres_types::WrongType>()
+        .then(|| format!("{e}: {cause}"))
+}
+
 /// Run a parameterized query on a connection and map rows to WIT result rows.
 /// Shared by the legacy per-component path and the named per-credential path.
 async fn execute_query(
@@ -493,10 +557,14 @@ async fn execute_query(
         .iter()
         .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
         .collect();
-    let stream = client
-        .query_raw(q, param_refs)
-        .await
-        .map_err(|e| QueryError::InvalidQuery(format!("query failed: {}", pg_error_string(&e))))?;
+    let stream =
+        client
+            .query_raw(q, param_refs)
+            .await
+            .map_err(|e| match wrong_type_message(&e) {
+                Some(msg) => QueryError::InvalidParams(msg),
+                None => QueryError::InvalidQuery(format!("query failed: {}", pg_error_string(&e))),
+            })?;
     let rows = stream.try_collect::<Vec<_>>().await.map_err(|e| {
         QueryError::Unexpected(format!("failed to collect rows: {}", pg_error_string(&e)))
     })?;
@@ -509,6 +577,20 @@ async fn execute_query(
 impl HostPlugin for WasmcloudPostgres {
     fn id(&self) -> &'static str {
         PLUGIN_POSTGRES_ID
+    }
+
+    /// A named import's `url` carries the role and password it connects
+    /// with, so it is the operator's under `workloadConfig: deny`. The unnamed
+    /// import's `database` is a ceiling: the operator lists the databases its
+    /// connection may select, and a workload names one of them.
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::BindingSchema::with_host_owned_keys(["url"])
+            .and_host_ceiling_keys(["database"])
+    }
+
+    /// A workload's `database` is inside the operator's comma-separated list.
+    fn narrows(&self, key: &str, ceiling: &str, value: &str) -> bool {
+        key == "database" && ceiling.split(',').map(str::trim).any(|db| db == value)
     }
 
     fn world(&self) -> WitWorld {
@@ -526,6 +608,18 @@ impl HostPlugin for WasmcloudPostgres {
     #[cfg(feature = "wasm_component_model_implements")]
     fn supports_named_instances(&self) -> bool {
         true
+    }
+
+    /// Checks the operator's base url now, and retains the ceiling for the
+    /// url each named import brings.
+    fn configure_egress_policy(
+        &self,
+        policy: Arc<crate::plugin::PluginEgressPolicy>,
+    ) -> anyhow::Result<()> {
+        check_egress(&self.base_config, &policy).context("the base postgres url")?;
+        #[cfg(feature = "wasm_component_model_implements")]
+        self.mux.configure_egress_policy(policy)?;
+        Ok(())
     }
 
     async fn start(&self) -> anyhow::Result<()> {
@@ -607,9 +701,7 @@ impl HostPlugin for WasmcloudPostgres {
             )?;
 
             if let Some(i) = unnamed {
-                let Some(database) = i.config.get("database").cloned() else {
-                    bail!("wasmcloud:postgres requires a 'database' config parameter")
-                };
+                let database = component_database(&i.config)?;
                 tracing::debug!(
                     component_id = %component_id,
                     database = %database,
@@ -669,9 +761,7 @@ impl HostPlugin for WasmcloudPostgres {
             // An unnamed import is the default, per-component-database path; a
             // `(implements ..)` import is a named one routed to its own pool.
             if let Some(i) = pg_async.iter().find(|i| i.name.is_none()).copied() {
-                let Some(database) = i.config.get("database").cloned() else {
-                    bail!("wasmcloud:postgres requires a 'database' config parameter")
-                };
+                let database = component_database(&i.config)?;
                 tracing::debug!(
                     component_id = %component_id,
                     database = %database,
@@ -732,6 +822,82 @@ impl HostPlugin for WasmcloudPostgres {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check(url: &str, hosts: &[&str]) -> anyhow::Result<()> {
+        check_egress(
+            &url.parse().unwrap(),
+            &crate::plugin::PluginEgressPolicy::allowing(hosts),
+        )
+    }
+
+    /// Every address tokio-postgres would dial is checked, including the ones
+    /// a query parameter names instead of the url's authority.
+    #[test]
+    fn egress_is_checked_at_every_address_postgres_dials() {
+        let hosts = ["postgres://db.internal:5432", "10.0.0.7:5432"];
+        check("postgres://u:p@db.internal/app", &hosts).expect("the default port is 5432");
+        check("postgres://u:p@db.internal/app?hostaddr=10.0.0.7", &hosts)
+            .expect("hostaddr is dialed in place of the name");
+
+        let err = check("postgres://u:p@evil.example/app", &hosts).unwrap_err();
+        assert!(format!("{err:#}").contains("evil.example"), "{err:#}");
+        for url in [
+            "postgres://u:p@db.internal/app?hostaddr=10.0.0.9",
+            "postgres://u:p@db.internal/app?host=evil.example",
+            "postgres://u:p@db.internal,evil.example/app",
+            "postgres://u:p@db.internal:6432/app",
+            "postgres://u:p@db.internal/app?host=/var/run/postgresql",
+        ] {
+            assert!(check(url, &hosts).is_err(), "{url}");
+        }
+    }
+
+    /// The operator lists databases; a workload names exactly one of them.
+    #[test]
+    fn database_is_a_ceiling_the_workload_narrows() {
+        let pg =
+            WasmcloudPostgres::new(&Url::parse("postgres://u:p@db.internal/").unwrap()).unwrap();
+        assert!(pg.narrows("database", "app, reports", "reports"));
+        assert!(!pg.narrows("database", "app, reports", "tenant_b"));
+        assert!(!pg.narrows("database", "app, reports", "app, reports"));
+        let config = |db: &str| HashMap::from([("database".to_string(), db.to_string())]);
+        assert_eq!(component_database(&config("app")).unwrap(), "app");
+        assert!(component_database(&config("app,reports")).is_err());
+        assert!(component_database(&HashMap::new()).is_err());
+    }
+
+    /// `postgres` and `postgresql` name one protocol, on either side.
+    #[test]
+    fn either_postgres_scheme_spelling_permits_the_other() {
+        check(
+            "postgres://u:p@db.internal/app",
+            &["postgresql://db.internal:5432"],
+        )
+        .unwrap();
+        check(
+            "postgresql://u:p@db.internal/app",
+            &["postgres://db.internal:5432"],
+        )
+        .unwrap();
+    }
+
+    /// The operator's base url is checked when the ceiling is installed, so a
+    /// ceiling that does not cover it fails startup rather than a later query.
+    #[test]
+    fn the_base_url_is_checked_when_the_ceiling_is_installed() {
+        let pg =
+            WasmcloudPostgres::new(&Url::parse("postgres://u:p@db.internal/").unwrap()).unwrap();
+        pg.configure_egress_policy(crate::plugin::PluginEgressPolicy::allowing(&[
+            "postgres://db.internal:5432",
+        ]))
+        .unwrap();
+        assert!(
+            pg.configure_egress_policy(crate::plugin::PluginEgressPolicy::allowing(&[
+                "postgres://other.internal:5432",
+            ]))
+            .is_err()
+        );
+    }
 
     fn entry(workload_id: &str) -> PreparedEntry {
         PreparedEntry {

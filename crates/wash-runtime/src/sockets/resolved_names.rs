@@ -19,15 +19,20 @@
 //! The name is the one the guest asked for. Reverse DNS, search-domain
 //! expansions and CNAME targets are never consulted.
 //!
-//! # Grants expire
+//! # Grants last unless given a lifetime
 //!
-//! Each observation permits its addresses for [`ResolvedNameLimits::lifetime`]
-//! from the moment resolution completed, on a monotonic clock. That is a
-//! runtime authorization lifetime, not a DNS TTL: the resolver APIs return no
-//! TTL to honor. Resolving again refreshes only the addresses returned again,
-//! so an address a Service no longer answers with expires on its own schedule.
-//! A guest that caches an address longer than the lifetime has to resolve
-//! again before a new connect; a connection already open is unaffected.
+//! By default a grant lasts as long as the table remembers it, so a program
+//! that resolves once and keeps the address (a connection pool, a metrics
+//! client) keeps working. Only the table's bounds drop one.
+//!
+//! With [`ResolvedNameLimits::lifetime`] set, each observation permits its
+//! addresses for that long from the moment resolution completed, on a
+//! monotonic clock. That is a runtime authorization lifetime, not a DNS TTL:
+//! the resolver APIs return no TTL to honor. Resolving again refreshes only
+//! the addresses returned again, so an address a Service no longer answers
+//! with expires on its own schedule. A guest that caches an address longer
+//! than the lifetime has to resolve again before a new connect; a connection
+//! already open is unaffected.
 //!
 //! A connected UDP socket is not a connection in that sense: each datagram is
 //! new egress. It carries its grant's deadline ([`super::Allowed::valid_until`])
@@ -52,9 +57,10 @@ use crate::host::allowed_hosts::AllowedHost;
 /// Bounds on one store's [`ResolvedNames`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolvedNameLimits {
-    /// How long an observation permits its addresses. Zero records nothing, so
-    /// name entries permit no socket.
-    pub lifetime: Duration,
+    /// How long an observation permits its addresses. `None` keeps a grant
+    /// for as long as the table remembers it. Zero records nothing, so name
+    /// entries permit no socket.
+    pub lifetime: Option<Duration>,
     /// Distinct names remembered at once.
     pub max_names: usize,
     /// Name/address associations remembered at once, across every name.
@@ -64,7 +70,7 @@ pub struct ResolvedNameLimits {
 impl Default for ResolvedNameLimits {
     fn default() -> Self {
         Self {
-            lifetime: Duration::from_secs(60),
+            lifetime: None,
             max_names: 256,
             max_associations: 4096,
         }
@@ -87,7 +93,7 @@ struct Inner {
     by_addr: BTreeMap<IpAddr, BTreeMap<Arc<str>, Instant>>,
     names: BTreeMap<Arc<str>, NameEntry>,
     /// Associations oldest first. The lifetime is one value per table, so
-    /// this is also the order they expire in.
+    /// this is also the order they expire in, if they do.
     by_observed: BTreeSet<(Instant, IpAddr, Arc<str>)>,
     /// Names by their latest observation, stalest first.
     by_newest: BTreeSet<(Instant, Arc<str>)>,
@@ -121,9 +127,13 @@ impl ResolvedNames {
     /// When the grant for `addr` lapses: it is an address this store was
     /// handed for a name that `policy` grants on `addr`'s port. `None` if
     /// there is no current grant, else the latest deadline among the names
-    /// that grant it.
+    /// that grant it, `Some(None)` if one of those never lapses.
     #[must_use]
-    pub fn permitted_until(&self, policy: &[AllowedHost], addr: SocketAddr) -> Option<Instant> {
+    pub fn permitted_until(
+        &self,
+        policy: &[AllowedHost],
+        addr: SocketAddr,
+    ) -> Option<Option<Instant>> {
         self.permitted_until_at(policy, addr, Instant::now())
     }
 
@@ -139,9 +149,11 @@ impl ResolvedNames {
         observed: Instant,
         now: Instant,
     ) {
-        let lapsed = observed
-            .checked_add(self.limits.lifetime)
-            .is_none_or(|deadline| deadline <= now);
+        let lapsed = self.limits.lifetime.is_some_and(|lifetime| {
+            observed
+                .checked_add(lifetime)
+                .is_some_and(|deadline| deadline <= now)
+        });
         if lapsed || self.limits.max_names == 0 || self.limits.max_associations == 0 {
             return;
         }
@@ -161,7 +173,7 @@ impl ResolvedNames {
         policy: &[AllowedHost],
         addr: SocketAddr,
         now: Instant,
-    ) -> Option<Instant> {
+    ) -> Option<Option<Instant>> {
         let lifetime = self.limits.lifetime;
         let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         inner
@@ -169,14 +181,15 @@ impl ResolvedNames {
             .get(&addr.ip().to_canonical())?
             .iter()
             .filter_map(|(name, observed)| {
-                let deadline = observed.checked_add(lifetime)?;
-                (deadline > now
+                // A deadline past what an `Instant` holds is none at all.
+                let deadline = lifetime.and_then(|lifetime| observed.checked_add(lifetime));
+                (deadline.is_none_or(|deadline| deadline > now)
                     && policy
                         .iter()
                         .any(|entry| entry.permits_name(name, addr.port())))
                 .then_some(deadline)
             })
-            .max()
+            .reduce(|one, other| one.zip(other).map(|(one, other)| one.max(other)))
     }
 
     #[cfg(test)]
@@ -295,11 +308,14 @@ impl Inner {
         }
     }
 
-    fn purge_expired(&mut self, now: Instant, lifetime: Duration) {
+    fn purge_expired(&mut self, now: Instant, lifetime: Option<Duration>) {
+        let Some(lifetime) = lifetime else {
+            return;
+        };
         while let Some((observed, addr, name)) = self.by_observed.first().cloned() {
             if observed
                 .checked_add(lifetime)
-                .is_some_and(|deadline| deadline > now)
+                .is_none_or(|deadline| deadline > now)
             {
                 break;
             }
@@ -415,7 +431,7 @@ mod tests {
 
     fn names(lifetime_secs: u64) -> ResolvedNames {
         ResolvedNames::new(ResolvedNameLimits {
-            lifetime: Duration::from_secs(lifetime_secs),
+            lifetime: Some(Duration::from_secs(lifetime_secs)),
             ..Default::default()
         })
     }
@@ -525,7 +541,7 @@ mod tests {
     fn the_association_bound_evicts_the_oldest_and_never_permits_it_again() {
         let t0 = Instant::now();
         let table = ResolvedNames::new(ResolvedNameLimits {
-            lifetime: Duration::from_secs(60),
+            lifetime: Some(Duration::from_secs(60)),
             max_names: 8,
             max_associations: 2,
         });
@@ -545,7 +561,7 @@ mod tests {
     fn the_name_bound_evicts_the_stalest_name_whole() {
         let t0 = Instant::now();
         let table = ResolvedNames::new(ResolvedNameLimits {
-            lifetime: Duration::from_secs(60),
+            lifetime: Some(Duration::from_secs(60)),
             max_names: 2,
             max_associations: 64,
         });
@@ -567,7 +583,7 @@ mod tests {
     fn expired_entries_are_removed_before_anything_live_is_evicted() {
         let t0 = Instant::now();
         let table = ResolvedNames::new(ResolvedNameLimits {
-            lifetime: Duration::from_secs(60),
+            lifetime: Some(Duration::from_secs(60)),
             max_names: 8,
             max_associations: 2,
         });
@@ -593,10 +609,52 @@ mod tests {
         assert_eq!(table.len(), (0, 0));
     }
 
+    /// Without a lifetime a grant stands until the table's bounds drop it, so
+    /// a guest that resolved once keeps its address.
+    #[test]
+    fn without_a_lifetime_a_grant_stands_until_evicted() {
+        let t0 = Instant::now();
+        let limits = ResolvedNameLimits {
+            max_names: 1,
+            ..Default::default()
+        };
+        let table = ResolvedNames::new(limits);
+        let allow = policy(&["*.internal"]);
+        table.record_at("db.internal", [ip("10.0.0.5")], t0, t0);
+
+        let years_on = t0 + Duration::from_secs(10 * 365 * 24 * 60 * 60);
+        assert!(table.permits_at(&allow, sock("10.0.0.5:5432"), years_on));
+        assert_eq!(
+            table.permitted_until_at(&allow, sock("10.0.0.5:5432"), years_on),
+            Some(None)
+        );
+
+        table.record_at("cache.internal", [ip("10.0.0.6")], years_on, years_on);
+        assert!(!table.permits_at(&allow, sock("10.0.0.5:5432"), years_on));
+        assert!(table.permits_at(&allow, sock("10.0.0.6:6379"), years_on));
+    }
+
+    /// A lifetime too long to add to an `Instant` is no deadline at all,
+    /// rather than one already past.
+    #[test]
+    fn a_lifetime_past_what_an_instant_holds_never_lapses() {
+        let t0 = Instant::now();
+        let table = ResolvedNames::new(ResolvedNameLimits {
+            lifetime: Some(Duration::MAX),
+            ..Default::default()
+        });
+        let allow = policy(&["db.internal"]);
+        table.record_at("db.internal", [ip("10.0.0.5")], t0, t0);
+        assert_eq!(
+            table.permitted_until_at(&allow, sock("10.0.0.5:5432"), t0),
+            Some(None)
+        );
+    }
+
     #[test]
     fn concurrent_recording_stays_within_bounds() {
         let table = Arc::new(ResolvedNames::new(ResolvedNameLimits {
-            lifetime: Duration::from_secs(60),
+            lifetime: Some(Duration::from_secs(60)),
             max_names: 4,
             max_associations: 16,
         }));
@@ -649,7 +707,7 @@ mod tests {
     fn churn_past_both_bounds_keeps_the_newest_and_the_indexes_consistent() {
         let t0 = Instant::now();
         let table = ResolvedNames::new(ResolvedNameLimits {
-            lifetime: Duration::from_secs(60),
+            lifetime: Some(Duration::from_secs(60)),
             max_names: 8,
             max_associations: 32,
         });

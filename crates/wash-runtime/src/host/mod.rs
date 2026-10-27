@@ -387,6 +387,18 @@ pub struct HostRef {
 }
 
 impl HostRef {
+    /// A standalone embedder with no host lifetime or outgoing HTTP handler.
+    ///
+    /// Useful for command runners that provide capabilities through native
+    /// plugins. WASI HTTP egress remains unavailable; use [`Self::from_handler`]
+    /// to supply it explicitly.
+    pub fn detached() -> Self {
+        Self {
+            handler: None,
+            lifetime: None,
+        }
+    }
+
     /// A reference to a handler with no host behind it, for an embedder that
     /// builds stores itself. Egress works; nothing ends those stores when the
     /// handler goes, because no host owns them.
@@ -533,7 +545,7 @@ impl Host {
 
         let mut filter_plugins = |interface: &WitInterface| {
             let mut found = false;
-            for (_, plugin) in self.plugins.iter() {
+            for plugin in self.plugins.values() {
                 if plugin.world().includes(interface) {
                     found = true;
                     break;
@@ -971,11 +983,20 @@ impl Host {
         Ok(monitor.cpu_usage().global_usage)
     }
 
+    /// Recheck after queued work obtains a permit and before expensive phases.
+    /// Reserving an ID earlier is still necessary for stop/status correctness.
+    pub(crate) fn check_start_memory(&self) -> Result<(), String> {
+        self.engine
+            .process_memory()
+            .map_or(Ok(()), |guard| guard.admit_start())
+    }
+
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
         cleanup: &crate::engine::workload::WorkloadResources,
     ) -> anyhow::Result<ResolvedWorkload> {
+        self.check_start_memory().map_err(anyhow::Error::msg)?;
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
 
@@ -991,6 +1012,10 @@ impl Host {
         let span = tracing::Span::current();
         let unresolved_workload = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
+            // The blocking executor can queue this after the check above.
+            if let Some(guard) = engine.process_memory() {
+                guard.admit_start().map_err(anyhow::Error::msg)?;
+            }
             engine.initialize_workload(&init_id, workload)
         })
         .await
@@ -1043,6 +1068,11 @@ impl HostApi for Host {
         // different questions: the monitor says how much memory this process
         // holds, the budget says how much of it guests asked for.
         self.engine.guest_memory().report();
+        // RSS from the monitor understates a process under pressure; this
+        // counts swapped and compressed pages too.
+        if let Some(process_memory) = self.engine.process_memory() {
+            process_memory.report();
+        }
 
         let (os_arch, os_name, os_kernel) = self.get_system_info().await;
         let (system_memory_total, system_memory_free) = self
@@ -1054,16 +1084,20 @@ impl HostApi for Host {
             .await
             .context("failed to get CPU usage")?;
 
-        // Count components and providers from workloads
+        // Count components and providers from workloads. The walk awaits
+        // nothing: the map lock is held for one pass over plain fields, so a
+        // host with 100k workloads does not stall starts and stops behind a
+        // per-workload lock every heartbeat.
         let (workload_count, component_count) = {
             let workloads = self.workloads.read().await;
             let workload_count: u64 = workloads.len() as u64;
-            let mut component_count: u64 = 0;
-            for workload in workloads.values() {
-                if let HostWorkload::Running(workload) = workload {
-                    component_count += workload.component_count().await as u64;
-                }
-            }
+            let component_count: u64 = workloads
+                .values()
+                .filter_map(|workload| match workload {
+                    HostWorkload::Running(workload) => Some(workload.component_count() as u64),
+                    _ => None,
+                })
+                .sum();
             (workload_count, component_count)
         };
 
@@ -1371,6 +1405,21 @@ impl WorkloadReservation for Host {
             tracing::warn!(workload_id, reason = message, "refused to start workload");
             return Err(message);
         }
+        // Plugin ids are not available as workload ids. A host component
+        // plugin binds its own native imports as a workload whose workload and
+        // component ids are both the plugin id
+        // (`component_host::link_native_imports`), and natives key per-workload
+        // state by workload id, so a workload under that id would share, then
+        // delete, the plugin's own state. Refusing every registered plugin id,
+        // native ones included, also keeps host-level state keyed by workload
+        // id distinct from anything named after a plugin. Plugins are fixed
+        // when the host is built, so this check is the only place needed.
+        if self.plugins.contains_key(workload_id) {
+            let message =
+                format!("Workload ID [{workload_id}] is reserved by host plugin [{workload_id}]");
+            tracing::warn!(workload_id, reason = message, "refused to start workload");
+            return Err(message);
+        }
         if workloads.contains_key(workload_id) {
             let message = format!(
                 "Workload ID [{workload_id}] already exists (the existing workload must be stopped to reuse the ID)"
@@ -1383,6 +1432,13 @@ impl WorkloadReservation for Host {
             // the caller as an error.
             debug!(workload_id, reason = message, "refused to start workload");
             return Err(message);
+        }
+        // After the duplicate check, so a replayed start still reads as the
+        // workload already running rather than as a refusal. The guard logs
+        // its own refusals, rate-limited: a host past its limit can be asked
+        // for thousands of starts a second.
+        if let Some(guard) = self.engine.process_memory() {
+            guard.admit_start()?;
         }
         workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
         Ok(reservation)
@@ -1639,6 +1695,27 @@ impl HostBuilder {
         &self.id
     }
 
+    /// Sets an ID known before the host connects to its control plane.
+    ///
+    /// The ID must be unique among every host sharing the control plane, and
+    /// never reused by a later host process: the operator may ignore heartbeats
+    /// from a removed host's ID for at least an hour. IDs must contain 1–128
+    /// ASCII letters, digits, hyphens, or underscores so they form one subject
+    /// token.
+    pub fn with_id(mut self, id: impl Into<String>) -> anyhow::Result<Self> {
+        let id = id.into();
+        anyhow::ensure!(
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')),
+            "host ID must contain 1–128 ASCII letters, digits, hyphens, or underscores"
+        );
+        self.id = id;
+        Ok(self)
+    }
+
     pub fn with_engine(mut self, engine: Engine) -> Self {
         self.engine = Some(engine);
         self
@@ -1659,6 +1736,9 @@ impl HostBuilder {
         }
 
         self.plugins.insert(plugin_id, plugin);
+        // Two plugins redefining one WASI interface cannot both take effect;
+        // refuse the host rather than let whichever binds last win.
+        crate::plugin::check_wasi_overrides(&self.plugins)?;
         Ok(self)
     }
 
@@ -1893,6 +1973,13 @@ impl HostBuilder {
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
             if let Some(policy) = declared.egress_policy(&engine.socket_policy) {
+                if policy.disabled_loopback_grants() {
+                    warn!(
+                        plugin_id = id,
+                        "host plugin declares allowedHostLoopbackPorts, but host-loopback access \
+                         is disabled; enable the host socket policy"
+                    );
+                }
                 plugin
                     .configure_egress_policy(policy)
                     .with_context(|| format!("invalid egress policy for host plugin '{id}'"))?;
@@ -1965,6 +2052,24 @@ fn reserve_http_ingress(
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    #[test]
+    fn host_id_accepts_one_bounded_subject_token() -> anyhow::Result<()> {
+        for id in ["host-1_A".to_string(), "a".repeat(128)] {
+            assert_eq!(HostBuilder::default().with_id(id.clone())?.id(), id);
+        }
+        for id in ["", "a.b", "*", ">", "a b", "a\tb", "a\nb", "höst", "a:b"] {
+            assert!(HostBuilder::default().with_id(id).is_err(), "{id:?}");
+        }
+        assert!(HostBuilder::default().with_id("a".repeat(129)).is_err());
+        assert_ne!(HostBuilder::default().id(), HostBuilder::default().id());
+        let generated = HostBuilder::default().id().to_string();
+        assert_eq!(
+            HostBuilder::default().with_id(generated.clone())?.id(),
+            generated
+        );
+        Ok(())
+    }
 
     #[test]
     fn http_ingress_is_host_owned() {
@@ -3471,6 +3576,73 @@ mod tests {
         assert!(format!("{err:#}").contains("allowedIpNameLookups"));
     }
 
+    /// Every plugin that dials a backend takes a declared ceiling rather than
+    /// refusing it as unenforceable, so none falls back to the default refusal.
+    /// wasmcloud-postgres also checks its base url here, so the list names it.
+    #[cfg(all(
+        feature = "wasm_component_model_implements",
+        feature = "wasi-keyvalue",
+        feature = "wasi-blobstore",
+        feature = "wasmcloud-postgres"
+    ))]
+    #[test]
+    fn every_dialing_plugin_accepts_a_declared_egress_policy() {
+        use crate::plugin::wasi_blobstore::{MultiplexedAsyncBlobstore, MultiplexedBlobstore};
+        use crate::plugin::wasi_keyvalue::{MultiplexedAsyncKeyValue, MultiplexedKeyValue};
+        use crate::plugin::wasmcloud_messaging::{MultiplexedAsyncMessaging, MultiplexedMessaging};
+        use crate::plugin::wasmcloud_postgres::WasmcloudPostgres;
+        use std::collections::BTreeSet;
+
+        let postgres =
+            WasmcloudPostgres::new(&url::Url::parse("postgres://u:p@db.internal/").unwrap())
+                .unwrap();
+        let plugins: [Arc<dyn HostPlugin>; 7] = [
+            Arc::new(MultiplexedKeyValue::new()),
+            Arc::new(MultiplexedAsyncKeyValue::new()),
+            Arc::new(MultiplexedBlobstore::new()),
+            Arc::new(MultiplexedAsyncBlobstore::new()),
+            Arc::new(MultiplexedMessaging::new()),
+            Arc::new(MultiplexedAsyncMessaging::new()),
+            Arc::new(postgres),
+        ];
+        let ids: BTreeSet<&str> = plugins.iter().map(|plugin| plugin.id()).collect();
+        assert_eq!(ids.len(), 7, "seven distinct plugin ids: {ids:?}");
+        for plugin in plugins {
+            let declared = crate::plugin::PluginBindingSet::new(plugin.id()).with_egress_policy(
+                Arc::from([
+                    "redis://cache.internal:6379".parse().unwrap(),
+                    "postgres://db.internal:5432".parse().unwrap(),
+                ]),
+                Arc::from([]),
+                Arc::from([]),
+            );
+            let id = plugin.id();
+            Host::builder()
+                .with_plugin(plugin)
+                .unwrap()
+                .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+                .build()
+                .unwrap_or_else(|err| panic!("{id}: {err:#}"));
+        }
+
+        // The base url the unnamed path dials is held to the same list.
+        let outside =
+            WasmcloudPostgres::new(&url::Url::parse("postgres://u:p@other.internal/").unwrap())
+                .unwrap();
+        let declared = crate::plugin::PluginBindingSet::new(outside.id()).with_egress_policy(
+            Arc::from(["postgres://db.internal:5432".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+        );
+        let err = Host::builder()
+            .with_plugin(Arc::new(outside))
+            .unwrap()
+            .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+            .build()
+            .expect_err("a base url outside the list must fail startup");
+        assert!(format!("{err:#}").contains("other.internal"), "{err:#}");
+    }
+
     /// A start that fails *after* its plugins bound must give the binding back.
     /// `resolve` rolls back its own failures; anything failing later has to be
     /// released by the start itself, or every plugin is left holding
@@ -3563,6 +3735,122 @@ mod tests {
             !host.workloads.read().await.contains_key("after-stop"),
             "a refused start must leave no reservation behind"
         );
+    }
+
+    /// A plugin's id is not available as a workload id: a host component
+    /// plugin's own native bindings are filed under it, so a workload sharing
+    /// it would share and then delete that state. The refusal comes before
+    /// anything binds, leaves no reservation behind, and does not affect ids
+    /// unrelated to a plugin.
+    #[tokio::test]
+    async fn test_a_workload_cannot_take_a_plugin_id() {
+        let plugin = Arc::new(BindRecordingPlugin::default());
+        let host = host_with(Arc::clone(&plugin));
+        let plugin_id = plugin.id();
+
+        let refused = host
+            .workload_start(marker_request(plugin_id))
+            .await
+            .expect("a refusal is a response, not a transport failure");
+        assert_eq!(
+            refused.workload_status.workload_state,
+            WorkloadState::Error,
+            "a workload id equal to a plugin id must be refused, got {:?}",
+            refused.workload_status
+        );
+        assert_eq!(
+            refused.workload_status.message,
+            format!("Workload ID [{plugin_id}] is reserved by host plugin [{plugin_id}]"),
+        );
+        assert!(
+            plugin.bound().is_empty() && plugin.unbound().is_empty(),
+            "a refused start must not reach any plugin: bound {:?}, unbound {:?}",
+            plugin.bound(),
+            plugin.unbound()
+        );
+        assert!(
+            !host.workloads.read().await.contains_key(plugin_id),
+            "a refused start must leave no reservation behind"
+        );
+        let status = host
+            .workload_status(WorkloadStatusRequest {
+                workload_id: plugin_id.to_string(),
+            })
+            .await
+            .expect("status should report");
+        assert_eq!(
+            status.workload_status.workload_state,
+            WorkloadState::NotFound
+        );
+
+        let unrelated = format!("{plugin_id}-2");
+        let started = host
+            .workload_start(marker_request(&unrelated))
+            .await
+            .expect("workload_start should report");
+        assert_eq!(
+            started.workload_status.workload_state,
+            WorkloadState::Running,
+            "an id that is not a plugin id still starts: {}",
+            started.workload_status.message
+        );
+        assert_eq!(plugin.bound(), vec![unrelated]);
+    }
+
+    /// The natives that key per-workload state by workload id, registered the
+    /// way a host registers them: none of their ids can be taken by a
+    /// workload, so a host component plugin's own bindings in any of them stay
+    /// its own.
+    #[cfg(all(
+        feature = "wasi-config",
+        feature = "wasi-logging",
+        feature = "wasi-keyvalue",
+        feature = "wasi-blobstore",
+        feature = "wasmcloud-postgres",
+        feature = "wasm_component_model_implements"
+    ))]
+    #[tokio::test]
+    async fn test_no_native_plugin_id_can_be_taken_by_a_workload() -> anyhow::Result<()> {
+        use crate::plugin::{
+            wasi_blobstore, wasi_config, wasi_keyvalue, wasi_logging, wasmcloud_messaging,
+            wasmcloud_postgres, wasmcloud_secrets,
+        };
+        let postgres_url = url::Url::parse("postgres://u:p@127.0.0.1:1/")?;
+        let host = Host::builder()
+            .with_plugin(Arc::new(wasi_config::DynamicConfig::default()))?
+            .with_plugin(Arc::new(wasi_logging::TracingLogger::default()))?
+            .with_plugin(Arc::new(wasi_keyvalue::InMemoryKeyValue::new()))?
+            .with_plugin(Arc::new(wasi_blobstore::InMemoryBlobstore::new(None)))?
+            .with_plugin(Arc::new(wasmcloud_messaging::InMemoryMessaging::new()))?
+            .with_plugin(Arc::new(wasmcloud_secrets::WasmcloudSecrets::new()))?
+            .with_plugin(Arc::new(wasmcloud_postgres::WasmcloudPostgres::new(
+                &postgres_url,
+            )?))?
+            .with_multiplexed_plugins()?
+            .build()?;
+
+        let mut ids: Vec<&str> = host.plugins.keys().copied().collect();
+        ids.sort_unstable();
+        assert!(ids.len() >= 11, "expected the full native set, got {ids:?}");
+        for id in ids {
+            let refused = host.workload_start(marker_request(id)).await?;
+            assert_eq!(
+                refused.workload_status.workload_state,
+                WorkloadState::Error,
+                "workload id [{id}] must be refused: {:?}",
+                refused.workload_status
+            );
+            assert!(
+                refused
+                    .workload_status
+                    .message
+                    .contains("reserved by host plugin"),
+                "unexpected refusal for [{id}]: {}",
+                refused.workload_status.message
+            );
+        }
+        assert!(host.workloads.read().await.is_empty());
+        Ok(())
     }
 
     /// A stop that arrives while a workload is still starting cannot tear it

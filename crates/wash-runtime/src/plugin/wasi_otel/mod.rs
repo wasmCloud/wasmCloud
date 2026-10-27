@@ -6,9 +6,9 @@ mod convert;
 
 pub use convert::otel_span_context_to_wit;
 use convert::{
-    convert_span_kind, convert_status, convert_wasi_log_record, extract_counter_values,
-    extract_gauge_values, extract_span_attributes, extract_span_events, extract_span_links,
-    summarize_resource_metrics, summarize_span_data, wasi_span_parent_context,
+    convert_datetime, convert_span_kind, convert_status, convert_wasi_log_record,
+    extract_counter_values, extract_gauge_values, extract_span_attributes, extract_span_events,
+    extract_span_links, summarize_resource_metrics, summarize_span_data, wasi_span_parent_context,
     wit_span_context_to_otel,
 };
 
@@ -232,7 +232,7 @@ impl HostPlugin for WasiOtel {
             .await
             .add_component(component_handle, ctx);
 
-        tracing::info!(
+        tracing::debug!(
             component_id = component_handle.id(),
             "WASI OTel interfaces bound to component"
         );
@@ -249,7 +249,7 @@ impl HostPlugin for WasiOtel {
             .await
             .remove_workload(workload_id)
             .await;
-        tracing::info!(workload_id, "WASI OTel unbound from workload");
+        tracing::debug!(workload_id, "WASI OTel unbound from workload");
         Ok(())
     }
 
@@ -279,7 +279,14 @@ impl<'a> bindings::wasi::otel::logs::Host for ActiveCtx<'a> {
         &mut self,
         data: bindings::wasi::otel::logs::LogRecord,
     ) -> wasmtime::Result<()> {
-        tracing::info!(?data, "emitting log record");
+        // Guest warnings and errors stay visible in the host log even with no
+        // OTel logs exporter; lower severities are per-request noise. The
+        // ranges match the severity mapping in `convert_wasi_log_record`.
+        match data.severity_number {
+            Some(17..=24) => tracing::error!(?data, "emitting log record"),
+            Some(13..=16) => tracing::warn!(?data, "emitting log record"),
+            _ => tracing::debug!(?data, "emitting log record"),
+        }
         if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
             let service_name = plugin.config.service_name.clone();
             let provider = plugin.logger_provider.read().await;
@@ -302,14 +309,17 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
         resource_metrics: bindings::wasi::otel::metrics::ResourceMetrics,
     ) -> wasmtime::Result<Result<(), bindings::wasi::otel::metrics::Error>> {
         if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
-            // Summarize incoming metrics for logging
-            let summary = summarize_resource_metrics(&resource_metrics);
-            tracing::info!(
-                total_scopes = summary.total_scopes,
-                total_metrics = summary.total_metrics,
-                metric_names = ?summary.metric_names,
-                "Processing WASI resource metrics"
-            );
+            // The summary formats a string per metric, so it is built only when
+            // something will print it; this runs on every guest export.
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                let summary = summarize_resource_metrics(&resource_metrics);
+                tracing::debug!(
+                    total_scopes = summary.total_scopes,
+                    total_metrics = summary.total_metrics,
+                    metric_names = ?summary.metric_names,
+                    "Processing WASI resource metrics"
+                );
+            }
 
             // Get the meter provider to record values
             let provider_guard = plugin.meter_provider.read().await;
@@ -349,8 +359,12 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
                     return Ok(Err(format!("Failed to flush metrics: {e}")));
                 }
 
-                tracing::info!(
-                    total_metrics = summary.total_metrics,
+                tracing::debug!(
+                    total_metrics = resource_metrics
+                        .scope_metrics
+                        .iter()
+                        .map(|scope| scope.metrics.len())
+                        .sum::<usize>(),
                     "Successfully processed WASI metrics"
                 );
             } else {
@@ -370,7 +384,7 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
         span_context: bindings::wasi::otel::tracing::SpanContext,
     ) -> wasmtime::Result<()> {
         // Log the span start - the actual span is managed by the guest
-        tracing::info!(
+        tracing::debug!(
             trace_id = %span_context.trace_id,
             span_id = %span_context.span_id,
             is_remote = span_context.is_remote,
@@ -384,19 +398,23 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
         span_data: bindings::wasi::otel::tracing::SpanData,
     ) -> wasmtime::Result<()> {
         if let Ok(plugin) = self.ctx.try_get_plugin::<WasiOtel>(WASI_OTEL_ID) {
-            let summary = summarize_span_data(&span_data);
-            tracing::info!(
-                name = %summary.name,
-                trace_id = %summary.trace_id,
-                span_id = %summary.span_id,
-                parent_span_id = %summary.parent_span_id,
-                kind = %summary.kind,
-                status = %summary.status,
-                attribute_count = summary.attribute_count,
-                event_count = summary.event_count,
-                link_count = summary.link_count,
-                "Processing WASI span end"
-            );
+            // The summary clones the span's names and IDs, so it is built only
+            // when something will print it; this runs on every guest span.
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                let summary = summarize_span_data(&span_data);
+                tracing::debug!(
+                    name = %summary.name,
+                    trace_id = %summary.trace_id,
+                    span_id = %summary.span_id,
+                    parent_span_id = %summary.parent_span_id,
+                    kind = %summary.kind,
+                    status = %summary.status,
+                    attribute_count = summary.attribute_count,
+                    event_count = summary.event_count,
+                    link_count = summary.link_count,
+                    "Processing WASI span end"
+                );
+            }
 
             let provider_guard = plugin.tracer_provider.read().await;
             if let Some(ref provider) = *provider_guard {
@@ -424,7 +442,7 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
                     .with_links(links);
 
                 // Set start time
-                builder = builder.with_start_time(summary.start_time);
+                builder = builder.with_start_time(convert_datetime(&span_data.start_time));
 
                 // Start the span, parented according to the guest's own nesting
                 let mut span = tracer.build_with_context(builder, &parent_cx);
@@ -438,11 +456,11 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
                 span.set_status(status);
 
                 // End the span with the end time from WASI
-                span.end_with_timestamp(summary.end_time);
+                span.end_with_timestamp(convert_datetime(&span_data.end_time));
 
-                tracing::info!(
-                    name = %summary.name,
-                    trace_id = %summary.trace_id,
+                tracing::debug!(
+                    name = %span_data.name,
+                    trace_id = %span_data.span_context.trace_id,
                     "Successfully exported WASI span"
                 );
             } else {
@@ -459,14 +477,14 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
         let span_context = current_context.span().span_context().clone();
 
         if span_context.is_valid() {
-            tracing::info!(
+            tracing::debug!(
                 trace_id = %format!("{:032x}", span_context.trace_id()),
                 span_id = %format!("{:016x}", span_context.span_id()),
                 "Returning outer span context"
             );
             Ok(otel_span_context_to_wit(&span_context))
         } else {
-            tracing::info!("No valid outer span context available");
+            tracing::debug!("No valid outer span context available");
             Ok(WitSpanContext {
                 trace_id: String::new(),
                 span_id: String::new(),

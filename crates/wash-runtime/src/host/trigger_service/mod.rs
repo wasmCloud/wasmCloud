@@ -494,6 +494,7 @@ pub(crate) async fn run_trigger_driver(
     let instance = pre
         .instantiate_async(&mut *store)
         .await
+        .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))
         .context("failed to instantiate trigger service")?;
     // `cli/run` is optional: a service exports it (its long-running work), but a
     // pure capability host component plugin need not — in which case there is
@@ -544,6 +545,7 @@ pub(crate) async fn run_trigger_driver(
                 futures::future::join_all(prepared.iter_mut().map(|p| p.serve(accessor))).await
             })
             .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
             .context("trigger service driver exited")?;
         // Every channel closed → clean stop, unless an ingress asked to flush a
         // proxied-resource drop (which needs top-level store access), in which

@@ -12,6 +12,7 @@ on:
       - crates/wash-runtime/tests/fixtures/http-handler-p2/**
       - crates/wash-runtime/tests/fixtures/http-relay/**
       - xtask/**
+      - '!xtask/src/fixtures.rs'
       - .github/workflows/k6bench*.yml
 
 permissions:

@@ -73,6 +73,58 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Embedded commands
+
+An embedder can resolve a workload and run one of its components as a command:
+
+```rust,ignore
+use wash_runtime::engine::command::CommandOptions;
+
+let resolved = engine.initialize_workload("shell-run", workload)?
+    .resolve(Some(&plugins), &bindings, &host_ref, &meters).await?;
+let options = CommandOptions::new()
+    .args(["agent", "hello"])
+    .stdin(wasmtime_wasi::cli::stdin());
+let result = resolved.run_command(&component_id, options).await;
+let cleanup = resolved.unbind_all_plugins().await;
+let exit_code = result?.exit_code;
+cleanup?;
+```
+
+`run_command` runs a WASIp2 or WASIp3 `wasi:cli/run` exactly once in a fresh
+store, using the resolved workload's grants, plugins, environment and volumes.
+Arguments include the program name.
+Stdin defaults to EOF; stdout and stderr default to the host's streams.
+All three accept custom WASI streams, including memory pipes and terminal adapters.
+Successful and unsuccessful command returns become exit codes 0 and 1;
+`wasi:cli/exit` preserves its exit code, and traps return errors.
+Dropping the invocation future drops its store.
+Services retain their existing supervision behavior.
+
+### Structured streams across component-plugin stores
+
+Scalar and string stream/future payloads work without configuration.
+For application-defined records, variants, lists, options and results,
+register the generated Wasmtime binding type before loading plugins or resolving
+workloads:
+
+```rust,ignore
+// `payload_type` is the Type from a compiled component's StreamType::ty()
+// or FutureType::ty(), e.g. the record used by stream<entry>.
+engine.stream_payloads().register::<bindings::Entry>(payload_type)?;
+```
+
+Registrations belong to the engine and propagate to both workload and plugin
+stores, including restarted plugin stores.
+The bridge uses the same bounded, backpressured pumps as scalar streams;
+it does not collect a stream before returning it.
+Wasmtime checks the registered Rust type against each source handle before
+transferring it.
+Payloads containing resources, nested streams/futures or error contexts are
+rejected because their handles belong to the source store.
+Native Rust plugins can use their generated typed bindings directly and need
+no cross-store registration.
+
 ### Cargo Features
 
 The crate supports the following cargo features:

@@ -136,6 +136,12 @@ pub(crate) async fn handle_component_request_p3(
                                 return Ok(());
                             }
                             Err(e) => {
+                                store.with(|mut access| {
+                                    crate::engine::trap_remediation::note_guest_fault(
+                                        access.data_mut(),
+                                        &e,
+                                    )
+                                });
                                 if let Some(tx) = parts_tx.take() {
                                     let _ =
                                         tx.send(Err(anyhow::anyhow!(e).context("P3 handler trap")));
@@ -219,7 +225,10 @@ pub(crate) async fn handle_component_request_p3(
             match run {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => tracing::error!(err = ?e, "P3 response streaming failed"),
-                Err(e) => tracing::error!(err = ?e, "P3 run_concurrent failed"),
+                Err(e) => {
+                    tracing::error!(err = ?e, "P3 run_concurrent failed");
+                    crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
+                }
             }
             drop(store);
         }

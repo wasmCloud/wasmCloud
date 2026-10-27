@@ -299,7 +299,9 @@ pub(crate) async fn deliver_pooled(
         // the log.
         Dispatch::NeedsInstance(job) => {
             let mut store = workload.new_store(component_id).await?;
-            let instance = pre.instantiate_async(&mut store).await?;
+            let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
+                crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+            })?;
             pool.dispatch_on_new(ComponentInstance { store, instance }, job)
                 .err()
         }
@@ -332,7 +334,9 @@ pub(crate) async fn deliver_pooled(
         Some(built) => built,
         None => {
             let mut store = workload.new_store(component_id).await?;
-            let instance = pre.instantiate_async(&mut store).await?;
+            let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
+                crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+            })?;
             ComponentInstance { store, instance }
         }
     };
@@ -366,6 +370,7 @@ pub(crate) async fn deliver_pooled(
     }))
     .await
     .ok_or_else(|| anyhow::anyhow!("delivery produced no message response in time"))?
+    .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
     .map_err(|e| anyhow::anyhow!("{e:#}"))?
     .map_err(|e| anyhow::anyhow!("{e:#}"))?;
     result_rx
@@ -508,10 +513,19 @@ macro_rules! messaging_handler_dispatch {
                 &self,
                 store: &mut wasmtime::Store<$crate::engine::ctx::SharedCtx>,
             ) -> wasmtime::Result<HandlerProxy> {
-                match self {
-                    HandlerPre::V0_2(p) => p.instantiate_async(store).await.map(HandlerProxy::V0_2),
-                    HandlerPre::V0_3(p) => p.instantiate_async(store).await.map(HandlerProxy::V0_3),
-                }
+                let instantiated = match self {
+                    HandlerPre::V0_2(p) => p
+                        .instantiate_async(&mut *store)
+                        .await
+                        .map(HandlerProxy::V0_2),
+                    HandlerPre::V0_3(p) => p
+                        .instantiate_async(&mut *store)
+                        .await
+                        .map(HandlerProxy::V0_3),
+                };
+                instantiated.map_err(|e| {
+                    $crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })
             }
         }
 
@@ -557,7 +571,10 @@ macro_rules! messaging_handler_dispatch {
                                     .call_handle_message(accessor, wit_msg)
                                     .await
                             })
-                            .await??;
+                            .await
+                            .inspect_err(|e| {
+                                $crate::engine::trap_remediation::note_guest_fault(store.data(), e)
+                            })??;
                         Ok(outcome.map_err(render_handle_error))
                     }
                 }

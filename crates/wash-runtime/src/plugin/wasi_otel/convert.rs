@@ -309,7 +309,9 @@ pub fn extract_counter_values(metrics: &wasi_metrics::ResourceMetrics) -> Vec<Co
 // ============================================================================
 
 /// Convert a WASI datetime to SystemTime
-fn convert_datetime(dt: &super::bindings::wasi::clocks::wall_clock::Datetime) -> SystemTime {
+pub(super) fn convert_datetime(
+    dt: &super::bindings::wasi::clocks::wall_clock::Datetime,
+) -> SystemTime {
     let duration = Duration::new(dt.seconds, dt.nanoseconds);
     UNIX_EPOCH.checked_add(duration).unwrap_or(UNIX_EPOCH)
 }
@@ -404,8 +406,6 @@ pub struct SpanSummary {
     pub span_id: String,
     pub parent_span_id: String,
     pub kind: String,
-    pub start_time: SystemTime,
-    pub end_time: SystemTime,
     pub attribute_count: usize,
     pub event_count: usize,
     pub link_count: usize,
@@ -434,8 +434,6 @@ pub fn summarize_span_data(span: &wasi_tracing::SpanData) -> SpanSummary {
         span_id: span.span_context.span_id.clone(),
         parent_span_id: span.parent_span_id.clone(),
         kind: kind.to_string(),
-        start_time: convert_datetime(&span.start_time),
-        end_time: convert_datetime(&span.end_time),
         attribute_count: span.attributes.len(),
         event_count: span.events.len(),
         link_count: span.links.len(),

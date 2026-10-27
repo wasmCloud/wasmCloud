@@ -584,12 +584,22 @@ impl HostPlugin for NatsMessaging {
         let guest_meter = self.meters.read().await.guest();
         // The identity every message on this component is measured under,
         // resolved once here rather than per delivery.
-        let attributes = workload
-            .component_identity(&component_id)
-            .await
-            .attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
+        let identity = workload.component_identity(&component_id).await;
+        let attributes = identity.attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
 
-        let span = tracing::Span::current();
+        // The loop runs for the workload's life, so its span is a root of its
+        // own, linked to the start that created it. Parenting it on the
+        // current span would hold the start's span, and every span above it
+        // (`workload_start`, `handle_command`), open for as long as the
+        // workload runs, keeping them unexported and in memory. DEBUG, so a
+        // host not tracing at that level keeps no span per subscriber at all.
+        let span = tracing::debug_span!(
+            parent: None,
+            "wasmcloud.messaging.subscriber",
+            workload.id = %workload.id(),
+            component_id = %component_id,
+        );
+        span.follows_from(tracing::Span::current());
         let handle = tokio::spawn(async move {
             debug!(
                 parent: &span,
@@ -603,6 +613,7 @@ impl HostPlugin for NatsMessaging {
                             None => {
                                 warn!(
                                     parent: &span,
+                                    workload.id = %workload.id(),
                                     component_id = %component_id,
                                     "NATS subscriber stream closed unexpectedly; handler will stop receiving messages"
                                 );
@@ -633,6 +644,7 @@ impl HostPlugin for NatsMessaging {
                         if http_handler.is_none() && pre.is_none() {
                             warn!(
                                 parent: &span,
+                                workload.id = %workload.id(),
                                 component_id = %component_id,
                                 "host is gone and this component has no per-message \
                                  instance; ending the NATS subscriber loop"
@@ -663,10 +675,10 @@ impl HostPlugin for NatsMessaging {
                             {
                                 Ok(Ok(())) => debug!(%subject, "trigger service handled message"),
                                 Ok(Err(e)) => {
-                                    warn!(%subject, error = %e, "trigger service message handler returned error")
+                                    warn!(workload.id = %workload.id(), %subject, error = %e, "trigger service message handler returned error")
                                 }
                                 Err(e) => {
-                                    warn!(%subject, error = %e, "failed to deliver message to trigger service")
+                                    warn!(workload.id = %workload.id(), %subject, error = %e, "failed to deliver message to trigger service")
                                 }
                             }
                             continue;
@@ -674,6 +686,7 @@ impl HostPlugin for NatsMessaging {
 
                         let Some(pre) = &pre else {
                             warn!(
+                                workload.id = %workload.id(),
                                 %subject,
                                 component_id = %component_id,
                                 "no trigger service registered and no per-message instance; dropping message"
@@ -786,16 +799,19 @@ impl HostPlugin for NatsMessaging {
                             continue;
                         }
 
-                        let mut store = match workload.new_store(&component_id).await {
+                        let mut store = match workload
+                            .new_store_as(&component_id, Some(&identity))
+                            .await
+                        {
                             Err(e) => {
-                                warn!("failed to create store for component {component_id}: {e}");
+                                warn!(workload.id = %workload.id(), "failed to create store for component {component_id}: {e}");
                                 continue;
                             }
                             Ok(s) => s,
                         };
                         let proxy = match pre.instantiate(&mut store).await {
                             Err(e) => {
-                                warn!("failed to instantiate component {component_id}: {e}");
+                                warn!(workload.id = %workload.id(), "failed to instantiate component {component_id}: {e}");
                                 continue;
                             }
                             Ok(p) => p,

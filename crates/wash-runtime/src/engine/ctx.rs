@@ -61,6 +61,8 @@ impl wasmtime_wasi_tls::TlsProvider for SharedTlsProvider {
 
 /// Shared context for linked components
 pub struct SharedCtx {
+    /// Typed adapters used when this store exchanges stream/future payloads.
+    pub stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// Current active context
     pub active_ctx: Ctx,
     /// The resource table used to manage resources in the Wasmtime store.
@@ -142,6 +144,7 @@ impl SharedCtx {
     pub fn new(context: Ctx) -> Self {
         Self {
             active_ctx: context,
+            stream_payloads: Arc::default(),
             table: ResourceTable::new(),
             contexts: Default::default(),
             exporter_instances: Default::default(),
@@ -327,6 +330,10 @@ pub struct Ctx {
     plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
     /// The HTTP hooks for outgoing HTTP requests.
     http_hooks: CtxHttpHooks,
+    /// Whether this workload deploy has already logged the remediation hint
+    /// for a known guest toolchain trap. Shared by every component of one
+    /// deploy (see [`crate::engine::trap_remediation`]).
+    pub(crate) trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Ctx {
@@ -634,6 +641,7 @@ impl CtxBuilder {
             },
             plugins,
             http_hooks,
+            trap_hint_logged: Arc::default(),
         }
     }
 }

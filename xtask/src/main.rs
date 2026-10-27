@@ -14,7 +14,10 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 mod e2e_images;
+mod fixtures;
 mod protos;
+
+use fixtures::{P2_FIXTURES, P3_FIXTURES};
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "wasmCloud workspace tasks", version)]
@@ -39,6 +42,12 @@ enum Task {
     /// oci-registry, and push the fixtures into it. Configured via env
     /// (E2E_IMAGES_MODE, E2E_FIXTURES_DIR); see the e2e_images module.
     E2eImages,
+    /// Run the host density benchmark (`crates/bench-scale`) in release mode,
+    /// forwarding every argument; `cargo xtask bench-scale --help` lists them.
+    BenchScale {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -48,7 +57,24 @@ fn main() -> Result<()> {
         Task::BuildFixtures { names } => build_fixtures(&workspace, &names),
         Task::E2eImages => e2e_images::run(&workspace),
         Task::GenerateProtos => protos::run(&workspace),
+        Task::BenchScale { args } => bench_scale(&workspace, &args),
     }
+}
+
+/// `cargo run -p bench-scale --release -- <args>`, exiting with its status so
+/// the bench's exit code (2: too few workloads served) reaches the caller.
+fn bench_scale(workspace: &Path, args: &[String]) -> Result<()> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let status = Command::new(cargo)
+        .args(["run", "-p", "bench-scale", "--release", "--"])
+        .args(args)
+        .current_dir(workspace)
+        .status()
+        .context("failed to run cargo run -p bench-scale")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
 }
 
 /// Walk up from this crate's manifest dir to the workspace root (the
@@ -84,95 +110,6 @@ impl FixtureKind {
         }
     }
 }
-
-const P2_FIXTURES: &[&str] = &[
-    "http-handler-p2",
-    "http-counter",
-    "cron-service",
-    "cron-component",
-    "http-blobstore",
-    "cpu-usage-service",
-    "messaging-handler",
-    "messaging-echo",
-    "inter-component-call-caller",
-    "inter-component-call-callee",
-    "inter-component-call-middleware",
-    "borrow-producer-p2",
-    "borrow-consumer-p2",
-    "borrow-middleware-p2",
-    "borrow-caller-p2",
-    "config-caller",
-    "config-callee",
-    "http-allowed-hosts",
-    "http-egress-pool",
-    "http-ip-name-lookup",
-    "keyvalue-counter",
-    "keyvalue-implements",
-    "postgres-implements",
-    "feeds-callee-a",
-    "feeds-callee-b",
-    "feeds-caller",
-    "http-relay",
-];
-
-const P3_FIXTURES: &[&str] = &[
-    "messaging-echo-p3",
-    "messaging-sleeper-p3",
-    "nats-async-handler-p3",
-    "nats-implements-p3",
-    "messaging-dual-handler",
-    "http-handler-p3",
-    "http-local-caller-p3",
-    "http-memory-grow",
-    "http-ip-name-lookup-p3",
-    "http-blobstore-p3",
-    "cli-service-p3",
-    "socket-test-p3",
-    "tls-echo-client-p3",
-    "inter-component-call-p3-caller",
-    "inter-component-call-p3-callee",
-    "stream-producer-p3",
-    "stream-consumer-p3",
-    "stream-pacer-p3",
-    "res-producer-p3",
-    "res-sink-p3",
-    "res-caller-p3",
-    "borrow-producer-p3",
-    "borrow-consumer-p3",
-    "borrow-middleware-p3",
-    "borrow-caller-p3",
-    "ephemeral-callee-p3",
-    "ephemeral-caller-p3",
-    "blobstore-implements-p3",
-    "blobstore-default-p3",
-    "keyvalue-implements-p3",
-    "keyvalue-default-p3",
-    "postgres-stream-p3",
-    "svc-counter",
-    "svc-http-proxy",
-    "svc-tcp-echo",
-    "http-loopback-gateway",
-    "svc-no-run",
-    "http-sleeper",
-    "msg-counter",
-    "bridge-backend",
-    "bridge-service",
-    "http-webgpu",
-    "kv-plugin",
-    "kv-plugin-caller",
-    "kv-plugin-implements-caller",
-    "kv-plugin-service",
-    "badlifecycle",
-    "secrets-caller",
-    "secrets-consumer-plugin",
-    "secrets-consumer-plugin-caller",
-    "http-egress-plugin",
-    "http-egress-plugin-caller",
-    "events-plugin",
-    "events-caller",
-    "events-service",
-    "dispatch-target",
-];
 
 fn build_fixtures(workspace: &Path, names: &[String]) -> Result<()> {
     let fixtures_dir = workspace.join("crates/wash-runtime/tests/fixtures");

@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     # P2 fixtures (wasm32-wasip2)
+    "structured-plugin",
+    "structured-caller",
     "http-handler-p2",
     "http-counter",
     "cron-service",
@@ -36,6 +38,7 @@ members = [
     "postgres-implements",
     "http-relay",
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
+    "command-p3",
     "http-handler-p3",
     "http-local-caller-p3",
     "http-memory-grow",

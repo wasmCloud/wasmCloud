@@ -8,6 +8,11 @@
 //!   `throughput`) so the existing `arewefastyet` reader doesn't break
 //!   on the schema bump.
 //! - gungraun rows carry only `metric` + `value` (Ir instruction counts).
+//! - Density rows (from `<target>/density/<bench>.json`, a list of
+//!   [`bench_tools::density::Report`]) carry `metric`, `value`, `unit` and
+//!   `better`, as k6 rows do: group `density`, one `param` per flavour
+//!   label (`warm`, `scale-to-zero@2cpu`), one row per figure. The label is
+//!   stable across machines; what ran is in the bench's own report.
 //!
 //! The dedup key in `push-s3.sh` is widened to include `.metric`, which
 //! lets `(bench, group, param)` map to multiple rows, one per metric,
@@ -59,6 +64,19 @@ struct CriterionRow<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct DensityRow<'a> {
+    bench: &'a str,
+    group: &'a str,
+    param: &'a str,
+    #[serde(flatten)]
+    meta: &'a Meta,
+    metric: &'static str,
+    value: f64,
+    unit: &'static str,
+    better: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 struct GungraunRow<'a> {
     bench: &'a str,
     group: String,
@@ -85,6 +103,9 @@ pub fn run(args: Args) -> Result<()> {
 
     if crate::callgrind::is_instruction_bench(&args.bench) {
         return emit_gungraun(&mut out, &args.bench, &meta, &target_dir);
+    }
+    if let Some(reports) = density_reports(&target_dir, &args.bench)? {
+        return emit_density(&mut out, &args.bench, &meta, &reports);
     }
 
     emit_criterion(
@@ -155,6 +176,47 @@ fn emit_gungraun<W: Write>(
         };
         serde_json::to_writer(&mut *out, &serialized)?;
         out.write_all(b"\n")?;
+    }
+    Ok(())
+}
+
+/// The density reports a run wrote to `<target>/density/<bench>.json`, if
+/// this bench is one that writes them.
+pub fn density_reports(
+    target_dir: &Path,
+    bench: &str,
+) -> Result<Option<Vec<bench_tools::density::Report>>> {
+    let path = target_dir.join("density").join(format!("{bench}.json"));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)?;
+    let reports = serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
+    Ok(Some(reports))
+}
+
+fn emit_density<W: Write>(
+    out: &mut W,
+    bench: &str,
+    meta: &Meta,
+    reports: &[bench_tools::density::Report],
+) -> Result<()> {
+    for report in reports {
+        for metric in report.metrics() {
+            let row = DensityRow {
+                bench,
+                group: "density",
+                param: &report.label,
+                meta,
+                metric: metric.name,
+                value: metric.value,
+                unit: metric.unit,
+                better: metric.better.as_str(),
+            };
+            serde_json::to_writer(&mut *out, &row)?;
+            out.write_all(b"\n")?;
+        }
     }
     Ok(())
 }

@@ -12,7 +12,7 @@ use anyhow::{bail, ensure};
 use tokio::{sync::RwLock, task::JoinHandle};
 use tracing::{Instrument, debug, error, info, instrument, trace, warn};
 use wasmtime::component::{
-    Component, InstancePre, Linker, ResourceAny, ResourceType, types::ComponentItem,
+    Component, InstancePre, Linker, LinkerInstance, ResourceAny, ResourceType, types::ComponentItem,
 };
 use wasmtime::error::Context as _;
 use wasmtime_wasi::p2::bindings::CommandPre;
@@ -145,8 +145,10 @@ pub struct WorkloadMetadata {
     workload_namespace: Arc<str>,
     /// The actual wasmtime [`Component`] that can be instantiated
     component: Component,
-    /// The wasmtime [`Linker`] used to instantiate the component
-    linker: Linker<SharedCtx>,
+    /// The wasmtime [`Linker`] used to instantiate the component. Shared with
+    /// every component that started from the same base until something
+    /// writes to it (see [`Self::linker`]).
+    linker: Arc<Linker<SharedCtx>>,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
     /// Pinned directory handles with guest mount names and permissions.
@@ -168,12 +170,21 @@ pub struct WorkloadMetadata {
     /// [`Default`] here is an unmetered budget, so a metadata built outside an
     /// engine is neither charged nor limited.
     pub(crate) guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// Set once this workload deploy has logged the remediation hint for a
+    /// known guest toolchain trap. One flag is shared by every component of a
+    /// deploy, so a redeploy starts with a fresh one.
+    pub(crate) trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
     /// Workload annotations
     pub(crate) annotations: Arc<HashMap<String, String>>,
     /// Top-level imports already supplied by host plugins.
     plugin_bound_instances: HashSet<String>,
+    /// Keeps the engine reusing this compile for any workload that loads the
+    /// same digest while this one runs (see [`super::LiveCompile`]).
+    pub(crate) compiled: Option<Arc<super::LiveCompile>>,
+    /// The component linked against `linker`, kept once a caller asked for it.
+    pre: std::sync::OnceLock<InstancePre<SharedCtx>>,
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
@@ -251,8 +262,54 @@ impl WorkloadMetadata {
     }
 
     /// Returns a mutable reference to the component's linker.
+    ///
+    /// Copies the linker first if it is still the engine's shared one, so ask
+    /// for it only to write to it: a component nothing writes to never pays
+    /// for a linker of its own.
+    ///
+    /// Forgets the linked component [`WorkloadComponent::pre_instantiate_ref`]
+    /// keeps, since a caller holding the linker mutably may change what it
+    /// links.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
-        &mut self.linker
+        self.pre = std::sync::OnceLock::new();
+        Arc::make_mut(&mut self.linker)
+    }
+
+    /// Reopen a host-linked WASI interface for a declared plugin override.
+    ///
+    /// Use this from [`HostPlugin::on_workload_item_bind`] after declaring the
+    /// interface in [`HostPlugin::wasi_overrides`]. Name one interface with a
+    /// version, such as `wasi:clocks/monotonic-clock@0.2.0`.
+    ///
+    /// Resolves compatible revisions to the exact instance the host registered,
+    /// preserving every function and resource the plugin does not redefine.
+    /// Calling `linker().instance(...)` with a different revision creates a
+    /// separate instance: it neither overrides the host's newer name nor
+    /// inherits the host's remaining definitions.
+    pub fn wasi_override_instance(
+        &mut self,
+        interface: &str,
+    ) -> anyhow::Result<LinkerInstance<'_, SharedCtx>> {
+        let interface = WitInterface::from(interface);
+        ensure!(
+            interface.is_host_builtin() && interface.interfaces.len() == 1,
+            "a WASI override must name one host-linked interface at a supported version"
+        );
+        let requested = interface
+            .version
+            .as_ref()
+            .context("a WASI override requires an explicit version to select WASIp2 or WASIp3")?;
+        let version = super::WASI_LINKER_VERSIONS
+            .into_iter()
+            .find(|linked| crate::wit::versions_compatible(Some(requested), Some(linked)))
+            .context("unsupported WASI override version")?;
+        let name = interface
+            .interfaces
+            .iter()
+            .next()
+            .context("missing WASI interface name")?;
+        let instance = format!("wasi:{}/{name}@{version}", interface.package);
+        Ok(self.linker().instance(&instance)?)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
@@ -418,7 +475,7 @@ impl WorkloadService {
         workload_name: impl Into<Arc<str>>,
         workload_namespace: impl Into<Arc<str>>,
         component: Component,
-        linker: Linker<SharedCtx>,
+        linker: impl Into<Arc<Linker<SharedCtx>>>,
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         max_restarts: u64,
@@ -431,7 +488,7 @@ impl WorkloadService {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker,
+                linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -439,9 +496,12 @@ impl WorkloadService {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                trap_hint_logged: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                compiled: None,
+                pre: std::sync::OnceLock::new(),
             },
             handle: None,
             max_restarts,
@@ -457,8 +517,14 @@ impl WorkloadService {
         self
     }
 
+    /// Share the workload deploy's trap-hint flag with this component.
+    pub(crate) fn with_trap_hint_flag(mut self, flag: &Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.metadata.trap_hint_logged = Arc::clone(flag);
+        self
+    }
+
     /// Pre-instantiate the component to prepare for execution.
-    pub fn pre_instantiate(&mut self) -> anyhow::Result<CommandPre<SharedCtx>> {
+    pub fn pre_instantiate(&self) -> anyhow::Result<CommandPre<SharedCtx>> {
         let component = self.metadata.component.clone();
         let pre = self.metadata.linker.instantiate_pre(&component)?;
         let command = CommandPre::new(pre)?;
@@ -467,7 +533,7 @@ impl WorkloadService {
 
     /// Pre-instantiate the component for P3 execution.
     pub fn pre_instantiate_p3(
-        &mut self,
+        &self,
     ) -> anyhow::Result<wasmtime_wasi::p3::bindings::CommandPre<SharedCtx>> {
         let component = self.metadata.component.clone();
         let pre = self.metadata.linker.instantiate_pre(&component)?;
@@ -530,7 +596,7 @@ impl WorkloadComponent {
         workload_namespace: impl Into<Arc<str>>,
         component_name: impl Into<Arc<str>>,
         component: Component,
-        linker: Linker<SharedCtx>,
+        linker: impl Into<Arc<Linker<SharedCtx>>>,
         volume_mounts: Vec<(PathBuf, VolumeMount)>,
         local_resources: LocalResources,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
@@ -543,7 +609,7 @@ impl WorkloadComponent {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker,
+                linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -551,9 +617,12 @@ impl WorkloadComponent {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                trap_hint_logged: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
+                compiled: None,
+                pre: std::sync::OnceLock::new(),
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),
@@ -569,6 +638,12 @@ impl WorkloadComponent {
         self
     }
 
+    /// Share the workload deploy's trap-hint flag with this component.
+    pub(crate) fn with_trap_hint_flag(mut self, flag: &Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.metadata.trap_hint_logged = Arc::clone(flag);
+        self
+    }
+
     /// Pre-instantiate the component to prepare for instantiation.
     pub fn pre_instantiate(&mut self) -> wasmtime::Result<InstancePre<SharedCtx>> {
         let component = self.metadata.component.clone();
@@ -579,10 +654,22 @@ impl WorkloadComponent {
     /// `Linker::instantiate_pre` only needs `&self`, so callers holding a read
     /// lock on the component map can pre-instantiate without serializing on a
     /// write lock.
+    ///
+    /// Linked once and reused: a request store or dispatch asks for this every
+    /// time, and checking every import against the linker per request is work
+    /// whose answer cannot change while nothing takes the linker mutably
+    /// (see [`WorkloadMetadata::linker`], which forgets it).
     pub fn pre_instantiate_ref(&self) -> wasmtime::Result<InstancePre<SharedCtx>> {
-        self.metadata
+        if let Some(pre) = self.metadata.pre.get() {
+            return Ok(pre.clone());
+        }
+        let pre = self
+            .metadata
             .linker
-            .instantiate_pre(&self.metadata.component)
+            .instantiate_pre(&self.metadata.component)?;
+        // Losing a race to another caller leaves the same answer stored.
+        let _ = self.metadata.pre.set(pre.clone());
+        Ok(pre)
     }
 
     pub fn metadata(&self) -> &WorkloadMetadata {
@@ -699,6 +786,8 @@ impl DerefMut for WorkloadService {
 /// state of a workload before execution.
 #[derive(Clone)]
 pub struct ResolvedWorkload {
+    /// Engine-local adapters shared by linking and every store built for this workload.
+    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
@@ -708,6 +797,8 @@ pub struct ResolvedWorkload {
     /// All components in the workload. This is behind a `RwLock` to support mutable
     /// access to the component linkers.
     components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
+    /// How many entries `components` holds, which never changes once resolved.
+    component_count: usize,
     /// The HTTP handler for outgoing HTTP requests. See
     /// [`crate::host::http::live_handler`] for why this is weak and how the
     /// two kinds of caller differ.
@@ -717,7 +808,11 @@ pub struct ResolvedWorkload {
     /// because a store has no other way back to the host that owns it.
     invocation: crate::observability::InvocationMeter,
     /// An optional service component that runs once to completion or for the duration of the workload
-    service: Option<WorkloadService>,
+    ///
+    /// Shared for the same reason as `host_interfaces`: its `Linker` is held
+    /// by value. The few writes after resolution go through `Arc::make_mut`,
+    /// so a clone taken earlier keeps what it saw, as a by-value copy did.
+    service: Option<Arc<WorkloadService>>,
     /// The ingress plugin-dispatched calls reach the service on, once one has
     /// claimed it as a [`DispatchTarget`]. Present whether or not the workload
     /// has a service — an unclaimed one costs a lock and an empty option.
@@ -728,7 +823,9 @@ pub struct ResolvedWorkload {
     /// checks this rather than instantiating into a workload that is going away.
     released: Arc<std::sync::atomic::AtomicBool>,
     /// The requested host [`WitInterface`]s to resolve this workload
-    host_interfaces: Vec<WitInterface>,
+    /// Shared, because a resolved workload is cloned per request and per
+    /// plugin binding and never changes these.
+    host_interfaces: Arc<Vec<WitInterface>>,
     /// Native bindings retained after a successful start so a cancelled stop
     /// can resume the same per-plugin teardown journal.
     teardown_bindings: Arc<[PendingBinding]>,
@@ -747,14 +844,7 @@ impl std::fmt::Debug for ResolvedWorkload {
             .field("namespace", &self.namespace)
             .field("host_interfaces", &self.host_interfaces)
             .field("has_service", &self.service.is_some())
-            .field(
-                "component_count",
-                &self
-                    .components
-                    .try_read()
-                    .map(|g| g.len() as isize)
-                    .unwrap_or(-1),
-            );
+            .field("component_count", &self.component_count);
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
@@ -768,6 +858,7 @@ impl std::fmt::Debug for ResolvedWorkload {
 /// leave every restarted incarnation permanently broken.
 struct ServiceStoreRecipe {
     engine: wasmtime::Engine,
+    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// Weak, like the workload's own; the supervisor holds this recipe for as
     /// long as the service runs.
     http_handler: crate::host::HostRef,
@@ -789,6 +880,7 @@ impl ServiceStoreRecipe {
     async fn build(&self) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let store = new_store_from_templates(
             &self.engine,
+            &self.stream_payloads,
             &self.http_handler,
             &self.active_template,
             &self.linked_templates,
@@ -875,13 +967,13 @@ impl ResolvedWorkload {
             return self.execute_service_p3().await;
         }
 
-        let Some(service) = self.service.as_mut() else {
+        let Some(service) = self.service.as_ref() else {
             return Ok(None);
         };
         let pre = service.pre_instantiate()?;
         let mut max_restarts = service.max_restarts;
         self.resolve_service_volume_mounts().await?;
-        // Re-borrow immutably after the mutable borrow for pre_instantiate() is done
+        // Re-borrow after resolving volume mounts, which needs `&mut self`
         let Some(service) = self.service.as_ref() else {
             bail!("service unexpectedly missing during execution");
         };
@@ -890,7 +982,10 @@ impl ResolvedWorkload {
             .await?
             .build()
             .await?;
-        let instance = pre.instantiate_async(&mut store).await?;
+        let instance = pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
         let handle = tokio::spawn(async move {
             loop {
                 if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
@@ -908,7 +1003,7 @@ impl ResolvedWorkload {
         });
 
         let handle = Arc::new(handle);
-        if let Some(s) = self.service.as_mut() {
+        if let Some(s) = self.service_mut() {
             s.handle = Some(Arc::clone(&handle));
         }
         Ok(Some(handle))
@@ -918,7 +1013,7 @@ impl ResolvedWorkload {
     async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
         let service = self
             .service
-            .as_mut()
+            .as_ref()
             .map(|s| (s.pre_instantiate_p3(), s.max_restarts));
 
         if let Some((Ok(pre), mut max_restarts)) = service {
@@ -937,7 +1032,9 @@ impl ResolvedWorkload {
             let mut store = recipe.build().await?;
             let handle = tokio::spawn(async move {
                 loop {
-                    let instance = match pre.instantiate_async(&mut store).await {
+                    let instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                    }) {
                         Ok(i) => i,
                         Err(e) => {
                             error!(err = %e, "failed to instantiate P3 service");
@@ -962,7 +1059,10 @@ impl ResolvedWorkload {
                             }
                         }
                         Ok(Err(e)) | Err(e) => {
-                            error!(err = %e, retries = max_restarts, "P3 service execution failed");
+                            // `?e`, not `%e`: a trap's message is in the cause
+                            // chain, which `Display` leaves out.
+                            error!(err = ?e, retries = max_restarts, "P3 service execution failed");
+                            crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
                             if max_restarts == 0 {
                                 warn!("max restarts reached, P3 service will not be restarted");
                                 break;
@@ -981,7 +1081,7 @@ impl ResolvedWorkload {
             });
 
             let handle = Arc::new(handle);
-            if let Some(s) = self.service.as_mut() {
+            if let Some(s) = self.service_mut() {
                 s.handle = Some(Arc::clone(&handle));
             }
             Ok(Some(handle))
@@ -1165,7 +1265,7 @@ impl ResolvedWorkload {
         });
 
         let handle = Arc::new(handle);
-        if let Some(s) = self.service.as_mut() {
+        if let Some(s) = self.service_mut() {
             s.handle = Some(Arc::clone(&handle));
         }
         Ok(Some(handle))
@@ -1196,6 +1296,13 @@ impl ResolvedWorkload {
         self.stop_service();
     }
 
+    /// The service, for one of the few writes after resolution. Copies it
+    /// first when a clone of this workload shares it, so that clone keeps
+    /// what it saw, as it did when the service was held by value.
+    fn service_mut(&mut self) -> Option<&mut WorkloadService> {
+        self.service.as_mut().map(Arc::make_mut)
+    }
+
     /// Aborts the running service [`JoinHandle`] if it exists.
     fn stop_service(&self) {
         if let Some(service) = &self.service
@@ -1209,6 +1316,11 @@ impl ResolvedWorkload {
         }
     }
 
+    /// Access the resolved components and their metadata.
+    ///
+    /// The map remains writable for updates to existing component metadata.
+    /// Adding or removing components after resolution is unsupported: the
+    /// component count and bindings are settled when the workload is resolved.
     pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
         self.components.clone()
     }
@@ -1239,7 +1351,7 @@ impl ResolvedWorkload {
             .unwrap_or_default();
         self.resolve_component_volume_mounts(&linked_component_ids)
             .await?;
-        if let Some(service) = &mut self.service
+        if let Some(service) = self.service_mut()
             && service.metadata.resolved_volume_mounts.is_empty()
             && !service.metadata.volume_mounts.is_empty()
         {
@@ -1407,12 +1519,10 @@ impl ResolvedWorkload {
 
             let component = workload_component.metadata.component.clone();
             let plugin_bound_instances = workload_component.metadata.plugin_bound_instances.clone();
-            let linker = &mut workload_component.metadata.linker;
-
             let res = match self
                 .resolve_component_imports(
                     &component,
-                    linker,
+                    &mut workload_component.metadata,
                     exports,
                     &plugin_bound_instances,
                     Some(component_id.as_ref()),
@@ -1439,15 +1549,14 @@ impl ResolvedWorkload {
             res?;
         }
 
-        if let Some(mut service) = self.service.take() {
+        if let Some(mut shared) = self.service.take() {
+            let service = Arc::make_mut(&mut shared);
             let component = service.metadata.component.clone();
             let plugin_bound_instances = service.metadata.plugin_bound_instances.clone();
-            let linker = &mut service.metadata.linker;
-
             let res = match self
                 .resolve_component_imports(
                     &component,
-                    linker,
+                    &mut service.metadata,
                     exports,
                     &plugin_bound_instances,
                     None,
@@ -1462,7 +1571,7 @@ impl ResolvedWorkload {
                 Err(err) => Err(err),
             };
 
-            self.service = Some(service);
+            self.service = Some(shared);
 
             // Propagate any errors encountered during import resolution
             res?;
@@ -1474,7 +1583,9 @@ impl ResolvedWorkload {
     async fn resolve_component_imports(
         &self,
         component: &wasmtime::component::Component,
-        linker: &mut Linker<SharedCtx>,
+        // Its linker is taken mutably only to link an import another component
+        // exports: taking it copies the engine's shared one.
+        metadata: &mut WorkloadMetadata,
         exports: &ExportMaps,
         plugin_bound_instances: &HashSet<String>,
         // The importer's own id. A component resolving an import to ITSELF is a
@@ -1612,7 +1723,7 @@ impl ResolvedWorkload {
                         e.context("failed to pre-instantiate during component linking")
                     })?;
 
-                    let mut linker_instance = match linker.instance(import_name) {
+                    let mut linker_instance = match metadata.linker().instance(import_name) {
                         Ok(i) => i,
                         Err(e) => {
                             trace!(name = import_name, error = %e, "error finding instance in linker, skipping");
@@ -1660,7 +1771,7 @@ impl ResolvedWorkload {
                                 let plain_safe = func_is_ephemeral_safe(&func_ty);
                                 let relocate = !plain_safe
                                     && is_service_workload
-                                    && func_is_bridge_safe(&func_ty);
+                                    && func_is_bridge_safe(&func_ty, &self.stream_payloads);
                                 let target = if export_is_async && (plain_safe || relocate) {
                                     let mode = if relocate {
                                         EphemeralCallMode::Relocated {
@@ -1674,6 +1785,7 @@ impl ResolvedWorkload {
                                         pre: pre.clone(),
                                         invocation: self.invocation.clone(),
                                         engine: plugin_engine.clone(),
+                                        stream_payloads: self.stream_payloads.clone(),
                                         http_handler: self.http_handler.clone(),
                                         components: self.components.clone(),
                                         active_component_id: plugin_component_id.clone(),
@@ -1858,8 +1970,11 @@ impl ResolvedWorkload {
 
     /// Returns the number of components in this workload.
     /// Does not include the service component if one is defined.
-    pub async fn component_count(&self) -> usize {
-        self.components.read().await.len()
+    ///
+    /// Read without the components lock: the set is fixed once resolved, and
+    /// the host heartbeat asks every running workload for it.
+    pub fn component_count(&self) -> usize {
+        self.component_count
     }
 
     /// Helper to create a new wasmtime Store for multiple components and set active given component in the workload.
@@ -1883,6 +1998,18 @@ impl ResolvedWorkload {
     pub async fn new_store(
         &self,
         component_id: &str,
+    ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        self.new_store_as(component_id, None).await
+    }
+
+    /// [`Self::new_store`] for a caller that resolved the component's
+    /// [`Self::component_identity`] once, where it registered the route or
+    /// subscription, so a request pays neither the read lock nor the
+    /// allocations of looking it up again.
+    pub(crate) async fn new_store_as(
+        &self,
+        component_id: &str,
+        identity: Option<&crate::observability::WorkloadIdentity>,
     ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
         let (engine, active_template, linked_templates, linked_instances) = {
             let components = self.components.read().await;
@@ -1909,6 +2036,7 @@ impl ResolvedWorkload {
         };
         let store = new_store_from_templates(
             &engine,
+            &self.stream_payloads,
             &self.http_handler,
             &active_template,
             &linked_templates,
@@ -1922,10 +2050,14 @@ impl ResolvedWorkload {
         // A host asked to measure nothing must not pay for them because some
         // other host in the process measures.
         if self.invocation.is_enabled() {
-            store.data().executed.set_identity(
-                self.component_identity(component_id).await,
-                self.invocation.clone(),
-            );
+            let identity = match identity {
+                Some(identity) => identity.clone(),
+                None => self.component_identity(component_id).await,
+            };
+            store
+                .data()
+                .executed
+                .set_identity(identity, self.invocation.clone());
         }
         Ok(store)
     }
@@ -2201,6 +2333,7 @@ impl ResolvedWorkload {
 
         Ok(ServiceStoreRecipe {
             engine: metadata.engine().clone(),
+            stream_payloads: self.stream_payloads.clone(),
             http_handler: self.http_handler.clone(),
             active_template,
             linked_templates,
@@ -2223,15 +2356,13 @@ impl ResolvedWorkload {
         &self,
         component_id: &str,
     ) -> anyhow::Result<wasmtime::component::InstancePre<SharedCtx>> {
-        let mut components = self.components.write().await;
+        // A read lock: linking needs only `&Linker`, and a write lock here
+        // would serialize every request and dispatch on this workload.
+        let components = self.components.read().await;
         let component = components
-            .get_mut(component_id)
+            .get(component_id)
             .context("component ID not found in workload")?;
-        let wasmtime_component = component.metadata.component.clone();
-        let linker = component.metadata.linker();
-        let pre = linker.instantiate_pre(&wasmtime_component)?;
-
-        Ok(pre)
+        Ok(component.pre_instantiate_ref()?)
     }
 
     /// Which item of the workload exports `interface` — what a host component
@@ -2354,8 +2485,8 @@ impl ResolvedWorkload {
                 && types_are_ephemeral_safe(func.result_tys)
             {
                 EphemeralCallMode::PlainValue
-            } else if types_are_bridge_safe(func.param_tys)
-                && types_are_bridge_safe(func.result_tys)
+            } else if types_are_bridge_safe(func.param_tys, &self.stream_payloads)
+                && types_are_bridge_safe(func.result_tys, &self.stream_payloads)
             {
                 EphemeralCallMode::Relocated {
                     param_tys: func.param_tys.into(),
@@ -2365,7 +2496,8 @@ impl ResolvedWorkload {
                 bail!(
                     "{interface}#{} carries a handle that cannot cross the boundary between a \
                      plugin's store and a workload's; only plain values, `stream<T>`, and \
-                     `future<T>` can",
+                     `future<T>` can; a `stream<T>`/`future<T>` of an \
+                     application-defined payload needs `Engine::stream_payloads().register`",
                     func.name
                 );
             };
@@ -2381,6 +2513,7 @@ impl ResolvedWorkload {
                         pre: pre.clone(),
                         invocation: self.invocation.clone(),
                         engine: engine.clone(),
+                        stream_payloads: self.stream_payloads.clone(),
                         http_handler: self.http_handler.clone(),
                         components: self.components.clone(),
                         active_component_id: Arc::clone(&component_id),
@@ -2424,6 +2557,7 @@ impl ResolvedWorkload {
             .as_ref()
             .context("workload has no service to call into")?;
         let component = &service.metadata.component;
+        let payloads = &self.stream_payloads;
         let Some((ComponentItem::ComponentInstance(_), instance_idx)) =
             component.get_export(None, interface)
         else {
@@ -2446,10 +2580,12 @@ impl ResolvedWorkload {
                 );
             };
             ensure!(
-                types_are_bridge_safe(func.param_tys) && types_are_bridge_safe(func.result_tys),
+                types_are_bridge_safe(func.param_tys, payloads)
+                    && types_are_bridge_safe(func.result_tys, payloads),
                 "{interface}#{} carries a handle that cannot cross the boundary between a \
                  plugin's store and a workload's; only plain values, `stream<T>`, and \
-                 `future<T>` can",
+                 `future<T>` can; a `stream<T>`/`future<T>` of an \
+                 application-defined payload needs `Engine::stream_payloads().register`",
                 func.name
             );
             let plain = types_are_ephemeral_safe(func.param_tys)
@@ -2622,6 +2758,8 @@ impl ResolvedWorkload {
 /// - Validate that all dependencies can be satisfied
 /// - Create the final executable workload representation
 pub struct UnresolvedWorkload {
+    /// Preserved through resolution so signature checks and stores use the same adapters.
+    stream_payloads: Arc<super::stream_payload::StreamPayloads>,
     /// The unique identifier of the workload, supplied by whoever starts it
     id: Arc<str>,
     /// The name of the workload
@@ -2826,6 +2964,7 @@ impl UnresolvedWorkload {
     ) -> Self {
         let mut component_order = Vec::new();
         Self {
+            stream_payloads: Arc::default(),
             id: id.into(),
             name: name.into(),
             namespace: namespace.into(),
@@ -2844,6 +2983,19 @@ impl UnresolvedWorkload {
             tls_provider: None,
             scratch: None,
         }
+    }
+
+    /// Use the engine's stream/future payload adapters for linking and store construction.
+    ///
+    /// [`super::Engine::initialize_workload`] sets this automatically. When building
+    /// a workload directly, pass a clone of [`super::Engine::stream_payloads`].
+    /// Register payload types before resolving the workload or loading plugins.
+    pub fn with_stream_payloads(
+        mut self,
+        stream_payloads: Arc<super::stream_payload::StreamPayloads>,
+    ) -> Self {
+        self.stream_payloads = stream_payloads;
+        self
     }
 
     pub(crate) fn with_scratch(
@@ -2936,6 +3088,9 @@ impl UnresolvedWorkload {
         plugin_bindings: &crate::plugin::PluginBindings,
         cleanup: Option<&WorkloadResources>,
     ) -> anyhow::Result<Vec<(Arc<dyn HostPlugin>, Vec<String>)>> {
+        // Before anything binds, so there is nothing to unbind: two plugins
+        // overriding one WASI interface is a host misconfiguration.
+        crate::plugin::check_wasi_overrides(plugins)?;
         // Track bound plugins with their matched interfaces for cleanup on failure
         let mut bound_plugins_with_interfaces: Vec<BoundPluginWithInterfaces> = Vec::new();
         let mut bound_plugins: Vec<(Arc<dyn HostPlugin + 'static>, Vec<String>)> = Vec::new();
@@ -3043,6 +3198,48 @@ impl UnresolvedWorkload {
             }
         }
 
+        // A plugin that overrides WASI interfaces (see
+        // [`HostPlugin::wasi_overrides`]) is required by every workload item that
+        // imports one of them, for each `hostInterfaces` entry the plugin
+        // serves. The entry is what opts the workload in; the matching below
+        // then binds it like any other required interface.
+        for (plugin_id, p) in plugins.iter() {
+            let overrides = p.wasi_overrides();
+            if overrides.imports.is_empty() {
+                continue;
+            }
+            let world = p.world();
+            for entry in &host_interfaces {
+                if !world.includes_bidirectional(entry) || !p.claims(entry) {
+                    continue;
+                }
+                if let Some(service) = &self.service {
+                    let service_world = service.world();
+                    if overrides.imports.iter().any(|o| service_world.uses(o)) {
+                        unmatched_interfaces
+                            .entry(IdFlavor::Service(Arc::from(service.id())))
+                            .or_default()
+                            .insert(entry.clone());
+                    }
+                }
+                for (id, _name, component_world) in &component_worlds {
+                    if !overrides.imports.iter().any(|o| component_world.uses(o)) {
+                        continue;
+                    }
+                    trace!(
+                        plugin_id,
+                        interface = %entry,
+                        component_id = id.as_ref(),
+                        "component imports a WASI interface the plugin overrides; requiring the plugin"
+                    );
+                    unmatched_interfaces
+                        .entry(IdFlavor::Component(id.clone()))
+                        .or_default()
+                        .insert(entry.clone());
+                }
+            }
+        }
+
         trace!(?unmatched_interfaces, "resolving unmatched interfaces");
 
         // Iterate through each plugin first, then check every component for matching worlds.
@@ -3054,7 +3251,11 @@ impl UnresolvedWorkload {
         // differently across process restarts — and with a plugin that *calls*
         // an interface rather than serving it, one of those outcomes fails the
         // deploy. A deterministic order at least makes the result reproducible.
-        let plugins_in_order: BTreeMap<_, _> = plugins.iter().collect();
+        // Plugins that override WASI bind after the rest, so that nothing binds
+        // over a redefinition and shadowing is on only while they bind.
+        let mut plugins_in_order: Vec<(&&'static str, &Arc<dyn HostPlugin>)> =
+            plugins.iter().collect();
+        plugins_in_order.sort_by_key(|(id, p)| (!p.wasi_overrides().imports.is_empty(), **id));
         for (plugin_id, p) in plugins_in_order {
             let plugin_interfaces = p.world();
             trace!(plugin_id = plugin_id, plugin_interfaces = ?plugin_interfaces, "checking plugin interfaces");
@@ -3313,14 +3514,23 @@ impl UnresolvedWorkload {
                         "plugin_on_workload_item_bind",
                         plugin_id = plugin_id,
                     );
-                    if let Err(e) = p
+                    // A WASI override redefines names the host already linked; the
+                    // linker allows that only for the duration of this bind.
+                    let overriding = !p.wasi_overrides().imports.is_empty();
+                    if overriding {
+                        workload_item.linker().allow_shadowing(true);
+                    }
+                    let bound = p
                         .on_workload_item_bind(
                             &mut workload_item,
                             WitInterfaces::new(&matching_interfaces),
                         )
                         .instrument(item_bind_span)
-                        .await
-                    {
+                        .await;
+                    if overriding {
+                        workload_item.linker().allow_shadowing(false);
+                    }
+                    if let Err(e) = bound {
                         tracing::error!(
                             plugin_id = plugin_id,
                             component_id = workload_item.id(),
@@ -3477,14 +3687,16 @@ impl UnresolvedWorkload {
 
         // Resolve the workload
         let mut resolved_workload = ResolvedWorkload {
+            stream_payloads: self.stream_payloads,
             id: self.id.clone(),
             name: self.name.clone(),
             namespace: self.namespace.clone(),
+            component_count: self.components.len(),
             components: Arc::new(RwLock::new(self.components)),
-            service: self.service,
+            service: self.service.map(Arc::new),
             service_calls: Arc::default(),
             released: Arc::default(),
-            host_interfaces: self.host_interfaces,
+            host_interfaces: Arc::new(self.host_interfaces),
             teardown_bindings: Arc::default(),
             http_handler: host.clone(),
             invocation: meters.invocation.clone(),
@@ -4171,6 +4383,8 @@ mod tests {
         /// Every interface handed to `on_workload_bind` /
         /// `on_workload_item_bind`, with the config the plugin actually saw.
         bound_interfaces: Arc<Mutex<Vec<WitInterface>>>,
+        /// WASI interfaces this plugin claims to redefine.
+        wasi_overrides: WitWorld,
     }
 
     impl MockPlugin {
@@ -4191,7 +4405,17 @@ mod tests {
                 claims_from: None,
                 host_owned: Vec::new(),
                 bound_interfaces: Arc::new(Mutex::new(Vec::new())),
+                wasi_overrides: WitWorld::default(),
             }
+        }
+        /// Declare that this plugin redefines `interfaces` (a WASI entry such
+        /// as `wasi:filesystem/preopens,types@0.2.0`), the way a plugin
+        /// shaping a filesystem view does.
+        fn overriding(mut self, interfaces: &str) -> Self {
+            self.wasi_overrides
+                .imports
+                .insert(WitInterface::from(interfaces));
+            self
         }
 
         /// Declare `keys` host-owned in code, the way a real plugin's
@@ -4272,6 +4496,10 @@ mod tests {
                 Some(min) => interface.version.as_ref().is_some_and(|v| v >= min),
                 None => true,
             }
+        }
+
+        fn wasi_overrides(&self) -> WitWorld {
+            self.wasi_overrides.clone()
         }
 
         fn binding_schema(&self) -> crate::plugin::BindingSchema {
@@ -4563,6 +4791,115 @@ mod tests {
 
     const MARKER: &str = "test:probe/marker@0.1.0";
 
+    /// The linked component is kept once asked for, and forgotten whenever the
+    /// linker is taken mutably, so a link added afterwards is never missed.
+    #[test]
+    fn pre_instantiate_ref_is_kept_until_the_linker_changes() {
+        let mut component = component_from_wat(
+            "pre",
+            r#"(component
+                 (import "test:pre/iface" (instance (export "f" (func))))
+               )"#,
+        );
+        assert!(
+            component.pre_instantiate_ref().is_err(),
+            "the import is not linked yet"
+        );
+        assert!(
+            component.metadata.pre.get().is_none(),
+            "a failure is not kept"
+        );
+
+        component
+            .metadata
+            .linker()
+            .instance("test:pre/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok(()))
+            .unwrap();
+        component.pre_instantiate_ref().unwrap();
+        assert!(component.metadata.pre.get().is_some());
+        component.pre_instantiate_ref().unwrap();
+
+        let _ = component.metadata.linker();
+        assert!(component.metadata.pre.get().is_none());
+    }
+
+    /// Components share the linker they start from until one is written to;
+    /// the write lands on a copy of that one component's own.
+    #[test]
+    fn a_shared_linker_is_copied_only_when_written() {
+        let mut a = component_from_wat(
+            "a",
+            r#"(component
+                (import "test:cow/iface" (instance $iface
+                    (export "f" (func (result u32)))))
+                (alias export $iface "f" (func $f))
+                (core func $f (canon lower (func $f)))
+                (core module $forward
+                    (import "host" "f" (func $f (result i32)))
+                    (func (export "call") (result i32) call $f))
+                (core instance $forward (instantiate $forward
+                    (with "host" (instance (export "f" (func $f))))))
+                (func (export "call") (result u32)
+                    (canon lift (core func $forward "call")))
+            )"#,
+        );
+        let shared = Arc::clone(&a.metadata.linker);
+        let mut b = a.clone();
+        assert!(Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+        assert!(a.pre_instantiate_ref().is_err());
+
+        b.metadata
+            .linker()
+            .instance("test:cow/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok((2_u32,)))
+            .unwrap();
+        assert!(b.pre_instantiate_ref().is_ok());
+        assert!(
+            a.pre_instantiate_ref().is_err(),
+            "binding one component must not satisfy another component's import"
+        );
+        assert!(
+            shared.instantiate_pre(a.metadata.component()).is_err(),
+            "the shared base must not inherit a component's binding"
+        );
+        assert!(!Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+        assert!(
+            Arc::ptr_eq(&a.metadata.linker, &shared),
+            "the component not written to keeps the shared linker"
+        );
+        a.metadata
+            .linker()
+            .instance("test:cow/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok((1_u32,)))
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(&a.metadata.linker, &shared),
+            "taking it mutably while shared copies it"
+        );
+
+        let call = |component: &WorkloadComponent| {
+            let ctx = crate::engine::ctx::Ctx::builder("cow", component.id()).build();
+            let mut store = wasmtime::Store::new(component.metadata.engine(), SharedCtx::new(ctx));
+            let instance = component
+                .pre_instantiate_ref()
+                .unwrap()
+                .instantiate(&mut store)
+                .unwrap();
+            let func = instance
+                .get_typed_func::<(), (u32,)>(&mut store, "call")
+                .unwrap();
+            let (value,) = func.call(&mut store, ()).unwrap();
+            value
+        };
+        assert_eq!(call(&a), 1);
+        assert_eq!(call(&b), 2, "the first component's binding must survive");
+        assert!(shared.instantiate_pre(a.metadata.component()).is_err());
+    }
+
     fn marker_importer(id: &str) -> WorkloadComponent {
         component_from_wat(
             id,
@@ -4657,6 +4994,114 @@ mod tests {
             bound_component_ids(&bound).contains(&importer_id),
             "with nothing in the workload exporting it, the plugin serves the import"
         );
+    }
+
+    /// A plugin that overrides a WASI interface (a filesystem view, say) binds
+    /// to the components that import that interface, as soon as the
+    /// workload's `hostInterfaces` names what the plugin serves. A component
+    /// not using the interface, or a workload without the entry, is untouched.
+    #[tokio::test]
+    async fn a_wasi_override_binds_the_components_that_use_the_interface() {
+        let fs_user = component_from_wat(
+            "fs-user",
+            r#"(component (import "wasi:filesystem/types@0.2.12" (instance)))"#,
+        );
+        let plain = component_from_wat("plain", "(component)");
+        let fs_user_id = fs_user.id().to_string();
+        let plain_id = plain.id().to_string();
+        let plugin = Arc::new(
+            MockPlugin::new("view-plugin", vec![WitInterface::from(MARKER)], vec![])
+                .overriding("wasi:filesystem/preopens,types@0.2.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+
+        let mut workload = marker_workload(vec![fs_user, plain]);
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+        let bound_ids = bound_component_ids(&bound);
+        assert!(
+            bound_ids.contains(&fs_user_id),
+            "imports the overridden interface"
+        );
+        assert!(
+            !bound_ids.contains(&plain_id),
+            "imports nothing the plugin changes"
+        );
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 1);
+
+        let fs_user = component_from_wat(
+            "fs-user",
+            r#"(component (import "wasi:filesystem/types@0.2.12" (instance)))"#,
+        );
+        let mut workload = UnresolvedWorkload::new(
+            "local-first".to_string(),
+            "local-first".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![fs_user],
+            vec![],
+        );
+        let bound = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .unwrap();
+        assert!(bound.is_empty(), "no entry, no binding");
+    }
+
+    /// Two plugins redefining one WASI interface cannot both take effect, so
+    /// the host refuses them before anything binds, naming both.
+    #[tokio::test]
+    async fn two_plugins_overriding_one_wasi_interface_are_refused() {
+        let a = Arc::new(
+            MockPlugin::new("view-a", vec![WitInterface::from(MARKER)], vec![])
+                .overriding("wasi:filesystem/types@0.2.0"),
+        );
+        let b = Arc::new(
+            MockPlugin::new(
+                "view-b",
+                vec![WitInterface::from("other:pkg/iface")],
+                vec![],
+            )
+            .overriding("wasi:filesystem/preopens,types@0.2.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> = HashMap::from([
+            (a.id(), a.clone() as Arc<dyn HostPlugin>),
+            (b.id(), b.clone() as Arc<dyn HostPlugin>),
+        ]);
+        let error = crate::plugin::check_wasi_overrides(&plugins)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("view-a") && error.contains("view-b"),
+            "{error}"
+        );
+        assert!(error.contains("wasi:filesystem"), "{error}");
+
+        let mut workload = marker_workload(vec![marker_importer("importer")]);
+        let refused = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await;
+        assert!(refused.is_err(), "binding refuses the pair too");
+        assert_eq!(a.get_call_count("on_workload_item_bind"), 0);
+        assert_eq!(b.get_call_count("on_workload_item_bind"), 0);
+
+        // Different versions of one package are different interfaces.
+        let c = Arc::new(
+            MockPlugin::new(
+                "view-c",
+                vec![WitInterface::from("other:pkg/iface")],
+                vec![],
+            )
+            .overriding("wasi:filesystem/types@0.3.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> = HashMap::from([
+            (a.id(), a.clone() as Arc<dyn HostPlugin>),
+            (c.id(), c as Arc<dyn HostPlugin>),
+        ]);
+        crate::plugin::check_wasi_overrides(&plugins).unwrap();
     }
 
     /// Two components exporting the same interface is the ambiguity

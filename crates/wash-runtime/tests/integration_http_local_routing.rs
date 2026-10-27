@@ -480,7 +480,8 @@ async fn test_local_routes_are_not_reachable_from_the_network() -> Result<()> {
 /// rather than served for free.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_local_dispatch_draws_on_the_outbound_http_quota() -> Result<()> {
-    // One permit, held for the life of each locally dispatched response.
+    // One permit, held until both the locally dispatched response and the
+    // callee's request body are dropped.
     let (addr, host) = start_host_with_quota(true, Some(1)).await?;
 
     host.workload_start(http_workload(
@@ -507,10 +508,21 @@ async fn test_local_dispatch_draws_on_the_outbound_http_quota() -> Result<()> {
         status, 200,
         "a call within the allowance is served in-memory: {body}"
     );
-    let (status, body) = call(addr, "/example").await?;
+    // The callee's request body holds the slot too, and is dropped when the
+    // callee's instance winds down, which can finish after the caller answers.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let (status, body) = loop {
+        let (status, body) = call(addr, "/example").await?;
+        // Only the quota refusal is waited out; any other answer is final.
+        let refused = status == 502 && body.contains("ConnectionLimitReached");
+        if !refused || tokio::time::Instant::now() >= deadline {
+            break (status, body);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(
         status, 200,
-        "the slot must be released when the response is drained: {body}"
+        "the slot must be released once the call is done: {body}"
     );
 
     Ok(())

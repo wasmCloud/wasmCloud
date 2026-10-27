@@ -64,12 +64,13 @@ pub enum Relocated {
 
 /// Builds a `stream<T>`/`future<T>` value in the destination store from a
 /// pre-wired producer (it captures the source side's pump endpoint).
-type ValFactory = Box<dyn FnOnce(StoreContextMut<SharedCtx>) -> wasmtime::Result<Val> + Send>;
+pub(crate) type ValFactory =
+    Box<dyn FnOnce(StoreContextMut<SharedCtx>) -> wasmtime::Result<Val> + Send>;
 
 /// Set up a no-buffering pump for a `stream<T>`: `pipe` the source reader (in
 /// `src`) into a channel, and return a factory that builds the destination
 /// stream from the channel's producer, plus the pump's drain signal.
-fn bridge_stream<T>(
+pub(crate) fn bridge_stream<T>(
     mut src: StoreContextMut<SharedCtx>,
     any: StreamAny,
 ) -> wasmtime::Result<(ValFactory, Done)>
@@ -91,7 +92,7 @@ where
 /// into a [`stream_pump::FutureSink`], and return a factory that builds the
 /// destination future from the paired receiver, plus the pump's completion
 /// signal.
-fn bridge_future<T>(
+pub(crate) fn bridge_future<T>(
     mut src: StoreContextMut<SharedCtx>,
     any: FutureAny,
 ) -> wasmtime::Result<(ValFactory, Done)>
@@ -132,9 +133,13 @@ macro_rules! bridgeable_elements {
         ) -> wasmtime::Result<(ValFactory, Done)> {
             match payload {
                 $(Type::$variant => bridge_stream::<$t>(src, any),)*
-                other => wasmtime::bail!(
-                    "cross-store bridge: unsupported stream element type {other:?}"
-                ),
+                other => match src.data().stream_payloads.stream(other) {
+                    Some(factory) => factory(src, any),
+                    None => wasmtime::bail!(
+                        "cross-store bridge: unregistered stream payload {other:?}; \
+                         register it with `Engine::stream_payloads().register`"
+                    ),
+                },
             }
         }
 
@@ -146,9 +151,13 @@ macro_rules! bridgeable_elements {
         ) -> wasmtime::Result<(ValFactory, Done)> {
             match payload {
                 $(Type::$variant => bridge_future::<$t>(src, any),)*
-                other => wasmtime::bail!(
-                    "cross-store bridge: unsupported future element type {other:?}"
-                ),
+                other => match src.data().stream_payloads.future(other) {
+                    Some(factory) => factory(src, any),
+                    None => wasmtime::bail!(
+                        "cross-store bridge: unregistered future payload {other:?}; \
+                         register it with `Engine::stream_payloads().register`"
+                    ),
+                },
             }
         }
     };
@@ -267,10 +276,10 @@ pub fn extract(
             Ok(Relocated::Stream(factory))
         }
         (Val::Future(any), Type::Future(ft)) => {
-            let payload = ft
-                .ty()
-                .ok_or_else(|| wasmtime::format_err!("future is missing its element type"))?;
-            let (factory, done) = future_factory(store, any.clone(), &payload)?;
+            let (factory, done) = match ft.ty() {
+                Some(payload) => future_factory(store, any.clone(), &payload)?,
+                None => bridge_future::<()>(store, any.clone())?,
+            };
             dones.push(done);
             Ok(Relocated::Future(factory))
         }

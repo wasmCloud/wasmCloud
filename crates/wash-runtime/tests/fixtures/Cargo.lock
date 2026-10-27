@@ -149,6 +149,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "config-callee"
 version = "0.1.0"
 dependencies = [
@@ -1003,6 +1010,20 @@ dependencies = [
 
 [[package]]
 name = "stream-producer-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "structured-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "structured-plugin"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.60.0",

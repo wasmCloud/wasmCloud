@@ -33,7 +33,7 @@ inputs:
   wasm-component-ld-version:
     description: "Version of standalone wasm-component-ld to install"
     required: false
-    default: "0.5.24"
+    default: "0.5.26"
 
 runs:
   using: "composite"
@@ -130,7 +130,7 @@ runs:
 
     - name: Install cargo-zigbuild
       if: ${{ inputs.install-zigbuild == 'true' }}
-      uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+      uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
       env:
         # Authenticate the action's GitHub API calls so they aren't throttled
         # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -146,7 +146,8 @@ runs:
     # standalone crate and is too old to decode the component-model
     # `(implements ..)` imports that wit-bindgen now emits — linking such a
     # component fails with "decoding custom section ... invalid leading byte".
-    # Drop once a Rust release bundles wasm-component-ld >= 0.5.23.
+    # Keep the default version aligned with scripts/bench/ansible/provision.yml.
+    # Drop the override once the pinned Rust toolchain can build all wasm fixtures.
     - name: Install wasm-component-ld
       uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
       with:

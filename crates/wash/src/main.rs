@@ -141,8 +141,41 @@ impl CliCommand for WashCliCommand {
     }
 }
 
-#[tokio::main]
-async fn main() {
+/// The stack wash's top-level future runs on. Linux (by default, through
+/// `ulimit -s`) and macOS give the main thread 8 MiB, but Windows gives it only
+/// 1 MiB, which a debug build of wash can overrun. So wash runs on a thread of
+/// its own with the stack the other platforms usually give. Tasks spawned onto
+/// the runtime, and `spawn_blocking` closures, still run on tokio's own
+/// threads with tokio's default stack.
+const MAIN_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn main() {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("failed to start the async runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+    let wash = std::thread::Builder::new()
+        .name("main".to_string())
+        .stack_size(MAIN_STACK_SIZE)
+        .spawn(move || runtime.block_on(run()));
+    match wash.map(std::thread::JoinHandle::join) {
+        Ok(Ok(())) => {}
+        // The panic has already been reported; keep its exit status.
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(e) => {
+            eprintln!("failed to start wash: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run() {
     let global_parser = Cli::command_for_update()
         .arg_required_else_help(false)
         .subcommand_required(false)

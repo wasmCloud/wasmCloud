@@ -14,59 +14,20 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use rcgen::{
-    BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
-    KeyUsagePurpose,
-};
 use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
-use tokio_rustls::rustls::ServerConfig;
-use tokio_rustls::rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use wash_runtime::oci::{OciConfig, OciPullPolicy, pull_component, set_extra_ca_certificates};
 
-struct Ca(CertifiedIssuer<'static, KeyPair>);
-
-impl Ca {
-    fn new(name: &str) -> Self {
-        let now = SystemTime::now();
-        let mut params = CertificateParams::new(Vec::new()).unwrap();
-        params
-            .distinguished_name
-            .push(rcgen::DnType::CommonName, name);
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-        params.not_before = (now - Duration::from_secs(3_600)).into();
-        params.not_after = (now + Duration::from_secs(172_800)).into();
-        Self(CertifiedIssuer::self_signed(params, KeyPair::generate().unwrap()).unwrap())
-    }
-
-    fn pem(&self) -> String {
-        self.0.pem()
-    }
-
-    /// A `localhost` server certificate this CA signs, as a rustls config.
-    fn server_config(&self) -> ServerConfig {
-        let now = SystemTime::now();
-        let mut params = CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-        params.not_before = (now - Duration::from_secs(3_600)).into();
-        params.not_after = (now + Duration::from_secs(86_400)).into();
-        let key = KeyPair::generate().unwrap();
-        let cert = params.signed_by(&key, &self.0).unwrap();
-        ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![cert.der().clone(), self.0.der().clone()],
-                PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
-            )
-            .unwrap()
-    }
-}
+#[path = "common/oci_ca.rs"]
+mod ca;
+#[path = "common/oci_registry.rs"]
+mod cache_registry;
+use ca::Ca;
 
 /// A registry on loopback that counts the requests it read.
 struct Registry {
@@ -136,6 +97,14 @@ async fn answer_404(mut stream: impl AsyncRead + AsyncWrite + Unpin, reached: &A
 ///
 /// Explicit credentials keep the pull off the docker credential helper.
 async fn pull_reaches(registry: &Registry, insecure: bool) -> Result<bool, anyhow::Error> {
+    pull_reaches_with_policy(registry, insecure, OciPullPolicy::Always).await
+}
+
+async fn pull_reaches_with_policy(
+    registry: &Registry,
+    insecure: bool,
+    policy: OciPullPolicy,
+) -> Result<bool, anyhow::Error> {
     let before = registry.reached();
     let config = OciConfig {
         credentials: Some(("user".into(), "pass".into())),
@@ -144,7 +113,7 @@ async fn pull_reaches(registry: &Registry, insecure: bool) -> Result<bool, anyho
     };
     let err = tokio::time::timeout(
         Duration::from_secs(30),
-        pull_component(&registry.reference(), config, OciPullPolicy::Always),
+        pull_component(&registry.reference(), config, policy),
     )
     .await
     .context("pull timed out")?
@@ -227,6 +196,55 @@ async fn oci_pulls_trust_ssl_cert_env_and_ca_paths() -> Result<()> {
         "a CA rotated out of SSL_CERT_FILE is no longer trusted",
     );
 
+    // Populate a pinned disk entry under CA A, then remove that CA. Both the
+    // completed-result cache and the disk cache must honor the new snapshot.
+    let cached_registry =
+        cache_registry::Registry::start_with_tls(Some(ca_a.server_config())).await;
+    let cache = TempDir::new()?;
+    let config = OciConfig {
+        credentials: Some(("user".into(), "secret".into())),
+        cache_dir: Some(cache.path().to_path_buf()),
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    };
+    let cached_reference = cached_registry.reference();
+    write(&bundle, &ca_a.pem());
+    pull_component(
+        &cached_reference,
+        config.clone(),
+        OciPullPolicy::IfNotPresent,
+    )
+    .await?;
+    let fetched = cached_registry.requests.load(Ordering::SeqCst);
+    write(&bundle, &ca_b.pem());
+    assert!(
+        pull_component(&cached_reference, config.clone(), OciPullPolicy::Never)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        cached_registry.requests.load(Ordering::SeqCst),
+        fetched,
+        "Never stays offline on a trust-scope miss"
+    );
+    assert_untrusted(
+        pull_component(
+            &cached_reference,
+            config.clone(),
+            OciPullPolicy::IfNotPresent,
+        )
+        .await
+        .map(|_| true),
+        "a pinned disk entry cannot outlive the CA that authorized its fetch",
+    );
+    write(&bundle, &ca_a.pem());
+    pull_component(&cached_reference, config, OciPullPolicy::Never).await?;
+    assert_eq!(
+        cached_registry.requests.load(Ordering::SeqCst),
+        fetched,
+        "Never reuses the matching trust scope offline"
+    );
+
     // An `insecure` pull keeps speaking plain HTTP with extra roots set.
     let plain = Registry::start(None).await;
     assert!(
@@ -246,12 +264,16 @@ async fn oci_pulls_trust_ssl_cert_env_and_ca_paths() -> Result<()> {
 
     // `--ca-path` last: the store it writes can be set once per process.
     clear_env();
+    assert_untrusted(
+        pull_reaches_with_policy(&registry_b, false, OciPullPolicy::IfNotPresent).await,
+        "cache a failure before installing the extra CA",
+    );
     let ca_path = dir.path().join("ca-path.pem");
     write(&ca_path, &ca_b.pem());
     set_extra_ca_certificates(&[ca_path])?;
     assert!(
-        pull_reaches(&registry_b, false).await?,
-        "a --ca-path CA is trusted"
+        pull_reaches_with_policy(&registry_b, false, OciPullPolicy::IfNotPresent).await?,
+        "a --ca-path CA is trusted immediately, including through the result cache"
     );
     assert_untrusted(
         pull_reaches(&registry_a, false).await,
