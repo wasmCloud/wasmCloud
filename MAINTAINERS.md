@@ -89,10 +89,6 @@ Name: Brooks Townsend
 GitHub: @brooksmtownsend
 Organization: Capital One
 
-Name: Roman Volosatovs
-GitHub: @rvolosatovs
-Organization: Helmet Security
-
 Name: Jordan Rash
 GitHub: @jordan-rash
 Organization: Synadia
@@ -130,10 +126,6 @@ Name: Liam Randall
 GitHub: @LiamRandall
 Organization: Cosmonic
 
-Name: Roman Volosatovs
-GitHub: @rvolosatovs
-Organization: Helmet Security
-
 Name: Victor Adossi
 GitHub: @vados-cosmonic
 Organization: Cosmonic
@@ -153,10 +145,6 @@ Organization: Cosmonic
 Name: Brooks Townsend
 GitHub: @brooksmtownsend
 Organization: Capital One
-
-Name: Roman Volosatovs
-GitHub: @rvolosatovs
-Organization: Helmet Security
 
 Name: Victor Adossi
 GitHub: @vados-cosmonic
@@ -236,3 +224,6 @@ GitHub: @asherillan
 
 Name: Lucas Fontes
 GitHub: @lxfontes
+
+Name: Roman Volosatovs
+GitHub: @rvolosatovs
