@@ -138,6 +138,23 @@ pub struct CallerIdentity {
     /// two bindings of one workload can pair a call with the configuration that
     /// binding was resolved with.
     pub binding: Option<Arc<str>>,
+    /// Whether the host itself made the call, on no workload's behalf (an
+    /// operator's `secret:` map value being resolved). Read by
+    /// `wasmcloud:host/identity#is-host-call`: `workload_id` is empty here, but
+    /// `get-workload-id` also returns empty for a caller it cannot resolve.
+    pub host: bool,
+}
+
+impl CallerIdentity {
+    /// The host itself, calling a plugin on no workload's behalf.
+    pub fn host() -> Self {
+        Self {
+            workload_id: Arc::from(""),
+            component_id: None,
+            binding: None,
+            host: true,
+        }
+    }
 }
 
 impl SharedCtx {

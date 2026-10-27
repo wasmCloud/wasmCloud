@@ -1405,6 +1405,14 @@ impl WorkloadReservation for Host {
             tracing::warn!(workload_id, reason = message, "refused to start workload");
             return Err(message);
         }
+        // `wasmcloud:host/identity#get-workload-id` reports an empty id for the
+        // host's own calls and for an unresolvable caller, so no workload may
+        // carry one.
+        if workload_id.is_empty() {
+            let message = "Workload ID must not be empty".to_string();
+            tracing::warn!(reason = message, "refused to start workload");
+            return Err(message);
+        }
         // Plugin ids are not available as workload ids. A host component
         // plugin binds its own native imports as a workload whose workload and
         // component ids are both the plugin id
@@ -3743,6 +3751,29 @@ mod tests {
             !host.workloads.read().await.contains_key("after-stop"),
             "a refused start must leave no reservation behind"
         );
+    }
+
+    /// An empty workload id is refused before anything binds: a plugin sees
+    /// an empty id for the host's own calls, so no workload may carry one.
+    #[tokio::test]
+    async fn test_a_workload_cannot_take_an_empty_id() {
+        let plugin = Arc::new(BindRecordingPlugin::default());
+        let host = host_with(Arc::clone(&plugin));
+
+        let refused = host
+            .workload_start(marker_request(""))
+            .await
+            .expect("a refusal is a response, not a transport failure");
+        assert_eq!(refused.workload_status.workload_state, WorkloadState::Error);
+        assert_eq!(
+            refused.workload_status.message,
+            "Workload ID must not be empty"
+        );
+        assert!(
+            plugin.bound().is_empty(),
+            "a refused start must bind nothing"
+        );
+        assert!(!host.workloads.read().await.contains_key(""));
     }
 
     /// A plugin's id is not available as a workload id: a host component

@@ -1436,12 +1436,12 @@ fn caller_root_task(store: &mut StoreContextMut<'_, SharedCtx>) -> Option<GuestT
     }
 }
 
-/// Install the `wasmcloud:host/identity` import on the plugin's own linker: two
-/// no-argument funcs returning the workload/component id of the caller whose
-/// capability call is currently running. Each walks its async call stack back to
-/// the root export task and looks that task up in the current incarnation's
-/// [`JobRegistry`], so the answer is exact even while calls from other workloads
-/// interleave. A plugin that imports the interface can thereby partition its state
+/// Install the `wasmcloud:host/identity` import on the plugin's own linker:
+/// no-argument funcs describing the caller whose capability call is currently
+/// running (workload id, component id, binding, and whether it is the host
+/// itself). Each walks its async call stack back to the root export task and
+/// looks that task up in the current incarnation's [`JobRegistry`], so the
+/// answer is exact even while calls from other workloads interleave. A plugin that imports the interface can thereby partition its state
 /// per caller; a plugin that does not import it leaves these definitions unused.
 fn install_host_identity(
     linker: &mut Linker<SharedCtx>,
@@ -1513,6 +1513,21 @@ fn install_host_identity(
             },
         )
         .map_err(|e| e.context("failed to define wasmcloud:host/identity#get-binding-name"))?;
+    let host_state = Arc::clone(state);
+    instance
+        .func_new("is-host-call", move |mut store, _ty, _params, results| {
+            // Only a caller the registry resolves can be the host, so an
+            // unresolvable one reads `false`; `get-workload-id` returns ""
+            // for both.
+            let host = caller_root_task(&mut store)
+                .and_then(|task| host_state.registry()?.caller_for_task(task))
+                .is_some_and(|c| c.host);
+            if let Some(slot) = results.first_mut() {
+                *slot = Val::Bool(host);
+            }
+            Ok(())
+        })
+        .map_err(|e| e.context("failed to define wasmcloud:host/identity#is-host-call"))?;
     Ok(())
 }
 
@@ -1745,6 +1760,7 @@ async fn route_capability_call(
                     // Fixed when the shim was installed, not read from the
                     // call, so nothing the guest passes can influence it.
                     binding,
+                    host: false,
                 }
             };
             let mut dones = Vec::new();
@@ -1827,10 +1843,11 @@ async fn dispatch_capability_call(
 }
 
 /// Resolves secrets for the host through a host component plugin's exported
-/// `wasmcloud:secrets` `store.get` + `reveal`. The calls carry no workload
-/// identity, so the plugin answers from its host-level secrets rather than any
-/// workload's scope. The `secret` handle `get` returns stays in the plugin
-/// store and is released once revealed.
+/// `wasmcloud:secrets` `store.get` + `reveal`. The calls are made as
+/// [`CallerIdentity::host`], which the plugin tells apart with
+/// `wasmcloud:host/identity#is-host-call` to answer from its host-level secrets
+/// rather than any workload's scope. The `secret` handle `get` returns stays in
+/// the plugin store and is released once revealed.
 struct ComponentSecretResolver {
     state: Arc<ComponentHostPluginState>,
     store: Arc<str>,
@@ -1908,13 +1925,9 @@ impl ComponentSecretResolver {
 #[async_trait]
 impl crate::plugin::SecretResolver for ComponentSecretResolver {
     async fn resolve(&self, key: &str) -> anyhow::Result<Option<String>> {
-        // The host itself, not a workload: `wasmcloud:host/identity` reports
-        // an empty workload id, so the plugin reads its host-level secrets.
-        let caller = CallerIdentity {
-            workload_id: Arc::from(""),
-            component_id: None,
-            binding: None,
-        };
+        // The host itself, not a workload: `is-host-call` reads true, so the
+        // plugin can answer from its host-level secrets.
+        let caller = CallerIdentity::host();
         let got = dispatch_capability_call(
             &self.state,
             Arc::clone(&self.store),
