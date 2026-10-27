@@ -885,35 +885,48 @@ fn host_plugin_registry_credentials(
     }
 }
 
+/// How one NATS connection authenticates, from its flags.
+fn nats_auth(
+    credentials: &Option<PathBuf>,
+    nkey: &Option<PathBuf>,
+    token_file: &Option<PathBuf>,
+    user: &Option<String>,
+    password_file: &Option<PathBuf>,
+    jwt_as_token: bool,
+) -> wash_runtime::washlet::NatsAuth {
+    let mut auth = wash_runtime::washlet::NatsAuth::default();
+    auth.credentials = credentials.clone();
+    auth.nkey = nkey.clone();
+    auth.token_file = token_file.clone();
+    auth.user = user.clone();
+    auth.password_file = password_file.clone();
+    auth.hook = jwt_as_token.then(wash_runtime::washlet::AuthHook::jwt_as_token);
+    auth
+}
+
 impl HostCommand {
     /// How the scheduler connection authenticates.
     fn scheduler_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
-        wash_runtime::washlet::NatsAuth {
-            credentials: self.scheduler_nats_creds.clone(),
-            nkey: self.scheduler_nats_nkey.clone(),
-            token_file: self.scheduler_nats_token_file.clone(),
-            user: self.scheduler_nats_user.clone(),
-            password_file: self.scheduler_nats_password_file.clone(),
-            hook: self
-                .scheduler_nats_jwt_as_token
-                .then(wash_runtime::washlet::AuthHook::jwt_as_token),
-            ..Default::default()
-        }
+        nats_auth(
+            &self.scheduler_nats_creds,
+            &self.scheduler_nats_nkey,
+            &self.scheduler_nats_token_file,
+            &self.scheduler_nats_user,
+            &self.scheduler_nats_password_file,
+            self.scheduler_nats_jwt_as_token,
+        )
     }
 
     /// How the data connection authenticates.
     fn data_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
-        wash_runtime::washlet::NatsAuth {
-            credentials: self.data_nats_creds.clone(),
-            nkey: self.data_nats_nkey.clone(),
-            token_file: self.data_nats_token_file.clone(),
-            user: self.data_nats_user.clone(),
-            password_file: self.data_nats_password_file.clone(),
-            hook: self
-                .data_nats_jwt_as_token
-                .then(wash_runtime::washlet::AuthHook::jwt_as_token),
-            ..Default::default()
-        }
+        nats_auth(
+            &self.data_nats_creds,
+            &self.data_nats_nkey,
+            &self.data_nats_token_file,
+            &self.data_nats_user,
+            &self.data_nats_password_file,
+            self.data_nats_jwt_as_token,
+        )
     }
 
     /// Every path this host reads credentials or configuration from, which no

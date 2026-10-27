@@ -14,7 +14,12 @@ use crate::nats_credentials::{Credentials, Secret};
 /// `credentials` and `nkey` both answer the server's nonce, so only one of them
 /// may be set. Files are read on every connect rather than once, so a rotated
 /// credential is presented on the next reconnect without a restart.
+///
+/// `#[non_exhaustive]`: build one with [`Default`] and the `with_*` methods
+/// rather than a struct literal, so that adding a way to authenticate later is
+/// not a breaking change for callers outside this crate.
 #[derive(Clone, Default)]
+#[non_exhaustive]
 pub struct NatsAuth {
     /// A NATS `.creds` file: a user JWT and the nkey seed that signs for it.
     pub credentials: Option<PathBuf>,
@@ -65,6 +70,62 @@ impl NatsAuth {
         }
         .connect_options()
     }
+
+    /// See [`NatsAuth::credentials`].
+    #[must_use]
+    pub fn with_credentials(mut self, path: impl Into<PathBuf>) -> Self {
+        self.credentials = Some(path.into());
+        self
+    }
+
+    /// See [`NatsAuth::nkey`].
+    #[must_use]
+    pub fn with_nkey(mut self, path: impl Into<PathBuf>) -> Self {
+        self.nkey = Some(path.into());
+        self
+    }
+
+    /// See [`NatsAuth::token`].
+    #[must_use]
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
+    }
+
+    /// See [`NatsAuth::token_file`].
+    #[must_use]
+    pub fn with_token_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.token_file = Some(path.into());
+        self
+    }
+
+    /// See [`NatsAuth::user`].
+    #[must_use]
+    pub fn with_user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
+        self
+    }
+
+    /// See [`NatsAuth::password`].
+    #[must_use]
+    pub fn with_password(mut self, password: impl Into<String>) -> Self {
+        self.password = Some(password.into());
+        self
+    }
+
+    /// See [`NatsAuth::password_file`].
+    #[must_use]
+    pub fn with_password_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.password_file = Some(path.into());
+        self
+    }
+
+    /// See [`NatsAuth::hook`].
+    #[must_use]
+    pub fn with_hook(mut self, hook: AuthHook) -> Self {
+        self.hook = Some(hook);
+        self
+    }
 }
 
 fn value_or_file(
@@ -102,40 +163,54 @@ impl std::fmt::Debug for NatsAuth {
 mod tests {
     use super::*;
 
+    /// Each setter sets only its own field, the way a caller outside this
+    /// crate builds one.
+    #[test]
+    fn each_setter_sets_its_field() {
+        let auth = NatsAuth::default()
+            .with_credentials("a.creds")
+            .with_nkey("a.nk")
+            .with_token("t")
+            .with_token_file("t.file")
+            .with_user("u")
+            .with_password("p")
+            .with_password_file("p.file")
+            .with_hook(AuthHook::jwt_as_token());
+        assert_eq!(auth.credentials, Some("a.creds".into()));
+        assert_eq!(auth.nkey, Some("a.nk".into()));
+        assert_eq!(auth.token.as_deref(), Some("t"));
+        assert_eq!(auth.token_file, Some("t.file".into()));
+        assert_eq!(auth.user.as_deref(), Some("u"));
+        assert_eq!(auth.password.as_deref(), Some("p"));
+        assert_eq!(auth.password_file, Some("p.file".into()));
+        assert!(auth.hook.is_some());
+    }
+
     #[test]
     fn a_value_and_its_file_are_refused_together() {
-        let token = NatsAuth {
-            token: Some("t".into()),
-            token_file: Some("t".into()),
-            ..Default::default()
-        };
+        let token = NatsAuth::default().with_token("t").with_token_file("t");
         assert!(token.into_connect_options().is_err());
-        let password = NatsAuth {
-            password: Some("p".into()),
-            password_file: Some("p".into()),
-            ..Default::default()
-        };
+        let password = NatsAuth::default()
+            .with_user("u")
+            .with_password("p")
+            .with_password_file("p");
         assert!(password.into_connect_options().is_err());
     }
 
     #[test]
     fn credentials_and_an_nkey_are_refused_together() {
-        let auth = NatsAuth {
-            credentials: Some("a.creds".into()),
-            nkey: Some("a.nk".into()),
-            ..Default::default()
-        };
+        let auth = NatsAuth::default()
+            .with_credentials("a.creds")
+            .with_nkey("a.nk");
         assert!(auth.into_connect_options().is_err());
     }
 
     #[test]
     fn secrets_stay_out_of_debug_output() {
-        let auth = NatsAuth {
-            token: Some("s3cr3t-token".into()),
-            user: Some("derek".into()),
-            password: Some("s3cr3t-pass".into()),
-            ..Default::default()
-        };
+        let auth = NatsAuth::default()
+            .with_token("s3cr3t-token")
+            .with_user("derek")
+            .with_password("s3cr3t-pass");
         let debug = format!("{auth:?}");
         assert!(!debug.contains("s3cr3t"), "{debug}");
         assert!(debug.contains("derek"), "{debug}");
