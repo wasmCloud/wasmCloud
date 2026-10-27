@@ -109,7 +109,9 @@ The following are enforced in every mode:
 
 ## What we treat as a vulnerability
 
-A breach of a security goal that [Known limitations](#known-limitations) does not name, while the relevant control enforces. In particular:
+Breaches of security goals that are not included in [Known limitations](#known-limitations), which should be covered by current controls are considered vulnerabilities.
+
+For example:
 
 - A component, request, response or registry artifact that crashes the host, hangs it, or corrupts its memory.
 - A component reaching something its spec does not grant, or bypassing a control that is enforced in every mode.
