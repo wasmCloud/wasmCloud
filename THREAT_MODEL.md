@@ -1,6 +1,8 @@
 # wasmCloud Threat Model
 
-This document states what wasmCloud defends against, whom it trusts, and what we treat as a security vulnerability. It covers this repository. To report a vulnerability, follow [SECURITY.md](SECURITY.md).
+This document covers this repository, laying out what wasmCloud defends against, it's trust model, and what we treat as a security vulnerability.
+
+To report a vulnerability, follow [SECURITY.md](SECURITY.md).
 
 ## Scope
 
