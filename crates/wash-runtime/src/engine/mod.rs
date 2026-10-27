@@ -1990,8 +1990,7 @@ fn pooling_env_instances(key: &str, resolved: u32) -> u32 {
 }
 
 /// Core instances the pool admits per linear memory it holds, and the ratio
-/// `--max-memories` and `--core-instances` derive from each other by when
-/// only one is given.
+/// `--max-memories` alone derives the core-instance total by.
 ///
 /// Why 16. A component instance is one linear memory but several core
 /// instances, one per core module wasmtime instantiates for it: a Rust p2
@@ -2015,13 +2014,6 @@ fn pooling_env_instances(key: &str, resolved: u32) -> u32 {
 /// compositions sets `--core-instances` itself. Should the ratio become
 /// configurable, it is this one number.
 pub(crate) const CORE_INSTANCES_PER_MEMORY: u32 = 16;
-
-/// The memories a core-instance count fits in at [`CORE_INSTANCES_PER_MEMORY`]
-/// per memory, rounded up and never zero: what `--core-instances` alone sizes
-/// the pool to.
-pub(crate) fn memories_for_core_instances(core_instances: u32) -> u32 {
-    core_instances.div_ceil(CORE_INSTANCES_PER_MEMORY).max(1)
-}
 
 /// Tables the pool admits per linear memory it holds. The same shapes hold one
 /// or two tables (the main module's function table and the wit-component
