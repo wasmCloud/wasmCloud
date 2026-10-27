@@ -14,9 +14,9 @@ In scope:
 
 Out of scope:
 
-- `wash dev` and other developer workflows. They run code the developer chose, on the developer's own machine.
+- `wash dev` and other developer-focused workflows which run code developer-controlled code on the developer's own machine.
 - Features marked experimental, and non-default build features.
-- Applications deployed onto wasmCloud. Report those to their maintainers.
+- End-user applications deployed onto wasmCloud.
 
 ## Actors and trust
 
@@ -72,7 +72,9 @@ Every peer is untrusted, in both directions. The host parses HTTP, TLS, NATS and
 
 ## Security goals
 
-With its default settings, the host is built to uphold these goals. A breach of one is a vulnerability unless [Known limitations](#known-limitations) names it. Refer to them by number.
+This section details goals that are expected to hold for a host with default settings.
+
+A breach of one is a vulnerability unless mentioned in [Known limitations](#known-limitations).
 
 1. **Sandbox.** A component runs only as WebAssembly in its own instance. Whatever bytes it contains, it cannot execute native code, read or write memory outside its own linear memories and tables, call a host function it was not linked to, or crash or corrupt the host.
 2. **Grants.** A component reaches only the hosts, addresses, files, config, secrets and interfaces its spec grants.
@@ -84,7 +86,9 @@ With its default settings, the host is built to uphold these goals. A breach of 
 
 ## Operator settings that weaken a goal
 
-The two count modes exist for migrating a host: they report what enforcement would refuse, and allow it. Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator sets `--deny-private-ranges`, since reaching a sibling service on a private address is the ordinary in-cluster case.
+Certain settings may be set to `count` which enable host migration but weaken the security model. The `count` setting, where applicable, reports what policy would have refused, but allows the operation.
+
+Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator sets `--deny-private-ranges`, since reaching a sibling service on a private address is the ordinary in-cluster case.
 
 | Setting | Goal | Effect |
 | --- | --- | --- |
@@ -150,7 +154,7 @@ wasmCloud is one layer. Each layer below it must hold for the guarantees above t
 - **Supply chain.** Pin components by digest, and decide which registries a host may pull from.
 - **wasmCloud host.** Use count modes only while migrating, and return to enforce once nothing would be refused. Name credential files the host can read with `--reserved-host-path`; the host already reserves the files its own flags and configuration name. Keep hosts current, since a wasmtime fix reaches you only through a release.
 
-## Related
+## See also
 
 - [SECURITY.md](SECURITY.md): how to report a vulnerability, and how we disclose.
 - [wasmtime security](https://docs.wasmtime.dev/security.html), and [what wasmtime considers a vulnerability](https://docs.wasmtime.dev/security-what-is-considered-a-security-vulnerability.html).
