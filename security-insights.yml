@@ -84,6 +84,10 @@ repository:
         comment: ghcr.io/wasmcloud/runtime-operator container image.
       - uri: https://github.com/wasmCloud/wasmCloud/pkgs/container/charts%2Fruntime-operator
         comment: ghcr.io/wasmcloud/charts/runtime-operator Helm chart (OCI).
+      - uri: https://github.com/orgs/wasmCloud/packages?repo_name=wasmCloud
+        comment: >-
+          WIT interface packages at ghcr.io/wasmcloud/interfaces/<ns>/<name>:<version>,
+          published from wit/ on pushes to main.
       - uri: https://github.com/wasmCloud/homebrew-wasmcloud
         comment: Homebrew tap for wash.
       - uri: https://github.com/microsoft/winget-pkgs/tree/master/manifests/w/wasmCloud/wash
@@ -94,8 +98,8 @@ repository:
         location: https://github.com/wasmCloud/wasmCloud/attestations
         predicate-uri: https://slsa.dev/provenance/v1
         comment: >-
-          Release binaries and container images carry Sigstore-signed SLSA
-          provenance. Verify with `gh attestation verify --repo wasmCloud/wasmCloud`.
+          Release binaries, container images and WIT interface packages carry
+          Sigstore-signed SLSA provenance. Verify with `gh attestation verify --repo wasmCloud/wasmCloud`.
   security:
     assessments:
       self:
