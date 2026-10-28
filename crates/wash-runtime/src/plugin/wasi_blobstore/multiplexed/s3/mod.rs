@@ -525,6 +525,8 @@ mod tests {
         // No endpoint: path-style requests go to the regional endpoint.
         egress(&keyed(&[("region", "eu-central-1")]), &policy).unwrap();
         egress(&keyed(&[("aws_region", "eu-central-1")]), &policy).unwrap();
+        // `default_region` fills `Region` inside the builder.
+        egress(&keyed(&[("default_region", "eu-central-1")]), &policy).unwrap();
         assert!(egress(&keyed(&[("region", "us-west-2")]), &policy).is_err());
         // An endpoint, under any spelling, is dialed instead of the region's.
         egress(
