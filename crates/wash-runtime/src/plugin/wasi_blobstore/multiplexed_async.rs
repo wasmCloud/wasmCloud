@@ -459,9 +459,14 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         self.mux.configure_egress_policy(policy)
     }
 
+    /// Same schema as the sync plugin: the blobstore address keys and every
+    /// S3 key are host-owned.
     fn binding_schema(&self) -> crate::plugin::BindingSchema {
-        crate::plugin::multiplex::backend_binding_schema(
-            crate::plugin::multiplex::BLOBSTORE_HOST_OWNED_KEYS,
+        crate::plugin::BindingSchema::with_host_owned_keys(
+            crate::plugin::multiplex::BLOBSTORE_HOST_OWNED_KEYS
+                .iter()
+                .copied()
+                .chain(super::multiplexed::host_owned_spellings()),
         )
     }
 
@@ -476,14 +481,6 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
 
     fn supports_named_instances(&self) -> bool {
         true
-    }
-
-    /// Same schema as the sync plugin: every S3 key is host-owned, the other
-    /// backends' keys stay the workload's.
-    fn binding_schema(&self) -> crate::plugin::BindingSchema {
-        crate::plugin::BindingSchema::with_host_owned_keys(
-            super::multiplexed::host_owned_spellings(),
-        )
     }
 
     async fn on_workload_item_bind<'a>(

@@ -37,6 +37,14 @@
 //! to run as the host (its `AWS_*` environment, then the instance role). One
 //! that names none fails to bind rather than inheriting the host's identity.
 //!
+//! Under a declared egress policy (`allowedHosts`), each bind checks the
+//! endpoint the client dials: `endpoint` when set, otherwise
+//! `https://s3.{region}.amazonaws.com`. Virtual-hosted requests without an
+//! `endpoint` are refused there, since their host carries the bucket a guest
+//! names later. Not checked: the credential endpoints `use_host_identity`
+//! reaches (instance metadata, STS), which come from the host's environment,
+//! and redirects the HTTP client follows.
+//!
 //! Each container is one bucket, provisioned outside wasmCloud:
 //! `create_container` and `delete_container` return an error until
 //! `object_store` grows a bucket API (apache/arrow-rs-object-store#868).
@@ -57,11 +65,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use futures::{StreamExt, TryStreamExt};
-use object_store::aws::{AmazonS3, AmazonS3Builder};
+use object_store::aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
 use sha2::{Digest, Sha256};
 
+use crate::host::declared_port::Protocol;
+use crate::plugin::PluginEgressPolicy;
 use crate::plugin::multiplex::{BACKEND_CONFIG_KEY, BackendProvider};
 
 use super::{
@@ -363,7 +373,11 @@ impl BackendProvider<BlobId> for S3BlobProvider {
         Some(format!("{:x}", hasher.finalize()))
     }
 
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<BlobId> {
+    async fn instantiate(
+        &self,
+        config: &HashMap<String, String>,
+        _egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<BlobId> {
         let base = builder_from_config(config)?;
         // Probe-build so a config error fails the bind, not the first request.
         base.clone()
@@ -371,6 +385,38 @@ impl BackendProvider<BlobId> for S3BlobProvider {
             .build()
             .context("invalid s3 blobstore config")?;
         Ok(Arc::new(S3BlobBackend::new(base, MAX_BUCKET_CLIENTS)))
+    }
+
+    /// The endpoint the client dials, derived as `AmazonS3Builder::build`
+    /// derives it, without the bucket.
+    fn check_egress(
+        &self,
+        config: &HashMap<String, String>,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        // A config the builder refuses fails in `instantiate`, as the config
+        // error it is rather than an egress refusal.
+        let Ok(builder) = builder_from_config(config) else {
+            return Ok(());
+        };
+        let get = |key| builder.get_config_value(&key);
+        let endpoint =
+            get(AmazonS3ConfigKey::S3Endpoint).or_else(|| get(AmazonS3ConfigKey::Endpoint));
+        let virtual_hosted =
+            get(AmazonS3ConfigKey::VirtualHostedStyleRequest).as_deref() == Some("true");
+        let url = match (endpoint, virtual_hosted) {
+            (Some(endpoint), _) => endpoint,
+            (None, false) => {
+                let region = get(AmazonS3ConfigKey::Region).unwrap_or_else(|| "us-east-1".into());
+                format!("https://s3.{region}.amazonaws.com")
+            }
+            (None, true) => anyhow::bail!(
+                "s3 blobstore virtual-hosted requests without an 'endpoint' dial a host per \
+                 bucket, which allowedHosts cannot check; name an 'endpoint' or use path-style \
+                 requests"
+            ),
+        };
+        policy.check_url(&url, Protocol::Tcp, 443)
     }
 }
 
@@ -457,12 +503,108 @@ mod tests {
         // `allow_http` is parsed leniently at `with_config`; a deferred bool is
         // what the probe-build catches.
         let Err(err) = S3BlobProvider
-            .instantiate(&keyed(&[("virtual_hosted_style_request", "maybe")]))
+            .instantiate(&keyed(&[("virtual_hosted_style_request", "maybe")]), None)
             .await
         else {
             panic!("a bad bool must fail the bind");
         };
         let err = err.to_string();
         assert!(err.contains("invalid s3 blobstore config"), "{err}");
+    }
+
+    fn egress(config: &HashMap<String, String>, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
+        S3BlobProvider.check_egress(config, policy)
+    }
+
+    #[test]
+    fn egress_is_checked_at_the_endpoint_s3_dials() {
+        let policy = PluginEgressPolicy::allowing(&[
+            "https://s3.eu-central-1.amazonaws.com",
+            "http://rustfs.internal:9000",
+        ]);
+        // No endpoint: path-style requests go to the regional endpoint.
+        egress(&keyed(&[("region", "eu-central-1")]), &policy).unwrap();
+        egress(&keyed(&[("aws_region", "eu-central-1")]), &policy).unwrap();
+        assert!(egress(&keyed(&[("region", "us-west-2")]), &policy).is_err());
+        // An endpoint, under any spelling, is dialed instead of the region's.
+        egress(
+            &keyed(&[("endpoint", "http://rustfs.internal:9000")]),
+            &policy,
+        )
+        .unwrap();
+        egress(
+            &keyed(&[("aws_endpoint_url", "http://rustfs.internal:9000")]),
+            &policy,
+        )
+        .unwrap();
+        let err = egress(
+            &keyed(&[
+                ("region", "eu-central-1"),
+                ("endpoint", "https://evil.example"),
+            ]),
+            &policy,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("evil.example"), "{err:#}");
+    }
+
+    #[test]
+    fn egress_refuses_virtual_hosted_requests_without_an_endpoint() {
+        // The host would be `{bucket}.s3.…`, and the guest names the bucket
+        // after the bind.
+        let policy = PluginEgressPolicy::allowing(&["https://s3.eu-central-1.amazonaws.com"]);
+        let err = egress(
+            &keyed(&[
+                ("region", "eu-central-1"),
+                ("virtual_hosted_style_request", "true"),
+            ]),
+            &policy,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("'endpoint'"), "{err:#}");
+
+        // An endpoint for virtual-hosted requests already names the bucket.
+        let policy =
+            PluginEgressPolicy::allowing(&["https://assets.s3.eu-central-1.amazonaws.com"]);
+        egress(
+            &keyed(&[
+                ("virtual_hosted_style_request", "true"),
+                ("endpoint", "https://assets.s3.eu-central-1.amazonaws.com"),
+            ]),
+            &policy,
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn egress_leaves_a_bad_config_to_instantiate() {
+        // No credential source: refused by the bind as a config error, not
+        // reported as an egress refusal.
+        let policy = PluginEgressPolicy::allowing(&[]);
+        let config = cfg(&[("region", "eu-central-1")]);
+        egress(&config, &policy).unwrap();
+        assert!(
+            S3BlobProvider
+                .instantiate(&config, Some(&policy))
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn egress_refusal_does_not_echo_credentials() {
+        let policy = PluginEgressPolicy::allowing(&["https://s3.eu-central-1.amazonaws.com"]);
+        let err = egress(
+            &cfg(&[
+                ("region", "us-west-2"),
+                ("access_key_id", "AKIA-OPERATOR"),
+                ("secret_access_key", "operator-secret"),
+            ]),
+            &policy,
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(!err.contains("AKIA-OPERATOR"), "{err}");
+        assert!(!err.contains("operator-secret"), "{err}");
     }
 }
