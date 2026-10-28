@@ -1,0 +1,49 @@
+name: Bug report
+description: Report something in wasmCloud that doesn't work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search the [open issues](https://github.com/wasmCloud/wasmCloud/issues) before filing. Report security vulnerabilities privately as [SECURITY.md](https://github.com/wasmCloud/wasmCloud/blob/main/SECURITY.md) describes, not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran and what happened. Include the full error message.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: >-
+        The smallest set of steps or commands that shows the problem. If it needs
+        files, link a public repository with a minimal reproduction. Don't attach
+        zip files or other archives.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `wash --version`, and the runtime-operator chart version for Kubernetes deployments.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and architecture, and the Kubernetes version if one is involved.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output. It's formatted as code automatically.
+      render: shell
