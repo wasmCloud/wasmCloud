@@ -506,8 +506,8 @@ pub struct DynamicRouter {
     hosts: Box<[RouteShard; ROUTE_SHARDS]>,
     /// One writer lock per `hosts` shard. A writer holds it across its
     /// load-copy-store of that shard, so two writers to one shard never copy
-    /// the same snapshot and lose an edit, and no writer waits on another
-    /// shard's lock. It lives outside [`RouteShard`] because a
+    /// the same snapshot and lose an edit, and an edit of one shard never
+    /// takes another shard's lock. It lives outside [`RouteShard`] because a
     /// waiting writer writes the lock word: inside the shard, a burst of
     /// writers to one hostname would keep taking the cache line that every
     /// request for that hostname loads. Requests never take it.
@@ -681,7 +681,8 @@ impl DynamicRouter {
     /// under its own writer lock, so no other writer can store that shard
     /// between this load and store, while writers to other shards carry on.
     /// Only one shard's writer lock is held at a time, and nothing waits while
-    /// holding one, so writers cannot deadlock on these locks.
+    /// holding one, so writers cannot deadlock on these locks. `edit` runs
+    /// under that lock and must not take a workload map shard.
     fn edit_shards(
         &self,
         routes: &[IngressRoute],
@@ -6680,10 +6681,16 @@ mod tests {
         router.register_routes("w", &routes);
 
         let writer = router.hold_route_writer(&first.host);
-        let unregister = {
+        let (done, unregistered) = std::sync::mpsc::channel();
+        {
             let router = Arc::clone(&router);
-            std::thread::spawn(move || router.unregister_routes("w"))
-        };
+            // Not joined: an unregister that never returns must fail this
+            // test, not hang it.
+            std::thread::spawn(move || {
+                router.unregister_routes("w");
+                let _ = done.send(());
+            });
+        }
         // Wait for the unregister to take the map shard (or, in a design that
         // releases it early, to drop the record).
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -6695,13 +6702,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let mid_edit = router.try_recorded_routes("w");
         drop(writer);
-        unregister.join().unwrap();
+        let finished = unregistered.recv_timeout(Duration::from_secs(10));
 
         assert_eq!(
             mid_edit,
             Err(WouldBlock),
             "the workload map shard was free while its unregister was mid-edit"
         );
+        assert_eq!(finished, Ok(()), "the unregister never finished");
         assert!(router.is_empty());
     }
 
@@ -6767,7 +6775,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "route write throughput by thread count; run explicitly with --ignored --nocapture"]
+    #[ignore = "prints route write throughput by thread count; run with --ignored --nocapture"]
     fn routing_write_scaling_across_threads() {
         const REGISTERS: usize = 100_000;
         for replicas in [false, true] {
@@ -6794,6 +6802,22 @@ mod tests {
                 });
                 let rate = REGISTERS as f64 / began.elapsed().as_secs_f64();
                 eprintln!("replicas={replicas} threads={threads}: {rate:.0} registers/s");
+
+                // CI runs ignored tests, so check that no registration was lost.
+                let recorded: usize = router
+                    .workload_to_host
+                    .iter()
+                    .map(|shard| lock_routes(shard.0.lock()).len())
+                    .sum();
+                let routed: usize = if replicas {
+                    router
+                        .host_buckets("shared.scale.test")
+                        .map_or(0, |buckets| buckets.iter().map(|b| b.workloads.len()).sum())
+                } else {
+                    router.hosts.iter().map(|shard| shard.0.load().len()).sum()
+                };
+                assert_eq!(recorded, REGISTERS, "a registration left no record");
+                assert_eq!(routed, REGISTERS, "a registration left no route");
             }
         }
     }
