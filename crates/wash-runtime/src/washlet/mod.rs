@@ -1356,7 +1356,12 @@ pub async fn run_cluster_host(
 }
 
 /// Configuration options for NATS connections
+///
+/// `#[non_exhaustive]`: build one with [`Default`] and the `with_*` methods
+/// rather than a struct literal, so that adding an option later is not a
+/// breaking change for callers outside this crate.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct NatsConnectionOptions {
     /// Request timeout for NATS operations
     pub request_timeout: Option<Duration>,
@@ -1386,6 +1391,72 @@ pub struct NatsConnectionOptions {
     pub name: Option<String>,
     /// What the connection presents to a server that requires authentication.
     pub auth: NatsAuth,
+    /// The prefix of the inboxes the client creates for request replies, in
+    /// place of `_INBOX`.
+    pub inbox_prefix: Option<String>,
+}
+
+impl NatsConnectionOptions {
+    /// Bound every request on the connection by `timeout`.
+    #[must_use]
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
+        self
+    }
+
+    /// Trust the CA certificate at `path`.
+    #[must_use]
+    pub fn with_tls_ca(mut self, path: impl Into<PathBuf>) -> Self {
+        self.tls_ca = Some(path.into());
+        self
+    }
+
+    /// Start TLS before the server's `INFO`.
+    #[must_use]
+    pub fn with_tls_first(mut self, tls_first: bool) -> Self {
+        self.tls_first = tls_first;
+        self
+    }
+
+    /// Present the client certificate at `cert` with its key at `key`.
+    #[must_use]
+    pub fn with_tls_client_cert(
+        mut self,
+        cert: impl Into<PathBuf>,
+        key: impl Into<PathBuf>,
+    ) -> Self {
+        self.tls_cert = Some(cert.into());
+        self.tls_key = Some(key.into());
+        self
+    }
+
+    /// See [`NatsConnectionOptions::connect_retry`].
+    #[must_use]
+    pub fn with_connect_retry(mut self, window: Duration) -> Self {
+        self.connect_retry = Some(window);
+        self
+    }
+
+    /// See [`NatsConnectionOptions::name`].
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// See [`NatsConnectionOptions::auth`].
+    #[must_use]
+    pub fn with_auth(mut self, auth: NatsAuth) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    /// See [`NatsConnectionOptions::inbox_prefix`].
+    #[must_use]
+    pub fn with_inbox_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.inbox_prefix = Some(prefix.into());
+        self
+    }
 }
 
 #[instrument(skip_all)]
@@ -1393,10 +1464,14 @@ pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     options: NatsConnectionOptions,
 ) -> Result<async_nats::Client, anyhow::Error> {
-    let mut opts = options.auth.connect_options()?;
+    let mut opts = options.auth.into_connect_options()?;
 
     if let Some(name) = options.name {
         opts = opts.name(name);
+    }
+
+    if let Some(prefix) = options.inbox_prefix {
+        opts = opts.custom_inbox_prefix(prefix);
     }
 
     if let Some(timeout) = options.request_timeout {
@@ -3047,47 +3122,11 @@ mod tests {
         );
     }
 
-    /// Answer one connection's handshake with `nonce` and hand back the
-    /// `CONNECT` it sent, then close it so the client has to reconnect.
-    async fn accept_connect(
-        listener: &tokio::net::TcpListener,
-        nonce: &str,
-    ) -> anyhow::Result<serde_json::Value> {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-            let (socket, _) = listener.accept().await?;
-            let (reader, mut writer) = socket.into_split();
-            writer
-                .write_all(
-                    format!(
-                        "INFO {{\"max_payload\":1048576,\"auth_required\":true,\"nonce\":\"{nonce}\"}}\r\n"
-                    )
-                    .as_bytes(),
-                )
-                .await?;
-            let mut reader = BufReader::new(reader);
-            let mut connect = None;
-            loop {
-                let mut line = String::new();
-                anyhow::ensure!(reader.read_line(&mut line).await? > 0, "closed before PING");
-                if let Some(json) = line.strip_prefix("CONNECT ") {
-                    connect = Some(serde_json::from_str(json.trim())?);
-                } else if line.starts_with("PING") {
-                    writer.write_all(b"PONG\r\n").await?;
-                    break;
-                }
-            }
-            connect.context("no CONNECT before PING")
-        })
-        .await
-        .context("NATS handshake timed out")?
-    }
-
     /// The credentials file is read on every connect, so a rotated one is what
     /// the next reconnect presents, and the connection keeps its name.
     #[tokio::test]
     async fn a_rotated_credentials_file_is_presented_on_reconnect() -> anyhow::Result<()> {
-        use super::nats_auth::tests::creds_file;
+        use crate::nats_credentials::tests::{accept_connect, creds_file};
 
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("host.creds");
@@ -3126,10 +3165,59 @@ mod tests {
         Ok(())
     }
 
+    /// An embedder that opens its own connection keeps the rereading of
+    /// credential files, and the inbox prefix it sets on top.
+    #[tokio::test]
+    async fn an_embedder_connection_rereads_credentials() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let dir = tempfile::tempdir()?;
+        let token = dir.path().join("token");
+        std::fs::write(&token, "first")?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsAuth::default()
+            .with_token_file(&token)
+            .into_connect_options()?
+            .custom_inbox_prefix("agent.inbox");
+
+        let (first, client) = tokio::try_join!(accept_connect(&listener, "first-nonce"), async {
+            options
+                .connect(format!("nats://{}", listener.local_addr()?))
+                .await
+                .map_err(anyhow::Error::new)
+        },)?;
+        assert_eq!(first["auth_token"], "first");
+        assert!(client.new_inbox().starts_with("agent.inbox."));
+
+        std::fs::write(&token, "second")?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["auth_token"], "second");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn connect_nats_sets_the_inbox_prefix() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsConnectionOptions::default()
+            .with_name("host:test")
+            .with_inbox_prefix("runtime.inbox");
+        let (connect, client) = tokio::try_join!(
+            accept_connect(&listener, "nonce"),
+            connect_nats(format!("nats://{}", listener.local_addr()?), options),
+        )?;
+        assert_eq!(connect["name"], "host:test");
+        assert!(client.new_inbox().starts_with("runtime.inbox."));
+        Ok(())
+    }
+
     /// A credentials file that cannot be read reads the same on every attempt,
     /// so it is reported at once rather than retried for the whole window.
     #[tokio::test]
     async fn an_unreadable_credentials_file_is_not_retried() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {

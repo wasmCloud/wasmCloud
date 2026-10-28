@@ -2,8 +2,8 @@
 //!
 //! The budget names a total; wasmtime's own knobs bound a *single* linear
 //! memory ([`HostMemoryBudgets::default_heap_memory`]) and a *count* of pool
-//! slots ([`HostMemoryBudgets::core_instances`]). Neither adds up to the total:
-//! `core_instances x` the slot size bounds address space, which the
+//! slots ([`HostMemoryBudgets::max_memories`]). Neither adds up to the total:
+//! `max_memories x` the slot size bounds address space, which the
 //! kernel does not back until it is written to. The case nothing covers is
 //! aggregate creep — N guests each under its own ceiling, together over the
 //! pod's — and the first notification is the OOM killer taking every workload
@@ -913,7 +913,7 @@ mod tests {
 
     #[test]
     fn the_budget_takes_its_cap_from_the_resolved_knobs() {
-        let budgets = HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), None, None).unwrap();
+        let budgets = HostMemoryBudgets::resolve(Some(8 * 1024 * MIB), None, None, None).unwrap();
         let budget = GuestMemoryBudget::from_budgets(&budgets, GuestMemoryMode::Enforce);
         assert_eq!(budget.cap(), 8 * 1024 * MIB);
         assert_eq!(budget.mode(), GuestMemoryMode::Enforce);

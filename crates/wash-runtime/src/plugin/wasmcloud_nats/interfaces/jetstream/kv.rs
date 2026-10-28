@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/kv@0.1.2` — the JetStream KV store, and the `bucket`
+//! `wasmcloud:nats/kv@0.1.3` — the JetStream KV store, and the `bucket`
 //! resource an `open` hands back.
 
 use core::future::Future as _;
@@ -21,8 +21,8 @@ use wasmtime::component::{
 use crate::engine::ctx::{ActiveCtx, SharedCtx};
 
 use crate::plugin::wasmcloud_nats::interfaces::{
-    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, jetstream_err, kv,
-    kv_err, labeled_kv, types, with_deadline,
+    NatsId, bucket_lookup_err, chain_timed_out, check_bucket, check_payload, jetstream_err,
+    js_publish_err, kv, kv_err, labeled_kv, types, with_deadline,
 };
 use crate::plugin::wasmcloud_nats::jetstream::BucketHandle;
 
@@ -33,6 +33,25 @@ const KV_KEYS_BATCH: usize = 1000;
 /// Entries one `select` poll will gather before handing them to the guest.
 /// Bounds host memory per poll; the drain as a whole stays unbounded.
 const DEFAULT_SELECT_BATCH: usize = 1024;
+
+/// NATS truncates message TTLs to whole seconds. Round up before publishing so
+/// a lease cannot expire early just because its requested TTL was fractional.
+fn message_ttl_seconds(ttl_ms: u64) -> Option<u64> {
+    let seconds = ttl_ms.div_ceil(1_000);
+    // Check the rounded duration: rounding the largest millisecond duration
+    // up would otherwise overflow the server's signed nanosecond duration.
+    (ttl_ms >= 1_000 && seconds <= i64::MAX as u64 / 1_000_000_000).then_some(seconds)
+}
+
+/// KV keys use ASCII letters, digits, and `-/_=.`, with no leading or trailing dot.
+fn is_valid_key(key: &str) -> bool {
+    !key.is_empty()
+        && !key.starts_with('.')
+        && !key.ends_with('.')
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-/_=.".contains(&b))
+}
 
 /// Refuses a `keys` filter that could not be a KV subject pattern.
 ///
@@ -448,6 +467,138 @@ impl<T: 'static + Send> kv::HostBucketWithStore<T> for SharedCtx {
             .map_err(|e| kv_err("kv create failed", chain_timed_out(&e), e)))
     }
 
+    async fn create_with_ttl(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<BucketHandle>,
+        key: String,
+        value: Vec<u8>,
+        ttl_ms: u64,
+    ) -> wasmtime::Result<Result<u64, types::NatsError>> {
+        let (store, conn) = accessor.with(|mut a| {
+            Ok::<_, wasmtime::Error>((store_ref(&mut a, &rep)?, conn_ref(&mut a, &rep)?))
+        })?;
+        if !conn.server_at_least(2, 11) {
+            return Ok(Err(types::NatsError::UnsupportedByServer(
+                "per-key TTL requires NATS server 2.11 or newer".to_string(),
+            )));
+        }
+        let Some(ttl_seconds) = message_ttl_seconds(ttl_ms) else {
+            return Ok(Err(types::NatsError::Jetstream(
+                "per-key TTL must be at least 1000ms and fit a NATS duration after rounding up to whole seconds"
+                    .to_string(),
+            )));
+        };
+        if !is_valid_key(&key) {
+            return Ok(Err(types::NatsError::Jetstream(
+                "invalid KV key".to_string(),
+            )));
+        }
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert(async_nats::header::NATS_EXPECTED_LAST_SUBJECT_SEQUENCE, "0");
+        headers.insert(
+            async_nats::header::NATS_MESSAGE_TTL,
+            format!("{ttl_seconds}s"),
+        );
+        if let Err(e) = check_payload(value.len(), Some(&headers), &conn) {
+            return Ok(Err(e));
+        }
+        let prefix = store.put_prefix.as_ref().unwrap_or(&store.prefix);
+        let subject = if store.use_jetstream_prefix {
+            format!("{}.{prefix}{key}", conn.jetstream_prefix)
+        } else {
+            format!("{prefix}{key}")
+        };
+        let value = bytes::Bytes::from(value);
+        let publish = async |headers: async_nats::HeaderMap| {
+            conn.jetstream
+                .publish_with_headers(subject.clone(), headers, value.clone())
+                .await?
+                .await
+                .map(|ack| ack.sequence)
+        };
+        match publish(headers.clone()).await {
+            Ok(revision) => Ok(Ok(revision)),
+            Err(e) if e.kind() == jetstream::context::PublishErrorKind::WrongLastSequence => {
+                // A tombstone's revision guards recreation, with the TTL on the same write.
+                let revision = match store.entry(&key).await {
+                    Ok(Some(entry)) if entry.operation != jetstream::kv::Operation::Put => {
+                        entry.revision
+                    }
+                    Ok(_) => {
+                        return Ok(Err(js_publish_err(
+                            "kv create-with-ttl failed",
+                            e,
+                            conn.max_payload(),
+                        )));
+                    }
+                    Err(e) => {
+                        return Ok(Err(kv_err(
+                            "kv create-with-ttl lookup failed",
+                            chain_timed_out(&e),
+                            e,
+                        )));
+                    }
+                };
+                headers.insert(
+                    async_nats::header::NATS_EXPECTED_LAST_SUBJECT_SEQUENCE,
+                    revision.to_string(),
+                );
+                if let Err(e) = check_payload(value.len(), Some(&headers), &conn) {
+                    return Ok(Err(e));
+                }
+                Ok(publish(headers).await.map_err(|e| {
+                    js_publish_err("kv create-with-ttl failed", e, conn.max_payload())
+                }))
+            }
+            Err(e) => Ok(Err(js_publish_err(
+                "kv create-with-ttl failed",
+                e,
+                conn.max_payload(),
+            ))),
+        }
+    }
+
+    async fn delete_by_revision(
+        accessor: &Accessor<T, Self>,
+        rep: Resource<BucketHandle>,
+        key: String,
+        expected_revision: u64,
+    ) -> wasmtime::Result<Result<(), types::NatsError>> {
+        // Revision zero must not create a tombstone for an absent key.
+        if expected_revision == 0 {
+            return Ok(Err(types::NatsError::Jetstream(
+                "delete-by-revision requires an expected revision of at least 1".to_string(),
+            )));
+        }
+        let store = accessor.with(|mut a| store_ref(&mut a, &rep))?;
+        match store
+            .delete_expect_revision(&key, Some(expected_revision))
+            .await
+        {
+            Ok(()) => Ok(Ok(())),
+            Err(e) if is_revision_mismatch(&e) => {
+                if let Some(actual) = parse_wrong_last_sequence(&e.to_string()) {
+                    return Ok(Err(types::NatsError::RevisionMismatch(actual)));
+                }
+                match store.entry(&key).await {
+                    Ok(entry) => Ok(Err(types::NatsError::RevisionMismatch(
+                        entry.map_or(0, |e| e.revision),
+                    ))),
+                    Err(_) => Ok(Err(kv_err(
+                        "kv delete-by-revision failed",
+                        chain_timed_out(&e),
+                        e,
+                    ))),
+                }
+            }
+            Err(e) => Ok(Err(kv_err(
+                "kv delete-by-revision failed",
+                chain_timed_out(&e),
+                e,
+            ))),
+        }
+    }
+
     async fn update(
         accessor: &Accessor<T, Self>,
         rep: Resource<BucketHandle>,
@@ -853,5 +1004,30 @@ impl kv::HostBucket for ActiveCtx<'_> {
     async fn drop(&mut self, rep: Resource<BucketHandle>) -> wasmtime::Result<()> {
         self.table.delete(rep)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::message_ttl_seconds;
+
+    #[test]
+    fn ttl_rounds_up_to_whole_seconds() {
+        for (millis, seconds) in [(1_000, 1), (1_001, 2), (1_999, 2), (2_000, 2), (2_001, 3)] {
+            assert_eq!(message_ttl_seconds(millis), Some(seconds));
+        }
+    }
+
+    #[test]
+    fn ttl_validates_the_rounded_duration() {
+        let max_seconds = i64::MAX as u64 / 1_000_000_000;
+        assert_eq!(message_ttl_seconds(max_seconds * 1_000), Some(max_seconds));
+        assert_eq!(
+            message_ttl_seconds(max_seconds * 1_000 - 1),
+            Some(max_seconds)
+        );
+        for millis in [0, 999, max_seconds * 1_000 + 1, u64::MAX] {
+            assert_eq!(message_ttl_seconds(millis), None);
+        }
     }
 }

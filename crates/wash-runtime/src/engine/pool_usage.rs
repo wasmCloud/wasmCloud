@@ -39,15 +39,16 @@ impl PoolSlots {
 /// [`PoolingAllocationConfig`] so environment overrides are reflected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PoolTotals {
-    core_instances: u32,
-    component_instances: u32,
-    pub(super) memories: u32,
-    pub(super) tables: u32,
-    pub(super) stacks: u32,
-    gc_heaps: u32,
+    pub(crate) core_instances: u32,
+    pub(crate) component_instances: u32,
+    pub(crate) memories: u32,
+    pub(crate) tables: u32,
+    pub(crate) stacks: u32,
+    pub(crate) gc_heaps: u32,
 }
 
 impl PoolTotals {
+    /// Read every total from a pooling configuration, including overrides.
     pub(crate) fn of(config: &PoolingAllocationConfig) -> Self {
         Self {
             core_instances: config.get_total_core_instances(),
@@ -136,16 +137,43 @@ const EXHAUSTED: &str = exhausted!("");
 
 /// The context naming the knob that raises the total wasmtime names in a
 /// refusal. Whole static strings, so annotating a refusal allocates nothing.
+///
+/// `--max-memories` sizes the memories, stacks and component instances
+/// together, so each of those names it first: raising only the one total that
+/// was hit moves the refusal to the next of the three. The core-instance and
+/// table totals are multiples of it that a component of the usual shape never
+/// fills, so a refusal there points at the shape rather than the flag.
 fn remedy(kind: &str) -> &'static str {
+    // Wasmtime names the exhausted memory stripe, even without protection
+    // keys ("memory stripe 0"), rather than the pool's "memories" total.
+    let kind = if kind.starts_with("memory stripe ") {
+        "memories"
+    } else {
+        kind
+    };
     match kind {
         "core instances" => exhausted!(
-            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_CORE_INSTANCES), or give this \
-             host fewer warm instances"
+            "Raise --core-instances (or WASMTIME_POOLING_TOTAL_CORE_INSTANCES): unset, it is \
+             a multiple of --max-memories that a component of the usual shape never fills, \
+             so a component made of many core modules, or many warm instances of one, is \
+             what filled it"
         ),
-        "component instances" => exhausted!("Raise WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES"),
-        "memories" => exhausted!("Raise WASMTIME_POOLING_TOTAL_MEMORIES"),
-        "tables" => exhausted!("Raise WASMTIME_POOLING_TOTAL_TABLES"),
-        "fibers" | "stacks" => exhausted!("Raise WASMTIME_POOLING_TOTAL_STACKS"),
+        "component instances" => exhausted!(
+            "Raise --max-memories (or WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES), or give \
+             this host fewer warm instances"
+        ),
+        "memories" => exhausted!(
+            "Raise --max-memories (or WASMTIME_POOLING_TOTAL_MEMORIES), or give this host \
+             fewer warm instances"
+        ),
+        "tables" => exhausted!(
+            "Raise WASMTIME_POOLING_TOTAL_TABLES: --max-memories sets it to a multiple of \
+             the memory count that a component of the usual shape never fills"
+        ),
+        "fibers" | "stacks" => exhausted!(
+            "Raise --max-memories (or WASMTIME_POOLING_TOTAL_STACKS), or give this host \
+             fewer warm instances"
+        ),
         "GC heaps" => exhausted!("Raise WASMTIME_POOLING_TOTAL_GC_HEAPS"),
         _ => exhausted!("Raise the matching WASMTIME_POOLING_TOTAL_* setting"),
     }
@@ -221,6 +249,36 @@ mod tests {
     }
 
     #[test]
+    fn the_totals_sized_together_name_the_flag_that_sizes_them() {
+        // The refusal an operator sees once the memories are full must name
+        // the knob that raises all three of the totals `--max-memories`
+        // sizes, not only the one that happened to bind: raising that one
+        // alone moves the refusal to the next.
+        for kind in [
+            "memories",
+            "memory stripe 0",
+            "memory stripe 7",
+            "fibers",
+            "stacks",
+            "component instances",
+        ] {
+            assert!(
+                remedy(kind).contains("--max-memories"),
+                "{kind}: {}",
+                remedy(kind)
+            );
+        }
+        // The multiples a component never fills point elsewhere.
+        for kind in ["core instances", "tables"] {
+            assert!(
+                !remedy(kind).starts_with(exhausted!("Raise --max-memories")),
+                "{kind}: {}",
+                remedy(kind)
+            );
+        }
+    }
+
+    #[test]
     fn every_kind_wasmtime_names_has_its_own_remedy() {
         for kind in [
             "core instances",
@@ -291,6 +349,48 @@ mod tests {
         assert!(text.contains("--core-instances"), "{text}");
         assert!(
             text.contains("maximum concurrent limit of 1 for core instances"),
+            "the original refusal is still underneath: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_real_memory_refusal_names_the_memory_knobs() {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
+        let mut pooling = PoolingAllocationConfig::default();
+        // Leave room for both instances so only the memory total can bind.
+        pooling
+            .total_core_instances(2)
+            .total_component_instances(2)
+            .total_memories(1)
+            .max_memory_size(1 << 16);
+        let mut config = wasmtime::Config::new();
+        config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let wasm = wat::parse_str(
+            "(component (core module $m (memory 1)) (core instance (instantiate $m)))",
+        )
+        .unwrap();
+        let component = wasmtime::component::Component::new(&engine, wasm).unwrap();
+        let linker = wasmtime::component::Linker::<SharedCtx>::new(&engine);
+        let ctx = |n| SharedCtx::new(crate::engine::ctx::Ctx::builder("pool-workload", n).build());
+
+        let mut first = wasmtime::Store::new(&engine, ctx("first"));
+        linker
+            .instantiate_async(&mut first, &component)
+            .await
+            .unwrap();
+        let mut second = wasmtime::Store::new(&engine, ctx("second"));
+        let err = linker
+            .instantiate_async(&mut second, &component)
+            .await
+            .expect_err("a pool of one memory is full");
+        let text = format!("{:#}", explain_instantiate_failure(second.data(), err));
+        assert!(text.contains("--max-memories"), "{text}");
+        assert!(text.contains("WASMTIME_POOLING_TOTAL_MEMORIES"), "{text}");
+        assert!(
+            text.contains("maximum concurrent limit of 1 for memory stripe 0 reached"),
             "the original refusal is still underneath: {text}"
         );
     }

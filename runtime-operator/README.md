@@ -20,6 +20,9 @@ Credentials, token, and password files are reread on every connect. When the
 server rejects the operator's credential, as when the server rotates a token
 before the kubelet refreshes the mounted Secret, the operator keeps
 reconnecting with whatever the file holds until the server accepts it.
+If the server is still refusing it after `-nats-auth-failure-grace` (five
+minutes by default, longer than the kubelet takes to refresh a Secret),
+liveness fails so Kubernetes restarts the operator and the refusal shows.
 Token and password files may end with one LF or CRLF line ending, which is
 removed. All other whitespace is preserved.
 Restart the operator after replacing a bare nkey seed: the NATS client
@@ -69,6 +72,10 @@ Each flag also reads `WASH_<PLANE>_NATS_<NAME>`, such as
 `WASH_SCHEDULER_NATS_CREDS`. Files are reread on every reconnect, and token
 and password files lose one LF or CRLF line ending. While a file stalls, fails
 to read, or does not parse, the host presents the last contents that parsed.
+
+`--<plane>-nats-jwt-as-token` sends a `.creds` file's user JWT a second time,
+as the token. A NATS server without trusted operators drops the JWT before
+an auth callout sees it, so a callout that authorizes by JWT reads this copy.
 
 Give each connection its own credential, so the data connection can be denied
 the control subjects under [Permissions](#permissions). Mount the Secret on a

@@ -271,6 +271,7 @@ impl WasmcloudNats {
                 binding = describe_binding(binding),
                 subject_allow = config.policy.subject_allow.join(","),
                 stream_allow = config.policy.stream_allow.join(","),
+                stream_delete_allow = config.policy.stream_delete_allow.join(","),
                 bucket_allow = config.policy.bucket_allow.join(","),
                 inbox_prefix = config.inbox_prefix.as_deref().unwrap_or_default(),
                 "wasmcloud:nats binding grant"
@@ -703,7 +704,7 @@ impl HostPlugin for WasmcloudNats {
                     .all(|v| ceiling.iter().any(|c| c.contains(&v)))
             }
             // Plain names: subset, not pattern containment.
-            "stream-allow" | "bucket-allow" => {
+            "stream-allow" | "stream-delete-allow" | "bucket-allow" => {
                 let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
                 split(value).all(|v| ceiling.contains(v))
             }
@@ -1179,6 +1180,16 @@ mod tests {
     }
 
     #[test]
+    fn destructive_stream_ceiling_only_allows_subsets() {
+        let plugin = WasmcloudNats::new();
+        assert!(plugin.narrows("stream-delete-allow", "ORDERS,PAYMENTS", "ORDERS"));
+        assert!(plugin.narrows("stream-delete-allow", "ORDERS", ""));
+        assert!(!plugin.narrows("stream-delete-allow", "ORDERS", "ORDERS,OTHER"));
+        assert!(!plugin.narrows("stream-delete-allow", "", "ORDERS"));
+        assert!(!plugin.narrows("stream-delete-allow", "ORDERS", ">"));
+    }
+
+    #[test]
     fn egress_check_uses_nats_endpoint_normalization() {
         let plugin = WasmcloudNats::new();
         plugin
@@ -1248,8 +1259,8 @@ mod tests {
             v.sort();
             v
         };
-        assert_eq!(versions(&world.imports), vec!["0.1.2"]);
-        assert_eq!(versions(&world.exports), vec!["0.1.2"]);
+        assert_eq!(versions(&world.imports), vec!["0.1.3"]);
+        assert_eq!(versions(&world.exports), vec!["0.1.3"]);
         for iface in world.exports.iter() {
             assert!(
                 iface.interfaces.contains("kv-handler"),
@@ -1308,7 +1319,7 @@ mod tests {
     fn split_entries_fold_into_one_binding() {
         let entries = [
             entry(
-                "wasmcloud:nats/types,core,jetstream@0.1.2",
+                "wasmcloud:nats/types,core,jetstream@0.1.3",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1317,7 +1328,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/jetstream-handler@0.1.2",
+                "wasmcloud:nats/jetstream-handler@0.1.3",
                 None,
                 &[("jetstream-subscriptions", "ORDERS:orders.eu.>")],
             ),
@@ -1342,12 +1353,12 @@ mod tests {
     fn entries_may_repeat_a_key_they_agree_on() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.1.2",
+                "wasmcloud:nats/core@0.1.3",
                 None,
                 &[("servers", "nats://localhost:4222")],
             ),
             entry(
-                "wasmcloud:nats/core-handler@0.1.2",
+                "wasmcloud:nats/core-handler@0.1.3",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1366,12 +1377,12 @@ mod tests {
     #[test]
     fn a_label_naming_the_plugin_is_the_unnamed_binding() {
         let plain = entry(
-            "wasmcloud:nats/core@0.1.2",
+            "wasmcloud:nats/core@0.1.3",
             None,
             &[("servers", "nats://localhost:4222")],
         );
         let labeled = entry(
-            "wasmcloud:nats/core-handler@0.1.2",
+            "wasmcloud:nats/core-handler@0.1.3",
             Some(super::super::PLUGIN_NATS_ID),
             &[("core-subscriptions", "orders.new")],
         );
@@ -1389,7 +1400,7 @@ mod tests {
     #[test]
     fn conflicting_entries_are_refused_by_key_name() {
         let a = entry(
-            "wasmcloud:nats/core@0.1.2",
+            "wasmcloud:nats/core@0.1.3",
             None,
             &[
                 ("servers", "nats://localhost:4222"),
@@ -1397,7 +1408,7 @@ mod tests {
             ],
         );
         let b = entry(
-            "wasmcloud:nats/core-handler@0.1.2",
+            "wasmcloud:nats/core-handler@0.1.3",
             None,
             &[("subject_allow", "orders.>")],
         );
@@ -1417,7 +1428,7 @@ mod tests {
     #[test]
     fn a_binding_without_servers_is_still_refused() {
         let entries = [entry(
-            "wasmcloud:nats/jetstream-handler@0.1.2",
+            "wasmcloud:nats/jetstream-handler@0.1.3",
             None,
             &[("jetstream-subscriptions", "ORDERS:orders.>")],
         )];
@@ -1430,7 +1441,7 @@ mod tests {
     fn named_bindings_fold_separately() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.1.2",
+                "wasmcloud:nats/core@0.1.3",
                 Some("hub"),
                 &[
                     ("servers", "nats://hub:4222"),
@@ -1438,7 +1449,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/core@0.1.2",
+                "wasmcloud:nats/core@0.1.3",
                 Some("leaf"),
                 &[
                     ("servers", "nats://leaf:4222"),

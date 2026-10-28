@@ -1,7 +1,8 @@
-package main
+package natsclient
 
 import (
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,9 +61,9 @@ func writeSecret(t *testing.T, name, contents string) string {
 	return path
 }
 
-func connect(t *testing.T, url string, flags natsClientFlags) (*nats.Conn, error) {
+func connect(t *testing.T, url string, flags Flags) (*nats.Conn, error) {
 	t.Helper()
-	opts, err := flags.options()
+	opts, err := flags.Options()
 	if err != nil {
 		t.Fatalf("options: %v", err)
 	}
@@ -90,12 +91,12 @@ func TestNatsClientAuthenticates(t *testing.T) {
 	cases := []struct {
 		name      string
 		configure func(*server.Options)
-		flags     natsClientFlags
+		flags     Flags
 	}{
 		{
 			name:      testTokenAuth,
 			configure: func(o *server.Options) { o.Authorization = "s3cr3t" },
-			flags:     natsClientFlags{tokenFile: writeSecret(t, "token", "s3cr3t\n")},
+			flags:     Flags{TokenFile: writeSecret(t, "token", "s3cr3t\n")},
 		},
 		{
 			name: "user and password",
@@ -103,21 +104,21 @@ func TestNatsClientAuthenticates(t *testing.T) {
 				o.Username = testOperatorUser
 				o.Password = "s3cr3t"
 			},
-			flags: natsClientFlags{user: testOperatorUser, passwordFile: writeSecret(t, "password", "s3cr3t\n")},
+			flags: Flags{User: testOperatorUser, PasswordFile: writeSecret(t, "password", "s3cr3t\n")},
 		},
 		{
 			name:      "nkey",
 			configure: func(o *server.Options) { o.Nkeys = []*server.NkeyUser{{Nkey: public}} },
-			flags:     natsClientFlags{nkey: writeSecret(t, "operator.nk", string(seed))},
+			flags:     Flags{Nkey: writeSecret(t, "operator.nk", string(seed))},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			url := startNats(t, tc.configure)
-			if _, err := connect(t, url, natsClientFlags{}); err == nil {
+			if _, err := connect(t, url, Flags{}); err == nil {
 				t.Fatal("the server admitted an anonymous client")
 			}
-			tc.flags.name = "runtime-operator"
+			tc.flags.Name = "runtime-operator"
 			nc, err := connect(t, url, tc.flags)
 			if err != nil {
 				t.Fatalf("connect: %v", err)
@@ -169,8 +170,8 @@ func TestNatsInboxPrefixCarriesHostReplies(t *testing.T) {
 	}
 
 	password := writeSecret(t, "password", testOperatorUser)
-	withPrefix, err := connect(t, url, natsClientFlags{
-		user: testOperatorUser, passwordFile: password, inboxPrefix: "runtime.operator.inbox",
+	withPrefix, err := connect(t, url, Flags{
+		User: testOperatorUser, PasswordFile: password, InboxPrefix: "runtime.operator.inbox",
 	})
 	if err != nil {
 		t.Fatalf("operator connect: %v", err)
@@ -183,12 +184,42 @@ func TestNatsInboxPrefixCarriesHostReplies(t *testing.T) {
 		t.Fatalf("reply %q on %q", reply.Data, reply.Subject)
 	}
 
-	withoutPrefix, err := connect(t, url, natsClientFlags{user: testOperatorUser, passwordFile: password})
+	withoutPrefix, err := connect(t, url, Flags{User: testOperatorUser, PasswordFile: password})
 	if err != nil {
 		t.Fatalf("operator connect: %v", err)
 	}
 	if _, err := withoutPrefix.Request("runtime.host.h1.heartbeat", nil, 500*time.Millisecond); err == nil {
 		t.Fatal("a reply arrived on _INBOX, which the operator may not subscribe to")
+	}
+}
+
+// An embedder registers the flags under its own prefix, with its own
+// defaults, and errors name the flags it registered.
+func TestNatsClientFlagsRegisterUnderAPrefix(t *testing.T) {
+	fs := flag.NewFlagSet("embedder", flag.ContinueOnError)
+	flags := Flags{Name: "embedder"}
+	flags.Register(fs, "hub-nats")
+	if err := fs.Parse([]string{"-hub-nats-creds=a.creds", "-hub-nats-token-file=t"}); err != nil {
+		t.Fatal(err)
+	}
+	if flags.Creds != "a.creds" || flags.TokenFile != "t" || flags.Name != "embedder" {
+		t.Fatalf("parsed %+v", flags)
+	}
+	if fs.Lookup("nats-creds") != nil {
+		t.Fatal("registered a flag outside the prefix")
+	}
+	if flags.AuthFailureGrace != DefaultAuthFailureGrace {
+		t.Fatalf("auth failure grace %v", flags.AuthFailureGrace)
+	}
+	if err := fs.Parse([]string{"-hub-nats-auth-failure-grace=2m"}); err != nil {
+		t.Fatal(err)
+	}
+	if flags.AuthFailureGrace != 2*time.Minute {
+		t.Fatalf("auth failure grace %v", flags.AuthFailureGrace)
+	}
+	_, err := flags.Options()
+	if want := "-hub-nats-creds and -hub-nats-token-file"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("got %v, want an error containing %q", err, want)
 	}
 }
 
@@ -200,29 +231,29 @@ func TestNatsClientFlagsRefuseContradictions(t *testing.T) {
 	)
 	for _, tc := range []struct {
 		name  string
-		flags natsClientFlags
+		flags Flags
 		want  string
 	}{
-		{"creds and nkey", natsClientFlags{creds: credsFile, nkey: nkeyFile}, "-nats-creds and -nats-nkey"},
-		{"creds and token", natsClientFlags{creds: credsFile, tokenFile: "t"}, "-nats-creds and -nats-token-file"},
-		{"nkey and user", natsClientFlags{nkey: nkeyFile, user: "u", passwordFile: "p"}, "-nats-nkey and -nats-user"},
-		{"token and user", natsClientFlags{tokenFile: "t", user: "u", passwordFile: "p"}, "-nats-token-file and -nats-user"},
+		{"creds and nkey", Flags{Creds: credsFile, Nkey: nkeyFile}, "-nats-creds and -nats-nkey"},
+		{"creds and token", Flags{Creds: credsFile, TokenFile: "t"}, "-nats-creds and -nats-token-file"},
+		{"nkey and user", Flags{Nkey: nkeyFile, User: "u", PasswordFile: "p"}, "-nats-nkey and -nats-user"},
+		{"token and user", Flags{TokenFile: "t", User: "u", PasswordFile: "p"}, "-nats-token-file and -nats-user"},
 		{
 			"all four",
-			natsClientFlags{creds: credsFile, nkey: nkeyFile, tokenFile: "t", user: "u", passwordFile: "p"},
-			"-nats-creds and -nats-nkey and -nats-token-file and -nats-user each authenticate the operator; set one",
+			Flags{Creds: credsFile, Nkey: nkeyFile, TokenFile: "t", User: "u", PasswordFile: "p"},
+			"-nats-creds and -nats-nkey and -nats-token-file and -nats-user each authenticate the client; set one",
 		},
-		{"password without user", natsClientFlags{passwordFile: "p"}, "requires -nats-user"},
-		{"user without password", natsClientFlags{user: "u"}, "requires -nats-password-file"},
-		{"missing token file", natsClientFlags{tokenFile: "/nonexistent/token"}, "-nats-token-file"},
-		{"empty token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "\n")}, emptySecretError},
-		{"zero-byte token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "")}, emptySecretError},
-		{"CRLF-only token file", natsClientFlags{tokenFile: writeSecret(t, "empty", "\r\n")}, emptySecretError},
-		{"wildcard inbox", natsClientFlags{inboxPrefix: "runtime.*"}, "wildcards"},
-		{"empty inbox token", natsClientFlags{inboxPrefix: "runtime..inbox"}, "empty subject token"},
+		{"password without user", Flags{PasswordFile: "p"}, "requires -nats-user"},
+		{"user without password", Flags{User: "u"}, "requires -nats-password-file"},
+		{"missing token file", Flags{TokenFile: "/nonexistent/token"}, "-nats-token-file"},
+		{"empty token file", Flags{TokenFile: writeSecret(t, "empty", "\n")}, emptySecretError},
+		{"zero-byte token file", Flags{TokenFile: writeSecret(t, "empty", "")}, emptySecretError},
+		{"CRLF-only token file", Flags{TokenFile: writeSecret(t, "empty", "\r\n")}, emptySecretError},
+		{"wildcard inbox", Flags{InboxPrefix: "runtime.*"}, "wildcards"},
+		{"empty inbox token", Flags{InboxPrefix: "runtime..inbox"}, "empty subject token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := tc.flags.options()
+			_, err := tc.flags.Options()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -233,8 +264,8 @@ func TestNatsClientFlagsRefuseContradictions(t *testing.T) {
 func TestNatsSecretFilesReload(t *testing.T) {
 	token := writeSecret(t, "token", "first-token\n")
 	password := writeSecret(t, "password", "first-password\n")
-	tokenOpts := clientOptions(t, natsClientFlags{tokenFile: token})
-	userOpts := clientOptions(t, natsClientFlags{user: testOperatorUser, passwordFile: password})
+	tokenOpts := clientOptions(t, Flags{TokenFile: token})
+	userOpts := clientOptions(t, Flags{User: testOperatorUser, PasswordFile: password})
 	if got := tokenOpts.TokenHandler(); got != "first-token" {
 		t.Fatal("initial token was not loaded")
 	}
@@ -255,9 +286,9 @@ func TestNatsSecretFilesReload(t *testing.T) {
 	}
 }
 
-func clientOptions(t *testing.T, flags natsClientFlags) nats.Options {
+func clientOptions(t *testing.T, flags Flags) nats.Options {
 	t.Helper()
-	options, err := flags.options()
+	options, err := flags.Options()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +310,7 @@ func TestNatsTokenRotationReconnects(t *testing.T) {
 	}
 	s := startNatsServer(t, configure("first-token"))
 	tokenFile := writeSecret(t, "token", "first-token\n")
-	options, err := natsClientFlags{tokenFile: tokenFile}.options()
+	options, err := Flags{TokenFile: tokenFile}.Options()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +366,7 @@ func TestNatsNkeyRotationFailsLiveness(t *testing.T) {
 	}
 	s := startNatsServer(t, configure)
 	path := writeSecret(t, "operator.nk", seed)
-	options, err := natsClientFlags{nkey: path}.options()
+	options, err := Flags{Nkey: path}.Options()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,12 +385,14 @@ func TestNatsNkeyRotationFailsLiveness(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.ReloadOptions(natsServerOptions(configure)); err != nil {
-		t.Fatalf("rotate the server nkey: %v", err)
+		t.Fatalf("rotate the server Nkey: %v", err)
 	}
 	if !waitFor(nc.IsClosed) {
 		t.Fatalf("stale public key kept reconnecting: status %v", nc.Status())
 	}
-	if err := natsLivenessCheck(nc)(nil); err == nil {
+	liveness := NewLiveness(DefaultAuthFailureGrace)
+	liveness.Watch(nc)
+	if err := liveness.Check(nil); err == nil {
 		t.Fatal("rotated nkey did not fail liveness")
 	}
 }
@@ -403,9 +436,9 @@ func TestNatsSecretFilesPreserveWhitespace(t *testing.T) {
 						}
 					})
 					path := writeSecret(t, method, tc.secret+tc.lineEnding)
-					flags := natsClientFlags{tokenFile: path}
+					flags := Flags{TokenFile: path}
 					if method == "password" {
-						flags = natsClientFlags{user: testOperatorUser, passwordFile: path}
+						flags = Flags{User: testOperatorUser, PasswordFile: path}
 					}
 					if _, err := connect(t, url, flags); err != nil {
 						t.Fatalf("connect with whitespace-preserving secret file: %v", err)

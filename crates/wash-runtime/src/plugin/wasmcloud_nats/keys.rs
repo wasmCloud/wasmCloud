@@ -87,9 +87,13 @@ pub const KEYS: &[Key] = &[
     host_aliased("creds", &["creds-file"]),
     host("jwt"),
     host_aliased("nkey-seed", &["nkey"]),
+    host_aliased("nkey-seed-file", &["nkey-file"]),
     host_aliased("username", &["user"]),
     host("password"),
+    host("password-file"),
     host("token"),
+    host("token-file"),
+    host("jwt-as-token"),
     host("tls-ca"),
     host("tls-cert"),
     host("tls-key"),
@@ -97,6 +101,7 @@ pub const KEYS: &[Key] = &[
     // Grants — what it may reach.
     ceiling("subject-allow"),
     ceiling("stream-allow"),
+    ceiling("stream-delete-allow"),
     ceiling("bucket-allow"),
     // The workload's own behaviour within that grant.
     workload("ack-mode"),
@@ -110,6 +115,17 @@ pub const KEYS: &[Key] = &[
     workload("core-subscriptions"),
     workload("kv-watches"),
     workload("component"),
+];
+
+/// The keys whose values name files the host reads.
+pub const FILES: &[&str] = &[
+    "creds",
+    "nkey-seed-file",
+    "password-file",
+    "token-file",
+    "tls-ca",
+    "tls-cert",
+    "tls-key",
 ];
 
 /// The canonical spelling of `key`, for comparing two spellings of one key.
@@ -189,6 +205,32 @@ pub fn workload_owned() -> impl Iterator<Item = &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A workload must not be able to point a file key elsewhere, and every
+    /// spelling of one is reserved.
+    #[test]
+    fn file_keys_are_host_owned_and_reserved_in_any_spelling() {
+        for key in FILES {
+            let row = find(key).unwrap_or_else(|| panic!("`{key}` is not declared"));
+            assert_eq!(row.ownership, KeyOwnership::Host, "{key}");
+        }
+        let config: HashMap<String, String> = [
+            ("creds-file", "/s/creds"),
+            ("nkey-file", "/s/seed"),
+            ("Token_File", "/s/token"),
+            ("tls-key", "/s/key"),
+            ("servers", "nats://localhost:4222"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let mut paths = super::super::host_paths(&config);
+        paths.sort();
+        assert_eq!(
+            paths,
+            ["/s/creds", "/s/key", "/s/seed", "/s/token"].map(std::path::PathBuf::from)
+        );
+    }
 
     #[test]
     fn every_key_is_declared_once_under_one_spelling() {

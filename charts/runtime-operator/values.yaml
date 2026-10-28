@@ -639,20 +639,28 @@ runtime:
       # a binding of its own; it defaults to `deny`.
       #
       # Keys are `wasmcloud:nats` config keys — `servers`, `subject-allow`,
-      # `stream-allow`, `bucket-allow`, `creds`, `jwt`/`nkey-seed`,
+      # `stream-allow`, `stream-delete-allow`, `bucket-allow`, `creds`, `jwt`/`nkey-seed`,
       # `username`/`password`, `token`, `tls-*`, `jetstream-domain`. The
       # entry's own `config` applies to every binding; each entry under
       # `bindings` layers over it. Leave `servers` out to take
       # `wasmcloudNatsUrl` above, which brings the data plane's TLS with it.
       #
-      # The three grants are ceilings, not switches: a workload may ask for a
-      # subset of what is declared here and is refused only for asking for
-      # more. All three are deny-by-default, and `stream-allow` on its own
-      # reaches nothing readable — every stored message a workload reads is
-      # checked against `subject-allow` as well, so a binding granted streams
-      # and no subjects gets empty results rather than an error. Grant the
-      # subjects those streams store alongside the stream itself. (The host
-      # warns at bind when a binding has streams and no subjects.)
+      # `nkey-seed-file`, `password-file` and `token-file` name files in place
+      # of those values. The host rereads them, like `creds`, on every
+      # reconnect, so a Secret mounted into the host pod rotates without a
+      # redeploy. `jwt-as-token: "true"` also sends the `creds` or `jwt` user
+      # JWT as the token, for an auth callout on a server without trusted
+      # operators, which drops the JWT before the callout sees it.
+      #
+      # A workload may narrow the host's grant ceilings. All deny by default.
+      # Stored messages also require `subject-allow`, so `stream-allow` on its
+      # own reaches nothing readable: a binding granted streams and no subjects
+      # gets empty results rather than an error. Grant the subjects those
+      # streams store alongside the stream itself. (The host warns at bind
+      # when a binding has streams but no subjects.)
+      # Purge and delete also require `stream-delete-allow` for the stream.
+      # Purge filters must fit inside `subject-allow`; deleting a sequence
+      # checks its stored subject. All grants are host-owned ceilings.
       #
       # `inbox-prefix` is refused on the entry's own `config`: it would give
       # every workload on the group the same inbox, and two workloads sharing

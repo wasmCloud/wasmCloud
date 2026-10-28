@@ -56,6 +56,20 @@ pub struct HostCommand {
     )]
     pub scheduler_nats_password_file: Option<PathBuf>,
 
+    /// Also send the credentials file's user JWT as the token, for an auth
+    /// callout on a NATS server without trusted operators, which drops the
+    /// JWT before the callout sees it
+    //
+    // clap waives `requires` when the required arg conflicts with one that is
+    // present, as members of one group do, so the others are refused here.
+    #[arg(
+        long,
+        env = "WASH_SCHEDULER_NATS_JWT_AS_TOKEN",
+        requires = "scheduler_nats_creds",
+        conflicts_with_all = ["scheduler_nats_nkey", "scheduler_nats_token_file", "scheduler_nats_user"]
+    )]
+    pub scheduler_nats_jwt_as_token: bool,
+
     /// How long to keep retrying NATS at startup before giving up, across both
     /// the scheduler and data connections together.
     ///
@@ -115,6 +129,17 @@ pub struct HostCommand {
         requires = "data_nats_user"
     )]
     pub data_nats_password_file: Option<PathBuf>,
+
+    /// Also send the credentials file's user JWT as the token, for an auth
+    /// callout on a NATS server without trusted operators, which drops the
+    /// JWT before the callout sees it
+    #[arg(
+        long,
+        env = "WASH_DATA_NATS_JWT_AS_TOKEN",
+        requires = "data_nats_creds",
+        conflicts_with_all = ["data_nats_nkey", "data_nats_token_file", "data_nats_user"]
+    )]
+    pub data_nats_jwt_as_token: bool,
 
     /// The path to TLS CA certificate file for NATS Data connection
     #[arg(long = "data-nats-tls-ca")]
@@ -304,13 +329,14 @@ pub struct HostCommand {
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
     /// this equally bounds instances. Unset, it is derived from the host's
-    /// instance pool: at the worst measured component shape (Componentize-Go,
-    /// 5 core instances each) a `total_core_instances` of 1000 supports 200
-    /// components, and messaging claims two thirds of that — 133 — leaving the
-    /// rest for HTTP-triggered work, warm pools, and long-lived services.
-    /// Raising `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` raises this with it;
-    /// with pooling disabled there is no budget to divide and the pinned
-    /// default of 128 stands. Set, the number given is used as-is.
+    /// installed instance and memory limits. The stock pool derives 666,
+    /// leaving capacity for HTTP-triggered work, warm pools, and long-lived
+    /// services; independent pool overrides can lower that default.
+    /// Components also acquire pool resources according to their memory and
+    /// table requirements, so compositions can reach a resource limit before
+    /// the message cap. Raising `--max-memories` raises the pool; with pooling
+    /// disabled the pinned default of 128 stands. Set, the number given is the
+    /// message cap, still subject to the installed pool's resource limits.
     //
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
@@ -336,7 +362,7 @@ pub struct HostCommand {
     ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
-    /// 133 of a stock host gives 33, and the pinned 128 of a host with pooling
+    /// 666 of a stock host gives 166, and the pinned 128 of a host with pooling
     /// disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
@@ -356,7 +382,7 @@ pub struct HostCommand {
     ///
     /// What this bounds is the *total* of every guest's linear memory, which
     /// no other knob does: `--default-heap-memory` bounds one memory and
-    /// `--core-instances` bounds a count of slots. Whether it is enforced or
+    /// `--max-memories` bounds a count of slots. Whether it is enforced or
     /// only accounted is `--guest-memory-mode`, which enforces by default.
     //
     // Deliberately no `default_value_t`: a parse-time default is
@@ -439,12 +465,36 @@ pub struct HostCommand {
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
-    /// Instance slots the pooling allocator keeps.
+    /// Linear memories the pooling allocator keeps room for, whatever
+    /// triggers them, and with them the fiber stacks, component instances and
+    /// GC heaps it admits, one count for all: a component instance of the
+    /// usual shape takes one of each.
     ///
-    /// Unset, this stays wasmtime's default of 1000. Multiplied by the slot
-    /// size (4 GiB plus a 32 MiB guard, whatever `--default-heap-memory` is)
-    /// it is the pool's address-space reservation, so it is the knob that
-    /// sizes the pool.
+    /// Unset, this is wasmtime's default of 1000, or the `--core-instances`
+    /// count when only that is given. Multiplied by one
+    /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
+    /// `--default-heap-memory` is) it is the pool's address-space reservation,
+    /// so it is the knob that sizes the pool. The core-instance and table
+    /// totals are multiples of it, since a component spends several of each
+    /// and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set any
+    /// total on its own.
+    #[arg(long = "max-memories", env = "WASH_MAX_MEMORIES")]
+    pub max_memories: Option<u32>,
+
+    /// Core instances (WebAssembly core modules) the pooling allocator admits
+    /// at once. A component is several: a Rust HTTP handler is four, a
+    /// Componentize-Go one five, and a composition adds every member's.
+    ///
+    /// Unset, this is sixteen per memory of `--max-memories`, which a
+    /// component of the usual shape never fills, so that the linear memories
+    /// are what a full pool runs out of first. Set alone, it sizes
+    /// `--max-memories` to the same count, the pool it sized before that flag
+    /// existed, with a warning at startup to move to `--max-memories`. Set
+    /// beside `--max-memories`, both are installed as given, with a warning
+    /// at startup when they do not match. A core instance reserves nothing,
+    /// so this is a counter, not a memory budget.
+    /// `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` overrides it, as it does every
+    /// total.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
 
@@ -835,29 +885,48 @@ fn host_plugin_registry_credentials(
     }
 }
 
+/// How one NATS connection authenticates, from its flags.
+fn nats_auth(
+    credentials: &Option<PathBuf>,
+    nkey: &Option<PathBuf>,
+    token_file: &Option<PathBuf>,
+    user: &Option<String>,
+    password_file: &Option<PathBuf>,
+    jwt_as_token: bool,
+) -> wash_runtime::washlet::NatsAuth {
+    let mut auth = wash_runtime::washlet::NatsAuth::default();
+    auth.credentials = credentials.clone();
+    auth.nkey = nkey.clone();
+    auth.token_file = token_file.clone();
+    auth.user = user.clone();
+    auth.password_file = password_file.clone();
+    auth.hook = jwt_as_token.then(wash_runtime::washlet::AuthHook::jwt_as_token);
+    auth
+}
+
 impl HostCommand {
     /// How the scheduler connection authenticates.
     fn scheduler_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
-        wash_runtime::washlet::NatsAuth {
-            credentials: self.scheduler_nats_creds.clone(),
-            nkey: self.scheduler_nats_nkey.clone(),
-            token_file: self.scheduler_nats_token_file.clone(),
-            user: self.scheduler_nats_user.clone(),
-            password_file: self.scheduler_nats_password_file.clone(),
-            ..Default::default()
-        }
+        nats_auth(
+            &self.scheduler_nats_creds,
+            &self.scheduler_nats_nkey,
+            &self.scheduler_nats_token_file,
+            &self.scheduler_nats_user,
+            &self.scheduler_nats_password_file,
+            self.scheduler_nats_jwt_as_token,
+        )
     }
 
     /// How the data connection authenticates.
     fn data_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
-        wash_runtime::washlet::NatsAuth {
-            credentials: self.data_nats_creds.clone(),
-            nkey: self.data_nats_nkey.clone(),
-            token_file: self.data_nats_token_file.clone(),
-            user: self.data_nats_user.clone(),
-            password_file: self.data_nats_password_file.clone(),
-            ..Default::default()
-        }
+        nats_auth(
+            &self.data_nats_creds,
+            &self.data_nats_nkey,
+            &self.data_nats_token_file,
+            &self.data_nats_user,
+            &self.data_nats_password_file,
+            self.data_nats_jwt_as_token,
+        )
     }
 
     /// Every path this host reads credentials or configuration from, which no
@@ -914,6 +983,17 @@ impl HostCommand {
                     }
                 }),
         );
+        // A credential file a `wasmcloud:nats` binding names, so a workload
+        // cannot mount the Secret the binding authenticates with.
+        if let Ok(bindings) = self.plugin_bindings(config, project_dir) {
+            let nats = bindings.for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID);
+            let names: Vec<&str> = std::iter::once("").chain(nats.binding_names()).collect();
+            for name in names {
+                paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
+                    &nats.host_layer(name),
+                ));
+            }
+        }
         paths.extend(
             self.host_plugins
                 .iter()
@@ -1051,6 +1131,7 @@ impl CliCommand for HostCommand {
         let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
+            self.max_memories,
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -1093,44 +1174,37 @@ impl CliCommand for HostCommand {
             (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
 
         let cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default();
-        let scheduler_nats_client = wash_runtime::washlet::connect_nats(
-            self.scheduler_nats_url.clone(),
-            wash_runtime::washlet::NatsConnectionOptions {
-                request_timeout: None,
-                name: Some(format!("host:{}", cluster_host_builder.host_id())),
-                auth: self.scheduler_nats_auth(),
-                tls_ca: self.scheduler_nats_tls_ca.clone(),
-                tls_first: self.scheduler_nats_tls_first,
-                tls_cert: self.scheduler_nats_tls_cert.clone(),
-                tls_key: self.scheduler_nats_tls_key.clone(),
-                connect_retry,
-            },
-        )
-        .await
-        .context("failed to connect to NATS Scheduler URL")?;
+        let mut scheduler_options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{}", cluster_host_builder.host_id()))
+            .with_auth(self.scheduler_nats_auth())
+            .with_tls_first(self.scheduler_nats_tls_first);
+        scheduler_options.tls_ca = self.scheduler_nats_tls_ca.clone();
+        scheduler_options.tls_cert = self.scheduler_nats_tls_cert.clone();
+        scheduler_options.tls_key = self.scheduler_nats_tls_key.clone();
+        scheduler_options.connect_retry = connect_retry;
+        let scheduler_nats_client =
+            wash_runtime::washlet::connect_nats(self.scheduler_nats_url.clone(), scheduler_options)
+                .await
+                .context("failed to connect to NATS Scheduler URL")?;
 
-        let data_nats_client = wash_runtime::washlet::connect_nats(
-            self.data_nats_url.clone(),
-            wash_runtime::washlet::NatsConnectionOptions {
-                request_timeout: None,
-                name: Some(format!("host:{}:data", cluster_host_builder.host_id())),
-                auth: self.data_nats_auth(),
-                tls_ca: self.data_nats_tls_ca.clone(),
-                tls_first: self.data_nats_tls_first,
-                tls_cert: self.data_nats_tls_cert.clone(),
-                tls_key: self.data_nats_tls_key.clone(),
-                // Whatever the scheduler connection left of the budget. A
-                // budget already spent becomes `None`, so the failure reads as
-                // the refusal it is rather than as a timeout of no length.
-                connect_retry: connect_retry.and_then(|_| {
-                    let left =
-                        connect_deadline.saturating_duration_since(tokio::time::Instant::now());
-                    (!left.is_zero()).then_some(left)
-                }),
-            },
-        )
-        .await
-        .context("failed to connect to NATS")?;
+        let mut data_options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{}:data", cluster_host_builder.host_id()))
+            .with_auth(self.data_nats_auth())
+            .with_tls_first(self.data_nats_tls_first);
+        data_options.tls_ca = self.data_nats_tls_ca.clone();
+        data_options.tls_cert = self.data_nats_tls_cert.clone();
+        data_options.tls_key = self.data_nats_tls_key.clone();
+        // Whatever the scheduler connection left of the budget. A budget
+        // already spent becomes `None`, so the failure reads as the refusal it
+        // is rather than as a timeout of no length.
+        data_options.connect_retry = connect_retry.and_then(|_| {
+            let left = connect_deadline.saturating_duration_since(tokio::time::Instant::now());
+            (!left.is_zero()).then_some(left)
+        });
+        let data_nats_client =
+            wash_runtime::washlet::connect_nats(self.data_nats_url.clone(), data_options)
+                .await
+                .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
         let host_config = wash_runtime::host::HostConfig {
@@ -1223,7 +1297,7 @@ impl CliCommand for HostCommand {
         let messaging_limits = crate::config::wasmcloud_messaging_limits(
             self.wasmcloud_messaging_max_in_flight,
             self.wasmcloud_messaging_max_in_flight_per_component,
-            engine.total_core_instances(),
+            &engine,
         )?;
 
         if let Some(value) = &self.removed_wasmcloud_nats_workload_config {
@@ -1618,6 +1692,39 @@ mod nats_tests {
         }
     }
 
+    #[test]
+    fn host_nats_jwt_as_token_is_per_connection() {
+        let host = parse(&[
+            "--scheduler-nats-creds=scheduler.creds",
+            "--scheduler-nats-jwt-as-token",
+            "--data-nats-creds=data.creds",
+        ]);
+        assert!(host.scheduler_nats_jwt_as_token);
+        assert!(!host.data_nats_jwt_as_token);
+        assert!(host.scheduler_nats_auth().hook.is_some());
+        assert!(host.data_nats_auth().hook.is_none());
+    }
+
+    /// Only a credentials file carries a JWT to repeat.
+    #[test]
+    fn host_nats_jwt_as_token_requires_credentials() {
+        for plane in ["scheduler", "data"] {
+            let jwt_as_token = format!("--{plane}-nats-jwt-as-token");
+            let nkey = format!("--{plane}-nats-nkey=a.nk");
+            let token = format!("--{plane}-nats-token-file=a.token");
+            for args in [
+                vec![&jwt_as_token],
+                vec![&jwt_as_token, &nkey],
+                vec![&jwt_as_token, &token],
+            ] {
+                let argv: Vec<&str> = std::iter::once("wash-host")
+                    .chain(args.iter().map(|a| a.as_str()))
+                    .collect();
+                assert!(TestCli::try_parse_from(&argv).is_err(), "{argv:?}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn host_nats_auth_files_are_reserved() -> anyhow::Result<()> {
         let host = parse(&[
@@ -1639,6 +1746,39 @@ mod nats_tests {
         let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.nk")));
         assert!(paths.contains(&std::path::PathBuf::from("data.token")));
+        Ok(())
+    }
+
+    /// The files a `wasmcloud:nats` binding authenticates with are reserved,
+    /// from the base config and from each named binding.
+    #[tokio::test]
+    async fn reserved_paths_cover_nats_binding_files() -> anyhow::Result<()> {
+        let config = config_from(
+            r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      config:
+        creds: /secrets/base.creds
+      bindings:
+        orders:
+          config:
+            token-file: /secrets/orders.token
+            password-file: /secrets/orders.password
+"#,
+        );
+        let ctx = crate::cli::CliContextBuilder::default()
+            .keep_working_dir()
+            .build()
+            .await?;
+        let paths = parse(&[]).reserved_paths(&config, &ctx);
+        for path in [
+            "/secrets/base.creds",
+            "/secrets/orders.token",
+            "/secrets/orders.password",
+        ] {
+            assert!(paths.contains(&std::path::PathBuf::from(path)), "{path}");
+        }
         Ok(())
     }
 

@@ -1221,8 +1221,12 @@ pub(super) async fn spawn_jetstream_subscriptions(
                             delivered_this_cycle = true;
 
                             let subject_str = raw.subject.to_string();
-                            let (sequence, delivery_count) = match raw.info() {
-                                Ok(i) => (i.stream_sequence, i.delivered as u32),
+                            let (sequence, delivery_count, stored_at_unix_nanos) = match raw.info() {
+                                Ok(i) => (
+                                    i.stream_sequence,
+                                    i.delivered as u32,
+                                    i.published.unix_timestamp_nanos().clamp(0, u64::MAX as i128) as u64,
+                                ),
                                 // Nothing about this delivery can be trusted:
                                 // without its sequence there is no position to
                                 // ack at, to resume from, or to hand the guest.
@@ -1364,6 +1368,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 message,
                                 sequence,
                                 delivery_count,
+                                stored_at_unix_nanos,
                                 // A push delivery is bounded by
                                 // `max-ack-pending` and dies with the store
                                 // built for it, so it charges no budget.
