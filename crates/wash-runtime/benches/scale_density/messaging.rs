@@ -10,7 +10,7 @@ use bench_tools::density::{Report, Step, print_step};
 use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
 use wash_runtime::engine::Engine;
-use wash_runtime::engine::host_memory::render_bytes;
+use wash_runtime::engine::host_memory::{HostMemoryBudgets, render_bytes};
 use wash_runtime::engine::process_memory::process_footprint;
 use wash_runtime::host::http::{DynamicRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
@@ -247,6 +247,17 @@ impl Peaks {
     }
 }
 
+fn build_engine(settings: &Settings) -> Result<Engine> {
+    // The stock pool, so the ceilings are the ones a default host derives.
+    Engine::builder()
+        .with_host_memory(
+            HostMemoryBudgets::resolve(Some(settings.guest_memory), None, None)
+                .map_err(anyhow::Error::msg)?,
+        )
+        .with_max_process_memory_bytes(settings.memory_limit)
+        .build()
+}
+
 pub(super) async fn run(
     flavour: bench_tools::density::Flavour,
     settings: Settings,
@@ -260,10 +271,7 @@ pub(super) async fn run(
     // waits for comes free.
     let admission_wait_ms = (hold_ms / 2).max(1);
 
-    // The stock pool, so the ceilings are the ones a default host derives.
-    let engine = Engine::builder()
-        .with_max_process_memory_bytes(settings.memory_limit)
-        .build()?;
+    let engine = build_engine(&settings)?;
     anyhow::ensure!(
         engine.process_memory().is_some(),
         "the engine was built without a process memory guard"
@@ -557,6 +565,18 @@ mod tests {
     // As in `scale_density.rs`: unused where `harness = false` drops the tests.
     #[allow(unused_imports)]
     use super::*;
+
+    #[tokio::test]
+    async fn messaging_engine_uses_the_requested_guest_memory_budget() -> Result<()> {
+        let settings = Settings::from_values(|key| match key {
+            "WASH_SCALE_GUEST_MEMORY" => Some("64KiB".into()),
+            "WASH_SCALE_MEMORY_LIMIT" => Some("4GiB".into()),
+            _ => None,
+        })?;
+        let engine = build_engine(&settings)?;
+        assert_eq!(engine.guest_memory().cap(), 64 * 1024);
+        Ok(())
+    }
 
     #[test]
     fn plugin_messages_classify_how_a_delivery_ended() {
