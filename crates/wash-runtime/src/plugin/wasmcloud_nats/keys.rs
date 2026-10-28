@@ -128,6 +128,34 @@ pub const FILES: &[&str] = &[
     "tls-key",
 ];
 
+/// Keys the reader takes as text without parsing it, so a stand-in for one
+/// still waiting on a plugin secret parses like the real value.
+const OPAQUE: &[&str] = &[
+    "servers",
+    "name",
+    "jetstream-domain",
+    "inbox-prefix",
+    "creds",
+    "jwt",
+    "nkey-seed",
+    "nkey-seed-file",
+    "username",
+    "password",
+    "password-file",
+    "token",
+    "token-file",
+    "tls-ca",
+    "tls-cert",
+    "tls-key",
+];
+
+/// Whether `key`, in any spelling, is one [`super::config::NatsConfig::from_map`]
+/// takes as opaque text.
+#[must_use]
+pub fn is_opaque(key: &str) -> bool {
+    find(key).is_some_and(|row| OPAQUE.contains(&row.canonical))
+}
+
 /// The canonical spelling of `key`, for comparing two spellings of one key.
 #[must_use]
 pub fn canonical(key: &str) -> String {
