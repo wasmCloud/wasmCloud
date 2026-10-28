@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/wasmCloud/wasmCloud/security/advisories/new
+    about: Report vulnerabilities privately, as SECURITY.md describes.
+  - name: Ask a question
+    url: https://github.com/wasmCloud/wasmCloud/discussions
+    about: Ask questions and share ideas in GitHub Discussions or the wasmCloud Slack.
