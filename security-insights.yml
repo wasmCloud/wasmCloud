@@ -1,6 +1,6 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-10-27'
+  last-updated: '2026-10-28'
   last-reviewed: '2026-10-27'
   url: https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/security-insights.yml
 
@@ -68,6 +68,7 @@ repository:
     expression: Apache-2.0
   documentation:
     contributing-guide: https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md
+    dependency-management-policy: https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md#dependencies
     governance: https://github.com/wasmCloud/wasmCloud/blob/main/GOVERNANCE.md
     review-policy: https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md#code-review
     security-policy: https://github.com/wasmCloud/wasmCloud/blob/main/SECURITY.md
