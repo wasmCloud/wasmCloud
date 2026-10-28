@@ -1,0 +1,8 @@
+package acme:secretsource@0.1.0;
+
+/// Host component plugin serving secrets to the host only: no capability a
+/// workload can import.
+world secret-source-plugin {
+    include wasmcloud:host/secret-source-provider@0.1.5;
+    import wasmcloud:host/identity@0.1.5;
+}

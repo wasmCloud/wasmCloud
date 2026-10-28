@@ -80,6 +80,7 @@ members = [
     "kv-plugin-implements-caller",
     "kv-plugin-service",
     "badlifecycle",
+    "secret-source-plugin",
     "secrets-caller",
     "secrets-consumer-plugin",
     "secrets-consumer-plugin-caller",
