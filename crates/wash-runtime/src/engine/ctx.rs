@@ -117,8 +117,38 @@ impl Drop for StoreDropped {
     }
 }
 
-/// The identity of whoever is invoking a host component plugin, used to
+/// Whom a call into a host component plugin is on behalf of, used to
 /// partition state per caller.
+#[derive(Clone, Debug)]
+pub enum CallerIdentity {
+    /// The host itself, on no workload's behalf: a
+    /// `wasmcloud:host/secret-source` resolve.
+    Host,
+    /// A workload: one of its capability calls, or a lifecycle hook about it.
+    Workload(WorkloadCaller),
+}
+
+impl CallerIdentity {
+    /// The workload behind the call, or `None` for the host.
+    pub fn workload(&self) -> Option<&WorkloadCaller> {
+        match self {
+            Self::Host => None,
+            Self::Workload(caller) => Some(caller),
+        }
+    }
+
+    /// Whether `self` and `other` act for the same principal: one workload, or
+    /// both the host.
+    pub fn same_principal(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Host, Self::Host) => true,
+            (Self::Workload(a), Self::Workload(b)) => a.workload_id == b.workload_id,
+            _ => false,
+        }
+    }
+}
+
+/// The workload a call into a host component plugin is on behalf of.
 ///
 /// `component_id` is `None` when there is no component behind the call: a
 /// `wasmcloud:host/workload-lifecycle` hook is delivered by the host about a
@@ -126,7 +156,7 @@ impl Drop for StoreDropped {
 /// real id — an empty string, say — would make the host invent a component that
 /// does not exist, and would collide with a genuinely unresolvable caller.
 #[derive(Clone, Debug)]
-pub struct CallerIdentity {
+pub struct WorkloadCaller {
     pub workload_id: Arc<str>,
     pub component_id: Option<Arc<str>>,
     /// The binding the call arrived on: the `(implements ..)` label the caller
@@ -138,23 +168,6 @@ pub struct CallerIdentity {
     /// two bindings of one workload can pair a call with the configuration that
     /// binding was resolved with.
     pub binding: Option<Arc<str>>,
-    /// Whether the host itself made the call, on no workload's behalf (an
-    /// operator's `secret:` map value being resolved). Read by
-    /// `wasmcloud:host/identity#is-host-call`: `workload_id` is empty here, but
-    /// `get-workload-id` also returns empty for a caller it cannot resolve.
-    pub host: bool,
-}
-
-impl CallerIdentity {
-    /// The host itself, calling a plugin on no workload's behalf.
-    pub fn host() -> Self {
-        Self {
-            workload_id: Arc::from(""),
-            component_id: None,
-            binding: None,
-            host: true,
-        }
-    }
 }
 
 impl SharedCtx {

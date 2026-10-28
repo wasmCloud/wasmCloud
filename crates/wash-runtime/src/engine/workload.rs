@@ -3352,6 +3352,37 @@ impl UnresolvedWorkload {
                     .iter()
                     .flat_map(|(_, interfaces)| interfaces.clone())
                     .collect();
+                // Plugin-backed secrets become operator config before the
+                // policy runs, so it judges them like any other host key. The
+                // plugin's own checks skipped their bindings at host start, so
+                // they run now, on the values.
+                let had_secrets = declared.has_plugin_secrets();
+                let filled =
+                    crate::plugin::resolve_plugin_secrets(plugins, declared, &requested_interfaces)
+                        .await
+                        .and_then(|declared| {
+                            if had_secrets {
+                                p.validate_bindings(&declared)
+                                    .map_err(|e| e.context("invalid `host.plugins` declaration"))?;
+                            }
+                            Ok(declared)
+                        });
+                let declared = match filled {
+                    Ok(declared) => declared,
+                    Err(e) => {
+                        unbind_all(
+                            self.id(),
+                            &bound_plugins_with_interfaces,
+                            "plugin secret",
+                            cleanup,
+                        )
+                        .await;
+                        bail!(e.context(format!(
+                            "workload {} cannot bind plugin '{plugin_id}'",
+                            self.id()
+                        )))
+                    }
+                };
                 let resolved_by_name =
                     match declared.resolve_by_name(&requested_interfaces, &schema, &narrows) {
                         Ok(resolved) => resolved,
@@ -3370,44 +3401,13 @@ impl UnresolvedWorkload {
                         }
                     };
 
-                let mut resolved_component_bindings: Vec<HashSet<WitInterface>> =
+                let resolved_component_bindings: Vec<HashSet<WitInterface>> =
                     plugin_component_bindings
                         .iter()
                         .map(|(_, interfaces)| {
                             declared.apply_resolved(interfaces, &resolved_by_name)
                         })
                         .collect();
-
-                // The operator's `secret:` maps resolve last, through the
-                // secrets plugin each value names, as the host rather than as
-                // this workload: they read the plugin's host scope, never the
-                // workload's, and only the operator can write them.
-                for ((_, requested), interfaces) in plugin_component_bindings
-                    .iter()
-                    .zip(resolved_component_bindings.iter_mut())
-                    .filter(|_| declared.has_secret_refs())
-                {
-                    match crate::plugin::resolve_operator_secret_refs(
-                        plugins, plugin_id, &declared, requested, interfaces,
-                    )
-                    .await
-                    {
-                        Ok(resolved) => *interfaces = resolved,
-                        Err(e) => {
-                            unbind_all(
-                                self.id(),
-                                &bound_plugins_with_interfaces,
-                                "secret reference",
-                                cleanup,
-                            )
-                            .await;
-                            bail!(e.context(format!(
-                                "workload {} cannot bind plugin '{plugin_id}'",
-                                self.id()
-                            )))
-                        }
-                    }
-                }
 
                 // Collect all unique interfaces across all component bindings for on_workload_bind
                 let plugin_matched_interfaces: HashSet<WitInterface> = resolved_component_bindings
@@ -3461,8 +3461,7 @@ impl UnresolvedWorkload {
 
                 debug!(
                     plugin_id = plugin_id,
-                    // Config may hold resolved secrets: log only its keys.
-                    interfaces = ?crate::plugin::redacted(&plugin_matched_interfaces),
+                    interfaces = ?plugin_matched_interfaces,
                     "binding plugin to workload"
                 );
 
@@ -3537,7 +3536,7 @@ impl UnresolvedWorkload {
                     debug!(
                         plugin_id = plugin_id,
                         component_id = workload_item.id(),
-                        interfaces = ?crate::plugin::redacted(&matching_interfaces),
+                        interfaces = ?matching_interfaces,
                         "binding plugin to workload item"
                     );
 
@@ -4417,8 +4416,8 @@ mod tests {
         bound_interfaces: Arc<Mutex<Vec<WitInterface>>>,
         /// WASI interfaces this plugin claims to redefine.
         wasi_overrides: WitWorld,
-        /// Resolves operator `secret:<plugin-id>/<key>` references naming it.
-        secret_resolver: Option<Arc<dyn crate::plugin::SecretResolver>>,
+        /// Serves plugin-backed `secrets:` entries naming this plugin.
+        secret_source: Option<Arc<dyn crate::plugin::HostSecretSource>>,
     }
 
     impl MockPlugin {
@@ -4440,8 +4439,15 @@ mod tests {
                 host_owned: Vec::new(),
                 bound_interfaces: Arc::new(Mutex::new(Vec::new())),
                 wasi_overrides: WitWorld::default(),
-                secret_resolver: None,
+                secret_source: None,
             }
+        }
+
+        /// Serve plugin secrets through `source`, the way a component plugin
+        /// exporting `wasmcloud:host/secret-source` does.
+        fn serving_secrets(mut self, source: Arc<dyn crate::plugin::HostSecretSource>) -> Self {
+            self.secret_source = Some(source);
+            self
         }
         /// Declare that this plugin redefines `interfaces` (a WASI entry such
         /// as `wasi:filesystem/preopens,types@0.2.0`), the way a plugin
@@ -4450,13 +4456,6 @@ mod tests {
             self.wasi_overrides
                 .imports
                 .insert(WitInterface::from(interfaces));
-            self
-        }
-
-        /// Resolve references naming this plugin through `resolver`, the way a
-        /// host component plugin serving `wasmcloud:secrets` does.
-        fn resolving(mut self, resolver: Arc<dyn crate::plugin::SecretResolver>) -> Self {
-            self.secret_resolver = Some(resolver);
             self
         }
 
@@ -4529,10 +4528,6 @@ mod tests {
             self.named_instance_support
         }
 
-        fn secret_resolver(&self) -> Option<Arc<dyn crate::plugin::SecretResolver>> {
-            self.secret_resolver.clone()
-        }
-
         fn defers_unnamed_instances(&self) -> bool {
             self.named_instance_support && !self.serves_unnamed_too
         }
@@ -4550,6 +4545,10 @@ mod tests {
 
         fn binding_schema(&self) -> crate::plugin::BindingSchema {
             crate::plugin::BindingSchema::with_host_owned_keys(&self.host_owned)
+        }
+
+        fn secret_source(&self) -> Option<Arc<dyn crate::plugin::HostSecretSource>> {
+            self.secret_source.clone()
         }
 
         async fn on_workload_bind(
@@ -4990,125 +4989,6 @@ mod tests {
             .iter()
             .flat_map(|(_, ids)| ids.iter().cloned())
             .collect()
-    }
-
-    /// Answers every key with `<prefix>:<key>`, recording the keys asked.
-    struct EchoResolver(&'static str, Arc<Mutex<Vec<String>>>);
-
-    #[async_trait::async_trait]
-    impl crate::plugin::SecretResolver for EchoResolver {
-        async fn resolve(&self, key: &str) -> anyhow::Result<Option<String>> {
-            self.1.lock().unwrap().push(key.to_string());
-            Ok((key != "absent").then(|| format!("{}:{key}", self.0)))
-        }
-    }
-
-    type PluginMap = HashMap<&'static str, Arc<dyn HostPlugin>>;
-
-    /// A marker consumer plus a `z-secrets` plugin that resolves for the host
-    /// (and serves nothing the workload imports).
-    fn secret_ref_plugins() -> (Arc<MockPlugin>, Arc<Mutex<Vec<String>>>, PluginMap) {
-        let asked = Arc::new(Mutex::new(Vec::new()));
-        let secrets = Arc::new(
-            MockPlugin::new("z-secrets", vec![], vec![])
-                .resolving(Arc::new(EchoResolver("from-z", asked.clone()))),
-        );
-        let consumer = Arc::new(MockPlugin::new(
-            "a-consumer",
-            vec![WitInterface::from(MARKER)],
-            vec![],
-        ));
-        let plugins: PluginMap = HashMap::from([
-            (secrets.id(), secrets as Arc<dyn HostPlugin>),
-            (consumer.id(), consumer.clone() as Arc<dyn HostPlugin>),
-        ]);
-        (consumer, asked, plugins)
-    }
-
-    /// The operator's `secret:` map for the consumer's plain binding.
-    fn operator_secret(value: &str) -> crate::plugin::PluginBindings {
-        crate::plugin::PluginBindings::new().with_plugin(
-            crate::plugin::PluginBindingSet::new("a-consumer")
-                .with_secret_base([("cred".to_string(), value.to_string())].into()),
-        )
-    }
-
-    fn seen_cred(consumer: &MockPlugin) -> Vec<Option<String>> {
-        consumer
-            .bound_interfaces
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|i| i.config.get("cred").cloned())
-            .collect()
-    }
-
-    /// The operator's `secret:` map resolves through the named plugin at bind;
-    /// the consumer sees only the value, and the workload needs no
-    /// `wasmcloud:secrets` binding of its own.
-    #[tokio::test]
-    async fn an_operator_secret_resolves_through_the_named_plugin() {
-        let (consumer, asked, plugins) = secret_ref_plugins();
-        marker_workload(vec![marker_importer("app")])
-            .bind_plugins(&plugins, &operator_secret("z-secrets/db-password"))
-            .await
-            .unwrap();
-        let seen = seen_cred(&consumer);
-        assert!(!seen.is_empty());
-        assert!(
-            seen.iter()
-                .all(|c| c.as_deref() == Some("from-z:db-password")),
-            "{seen:?}"
-        );
-        assert_eq!(*asked.lock().unwrap(), ["db-password"]);
-    }
-
-    /// A key the workload set keeps the workload's value, exactly as it would
-    /// over the operator's `config` (the policy refuses it first when the key
-    /// is the operator's), and nothing is resolved for it.
-    #[tokio::test]
-    async fn a_workload_set_key_keeps_its_value_and_is_not_resolved() {
-        let (consumer, asked, plugins) = secret_ref_plugins();
-        let mut entry = WitInterface::from(MARKER);
-        entry
-            .config
-            .insert("cred".to_string(), "z-secrets/db-password".to_string());
-        UnresolvedWorkload::new(
-            "local-first".to_string(),
-            "local-first".to_string(),
-            "test-namespace".to_string(),
-            None,
-            vec![marker_importer("app")],
-            vec![entry],
-        )
-        .bind_plugins(&plugins, &operator_secret("z-secrets/other"))
-        .await
-        .unwrap();
-        assert!(
-            seen_cred(&consumer)
-                .iter()
-                .all(|c| c.as_deref() == Some("z-secrets/db-password"))
-        );
-        assert!(asked.lock().unwrap().is_empty(), "nothing may be resolved");
-    }
-
-    /// A missing secret fails the bind before the consumer is item-bound, and
-    /// the error names the key, not a value.
-    #[tokio::test]
-    async fn a_missing_operator_secret_fails_the_bind() {
-        let (consumer, _, plugins) = secret_ref_plugins();
-        let Err(err) = marker_workload(vec![marker_importer("app")])
-            .bind_plugins(&plugins, &operator_secret("z-secrets/absent"))
-            .await
-        else {
-            panic!("a missing secret must fail the bind");
-        };
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("'absent'") && msg.contains("'z-secrets'"),
-            "{msg}"
-        );
-        assert_eq!(consumer.get_call_count("on_workload_item_bind"), 0);
     }
 
     /// A workload serves itself first: an interface one component imports and
@@ -5935,6 +5815,88 @@ mod tests {
             1,
             "the item bind must still run against the resolved interface"
         );
+    }
+
+    /// Answers every key with `secret-for:<key>`.
+    struct EchoSecrets;
+
+    #[async_trait]
+    impl crate::plugin::HostSecretSource for EchoSecrets {
+        async fn resolve(
+            &self,
+            request: crate::plugin::SecretRequest,
+        ) -> Result<HashMap<String, crate::plugin::SecretValue>, crate::plugin::SecretSourceError>
+        {
+            Ok(request
+                .keys
+                .into_iter()
+                .map(|k| {
+                    let value = crate::plugin::SecretValue::new(format!("secret-for:{k}"));
+                    (k, value)
+                })
+                .collect())
+        }
+    }
+
+    /// A kv plugin owning `url`, a secrets plugin, and a `cache` binding whose
+    /// `url` comes from the secrets plugin.
+    fn kv_with_plugin_secret() -> (
+        Arc<MockPlugin>,
+        HashMap<&'static str, Arc<dyn HostPlugin>>,
+        crate::plugin::PluginBindings,
+    ) {
+        let kv = Arc::new(
+            MockPlugin::new("kv", vec![], vec![kv_iface(None, &[])])
+                .with_named_instance_support()
+                .owning(&["url"]),
+        );
+        let secrets = Arc::new(
+            MockPlugin::new("vault", vec![], vec![]).serving_secrets(Arc::new(EchoSecrets)),
+        );
+        let plugins = HashMap::from([
+            (kv.id(), kv.clone() as Arc<dyn HostPlugin>),
+            (secrets.id(), secrets as Arc<dyn HostPlugin>),
+        ]);
+        let bindings = crate::plugin::PluginBindings::new().with_plugin(
+            crate::plugin::PluginBindingSet::new("kv")
+                .with_binding("cache", HashMap::new())
+                .with_binding_secrets(
+                    "cache",
+                    HashMap::from([(
+                        "url".to_string(),
+                        crate::plugin::PluginSecretRef {
+                            source: "cache-db".to_string(),
+                            plugin: "vault".to_string(),
+                            key: "kv-url".to_string(),
+                        },
+                    )]),
+                ),
+        );
+        (kv, plugins, bindings)
+    }
+
+    /// A plugin secret reaches the consuming plugin as resolved config.
+    #[tokio::test]
+    async fn test_a_plugin_secret_reaches_the_plugin_as_config() {
+        let (kv, plugins, bindings) = kv_with_plugin_secret();
+        let mut workload = workload_requesting(vec![kv_iface(Some("cache"), &[])]);
+        workload.bind_plugins(&plugins, &bindings).await.unwrap();
+        assert_eq!(kv.seen_config(Some("cache"))["url"], "secret-for:kv-url");
+    }
+
+    /// A plugin secret is operator config by the time the policy runs, so
+    /// `deny` refuses a workload that sets the same key.
+    #[tokio::test]
+    async fn test_deny_refuses_a_workload_overriding_a_plugin_secret() {
+        let (kv, plugins, bindings) = kv_with_plugin_secret();
+        let mut workload =
+            workload_requesting(vec![kv_iface(Some("cache"), &[("url", "redis://guest")])]);
+        let err = match workload.bind_plugins(&plugins, &bindings).await {
+            Ok(_) => panic!("binding should have been refused"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(err.contains("`url`"), "got: {err}");
+        assert_eq!(kv.get_call_count("on_workload_bind"), 0);
     }
 
     /// Under `deny`, a workload writing a host-owned key fails the deploy — and

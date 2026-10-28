@@ -14,9 +14,11 @@ use wasmtime::component::{Accessor, AccessorTask, ComponentExportIndex, Instance
 use wasmtime::error::Context as _;
 
 use super::InFlightGuard;
-use crate::engine::ctx::{CallerIdentity, SharedCtx};
+use crate::engine::ctx::{CallerIdentity, SharedCtx, WorkloadCaller};
 use crate::engine::store::relocate::{self, Relocated};
 use crate::host::job_registry::{JobGuard, JobRegistry};
+use crate::plugin::SecretValue;
+use crate::plugin::component_host::{SecretSourceRequest, SecretSourceResolve, SourceError};
 
 /// One exported capability function the TriggerService should be ready to serve,
 /// identified by its interface and function name (e.g. `acme:kv/store@0.1.0` /
@@ -34,6 +36,9 @@ pub enum CapabilityJob {
     /// A capability function call (including resource methods, constructors, and
     /// statics — they are ordinary interface functions).
     Call(CapabilityCall),
+    /// A `wasmcloud:host/secret-source` resolve the host makes on its own
+    /// behalf.
+    SecretSource(SecretSourceCall),
     /// Drop a proxied resource: the caller dropped its proxy, so the real
     /// resource in the plugin store is taken from the registry and destroyed.
     DropResource {
@@ -72,6 +77,22 @@ pub struct CapabilityCall {
     pub abandoned: Arc<crate::engine::abandon::AbandonFlag>,
 }
 
+/// What a `secret-source` resolve answers: each key's value, or the plugin's
+/// `source-error`.
+pub type SecretSourceReply = Result<Vec<(String, SecretValue)>, SourceError>;
+
+/// A `secret-source` resolve, made through the typed `resolve` the incarnation
+/// checked when it instantiated. Runs as [`CallerIdentity::Host`].
+pub struct SecretSourceCall {
+    pub request: SecretSourceRequest,
+    /// Carries the plugin's answer, or a trap or routing error, back to the
+    /// host.
+    pub reply: tokio::sync::oneshot::Sender<wasmtime::Result<SecretSourceReply>>,
+    /// The abandonment flag of the dispatched call enforcing its deadline, as
+    /// on [`CapabilityCall::abandoned`].
+    pub abandoned: Arc<crate::engine::abandon::AbandonFlag>,
+}
+
 /// A `wasmcloud:host/workload-lifecycle` bind a fresh plugin incarnation must
 /// complete before serving capability calls: the replay performed for every
 /// workload still bound, so the incarnation's per-workload state exists before
@@ -81,8 +102,8 @@ pub struct LifecycleReplay {
     pub interface: Arc<str>,
     /// The bind function's name within that interface.
     pub func: Arc<str>,
-    /// The workload the bind concerns (its id, with an empty component id).
-    pub caller: CallerIdentity,
+    /// The workload the bind concerns (its id, with no component id).
+    pub caller: WorkloadCaller,
     /// The `workload-info` argument (handle-free).
     pub args: Vec<Relocated>,
     /// The bind function's result types.
@@ -148,17 +169,13 @@ pub(super) fn admit_and_spawn_call(
     in_flight: &Arc<AtomicUsize>,
     call: CapabilityCall,
 ) {
-    use std::sync::atomic::Ordering;
-    if in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_INFLIGHT_CAPABILITY_CALLS {
-        in_flight.fetch_sub(1, Ordering::SeqCst);
-        let _ = call.reply.send(Err(wasmtime::format_err!(
-            "host component plugin is at its in-flight capability-call \
-             ceiling ({MAX_INFLIGHT_CAPABILITY_CALLS}); a call cycle or \
-             overload is likely"
-        )));
-        return;
-    }
-    let guard = InFlightGuard::new(Arc::clone(in_flight));
+    let guard = match admit(in_flight) {
+        Ok(guard) => guard,
+        Err(e) => {
+            let _ = call.reply.send(Err(e));
+            return;
+        }
+    };
     let Some(func_idx) = func_map
         .get(&*call.interface)
         .and_then(|fns| fns.get(&*call.func))
@@ -186,6 +203,111 @@ pub(super) fn admit_and_spawn_call(
         job_guard,
     }) {
         tracing::error!(err = %e, "failed to spawn capability call task");
+    }
+}
+
+/// Take one in-flight slot under [`MAX_INFLIGHT_CAPABILITY_CALLS`], without
+/// blocking.
+fn admit(in_flight: &Arc<AtomicUsize>) -> wasmtime::Result<InFlightGuard> {
+    use std::sync::atomic::Ordering;
+    if in_flight.fetch_add(1, Ordering::SeqCst) >= MAX_INFLIGHT_CAPABILITY_CALLS {
+        in_flight.fetch_sub(1, Ordering::SeqCst);
+        wasmtime::bail!(
+            "host component plugin is at its in-flight capability-call \
+             ceiling ({MAX_INFLIGHT_CAPABILITY_CALLS}); a call cycle or \
+             overload is likely"
+        );
+    }
+    Ok(InFlightGuard::new(Arc::clone(in_flight)))
+}
+
+/// [`admit_and_spawn_call`] for a `secret-source` resolve, which the host makes
+/// on its own behalf through the typed `resolve`.
+pub(super) fn admit_and_spawn_secret_source(
+    accessor: &Accessor<SharedCtx>,
+    resolve: Option<SecretSourceResolve>,
+    registry: &Arc<JobRegistry>,
+    in_flight: &Arc<AtomicUsize>,
+    call: SecretSourceCall,
+) {
+    let Some(resolve) = resolve else {
+        let _ = call.reply.send(Err(wasmtime::format_err!(
+            "plugin does not export wasmcloud:host/secret-source"
+        )));
+        return;
+    };
+    let guard = match admit(in_flight) {
+        Ok(guard) => guard,
+        Err(e) => {
+            let _ = call.reply.send(Err(e));
+            return;
+        }
+    };
+    let job = registry.admit(CallerIdentity::Host);
+    let job_guard = JobGuard::new(Arc::clone(registry), job);
+    if let Err(e) = accessor.spawn(SecretSourceTask {
+        resolve,
+        call,
+        _in_flight: guard,
+        job_guard,
+    }) {
+        tracing::error!(err = %e, "failed to spawn secret-source call task");
+    }
+}
+
+/// Serves one `secret-source` resolve on the shared plugin instance, as
+/// [`CapabilityTask`] does a capability call.
+struct SecretSourceTask {
+    resolve: SecretSourceResolve,
+    call: SecretSourceCall,
+    _in_flight: InFlightGuard,
+    job_guard: JobGuard,
+}
+
+impl AccessorTask<SharedCtx> for SecretSourceTask {
+    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
+        let SecretSourceTask {
+            resolve,
+            call:
+                SecretSourceCall {
+                    request,
+                    reply,
+                    abandoned,
+                },
+            _in_flight,
+            mut job_guard,
+        } = self;
+        let calls = accessor.with(|mut access| {
+            crate::engine::abandon::rearm_for_call(&mut access);
+            Arc::clone(&access.get().abandoned)
+        });
+        let started = accessor
+            .with(|mut access| resolve.start_call_concurrent(access.as_context_mut(), (request,)));
+        let call = match started {
+            Ok(call) => call,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return Ok(());
+            }
+        };
+        // Bound as the host, so `identity.get-caller` reads `host` inside.
+        job_guard.set_task(call.task(), CallerIdentity::Host);
+        let result = crate::engine::abandon::watch_until_abandoned(
+            &calls,
+            abandoned,
+            resolve.finish_call_concurrent(accessor, call),
+        )
+        .await;
+        let _ = reply.send(match result {
+            Ok((answer,)) => Ok(answer.map(|pairs| {
+                pairs
+                    .into_iter()
+                    .map(|(key, value)| (key, SecretValue::new(value)))
+                    .collect()
+            })),
+            Err(e) => Err(e.context("secret-source resolve trapped")),
+        });
+        Ok(())
     }
 }
 

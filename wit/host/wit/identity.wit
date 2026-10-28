@@ -7,11 +7,8 @@ package wasmcloud:host@0.1.5;
 interface identity {
     use types.{workload-id, component-id};
 
-    /// The workload id of the caller currently invoking this plugin.
-    ///
-    /// Empty both for a call the host makes itself (see `is-host-call`) and
-    /// for a caller the host cannot resolve, so an empty id never identifies
-    /// the host.
+    /// The workload id of the caller currently invoking this plugin. Empty
+    /// when no workload is behind the call; `get-caller` says which.
     get-workload-id: func() -> workload-id;
     /// The component id of the caller currently invoking this plugin.
     get-component-id: func() -> component-id;
@@ -28,11 +25,17 @@ interface identity {
     /// too: it is about a whole workload, so read `workload-info` there.
     get-binding-name: func() -> option<string>;
 
-    /// Whether the call in flight was made by the host itself, on no
-    /// workload's behalf: the host resolving an operator's `secret:` map value
-    /// through a plugin serving `wasmcloud:secrets`, for example. A workload's
-    /// call, a lifecycle hook, and a caller the host cannot resolve all read
-    /// `false`. A plugin that answers the host from state no workload may
-    /// read checks this, not an empty `get-workload-id`.
-    is-host-call: func() -> bool;
+    /// Whom a call into this plugin is on behalf of.
+    @since(version = 0.1.5)
+    variant caller {
+        /// The host itself, on no workload's behalf: `secret-source.resolve`.
+        host,
+        /// A workload: a capability call or a `workload-lifecycle` hook.
+        workload(workload-id),
+    }
+
+    /// Whom the call running now is on behalf of, or `none` outside one, such
+    /// as in the plugin's own `wasi:cli/run`.
+    @since(version = 0.1.5)
+    get-caller: func() -> option<caller>;
 }

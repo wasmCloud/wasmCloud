@@ -737,6 +737,11 @@ runtime:
       #                   `(implements ..)` label a workload asks for. Each
       #                   takes its own `config`/`configFrom`/`secretFrom`,
       #                   layered over the entry's.
+
+      #
+      # A `secretFrom` name may also be a key of this host group's
+      # `pluginSecrets` (below), served by a host component plugin at bind
+      # instead of a Kubernetes Secret.
       #
       # Every entry here is file-backed (rendered into the `wash host` config
       # file, never a CLI arg), since a binding can carry credentials.
@@ -763,6 +768,25 @@ runtime:
       #         prod:
       #           configFrom: [vault-prod]
       plugins: []
+      # -- Secrets a host component plugin serves through
+      # `wasmcloud:host/secret-source`, by the name a `plugins` entry's or
+      # binding's `secretFrom` uses. `keys` maps each config key to the key
+      # the plugin is asked for. The host asks again on every workload bind,
+      # so a rotation reaches the next bind; no volume is mounted and no
+      # Reloader annotation is added. Only `plugins` bindings (or a native
+      # entry's own `secretFrom`) can name one.
+      #
+      #   pluginSecrets:
+      #     billing-db:
+      #       plugin: vault-secrets
+      #       keys:
+      #         url: apps/billing/pg-url
+      #   plugins:
+      #     - id: wasmcloud-postgres
+      #       bindings:
+      #         app-db:
+      #           secretFrom: [billing-db]
+      pluginSecrets: {}
       # -- Deprecated alias for `plugins`, from when only component plugins
       # could be declared. Entries here must name an `image` or `file`; a
       # native plugin's configuration belongs under `plugins`. Merges with
@@ -799,13 +823,6 @@ runtime:
       #   secretFrom      names of Secrets (same namespace), merged in last
       #                   (wins over `config`/`configFrom`). Same
       #                   host-only-reads-the-mount posture.
-      #   secret          config keys whose values come from a secrets
-      #                   plugin on this host group: `key: <plugin-id>/<key>`.
-      #                   The host resolves each at bind through the named
-      #                   plugin (as the host, not as a workload) and hands
-      #                   the value to this plugin under `key`. Also allowed
-      #                   per binding under `bindings.<name>.secret`. A key
-      #                   may not also come from config/configFrom/secretFrom.
       #   allowedHosts    endpoints this plugin may reach. Component plugins
       #                   are gated at WASI; native plugins must check their
       #                   client endpoints. Omitted/empty denies all.

@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
+use super::secret_source::SecretValue;
 use crate::wit::WitInterface;
 
 /// The binding name of a plain, unlabeled import.
@@ -464,12 +465,15 @@ impl BindingSchema {
     /// closest known spelling where there is an obvious one.
     ///
     /// Empty on an open schema.
-    fn unknown_keys(&self, config: &HashMap<String, String>) -> Vec<(String, Option<String>)> {
+    fn unknown_keys<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a String>,
+    ) -> Vec<(String, Option<String>)> {
         if !self.closed {
             return Vec::new();
         }
-        let mut unknown: Vec<(String, Option<String>)> = config
-            .keys()
+        let mut unknown: Vec<(String, Option<String>)> = keys
+            .into_iter()
             .filter(|key| !self.knows(key))
             .map(|key| (key.clone(), self.nearest(key).map(str::to_string)))
             .collect();
@@ -493,7 +497,17 @@ impl BindingSchema {
         config: &HashMap<String, String>,
         owner: &str,
     ) -> anyhow::Result<()> {
-        let unknown = self.unknown_keys(config);
+        self.reject_unknown_key_names(config.keys(), owner)
+    }
+
+    /// [`Self::reject_unknown_keys`] over bare key names, for keys whose
+    /// values are not known yet.
+    fn reject_unknown_key_names<'a>(
+        &self,
+        keys: impl IntoIterator<Item = &'a String>,
+        owner: &str,
+    ) -> anyhow::Result<()> {
+        let unknown = self.unknown_keys(keys);
         if unknown.is_empty() {
             return Ok(());
         }
@@ -581,6 +595,18 @@ fn within_one_edit(a: &str, b: &str) -> bool {
     true
 }
 
+/// A config key whose value a plugin-backed `secrets:` catalog entry supplies,
+/// resolved through that plugin each time a workload binds.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PluginSecretRef {
+    /// The `secrets:` entry, named in errors.
+    pub source: String,
+    /// The plugin that resolves it, through `wasmcloud:host/secret-source`.
+    pub plugin: String,
+    /// The key that plugin is asked for.
+    pub key: String,
+}
+
 /// One plugin's operator declaration: a base config, the named bindings it
 /// serves, and who may configure them.
 ///
@@ -592,10 +618,10 @@ pub struct PluginBindingSet {
     plugin_id: String,
     base: HashMap<String, String>,
     bindings: BTreeMap<String, HashMap<String, String>>,
-    /// The operator's `secret:` maps: config key -> `<plugin-id>/<secret-key>`,
-    /// resolved at bind through the named plugin. Entry-wide, then per binding.
-    secret_base: HashMap<String, String>,
-    secret_bindings: BTreeMap<String, HashMap<String, String>>,
+    /// Keys of `base`/`bindings` whose values are still to come from a plugin
+    /// secret. Cleared per layer once [`Self::fill_plugin_secrets`] fills it.
+    base_secrets: HashMap<String, PluginSecretRef>,
+    binding_secrets: BTreeMap<String, HashMap<String, PluginSecretRef>>,
     declared_host_owned: BTreeSet<String>,
     workload_config: WorkloadConfigPolicy,
     default_bundles: Vec<DefaultBundle>,
@@ -648,23 +674,23 @@ impl PluginBindingSet {
         self
     }
 
-    /// The entry's `secret:` map, applied to every binding of this plugin:
-    /// config key -> `<plugin-id>/<secret-key>`.
+    /// Keys of the base layer that a plugin secret supplies at bind. A key
+    /// here must not also be in [`Self::with_base`]'s config.
     #[must_use]
-    pub fn with_secret_base(mut self, secret: HashMap<String, String>) -> Self {
-        self.secret_base = secret;
+    pub fn with_base_secrets(mut self, secrets: HashMap<String, PluginSecretRef>) -> Self {
+        self.base_secrets = secrets;
         self
     }
 
-    /// The `secret:` map of binding `name`, layered over the entry's.
+    /// [`Self::with_base_secrets`] for binding `name`.
     #[must_use]
-    pub fn with_binding_secret(
+    pub fn with_binding_secrets(
         mut self,
         name: impl Into<String>,
-        secret: HashMap<String, String>,
+        secrets: HashMap<String, PluginSecretRef>,
     ) -> Self {
-        if !secret.is_empty() {
-            self.secret_bindings.insert(name.into(), secret);
+        if !secrets.is_empty() {
+            self.binding_secrets.insert(name.into(), secrets);
         }
         self
     }
@@ -872,6 +898,7 @@ impl PluginBindingSet {
     fn is_passthrough(&self, schema: &BindingSchema) -> bool {
         self.base.is_empty()
             && self.bindings.is_empty()
+            && !self.has_plugin_secrets()
             && schema.is_empty()
             && self.declared_host_owned.is_empty()
             && self.default_bundles.is_empty()
@@ -1064,6 +1091,12 @@ impl PluginBindingSet {
         schema: &BindingSchema,
         narrows: NarrowsFn<'_>,
     ) -> anyhow::Result<HashMap<String, String>> {
+        anyhow::ensure!(
+            self.base_secrets.is_empty() && !self.binding_secrets.contains_key(binding),
+            "binding {} of `host.plugins` entry `{}` reads a plugin secret that was not resolved",
+            describe_binding(binding),
+            self.plugin_id
+        );
         reject_conflicting_spellings(
             &self.base,
             schema,
@@ -1161,7 +1194,7 @@ impl PluginBindingSet {
             ));
         }
 
-        let unknown = schema.unknown_keys(workload);
+        let unknown = schema.unknown_keys(workload.keys());
         if !unknown.is_empty() {
             findings.push(format!(
                 "it sets {}, which this plugin does not read; a key it does not recognize is \
@@ -1278,58 +1311,81 @@ impl PluginBindingSet {
     /// time and is complete when the plugin actually sees it, so validating
     /// the layer without the bundle refuses the ordinary case: a second
     /// binding on the same cluster, declared only to carry a narrower grant.
+    ///
+    /// A binding still waiting on a plugin secret is left out: its values exist
+    /// only once a workload binds it, and the host checks it then.
     pub fn host_layers<'a>(
         &'a self,
         schema: &'a BindingSchema,
     ) -> impl Iterator<Item = (&'a str, HashMap<String, String>)> {
-        self.bindings.keys().map(move |name| {
-            let mut layer = self.host_layer_with(name, schema);
-            self.apply_default_bundles(name, &mut layer, schema);
-            (name.as_str(), layer)
-        })
-    }
-
-    /// Whether the operator declared any `secret:` map for this plugin.
-    pub fn has_secret_refs(&self) -> bool {
-        !self.secret_base.is_empty() || !self.secret_bindings.is_empty()
-    }
-
-    /// The secret references that apply to `binding` (`None` for the unnamed
-    /// binding): the entry's `secret:` map with the binding's own over it.
-    pub fn secret_refs(&self, binding: Option<&str>) -> HashMap<String, String> {
-        let mut refs = self.secret_base.clone();
-        if let Some(own) = binding.and_then(|b| self.secret_bindings.get(b)) {
-            refs.extend(own.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-        refs
-    }
-
-    /// Every layer the operator declared, for checking at host start: `None`
-    /// for the entry itself, then each named binding, with that level's
-    /// effective config keys (`config`/`configFrom`/`secretFrom`, merged with
-    /// the entry's) and effective `secret:` map.
-    pub fn declared_levels(
-        &self,
-    ) -> impl Iterator<Item = (Option<&str>, BTreeSet<&str>, HashMap<String, String>)> {
-        let base_keys = self.base.keys().map(String::as_str);
-        std::iter::once((None, base_keys.clone().collect(), self.secret_refs(None))).chain(
-            self.bindings.iter().map(move |(name, layer)| {
-                let keys = base_keys
-                    .clone()
-                    .chain(layer.keys().map(String::as_str))
-                    .collect();
-                (Some(name.as_str()), keys, self.secret_refs(Some(name)))
-            }),
-        )
-    }
-
-    /// The `secret:` maps of bindings the entry does not declare. A binding
-    /// exists only through `bindings`, so these could never be read.
-    pub fn undeclared_secret_bindings(&self) -> impl Iterator<Item = &str> {
-        self.secret_bindings
+        self.bindings
             .keys()
-            .filter(|name| !self.bindings.contains_key(*name))
-            .map(String::as_str)
+            .filter(|name| !self.reads_pending_secret(name))
+            .map(move |name| {
+                let mut layer = self.host_layer_with(name, schema);
+                self.apply_default_bundles(name, &mut layer, schema);
+                (name.as_str(), layer)
+            })
+    }
+
+    /// Whether any key still waits on a plugin secret.
+    pub fn has_plugin_secrets(&self) -> bool {
+        !self.base_secrets.is_empty() || !self.binding_secrets.is_empty()
+    }
+
+    /// Every plugin secret the operator declared, with the binding it is
+    /// declared on (`None` for the entry itself) and its config key.
+    pub fn plugin_secrets(&self) -> impl Iterator<Item = (Option<&str>, &str, &PluginSecretRef)> {
+        let base = self
+            .base_secrets
+            .iter()
+            .map(|(key, r)| (None, key.as_str(), r));
+        let named = self.binding_secrets.iter().flat_map(|(name, secrets)| {
+            secrets
+                .iter()
+                .map(move |(key, r)| (Some(name.as_str()), key.as_str(), r))
+        });
+        base.chain(named)
+    }
+
+    /// Whether binding `name`'s config still waits on a plugin secret, its own
+    /// or the entry's.
+    fn reads_pending_secret(&self, name: &str) -> bool {
+        !self.base_secrets.is_empty() || self.binding_secrets.contains_key(name)
+    }
+
+    /// This set with the plugin secrets of `bindings` (and of the entry
+    /// itself) written into their layers, taking each value from `value`.
+    /// Layers left out stay pending, and resolving a binding that reads one
+    /// fails. This is where a [`SecretValue`] becomes the consuming plugin's
+    /// config.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `value` returns.
+    pub fn fill_plugin_secrets(
+        mut self,
+        bindings: &BTreeSet<&str>,
+        mut value: impl FnMut(Option<&str>, &PluginSecretRef) -> anyhow::Result<SecretValue>,
+    ) -> anyhow::Result<Self> {
+        for (key, r) in std::mem::take(&mut self.base_secrets) {
+            let v = value(None, &r)?;
+            self.base.insert(key, v.into_exposed());
+        }
+        for (name, secrets) in std::mem::take(&mut self.binding_secrets) {
+            if !bindings.contains(name.as_str()) {
+                self.binding_secrets.insert(name, secrets);
+                continue;
+            }
+            for (key, r) in secrets {
+                let v = value(Some(&name), &r)?;
+                self.bindings
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(key, v.into_exposed());
+            }
+        }
+        Ok(self)
     }
 
     /// The base layer on its own, for a plugin checking a key that is only
@@ -1377,25 +1433,18 @@ impl PluginBindingSet {
     ///
     /// Names the entry or binding the invalid key was written on.
     pub fn reject_unknown_keys(&self, schema: &BindingSchema) -> anyhow::Result<()> {
-        reject_conflicting_spellings(
-            &self.base,
-            schema,
-            &format!("`host.plugins` entry `{}`", self.plugin_id),
-        )?;
-        schema.reject_unknown_keys(
-            &self.base,
-            &format!("`host.plugins` entry `{}`", self.plugin_id),
-        )?;
+        let entry = format!("`host.plugins` entry `{}`", self.plugin_id);
+        reject_conflicting_spellings(&self.base, schema, &entry)?;
+        reject_secret_clashes(&self.base, &self.base_secrets, schema, &entry)?;
+        schema
+            .reject_unknown_key_names(self.base.keys().chain(self.base_secrets.keys()), &entry)?;
+        let no_secrets = HashMap::new();
         for (name, config) in &self.bindings {
-            reject_conflicting_spellings(
-                config,
-                schema,
-                &format!("`host.plugins` entry `{}` binding `{name}`", self.plugin_id),
-            )?;
-            schema.reject_unknown_keys(
-                config,
-                &format!("`host.plugins` entry `{}` binding `{name}`", self.plugin_id),
-            )?;
+            let owner = format!("{entry} binding `{name}`");
+            let secrets = self.binding_secrets.get(name).unwrap_or(&no_secrets);
+            reject_conflicting_spellings(config, schema, &owner)?;
+            reject_secret_clashes(config, secrets, schema, &owner)?;
+            schema.reject_unknown_key_names(config.keys().chain(secrets.keys()), &owner)?;
         }
         // `hostOwnedKeys` too: a typo there locks nothing, which is the inert
         // `deny` this check exists to catch.
@@ -1418,6 +1467,33 @@ impl PluginBindingSet {
         let names: Vec<String> = self.bindings.keys().map(|n| format!("`{n}`")).collect();
         format!("; it serves {}", names.join(", "))
     }
+}
+
+/// Refuse a layer that sets a key both in its config and from a plugin secret,
+/// in any spelling the plugin reads it under.
+fn reject_secret_clashes(
+    config: &HashMap<String, String>,
+    secrets: &HashMap<String, PluginSecretRef>,
+    schema: &BindingSchema,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let mut clashes: Vec<(&str, &str, &str)> = secrets
+        .iter()
+        .filter_map(|(key, secret)| {
+            let literal = config
+                .keys()
+                .find(|k| schema.canonical(k) == schema.canonical(key))?;
+            Some((literal.as_str(), key.as_str(), secret.source.as_str()))
+        })
+        .collect();
+    clashes.sort_unstable();
+    if let Some((literal, key, source)) = clashes.first() {
+        anyhow::bail!(
+            "{owner} sets `{literal}` in its config and `{key}` from secret `{source}`; set it \
+             in one place"
+        )
+    }
+    Ok(())
 }
 
 /// Add one configuration layer in a stable order, collapsing every spelling

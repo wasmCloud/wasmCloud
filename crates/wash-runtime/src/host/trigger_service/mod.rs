@@ -48,6 +48,8 @@ use wasmtime::error::Context as _;
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi_http::p3::bindings::Service;
 
+#[cfg(feature = "host-component-plugins")]
+use crate::engine::ctx::CallerIdentity;
 use crate::engine::ctx::SharedCtx;
 use crate::engine::dispatch::{GuestJob, GuestTask, Placement};
 use crate::host::http::ServiceHttpJob;
@@ -60,7 +62,10 @@ mod http;
 mod messaging;
 
 #[cfg(feature = "host-component-plugins")]
-pub use capability::{CapabilityCall, CapabilityFunc, CapabilityJob, LifecycleReplay};
+pub use capability::{
+    CapabilityCall, CapabilityFunc, CapabilityJob, LifecycleReplay, SecretSourceCall,
+    SecretSourceReply,
+};
 pub use messaging::{BrokerMessage, MessagingJob};
 // The pooled path binds and drives the same handler the service ingress does.
 pub(crate) use messaging::{AsyncMessaging, MessagingTask};
@@ -69,7 +74,10 @@ pub(crate) use messaging::{AsyncMessaging, MessagingTask};
 pub(crate) use capability::decode_bind_reply;
 
 #[cfg(feature = "host-component-plugins")]
-use capability::{admit_and_spawn_call, drain_plugin_resources, flush_pending_resource_drops};
+use capability::{
+    admit_and_spawn_call, admit_and_spawn_secret_source, drain_plugin_resources,
+    flush_pending_resource_drops,
+};
 pub(crate) use http::HttpTask;
 
 /// A host-invoked handler export the TriggerService serves, carrying the receiver end
@@ -93,13 +101,15 @@ pub enum Ingress {
     /// every exported function to resolve up front; `rx` delivers the calls;
     /// `registry` tracks each served call as a cancellable job; `replay` holds
     /// the lifecycle binds this incarnation must complete before serving `rx`
-    /// (the per-workload state rebuild after a restart).
+    /// (the per-workload state rebuild after a restart); `secret_source`
+    /// names the plugin's `wasmcloud:host/secret-source` export, if any.
     #[cfg(feature = "host-component-plugins")]
     Capability {
         funcs: Vec<CapabilityFunc>,
         rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
         registry: Arc<JobRegistry>,
         replay: Vec<LifecycleReplay>,
+        secret_source: Option<Arc<str>>,
     },
 }
 
@@ -143,6 +153,7 @@ impl Ingress {
                 rx,
                 registry,
                 replay,
+                secret_source,
             } => {
                 // Resolve every exported capability function to a call index up
                 // front (mirroring the messaging arm), so serving a call is a
@@ -165,9 +176,19 @@ impl Ingress {
                         .or_default()
                         .insert(func, func_idx);
                 }
+                // Typed against the published WIT, so an export that does
+                // not match it fails here rather than on a bind.
+                let secret_source = secret_source
+                    .map(|interface| {
+                        crate::plugin::component_host::secret_source_resolve(
+                            store, instance, &interface,
+                        )
+                    })
+                    .transpose()?;
                 Ok(PreparedIngress::Capability {
                     instance: *instance,
                     func_map,
+                    secret_source,
                     rx,
                     registry,
                     replay,
@@ -201,6 +222,7 @@ enum PreparedIngress {
     Capability {
         instance: Instance,
         func_map: BTreeMap<Arc<str>, BTreeMap<Arc<str>, ComponentExportIndex>>,
+        secret_source: Option<crate::plugin::component_host::SecretSourceResolve>,
         rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
         registry: Arc<JobRegistry>,
         /// Lifecycle binds to complete before serving `rx`; drained on the
@@ -313,6 +335,7 @@ impl PreparedIngress {
             PreparedIngress::Capability {
                 instance,
                 func_map,
+                secret_source,
                 rx,
                 registry,
                 replay,
@@ -364,7 +387,7 @@ impl PreparedIngress {
                         CapabilityCall {
                             interface,
                             func,
-                            caller,
+                            caller: CallerIdentity::Workload(caller),
                             args,
                             result_tys,
                             reply: reply_tx,
@@ -394,6 +417,15 @@ impl PreparedIngress {
                         CapabilityJob::Call(call) => {
                             admit_and_spawn_call(
                                 accessor, *instance, func_map, registry, in_flight, call,
+                            );
+                        }
+                        CapabilityJob::SecretSource(call) => {
+                            admit_and_spawn_secret_source(
+                                accessor,
+                                *secret_source,
+                                registry,
+                                in_flight,
+                                call,
                             );
                         }
                     }

@@ -562,13 +562,6 @@ pub struct HostPluginConfig {
     /// against the same top-level `configs:`/`secrets:` catalogs.
     #[serde(flatten)]
     pub environment: EnvironmentLayer,
-    /// Config keys whose values come from a secrets plugin, as
-    /// `key: <plugin-id>/<secret-key>`. The host resolves each at bind through
-    /// the named plugin, as the host rather than any workload, and hands the
-    /// value to this plugin under `key`. A key set here may not also come from
-    /// `config`/`configFrom`/`secretFrom`. Bindings layer their own over these.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub secret: BTreeMap<String, String>,
     /// Hosts this plugin may reach. Component plugins are gated at their WASI
     /// sockets and HTTP interfaces. Native plugins must enforce this against
     /// their client endpoints or fail host startup. Empty denies all.
@@ -605,10 +598,6 @@ pub struct PluginBindingConfig {
     /// through the same `configs:`/`secrets:` catalogs as everything else.
     #[serde(flatten)]
     pub environment: EnvironmentLayer,
-    /// This binding's keys from a secrets plugin, `key: <plugin-id>/<secret-key>`,
-    /// layered over the entry's `secret`. See [`HostPluginConfig::secret`].
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub secret: BTreeMap<String, String>,
 }
 
 /// Config-file spelling of
@@ -711,9 +700,9 @@ impl HostPluginConfig {
             bail!("host.plugins entry is missing a non-empty `id`");
         }
         self.reject_component_only_fields()?;
-        let resolve = |env: &EnvironmentLayer, owner: &str| -> Result<HashMap<String, String>> {
-            wash_runtime::config_source::resolve_environment_layer(
-                Some(env),
+        let resolve = |env: &EnvironmentLayer, owner: &str| {
+            wash_runtime::config_source::resolve_plugin_environment_layer(
+                env,
                 owner,
                 &config.config_sources,
                 &config.secret_sources,
@@ -724,9 +713,10 @@ impl HostPluginConfig {
         };
 
         let owner = format!("host.plugins '{}'", self.id);
+        let (base, base_secrets) = resolve(&self.environment, &owner)?;
         let mut set = wash_runtime::plugin::PluginBindingSet::new(self.id.clone())
-            .with_base(resolve(&self.environment, &owner)?)
-            .with_secret_base(self.secret.clone().into_iter().collect())
+            .with_base(base)
+            .with_base_secrets(base_secrets)
             .with_host_owned_keys(&self.host_owned_keys)
             .with_workload_config(self.workload_config.unwrap_or(default_policy).into());
         // Declared only when the operator wrote one of the lists. An entry that
@@ -751,12 +741,11 @@ impl HostPluginConfig {
                     self.id
                 );
             }
+            let (config, secrets) =
+                resolve(&binding.environment, &format!("{owner} binding '{name}'"))?;
             set = set
-                .with_binding(
-                    name.clone(),
-                    resolve(&binding.environment, &format!("{owner} binding '{name}'"))?,
-                )
-                .with_binding_secret(name.clone(), binding.secret.clone().into_iter().collect());
+                .with_binding(name.clone(), config)
+                .with_binding_secrets(name.clone(), secrets);
         }
         Ok(set)
     }
@@ -3011,49 +3000,6 @@ host:
     }
 
     #[test]
-    fn plugin_secret_maps_parse_on_the_entry_and_each_binding() {
-        let yaml = r#"
-host:
-  plugins:
-    - id: wasmcloud-postgres
-      secret:
-        password: pragma-secrets/pg-password
-      bindings:
-        app-db:
-          secret:
-            url: pragma-secrets/pg-url-app
-          config:
-            other: hello
-        reports-db:
-          secret:
-            url: pragma-secrets-new/pg-url-reports
-"#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
-        let entry = &config.host().plugins[0];
-        assert_eq!(entry.secret["password"], "pragma-secrets/pg-password");
-        assert_eq!(
-            entry.bindings["app-db"].secret["url"],
-            "pragma-secrets/pg-url-app"
-        );
-
-        let set = entry
-            .to_binding_set(&config, Path::new("."), None, WorkloadConfigPolicy::Deny)
-            .unwrap();
-        let app = set.secret_refs(Some("app-db"));
-        assert_eq!(app["url"], "pragma-secrets/pg-url-app");
-        assert_eq!(app["password"], "pragma-secrets/pg-password");
-        assert_eq!(
-            set.secret_refs(Some("reports-db"))["url"],
-            "pragma-secrets-new/pg-url-reports"
-        );
-        assert_eq!(set.host_layer("app-db")["other"], "hello");
-        assert!(
-            !set.host_layer("app-db").contains_key("url"),
-            "a secret is never written into the plain config"
-        );
-    }
-
-    #[test]
     fn plugin_bindings_resolve_config_from_and_secret_from_per_binding() {
         // The shape from the design: a native entry configured host-wide, with
         // a named binding layering its own grants and credentials on top.
@@ -3108,6 +3054,45 @@ host:
         let owned = set.effective_host_owned(&wash_runtime::plugin::BindingSchema::empty());
         assert!(owned.contains("inbox-prefix"));
         assert!(!owned.contains("subject-allow"));
+    }
+
+    /// A plugin-backed `secrets:` entry named by a binding's `secretFrom`
+    /// carries its keys into the set without values, and a component plugin
+    /// cannot take one into its own config.
+    #[test]
+    fn a_plugin_secret_reaches_a_binding_as_a_pending_key() {
+        let yaml = r#"
+secrets:
+  billing-db:
+    plugin: vault-secrets
+    keys:
+      url: apps/billing/pg-url
+host:
+  plugins:
+    - id: wasmcloud-postgres
+      bindings:
+        app-db:
+          secretFrom: [billing-db]
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+      secretFrom: [billing-db]
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let set = config.host().plugins[0]
+            .to_binding_set(&config, Path::new("."), None, WorkloadConfigPolicy::Deny)
+            .unwrap();
+        assert!(!set.host_layer("app-db").contains_key("url"));
+        let pending: Vec<_> = set.plugin_secrets().collect();
+        assert_eq!(pending.len(), 1);
+        let (binding, key, secret) = pending[0];
+        assert_eq!((binding, key), (Some("app-db"), "url"));
+        assert_eq!(secret.plugin, "vault-secrets");
+        assert_eq!(secret.key, "apps/billing/pg-url");
+
+        let err = config.host().plugins[1]
+            .to_spec(&config, Path::new("."), None)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("billing-db"), "{err:#}");
     }
 
     #[test]

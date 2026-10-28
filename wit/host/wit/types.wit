@@ -15,6 +15,15 @@ interface types {
     /// identifies a running component rather than a manifest entry.
     type component-id = string;
 
+    /// Identifier of a plugin: the `id` of its `host.plugins` entry.
+    @since(version = 0.1.5)
+    type plugin-id = string;
+
+    /// Name of a binding the operator declared under a plugin's
+    /// `host.plugins` entry.
+    @since(version = 0.1.5)
+    type binding-name = string;
+
     /// Why the host could not complete a plugin's call into a workload.
     ///
     /// The recommended error arm for an interface a plugin imports for a
