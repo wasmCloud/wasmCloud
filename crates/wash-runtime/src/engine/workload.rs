@@ -3355,19 +3355,31 @@ impl UnresolvedWorkload {
                 // Plugin-backed secrets become operator config before the
                 // policy runs, so it judges them like any other host key. The
                 // plugin checked those layers at host start without the values,
-                // so it checks the ones this bind filled again, and only those.
-                let filled =
-                    crate::plugin::resolve_plugin_secrets(plugins, declared, &requested_interfaces)
-                        .await
-                        .and_then(|(declared, refilled)| {
-                            if let Some(refilled) = refilled {
-                                p.validate_bindings(&declared.only_bindings(&refilled))
-                                    .map_err(|e| e.context("invalid `host.plugins` declaration"))?;
-                            }
-                            Ok(declared)
-                        });
-                let declared = match filled {
-                    Ok(declared) => declared,
+                // so it checks the entry and the named bindings this bind
+                // filled again; the unnamed binding's layer is checked by the
+                // plugin's own bind, as it is without secrets. From here on an
+                // error may quote a value, so each one is redacted.
+                let filled = crate::plugin::resolve_plugin_secrets(
+                    plugins,
+                    declared,
+                    &requested_interfaces,
+                    &schema,
+                )
+                .await
+                .and_then(|filled| {
+                    if let Some(refilled) = &filled.refilled {
+                        p.validate_bindings(&filled.set.only_bindings(refilled))
+                            .map_err(|e| {
+                                filled
+                                    .redactor
+                                    .redact(e)
+                                    .context("invalid `host.plugins` declaration")
+                            })?;
+                    }
+                    Ok(filled)
+                });
+                let (declared, redactor) = match filled {
+                    Ok(filled) => (filled.set, filled.redactor),
                     Err(e) => {
                         unbind_all(
                             self.id(),
@@ -3386,6 +3398,7 @@ impl UnresolvedWorkload {
                     match declared.resolve_by_name(&requested_interfaces, &schema, &narrows) {
                         Ok(resolved) => resolved,
                         Err(e) => {
+                            let e = redactor.redact(e);
                             unbind_all(
                                 self.id(),
                                 &bound_plugins_with_interfaces,
@@ -3479,6 +3492,7 @@ impl UnresolvedWorkload {
                     .instrument(bind_span)
                     .await
                 {
+                    let e = redactor.redact(e);
                     tracing::error!(
                         plugin_id = plugin_id,
                         err = ?e,
@@ -3561,6 +3575,7 @@ impl UnresolvedWorkload {
                         workload_item.linker().allow_shadowing(false);
                     }
                     if let Err(e) = bound {
+                        let e = redactor.redact(e);
                         tracing::error!(
                             plugin_id = plugin_id,
                             component_id = workload_item.id(),

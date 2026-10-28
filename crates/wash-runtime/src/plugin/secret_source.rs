@@ -139,11 +139,50 @@ pub(crate) fn validate_plugin_secrets(
     Ok(())
 }
 
+/// What [`resolve_plugin_secrets`] filled in for one bind.
+#[derive(Debug)]
+pub(crate) struct FilledSecrets {
+    /// The declaration with this bind's plugin secrets written in.
+    pub set: PluginBindingSet,
+    /// The named bindings whose layers changed, or `None` when nothing was
+    /// filled: what the plugin checks again.
+    pub refilled: Option<BTreeSet<String>>,
+    /// Scrubs the filled values out of an error.
+    pub redactor: SecretRedactor,
+}
+
+/// The values a bind filled in, kept only to keep them out of its errors.
+#[derive(Debug, Default)]
+pub(crate) struct SecretRedactor(Vec<SecretValue>);
+
+impl SecretRedactor {
+    /// `e` with every value filled in replaced by `<redacted>`, since a
+    /// plugin's parser may quote the value it refuses.
+    pub fn redact(&self, e: anyhow::Error) -> anyhow::Error {
+        let mut secrets: Vec<&str> = self
+            .0
+            .iter()
+            .flat_map(|v| [v.expose(), v.expose().trim()])
+            .filter(|v| !v.is_empty())
+            .collect();
+        let msg = format!("{e:#}");
+        if !secrets.iter().any(|v| msg.contains(v)) {
+            return e;
+        }
+        // Longest first, so a value containing another is replaced whole.
+        secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        let msg = secrets
+            .into_iter()
+            .fold(msg, |msg, v| msg.replace(v, "<redacted>"));
+        anyhow::anyhow!(msg)
+    }
+}
+
 /// `declared` with the plugin secrets of every binding in `interfaces` filled
-/// in, and the bindings a fill changed (`None` when it filled nothing), the
-/// layers to check again. Each source declared on a layer is resolved with one
-/// call, keys deduplicated, however many keys and entries read it; the calls
-/// run concurrently.
+/// in. Each source declared on a layer is resolved with one call, keys
+/// deduplicated, however many keys and entries read it; the calls run
+/// concurrently. An entry-level secret every binding in use sets for itself is
+/// not resolved.
 ///
 /// # Errors
 ///
@@ -154,19 +193,33 @@ pub(crate) async fn resolve_plugin_secrets(
     plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     declared: PluginBindingSet,
     interfaces: &HashSet<WitInterface>,
-) -> anyhow::Result<(PluginBindingSet, Option<BTreeSet<String>>)> {
+    schema: &BindingSchema,
+) -> anyhow::Result<FilledSecrets> {
     if !declared.has_plugin_secrets() {
-        return Ok((declared, None));
+        return Ok(FilledSecrets {
+            set: declared,
+            refilled: None,
+            redactor: SecretRedactor::default(),
+        });
     }
     let plugin_id = declared.plugin_id().to_string();
     let in_use: BTreeSet<&str> = interfaces
         .iter()
         .map(|i| declared.binding_name(i))
         .collect();
+    // The entry-level keys some binding in use still reads.
+    let base_read: BTreeSet<String> = in_use
+        .iter()
+        .flat_map(|name| declared.pending_secret_keys(name, schema))
+        .collect();
+    let needed = |binding: Option<&str>, key: &str| match binding {
+        Some(name) => in_use.contains(name),
+        None => base_read.contains(&schema.canonical(key)),
+    };
 
     let mut requests: BTreeMap<LayerSource<'_>, (&str, BTreeSet<&str>)> = BTreeMap::new();
-    for (binding, _, secret) in declared.plugin_secrets() {
-        if binding.is_some_and(|b| !in_use.contains(b)) {
+    for (binding, key, secret) in declared.plugin_secrets() {
+        if !needed(binding, key) {
             continue;
         }
         requests
@@ -215,9 +268,13 @@ pub(crate) async fn resolve_plugin_secrets(
             .into_iter()
             .collect();
 
-    let in_use: BTreeSet<String> = in_use.into_iter().map(str::to_string).collect();
-    let (filled, refilled) = declared.fill_plugin_secrets(&in_use, |binding, secret| {
-        values
+    let wanted: BTreeSet<String> = in_use.iter().map(|b| b.to_string()).collect();
+    let mut used = Vec::new();
+    let (set, refilled) = declared.fill_plugin_secrets(&wanted, |binding, key, secret| {
+        if !needed(binding, key) {
+            return Ok(None);
+        }
+        let value = values
             .get(&(binding.map(str::to_string), secret.source.clone()))
             .and_then(|resolved| resolved.get(&secret.key))
             .cloned()
@@ -226,9 +283,15 @@ pub(crate) async fn resolve_plugin_secrets(
                     "secret `{}` for `{plugin_id}`: plugin `{}` has no key `{}`",
                     secret.source, secret.plugin, secret.key
                 )
-            })
+            })?;
+        used.push(value.clone());
+        Ok(Some(value))
     })?;
-    Ok((filled, Some(refilled)))
+    Ok(FilledSecrets {
+        set,
+        refilled,
+        redactor: SecretRedactor(used),
+    })
 }
 
 #[cfg(test)]
@@ -340,10 +403,15 @@ mod tests {
     #[tokio::test]
     async fn only_the_bindings_in_use_are_resolved() {
         let source = fixed();
-        let (filled, refilled) = resolve_plugin_secrets(
+        let FilledSecrets {
+            set: filled,
+            refilled,
+            ..
+        } = resolve_plugin_secrets(
             &plugins(source.clone()),
             declared(),
             &HashSet::from([postgres("app-db")]),
+            &BindingSchema::empty(),
         )
         .await
         .unwrap();
@@ -392,10 +460,14 @@ mod tests {
                 "app-db",
                 HashMap::from([("url".to_string(), secret("app", "nope"))]),
             );
-        let err =
-            resolve_plugin_secrets(&plugins(fixed()), set, &HashSet::from([postgres("app-db")]))
-                .await
-                .unwrap_err();
+        let err = resolve_plugin_secrets(
+            &plugins(fixed()),
+            set,
+            &HashSet::from([postgres("app-db")]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("`app`") && msg.contains("`nope`"), "{msg}");
     }
@@ -412,10 +484,11 @@ mod tests {
                 secret("shared", "pg-url-reports"),
             ),
         ]));
-        let (_, refilled) = resolve_plugin_secrets(
+        let FilledSecrets { refilled, .. } = resolve_plugin_secrets(
             &plugins(source.clone()),
             set,
             &HashSet::from([postgres("app-db"), postgres("reports-db")]),
+            &BindingSchema::empty(),
         )
         .await
         .unwrap();
@@ -469,10 +542,14 @@ mod tests {
                 "app-db",
                 HashMap::from([("url".to_string(), secret("app", "denied"))]),
             );
-        let err =
-            resolve_plugin_secrets(&plugins(fixed()), set, &HashSet::from([postgres("app-db")]))
-                .await
-                .unwrap_err();
+        let err = resolve_plugin_secrets(
+            &plugins(fixed()),
+            set,
+            &HashSet::from([postgres("app-db")]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap_err();
         assert!(
             matches!(
                 err.downcast_ref::<SecretSourceError>(),
@@ -489,13 +566,14 @@ mod tests {
     fn a_pending_secret_is_named_but_not_resolved() {
         let set = declared();
         let schema = BindingSchema::empty();
-        let layers: BTreeMap<_, _> = set.host_layers(&schema).collect();
+        let layers: BTreeMap<_, _> = set
+            .host_layers(&schema)
+            .map(|(name, layer, pending)| (name, (layer, pending)))
+            .collect();
         assert_eq!(layers.len(), 2);
-        assert!(!layers["app-db"].contains_key("url"));
-        assert_eq!(
-            set.pending_secret_keys("app-db", &schema),
-            BTreeSet::from(["url".to_string()])
-        );
+        let (layer, pending) = &layers["app-db"];
+        assert!(!layer.contains_key("url"));
+        assert_eq!(*pending, BTreeSet::from(["url".to_string()]));
         assert!(
             set.resolve("app-db", &HashMap::new(), &schema, &|_, _, _| false)
                 .is_err()
@@ -530,6 +608,59 @@ mod tests {
             .reject_unknown_keys(&schema)
             .unwrap_err();
         assert!(format!("{err}").contains("secret `app`"), "{err}");
+    }
+
+    /// An entry-level secret is resolved only if some binding in use reads
+    /// it; the unnamed binding always does, and its fill re-checks the entry.
+    #[tokio::test]
+    async fn an_entry_secret_every_binding_overrides_is_not_resolved() {
+        let set = || {
+            PluginBindingSet::new("wasmcloud-postgres")
+                .with_base_secrets(HashMap::from([(
+                    "url".to_string(),
+                    secret("shared", "denied"),
+                )]))
+                .with_binding(
+                    "app-db",
+                    HashMap::from([("url".to_string(), "postgres://own".to_string())]),
+                )
+        };
+        let schema = BindingSchema::empty();
+        let filled = resolve_plugin_secrets(
+            &plugins(fixed()),
+            set(),
+            &HashSet::from([postgres("app-db")]),
+            &schema,
+        )
+        .await
+        .expect("the refusing source is never asked");
+        assert_eq!(filled.refilled, None);
+        assert_eq!(filled.set.host_layer("app-db")["url"], "postgres://own");
+
+        let mut unnamed = WitInterface::from("wasmcloud:postgres/query@0.2.0");
+        unnamed.name = None;
+        let err =
+            resolve_plugin_secrets(&plugins(fixed()), set(), &HashSet::from([unnamed]), &schema)
+                .await
+                .unwrap_err();
+        assert!(err.downcast_ref::<SecretSourceError>().is_some(), "{err:#}");
+    }
+
+    /// A plugin parser quoting a filled value has it scrubbed.
+    #[tokio::test]
+    async fn an_error_quoting_a_filled_value_is_redacted() {
+        let filled = resolve_plugin_secrets(
+            &plugins(fixed()),
+            declared(),
+            &HashSet::from([postgres("app-db")]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap();
+        let err = filled
+            .redactor
+            .redact(anyhow::anyhow!("bad url `postgres://app:pw@db/app`"));
+        assert_eq!(format!("{err:#}"), "bad url `<redacted>`");
     }
 
     #[test]

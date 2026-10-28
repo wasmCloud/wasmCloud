@@ -137,11 +137,11 @@ impl CallerIdentity {
         }
     }
 
-    /// Whether `self` and `other` act for the same principal: one workload, or
-    /// both the host.
+    /// Whether `self` and `other` act for the same workload. Never for the
+    /// host: each host call resolves for a different consumer's bind, so one
+    /// must not cancel another.
     pub fn same_principal(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Host, Self::Host) => true,
             (Self::Workload(a), Self::Workload(b)) => a.workload_id == b.workload_id,
             _ => false,
         }

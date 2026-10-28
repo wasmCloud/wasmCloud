@@ -1133,7 +1133,7 @@ impl PluginBindingSet {
         for (key, value) in workload {
             layer_insert(&mut resolved, key, value, schema);
         }
-        self.apply_default_bundles(binding, &mut resolved, schema);
+        self.apply_default_bundles(binding, &mut resolved, schema, &BTreeSet::new());
 
         // After the bundles, so a default that supplies the address counts,
         // and outside the policy branch above, because this is not a question
@@ -1265,15 +1265,20 @@ impl PluginBindingSet {
         findings
     }
 
-    /// Apply every default bundle whose anchor nobody set.
+    /// Apply every default bundle whose anchor nobody set. A key in `pending`
+    /// counts as set: a plugin secret supplies it at bind.
     fn apply_default_bundles(
         &self,
         binding: &str,
         resolved: &mut HashMap<String, String>,
         schema: &BindingSchema,
+        pending: &BTreeSet<String>,
     ) {
+        let is_set = |resolved: &HashMap<String, String>, key: &str| {
+            lookup(resolved, key, schema).is_some() || pending.contains(&schema.canonical(key))
+        };
         for bundle in &self.default_bundles {
-            if lookup(resolved, &bundle.anchor, schema).is_some() {
+            if is_set(resolved, &bundle.anchor) {
                 debug!(
                     plugin_id = %self.plugin_id,
                     binding = describe_binding(binding),
@@ -1291,7 +1296,7 @@ impl PluginBindingSet {
                 continue;
             }
             for (key, value) in &bundle.entries {
-                if lookup(resolved, key, schema).is_none() {
+                if !is_set(resolved, key) {
                     resolved.insert(key.clone(), value.clone());
                 }
             }
@@ -1312,17 +1317,20 @@ impl PluginBindingSet {
     /// the layer without the bundle refuses the ordinary case: a second
     /// binding on the same cluster, declared only to carry a narrower grant.
     ///
-    /// A key still waiting on a plugin secret is absent from its layer; see
-    /// [`Self::pending_secret_keys`]. The host checks the filled layer again
-    /// when a workload binds it.
+    /// A key still waiting on a plugin secret is absent from its layer and
+    /// listed beside it, by the schema's identity for it; a plugin checks
+    /// whatever it can without the value, and the host checks the filled layer
+    /// again when a workload binds it. A default bundle whose anchor is pending
+    /// is not applied, since the bind will not apply it either.
     pub fn host_layers<'a>(
         &'a self,
         schema: &'a BindingSchema,
-    ) -> impl Iterator<Item = (&'a str, HashMap<String, String>)> {
+    ) -> impl Iterator<Item = (&'a str, HashMap<String, String>, BTreeSet<String>)> {
         self.bindings.keys().map(move |name| {
+            let pending = self.pending_secret_keys(name, schema);
             let mut layer = self.host_layer_with(name, schema);
-            self.apply_default_bundles(name, &mut layer, schema);
-            (name.as_str(), layer)
+            self.apply_default_bundles(name, &mut layer, schema, &pending);
+            (name.as_str(), layer, pending)
         })
     }
 
@@ -1402,9 +1410,11 @@ impl PluginBindingSet {
 
     /// This set with the plugin secrets of `bindings` (and of the entry
     /// itself) written into their layers, taking each value from `value`, and
-    /// the named bindings whose layers changed. Layers left out stay pending,
-    /// and resolving a binding that reads one fails. This is where a
-    /// [`SecretValue`] becomes the consuming plugin's config.
+    /// the named bindings whose layers changed, or `None` if nothing was
+    /// written. `value` returning `None` drops an entry-level secret that no
+    /// binding in use reads. Layers left out stay pending, and resolving a
+    /// binding that reads one fails. This is where a [`SecretValue`] becomes
+    /// the consuming plugin's config.
     ///
     /// # Errors
     ///
@@ -1412,10 +1422,21 @@ impl PluginBindingSet {
     pub fn fill_plugin_secrets(
         mut self,
         bindings: &BTreeSet<String>,
-        mut value: impl FnMut(Option<&str>, &PluginSecretRef) -> anyhow::Result<SecretValue>,
-    ) -> anyhow::Result<(Self, BTreeSet<String>)> {
+        mut value: impl FnMut(
+            Option<&str>,
+            &str,
+            &PluginSecretRef,
+        ) -> anyhow::Result<Option<SecretValue>>,
+    ) -> anyhow::Result<(Self, Option<BTreeSet<String>>)> {
         let mut changed = BTreeSet::new();
-        if !self.base_secrets.is_empty() {
+        let mut filled = false;
+        for (key, r) in std::mem::take(&mut self.base_secrets) {
+            if let Some(v) = value(None, &key, &r)? {
+                self.base.insert(key, v.into_exposed());
+                filled = true;
+            }
+        }
+        if filled {
             changed.extend(
                 self.bindings
                     .keys()
@@ -1423,25 +1444,23 @@ impl PluginBindingSet {
                     .cloned(),
             );
         }
-        for (key, r) in std::mem::take(&mut self.base_secrets) {
-            let v = value(None, &r)?;
-            self.base.insert(key, v.into_exposed());
-        }
         for (name, secrets) in std::mem::take(&mut self.binding_secrets) {
             if !bindings.contains(&name) {
                 self.binding_secrets.insert(name, secrets);
                 continue;
             }
             for (key, r) in secrets {
-                let v = value(Some(&name), &r)?;
-                self.bindings
-                    .entry(name.clone())
-                    .or_default()
-                    .insert(key, v.into_exposed());
+                if let Some(v) = value(Some(&name), &key, &r)? {
+                    self.bindings
+                        .entry(name.clone())
+                        .or_default()
+                        .insert(key, v.into_exposed());
+                    filled = true;
+                }
             }
             changed.insert(name);
         }
-        Ok((self, changed))
+        Ok((self, filled.then_some(changed)))
     }
 
     /// The base layer on its own, for a plugin checking a key that is only
@@ -2531,7 +2550,10 @@ mod tests {
             .with_binding("sessions", map(&[("url", "redis://other:6379")]));
 
         let schema = BindingSchema::empty();
-        let layers: BTreeMap<&str, HashMap<String, String>> = set.host_layers(&schema).collect();
+        let layers: BTreeMap<&str, HashMap<String, String>> = set
+            .host_layers(&schema)
+            .map(|(name, layer, _)| (name, layer))
+            .collect();
         assert_eq!(layers["cache"]["url"], "redis://host:6379");
         assert_eq!(layers["cache"]["bucket"], "cache");
         assert_eq!(layers["sessions"]["url"], "redis://other:6379");
@@ -2555,7 +2577,10 @@ mod tests {
             );
 
         let schema = BindingSchema::empty();
-        let layers: BTreeMap<&str, HashMap<String, String>> = set.host_layers(&schema).collect();
+        let layers: BTreeMap<&str, HashMap<String, String>> = set
+            .host_layers(&schema)
+            .map(|(name, layer, _)| (name, layer))
+            .collect();
         assert_eq!(layers["orders"]["servers"], "nats://data-plane:4222");
         assert_eq!(layers["orders"]["tls-ca"], "/ca.crt");
 
@@ -2566,6 +2591,33 @@ mod tests {
 
         // `host_layer` still reports what the operator wrote, and nothing more.
         assert!(!set.host_layer("orders").contains_key("servers"));
+    }
+
+    /// A secret supplying the anchor counts as setting it, so the startup check
+    /// sees neither the host's address nor the credentials issued for it.
+    #[test]
+    fn a_pending_anchor_keeps_the_default_bundle_out() {
+        let set = PluginBindingSet::new("nats")
+            .with_binding("orders", HashMap::new())
+            .with_binding_secrets(
+                "orders",
+                HashMap::from([(
+                    "servers".to_string(),
+                    PluginSecretRef {
+                        source: "orders-nats".to_string(),
+                        plugin: "vault".to_string(),
+                        key: "nats/servers".to_string(),
+                    },
+                )]),
+            )
+            .with_default_bundle(
+                "servers",
+                [("servers", "nats://data-plane:4222"), ("tls-ca", "/ca.crt")],
+            );
+        let schema = BindingSchema::empty();
+        let (_, layer, pending) = set.host_layers(&schema).next().unwrap();
+        assert!(layer.is_empty(), "{layer:?}");
+        assert_eq!(pending, BTreeSet::from(["servers".to_string()]));
     }
 
     /// Sorted and unique, so an id added by hand goes where it belongs and a
