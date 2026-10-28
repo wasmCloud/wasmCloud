@@ -42,7 +42,7 @@ use wasmtime::AsContextMut;
 use wasmtime::component::types::Type;
 use wasmtime::component::{Accessor, GuestTaskId, Linker, Resource, ResourceType, Val};
 
-use crate::engine::ctx::SharedCtx;
+use crate::engine::ctx::{CallerIdentity, SharedCtx};
 use crate::engine::dispatch::ServiceClaim;
 use crate::engine::linked_call::{LinkedExportInvocation, invoke_linked_async_export};
 use crate::engine::workload::{ExternalCallFunc, ItemExport, ResolvedWorkload};
@@ -873,46 +873,57 @@ async fn route_workload_call(
                     state.id
                 ),
             )),
-            Some(caller) => match state.workload_calls.routes_for(&caller.workload_id) {
-                // A lifecycle hook carries no component id: the host is telling
-                // the plugin *about* a workload rather than running one of that
-                // workload's calls. Worth saying so, because the hook is the one
-                // context where the caller is a workload that is deliberately
-                // not callable, and the generic message would read as a
-                // misconfiguration.
-                None if caller.component_id.is_none() => Err((
-                    CallFailure::NotRunning,
-                    format!(
-                        "host component plugin '{}' cannot call {interface}#{func} on workload \
+            Some(CallerIdentity::Host) => Err((
+                CallFailure::NoTarget,
+                format!(
+                    "host component plugin '{}' called {interface}#{func} from a call the host \
+                     made on its own behalf, which has no workload to call back. Open a \
+                     wasmcloud:host/workload-call target instead",
+                    state.id
+                ),
+            )),
+            Some(CallerIdentity::Workload(caller)) => {
+                match state.workload_calls.routes_for(&caller.workload_id) {
+                    // A lifecycle hook carries no component id: the host is telling
+                    // the plugin *about* a workload rather than running one of that
+                    // workload's calls. Worth saying so, because the hook is the one
+                    // context where the caller is a workload that is deliberately
+                    // not callable, and the generic message would read as a
+                    // misconfiguration.
+                    None if caller.component_id.is_none() => Err((
+                        CallFailure::NotRunning,
+                        format!(
+                            "host component plugin '{}' cannot call {interface}#{func} on workload \
                          '{}' from a workload-lifecycle hook: a workload is callable only while \
                          it is running, and a hook is delivered either side of that — still \
                          deploying at on-workload-bind, already torn down at on-workload-unbind. \
                          Reclaim per-workload state by id instead.",
-                        state.id, caller.workload_id
-                    ),
-                )),
-                None => Err((
-                    CallFailure::NotRunning,
-                    format!(
-                        "host component plugin '{}' cannot call {interface}#{func} back on its \
-                         caller '{}': it is not running",
-                        state.id, caller.workload_id
-                    ),
-                )),
-                Some((generation, routes)) => match routes.get(&*interface) {
-                    Some(route) => Ok((caller.workload_id, generation, Arc::clone(route))),
-                    None => Err((
-                        CallFailure::NotExported,
-                        format!(
-                            "host component plugin '{}' cannot call {interface}#{func} back on its \
-                             caller '{}': that workload does not export {interface}. Open a \
-                             wasmcloud:host/workload-call target for a workload that does — `callable` \
-                             reports which serve it.",
                             state.id, caller.workload_id
                         ),
                     )),
-                },
-            },
+                    None => Err((
+                        CallFailure::NotRunning,
+                        format!(
+                            "host component plugin '{}' cannot call {interface}#{func} back on its \
+                         caller '{}': it is not running",
+                            state.id, caller.workload_id
+                        ),
+                    )),
+                    Some((generation, routes)) => match routes.get(&*interface) {
+                        Some(route) => Ok((caller.workload_id, generation, Arc::clone(route))),
+                        None => Err((
+                            CallFailure::NotExported,
+                            format!(
+                                "host component plugin '{}' cannot call {interface}#{func} back on its \
+                             caller '{}': that workload does not export {interface}. Open a \
+                             wasmcloud:host/workload-call target for a workload that does — `callable` \
+                             reports which serve it.",
+                                state.id, caller.workload_id
+                            ),
+                        )),
+                    },
+                }
+            }
         },
     };
 
