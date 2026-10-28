@@ -27,8 +27,16 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      id-token: write # Trade the workflow's OIDC identity for a read-only token.
       security-events: write # Upload failed controls to the Security tab.
     steps:
+      - name: Get a read-only token from octo-sts
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: ${{ github.repository }}
+          identity: osps-baseline
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,10 +47,10 @@ jobs:
         with:
           owner: ${{ github.repository_owner }}
           repo: ${{ github.event.repository.name }}
-          # Fine-grained PAT with read-only Actions, Administration, Code
-          # scanning alerts and Contents on this repo. GITHUB_TOKEN can't
-          # read settings such as branch protection.
-          token: ${{ secrets.PVTR_GITHUB_TOKEN }}
+          # .github/chainguard/osps-baseline.sts.yaml limits this token to
+          # read access. GITHUB_TOKEN can't read settings such as branch
+          # protection.
+          token: ${{ steps.octo-sts.outputs.token }}
           catalog: "osps-baseline-2026-08"
           upload-sarif: "true"
           # A failed control is a finding to review, not a broken build.
