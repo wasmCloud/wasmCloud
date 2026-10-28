@@ -199,7 +199,7 @@ fn cmd_show(ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         None::<Config>,
     )?;
     Ok(CommandOutput::ok(
-        serde_yaml_ng::to_string(&config).context("failed to serialize config")?,
+        serde_saphyr::to_string(&config).context("failed to serialize config")?,
         Some(serde_json::to_value(&config).context("failed to serialize config")?),
     ))
 }

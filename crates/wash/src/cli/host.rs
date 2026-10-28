@@ -1783,7 +1783,7 @@ host:
     }
 
     fn config_from(yaml: &str) -> crate::config::Config {
-        serde_yaml_ng::from_str(yaml).expect("config must parse")
+        serde_saphyr::from_str(yaml).expect("config must parse")
     }
 
     fn nats_bindings(
@@ -1941,7 +1941,7 @@ host:
     /// An unparseable policy is a config error, named as one.
     #[test]
     fn the_workload_config_value_is_typed() {
-        serde_yaml_ng::from_str::<crate::config::Config>(
+        serde_saphyr::from_str::<crate::config::Config>(
             "host:\n  plugins:\n    - id: wasmcloud-nats\n      workloadConfig: sometimes\n",
         )
         .expect_err("`sometimes` is not a policy");
