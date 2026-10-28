@@ -1518,13 +1518,13 @@ pub type WorkloadHandles = Arc<std::sync::RwLock<HandleMap>>;
 
 type HandleMap = HashMap<String, Arc<ComponentHandle>>;
 
-/// Read the handle map, ignoring poison as the tokio lock it replaced did.
+/// Read the handle map. Poison is ignored: every write is a single step.
 fn read_handles(map: &std::sync::RwLock<HandleMap>) -> std::sync::RwLockReadGuard<'_, HandleMap> {
     map.read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Write the handle map, ignoring poison as the tokio lock it replaced did.
+/// Write the handle map. Poison is ignored: every write is a single step.
 fn write_handles(map: &std::sync::RwLock<HandleMap>) -> std::sync::RwLockWriteGuard<'_, HandleMap> {
     map.write()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1941,7 +1941,9 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                      releasing its routes anyway"
                 );
             }
-            write_handles(&workload_handles).clear();
+            // Dropped after the lock is released.
+            let cleared = std::mem::take(&mut *write_handles(&workload_handles));
+            drop(cleared);
             service_handlers.write().await.clear();
             messaging_handlers.write().await.clear();
         });
@@ -2663,8 +2665,10 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 identity,
                 pool,
             };
-            write_handles(&self.workload_handles)
-                .insert(resolved_handle.id().to_string(), Arc::new(handle));
+            let (key, handle) = (resolved_handle.id().to_string(), Arc::new(handle));
+            // Bound, so a replaced handle drops after the lock is released.
+            let replaced = write_handles(&self.workload_handles).insert(key, handle);
+            drop(replaced);
         }
 
         Ok(())
@@ -2675,7 +2679,9 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         // its state alive too.
         let routed = self.router.on_workload_unbind(workload_id).await;
 
-        write_handles(&self.workload_handles).remove(workload_id);
+        // Bound, so the handle drops after the lock is released.
+        let removed = write_handles(&self.workload_handles).remove(workload_id);
+        drop(removed);
         self.service_handlers.write().await.remove(workload_id);
         self.messaging_handlers.write().await.remove(workload_id);
         // Drop the stopped workload's egress state (pooled connections, TLS
@@ -3440,11 +3446,8 @@ async fn handle_http_request<T: Router>(
     // NOTE(lxf): Separate HTTP / GRPC handling
 
     // Look up workload handle for this host, with wildcard fallback
-    let workload_handle = {
-        let handles = read_handles(&workload_handles);
-        debug!(host = %workload_id, "looking up workload handle for host header");
-        handles.get(&workload_id).cloned()
-    };
+    debug!(host = %workload_id, "looking up workload handle for host header");
+    let workload_handle = read_handles(&workload_handles).get(&workload_id).cloned();
 
     let response = match workload_handle {
         Some(handle) => {

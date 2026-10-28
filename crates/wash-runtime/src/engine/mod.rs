@@ -898,24 +898,29 @@ impl Engine {
     }
 
     /// The compiles `workload` loads, held so initializing it compiles nothing,
-    /// or `None` if initializing it could compile or open files.
+    /// or `None` if initializing it could compile, open files or build a
+    /// service's linker.
     pub(crate) fn pin_compiled_components(
         &self,
         workload: &Workload,
     ) -> Option<Vec<Arc<LiveCompile>>> {
-        if !workload.volumes.is_empty() {
+        if !workload.volumes.is_empty() || workload.service.is_some() {
             return None;
         }
-        let digests = workload.components.iter().map(|c| c.digest.as_deref());
-        let service = workload.service.iter().map(|s| s.digest.as_deref());
-        digests
-            .chain(service)
-            .map(|digest| self.pin_compile(digest?))
+        workload
+            .components
+            .iter()
+            .map(|c| self.pin_compile(c.digest.as_deref()?))
             .collect()
     }
 
     /// `digest`'s live compile, recording a cached one as live; never compiles.
     fn pin_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
+        if let Some(live) = self.live_compile(digest) {
+            return Some(live);
+        }
+        // Outside the live map's lock: a cache read can run cache housekeeping.
+        let CacheValue(component) = self.cache.get(&CacheKey(digest.to_string()))?;
         let mut live = self
             .live_compiles
             .lock()
@@ -923,7 +928,6 @@ impl Engine {
         if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
             return Some(existing);
         }
-        let CacheValue(component) = self.cache.get(&CacheKey(digest.to_string()))?;
         let entry = Arc::new(LiveCompile {
             digest: digest.to_string(),
             component,
@@ -2421,14 +2425,19 @@ mod tests {
         engine.cache.invalidate_all();
         engine.cache.run_pending_tasks();
 
-        engine
+        let initialized = engine
             .initialize_workload("w", workload)
             .expect("initialize");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
-        drop(pins);
+        drop((pins, initialized));
+        assert!(
+            engine.live_compiles.lock().unwrap().is_empty(),
+            "a pin outlived its holders"
+        );
     }
 
-    /// A workload that could compile or open files is never pinned.
+    /// A workload that could compile, open files or build a service's linker
+    /// is never pinned, and a failed pin leaves nothing behind.
     #[test]
     fn a_workload_that_could_block_is_not_pinned() {
         const DIGEST: &str = "sha256:compiled-image";
@@ -2449,6 +2458,35 @@ mod tests {
                 .pin_compiled_components(&component_workload(Some(DIGEST), vec![empty_dir("a")]))
                 .is_none()
         );
+
+        let with_service = Workload {
+            service: Some(crate::types::Service {
+                bytes: bytes.clone().into(),
+                digest: Some(DIGEST.into()),
+                local_resources: Default::default(),
+                max_restarts: 0,
+            }),
+            ..component_workload(Some(DIGEST), vec![])
+        };
+        assert!(engine.pin_compiled_components(&with_service).is_none());
+
+        let mixed = Workload {
+            components: [Some(DIGEST), Some("sha256:not-compiled")]
+                .map(|digest| crate::types::Component {
+                    name: "c".into(),
+                    digest: digest.map(str::to_string),
+                    bytes: bytes.clone().into(),
+                    ..Default::default()
+                })
+                .into(),
+            ..volume_only_workload(vec![])
+        };
+        assert!(engine.pin_compiled_components(&mixed).is_none());
+        assert!(
+            engine.live_compiles.lock().unwrap().is_empty(),
+            "a failed pin left a live entry"
+        );
+
         assert!(
             engine
                 .pin_compiled_components(&component_workload(Some(DIGEST), vec![]))
