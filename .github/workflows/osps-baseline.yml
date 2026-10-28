@@ -1,0 +1,57 @@
+name: osps-baseline
+
+# Assesses this repo against OSPS Baseline Maturity Level 1 with the
+# OpenSSF GitHub repository scanner. Results land on the run summary page,
+# as code scanning alerts for failed controls, and in a results artifact.
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # Weekly Thursday at 09:00 UTC, a different day from codeql (Mon) and
+    # scorecard (Wed).
+    - cron: "0 9 * * 4"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  assess:
+    name: OSPS Baseline evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # Upload failed controls to the Security tab.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: OSPS Baseline scan
+        uses: revanite-io/osps-baseline-action@1af7ff8b44af83f120b20cc5f63b877286849257 # v1.5.2
+        with:
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.event.repository.name }}
+          # Fine-grained PAT with read-only Actions, Administration, Code
+          # scanning alerts and Contents on this repo. GITHUB_TOKEN can't
+          # read settings such as branch protection.
+          token: ${{ secrets.PVTR_GITHUB_TOKEN }}
+          catalog: "osps-baseline-2026-08"
+          upload-sarif: "true"
+          # A failed control is a finding to review, not a broken build.
+          fail-on-error: "false"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: osps-baseline-results-${{ github.run_number }}
+          path: evaluation_results/
+          retention-days: 30

@@ -205,3 +205,19 @@ repository:
             name: OpenSSF Scorecard
             predicate-uri: https://github.com/ossf/scorecard
             location: https://scorecard.dev/viewer/?uri=github.com/wasmCloud/wasmCloud
+      - name: OSPS Baseline Scanner
+        type: other
+        comment: >-
+          OSPS Baseline Maturity Level 1 assessment on every push to main and
+          weekly. Failed controls are uploaded to code scanning.
+        rulesets:
+          - osps-baseline-2026-08
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+        results:
+          ci:
+            name: OSPS Baseline evaluation
+            predicate-uri: https://github.com/revanite-io/osps-baseline-action
+            location: https://github.com/wasmCloud/wasmCloud/actions/workflows/osps-baseline.yml
