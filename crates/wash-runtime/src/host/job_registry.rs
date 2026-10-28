@@ -125,8 +125,9 @@ impl JobRegistry {
 
     /// Ask `job` to cancel on behalf of `requester`; returns whether the request
     /// was accepted (not whether the guest has stopped). Accepted only when the
-    /// requester acts for the job owner's workload, or both are the host — the
-    /// cross-tenant guard. The guest observes the mark and unwinds itself.
+    /// requester acts for the job owner's workload — the cross-tenant guard; a
+    /// host-made job cannot be cancelled this way. The guest observes the mark
+    /// and unwinds itself.
     pub fn request_cancel(&self, job: JobId, requester: &CallerIdentity) -> bool {
         let mut inner = self.lock();
         let Some(entry) = inner.jobs.get_mut(&job) else {
@@ -282,7 +283,8 @@ mod tests {
         assert!(!reg.request_cancel(host_job, &caller("wl-a", "comp-a")));
         let workload_job = reg.admit(caller("wl-a", "comp-a"));
         assert!(!reg.request_cancel(workload_job, &CallerIdentity::Host));
-        assert!(reg.request_cancel(host_job, &CallerIdentity::Host));
+        // Two resolves for different consumers both run as the host.
+        assert!(!reg.request_cancel(host_job, &CallerIdentity::Host));
     }
 
     #[test]

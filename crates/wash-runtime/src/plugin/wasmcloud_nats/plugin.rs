@@ -675,13 +675,16 @@ impl HostPlugin for WasmcloudNats {
         // The base alone is not required to be complete: a host that sets only
         // grants leaves the servers to a workload under `allow`.
         //
-        // A key a plugin secret supplies reads as set to a stand-in, so every
-        // other key is checked now; the host checks the real value at bind.
+        // A key a plugin secret supplies has no value until bind. One the
+        // reader takes as opaque text reads as set, so presence rules such as
+        // `username` needing `password` hold; any other is left out, its value
+        // checked at bind.
         const PENDING: &str = "pending-plugin-secret";
-        let schema = super::binding_schema();
-        for (name, mut layer) in declared.host_layers(&schema) {
-            for key in declared.pending_secret_keys(name, &schema) {
-                layer.insert(key, PENDING.to_string());
+        for (name, mut layer, pending) in declared.host_layers(&super::binding_schema()) {
+            for key in &pending {
+                if super::keys::is_opaque(key) {
+                    layer.insert(key.clone(), PENDING.to_string());
+                }
             }
             let mut config = NatsConfig::from_map(&layer)
                 .map_err(|e| anyhow::anyhow!("binding `{name}`: {e:#}"))?;
@@ -1288,6 +1291,26 @@ mod tests {
             .validate_bindings(&set(&[("servers", "nats://a:4222"), ("ack-mode", "bogus")]))
             .unwrap_err();
         assert!(format!("{err:#}").contains("ack-mode"), "{err:#}");
+    }
+
+    /// A typed key a secret supplies is checked at bind, not against a
+    /// stand-in that could never parse.
+    #[test]
+    fn a_pending_typed_key_does_not_fail_host_start() {
+        let plugin = WasmcloudNats::new();
+        for key in [
+            "ack-mode",
+            "max-in-flight",
+            "request-timeout-ms",
+            "jwt-as-token",
+        ] {
+            let set = PluginBindingSet::new(PLUGIN_NATS_ID)
+                .with_binding("orders", binding(&[("servers", "nats://a:4222")]))
+                .with_binding_secrets("orders", pending(key));
+            plugin
+                .validate_bindings(&set)
+                .unwrap_or_else(|e| panic!("{key}: {e:#}"));
+        }
     }
 
     /// A `servers` a secret supplies is egress-checked at bind, not against
