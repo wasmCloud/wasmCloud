@@ -2721,7 +2721,7 @@ host:
         );
         // The S3 backend accepts the resolved binding as it stands: the
         // catalog's env-var names are spellings it reads.
-        assert!(S3BlobProvider.instantiate(&resolved).await.is_ok());
+        assert!(S3BlobProvider.instantiate(&resolved, None).await.is_ok());
 
         // A workload cannot bring or replace a credential itself.
         let err = declared

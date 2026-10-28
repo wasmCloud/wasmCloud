@@ -617,9 +617,16 @@ impl HostPlugin for MultiplexedBlobstore {
         self.mux.configure_egress_policy(policy)
     }
 
+    /// The address keys every blobstore backend claims, and every S3 key: each
+    /// decides where a binding connects or as whom, so under
+    /// `workloadConfig: deny` credentials and endpoints come only from an
+    /// operator's `host.plugins` binding (`secretFrom` for the secrets).
     fn binding_schema(&self) -> crate::plugin::BindingSchema {
-        crate::plugin::multiplex::backend_binding_schema(
-            crate::plugin::multiplex::BLOBSTORE_HOST_OWNED_KEYS,
+        crate::plugin::BindingSchema::with_host_owned_keys(
+            crate::plugin::multiplex::BLOBSTORE_HOST_OWNED_KEYS
+                .iter()
+                .copied()
+                .chain(host_owned_spellings()),
         )
     }
 
@@ -634,15 +641,6 @@ impl HostPlugin for MultiplexedBlobstore {
 
     fn supports_named_instances(&self) -> bool {
         true
-    }
-
-    /// Every S3 key is the host's: each decides where a binding connects or
-    /// as whom, so under `workloadConfig: deny` credentials and endpoints come
-    /// only from an operator's `host.plugins` binding (`secretFrom` for the
-    /// secrets). The schema stays open: the other backends' keys (`root`,
-    /// `url`) are still the workload's, and unknown keys still pass through.
-    fn binding_schema(&self) -> crate::plugin::BindingSchema {
-        crate::plugin::BindingSchema::with_host_owned_keys(host_owned_spellings())
     }
 
     async fn on_workload_item_bind<'a>(
@@ -876,7 +874,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_owns_every_s3_spelling_and_no_other_backends_keys() {
+    fn schema_owns_every_s3_spelling_and_stays_open() {
         let schema = MultiplexedBlobstore::new().binding_schema();
         // Every spelling, not only the canonical one: the host folds case and
         // `_`/`-` but not an `aws_` prefix.
@@ -900,11 +898,9 @@ mod tests {
         ] {
             assert!(schema.owns(key), "'{key}' must be host-owned");
         }
-        // Open schema: the other backends' keys stay the workload's and
-        // unknown keys are not refused.
-        for key in ["backend", "root", "url"] {
-            assert!(!schema.owns(key), "'{key}' must stay the workload's");
-        }
+        // Open schema: `backend` stays the workload's and unknown keys are not
+        // refused.
+        assert!(!schema.owns("backend"));
         assert!(!schema.is_closed());
     }
 
@@ -939,7 +935,7 @@ mod tests {
         let resolved = set
             .resolve("assets", &HashMap::new(), &schema, never_narrows())
             .expect("a workload asking for `assets` is served");
-        assert!(S3BlobProvider.instantiate(&resolved).await.is_ok());
+        assert!(S3BlobProvider.instantiate(&resolved, None).await.is_ok());
 
         // A workload can neither supply nor replace a credential or the
         // endpoint, under any spelling.
@@ -974,7 +970,7 @@ mod tests {
                 never_narrows(),
             )
             .expect("allow serves the workload's own config");
-        assert!(S3BlobProvider.instantiate(&resolved).await.is_ok());
+        assert!(S3BlobProvider.instantiate(&resolved, None).await.is_ok());
     }
 }
 
