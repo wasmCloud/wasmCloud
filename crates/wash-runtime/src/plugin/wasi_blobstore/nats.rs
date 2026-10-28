@@ -117,17 +117,6 @@ async fn present(store: &ObjectStore, name: &str) -> bool {
     matches!(store.info(name).await, Ok(info) if !info.deleted)
 }
 
-/// The next entry of a listing that is an object now: a listing returns
-/// deleted objects' tombstones too.
-async fn next_present(objects: &mut List) -> Option<<List as futures::Stream>::Item> {
-    loop {
-        match objects.next().await {
-            Some(Ok(info)) if info.deleted => continue,
-            next => return next,
-        }
-    }
-}
-
 /// NATS blobstore plugin
 #[derive(Clone)]
 pub struct NatsBlobstore {
@@ -580,7 +569,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
             }
         };
 
-        while let Some(object) = next_present(&mut object_list).await {
+        while let Some(object) = object_list.next().await {
             match object {
                 Ok(obj) => {
                     if let Err(e) = container_data.store.delete(&obj.name).await {
@@ -625,7 +614,7 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
 
         let mut objects = Vec::<ObjectName>::new();
         for _ in 0..len {
-            match next_present(&mut stream_handle.objects).await {
+            match stream_handle.objects.next().await {
                 Some(Ok(obj)) => {
                     objects.push(obj.name);
                 }
@@ -649,7 +638,7 @@ impl<'a> bindings::wasi::blobstore::container::HostStreamObjectNames for ActiveC
         let stream_handle = self.table.get_mut(&stream)?;
 
         for i in 0..num {
-            match next_present(&mut stream_handle.objects).await {
+            match stream_handle.objects.next().await {
                 Some(Ok(_)) => {}
                 Some(Err(e)) => {
                     return Ok(Err(format!("failed to read object name from stream: {e}")));
