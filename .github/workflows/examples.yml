@@ -38,7 +38,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/component-matrix.yml
+    uses: $/.github/workflows/component-matrix.yml
     with:
       # `env` isn't an available context for a reusable-workflow call's
       # `with:`, so these live here directly rather than in a top-level
@@ -97,15 +97,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/setup-rust
+      - uses: $/.github/actions/setup-rust
         with:
           install-nightly: "true"
           install-wash: "true"
 
       - if: matrix.needs_protoc
-        uses: ./.github/actions/setup-protoc
+        uses: $/.github/actions/setup-protoc
 
-      - uses: ./.github/actions/build-rust-component
+      - uses: $/.github/actions/build-rust-component
         with:
           working-directory: ${{ matrix.workdir }}
           image: ${{ matrix.image }}

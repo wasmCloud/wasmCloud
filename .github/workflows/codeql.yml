@@ -43,10 +43,10 @@ jobs:
       # This job builds the whole workspace --all-targets and a CodeQL
       # database on one runner; reclaim disk so the build isn't killed midway.
       - name: Free disk space
-        uses: ./.github/actions/free-disk-space
+        uses: $/.github/actions/free-disk-space
 
       - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        uses: $/.github/actions/setup-rust
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0

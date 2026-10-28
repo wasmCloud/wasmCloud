@@ -52,8 +52,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
-      - uses: ./.github/actions/lint-go
+      - uses: $/.github/actions/setup-go
+      - uses: $/.github/actions/lint-go
         with:
           working-directory: runtime-operator
 
@@ -76,14 +76,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
+      - uses: $/.github/actions/setup-go
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.16.4
       - name: Regenerate manifests
         working-directory: runtime-operator
         run: make manifests
-      - uses: ./.github/actions/no-diff
+      - uses: $/.github/actions/no-diff
         with:
           path: runtime-operator
           fixup-command: "(cd runtime-operator && make manifests)"
@@ -101,7 +101,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
+      - uses: $/.github/actions/setup-go
       - name: Build
         working-directory: runtime-operator
         run: make build
@@ -153,7 +153,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
+      - uses: $/.github/actions/setup-go
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: operator-image
@@ -236,7 +236,7 @@ jobs:
     permissions:
       contents: write
       packages: write
-    uses: ./.github/workflows/docker-build-push.yml
+    uses: $/.github/workflows/docker-build-push.yml
     with:
       working-directory: runtime-operator
       file: runtime-operator/Dockerfile

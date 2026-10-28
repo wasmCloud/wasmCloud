@@ -99,7 +99,7 @@ jobs:
           persist-credentials: false
       - name: Free disk space
         if: ${{ matrix.os == 'ubuntu-latest' }}
-        uses: ./.github/actions/free-disk-space
+        uses: $/.github/actions/free-disk-space
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -117,7 +117,7 @@ jobs:
         with:
           version: ${{ env.WASM_TOOLS_VERSION }}
       - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        uses: $/.github/actions/setup-rust
       # Compile the wash-runtime wasm test fixtures. The test/bench targets
       # `include_bytes!` these, so they must exist before the `cargo test`
       # steps below. Targets wasm32-wasip2/wasip1 come from setup-rust.
@@ -181,9 +181,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Free disk space
-        uses: ./.github/actions/free-disk-space
+        uses: $/.github/actions/free-disk-space
       - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        uses: $/.github/actions/setup-rust
         with:
           rust-toolchain: nightly
           rust-components: rustfmt
@@ -552,8 +552,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/free-disk-space
-      - uses: ./.github/actions/setup-rust
+      - uses: $/.github/actions/free-disk-space
+      - uses: $/.github/actions/setup-rust
       - name: Build e2e fixture components + wash
         working-directory: runtime-operator
         run: make e2e-images
@@ -624,7 +624,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-go
+      - uses: $/.github/actions/setup-go
       # The fixture components + the in-repo wash were built by the e2e-fixtures
       # job; download them so `make e2e-images` (push mode) just deploys the
       # registry and pushes — no Rust build on this leg. Both legs push fixtures.
@@ -978,7 +978,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        uses: $/.github/actions/setup-rust
         with:
           rust-toolchain: stable
           # Only needed for ubuntu
