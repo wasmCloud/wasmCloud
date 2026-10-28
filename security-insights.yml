@@ -109,7 +109,8 @@ repository:
         comment: >-
           Written with the OpenSSF self-assessment template. THREAT_MODEL.md
           holds the trust boundaries, security goals and known limitations it
-          refers to.
+          refers to. Gemara v1.6.0 capability and threat catalogs for the host
+          are in docs/security/.
       third-party:
         - name: OSTIF and Trail of Bits security audit
           evidence: https://ostif.org/wp-content/uploads/2023/10/wasmcloud-audit-ostif-trail-of-bits-final.pdf

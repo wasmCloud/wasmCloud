@@ -35,6 +35,7 @@ This is the wasmCloud project's security self-assessment, written by its maintai
 | --- | --- |
 | Security policy and vulnerability reporting | [SECURITY.md](SECURITY.md) |
 | Threat model | [THREAT_MODEL.md](THREAT_MODEL.md) |
+| Host threat assessment (Gemara) | [capability catalog](docs/security/capability-catalog.yaml) and [threat catalog](docs/security/threat-catalog.yaml) |
 | Security Insights | [security-insights.yml](security-insights.yml) |
 | Release process and artifact verification | [RELEASE_RUNBOOK.md](RELEASE_RUNBOOK.md) |
 | Host security flags and their effects | [THREAT_MODEL.md: Operator settings that weaken a goal](THREAT_MODEL.md#operator-settings-that-weaken-a-goal) |
