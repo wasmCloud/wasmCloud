@@ -369,6 +369,10 @@ fn starts_for_cores(cores: usize) -> usize {
     cores.saturating_sub(1).clamp(1, MAX_CONCURRENT_STARTS)
 }
 
+mod nats_auth;
+
+pub use nats_auth::{AuthHook, NatsAuth};
+
 pub mod types {
     pub mod v2 {
         // Committed output of `cargo xtask generate-protos` — regenerate
@@ -396,6 +400,17 @@ pub struct ClusterHostBuilder {
 }
 
 impl ClusterHostBuilder {
+    /// The host ID used in control subjects.
+    pub fn host_id(&self) -> &str {
+        self.host_builder.id()
+    }
+
+    /// Sets the host ID; see [`HostBuilder::with_id`](crate::host::HostBuilder::with_id).
+    pub fn with_host_id(mut self, id: impl Into<String>) -> anyhow::Result<Self> {
+        self.host_builder = self.host_builder.with_id(id)?;
+        Ok(self)
+    }
+
     /// The interval this host will actually heartbeat on, resolved.
     ///
     /// Public so a caller sizing a liveness bound reads the number the host was
@@ -1341,7 +1356,12 @@ pub async fn run_cluster_host(
 }
 
 /// Configuration options for NATS connections
+///
+/// `#[non_exhaustive]`: build one with [`Default`] and the `with_*` methods
+/// rather than a struct literal, so that adding an option later is not a
+/// breaking change for callers outside this crate.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct NatsConnectionOptions {
     /// Request timeout for NATS operations
     pub request_timeout: Option<Duration>,
@@ -1366,6 +1386,77 @@ pub struct NatsConnectionOptions {
     /// Left unset by a command run against a NATS the operator already has up
     /// (`wash dev`), where a refusal is the answer rather than a race.
     pub connect_retry: Option<Duration>,
+    /// The connection name sent in `CONNECT`, which the server shows in its
+    /// connection reports and hands an auth callout as `client_info.name`.
+    pub name: Option<String>,
+    /// What the connection presents to a server that requires authentication.
+    pub auth: NatsAuth,
+    /// The prefix of the inboxes the client creates for request replies, in
+    /// place of `_INBOX`.
+    pub inbox_prefix: Option<String>,
+}
+
+impl NatsConnectionOptions {
+    /// Bound every request on the connection by `timeout`.
+    #[must_use]
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
+        self
+    }
+
+    /// Trust the CA certificate at `path`.
+    #[must_use]
+    pub fn with_tls_ca(mut self, path: impl Into<PathBuf>) -> Self {
+        self.tls_ca = Some(path.into());
+        self
+    }
+
+    /// Start TLS before the server's `INFO`.
+    #[must_use]
+    pub fn with_tls_first(mut self, tls_first: bool) -> Self {
+        self.tls_first = tls_first;
+        self
+    }
+
+    /// Present the client certificate at `cert` with its key at `key`.
+    #[must_use]
+    pub fn with_tls_client_cert(
+        mut self,
+        cert: impl Into<PathBuf>,
+        key: impl Into<PathBuf>,
+    ) -> Self {
+        self.tls_cert = Some(cert.into());
+        self.tls_key = Some(key.into());
+        self
+    }
+
+    /// See [`NatsConnectionOptions::connect_retry`].
+    #[must_use]
+    pub fn with_connect_retry(mut self, window: Duration) -> Self {
+        self.connect_retry = Some(window);
+        self
+    }
+
+    /// See [`NatsConnectionOptions::name`].
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// See [`NatsConnectionOptions::auth`].
+    #[must_use]
+    pub fn with_auth(mut self, auth: NatsAuth) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    /// See [`NatsConnectionOptions::inbox_prefix`].
+    #[must_use]
+    pub fn with_inbox_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.inbox_prefix = Some(prefix.into());
+        self
+    }
 }
 
 #[instrument(skip_all)]
@@ -1373,7 +1464,15 @@ pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     options: NatsConnectionOptions,
 ) -> Result<async_nats::Client, anyhow::Error> {
-    let mut opts = async_nats::ConnectOptions::new();
+    let mut opts = options.auth.into_connect_options()?;
+
+    if let Some(name) = options.name {
+        opts = opts.name(name);
+    }
+
+    if let Some(prefix) = options.inbox_prefix {
+        opts = opts.custom_inbox_prefix(prefix);
+    }
 
     if let Some(timeout) = options.request_timeout {
         opts = opts.request_timeout(Some(timeout));
@@ -1729,9 +1828,11 @@ async fn workload_start(
 
     // The guard retains the reservation until cancellation cleanup finishes.
     let prepared = async {
+        host.check_start_memory()?;
         let (components, host_interfaces) = if let Some(wit_world) = wit_world {
             let mut pulled_components = Vec::with_capacity(wit_world.components.len());
             for component in &wit_world.components {
+                host.check_start_memory()?;
                 let oci_config =
                     image_pull_secret_to_oci_config(config, &component.image_pull_secret);
                 let source = ComponentSource::Oci {
@@ -1774,6 +1875,7 @@ async fn workload_start(
         };
 
         let service = if let Some(service) = service {
+            host.check_start_memory()?;
             let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
             let source = ComponentSource::Oci {
                 image: service.image.clone(),
@@ -2084,6 +2186,22 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    #[test]
+    fn cluster_host_id_matches_the_inner_builder() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().with_id("host-test_1")?;
+        let cluster = ClusterHostBuilder::default().with_host_builder(host);
+        assert_eq!(cluster.host_id(), "host-test_1");
+        Ok(())
+    }
+
+    #[test]
+    fn cluster_host_id_is_validated() -> anyhow::Result<()> {
+        let cluster = ClusterHostBuilder::default().with_host_id("host-test_2")?;
+        assert_eq!(cluster.host_id(), "host-test_2");
+        assert!(ClusterHostBuilder::default().with_host_id("a.b").is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cancelled_and_concurrent_shutdowns_wait_for_the_same_task() -> anyhow::Result<()> {
@@ -2417,6 +2535,56 @@ mod tests {
                 types::v2::WorkloadState::NotFound
             );
         }
+        host.stop().await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn queued_start_rechecks_memory_before_preparing_and_releases_its_id()
+    -> anyhow::Result<()> {
+        let guard = Arc::new(crate::engine::process_memory::ProcessMemoryGuard::new(
+            1 << 30,
+        ));
+        let engine = crate::engine::Engine::builder()
+            .without_max_process_memory()
+            .build()?
+            .with_unsampled_admission_guard(guard.clone());
+        let host = crate::host::HostBuilder::default()
+            .with_engine(engine)
+            .build()?
+            .start()
+            .await?;
+        let defaults = control_defaults(host.clone());
+        let permit = defaults.starts.acquire().await?;
+        let request = types::v2::WorkloadStartRequest {
+            workload_id: "queued-memory".into(),
+            workload: Some(types::v2::Workload::default()),
+        };
+        let mut start = Box::pin(defaults.start(request.clone()));
+        assert!(start.as_mut().now_or_never().is_none());
+        guard.observe(u64::MAX);
+        drop(permit);
+        let status = start.await?.workload_status.context("start status")?;
+        assert_eq!(status.workload_state(), types::v2::WorkloadState::Error);
+        assert!(status.message.contains("max-process-memory"));
+        assert_eq!(
+            defaults
+                .status(types::v2::WorkloadStatusRequest {
+                    workload_id: request.workload_id.clone(),
+                })
+                .await?
+                .workload_status
+                .context("status")?
+                .workload_state(),
+            types::v2::WorkloadState::NotFound
+        );
+        guard.observe(0);
+        // The ID was released and can be reserved again after recovery.
+        let reservation = host
+            .workload_reserve(&request.workload_id)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        host.workload_release(&request.workload_id, reservation)
+            .await;
         host.stop().await
     }
 
@@ -2886,9 +3054,9 @@ mod tests {
         // Polled rather than read once: a stalled loop never beats again, while
         // a healthy one on a loaded machine is merely late.
         tokio::time::timeout(Duration::from_secs(5), async {
-            while !liveness
+            while liveness
                 .silence()
-                .is_some_and(|silence| silence < Duration::from_millis(100))
+                .is_none_or(|silence| silence >= Duration::from_millis(100))
             {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -2952,6 +3120,129 @@ mod tests {
             "a refusal with no window took {:?}, so it was retried",
             started.elapsed()
         );
+    }
+
+    /// The credentials file is read on every connect, so a rotated one is what
+    /// the next reconnect presents, and the connection keeps its name.
+    #[tokio::test]
+    async fn a_rotated_credentials_file_is_presented_on_reconnect() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::{accept_connect, creds_file};
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("host.creds");
+        let key = nkeys::KeyPair::new_user();
+        std::fs::write(&path, creds_file("first.jwt", &key.seed()?))?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+
+        let client = tokio::spawn(connect_nats(
+            format!("nats://{addr}"),
+            NatsConnectionOptions {
+                name: Some("host:test".into()),
+                auth: NatsAuth {
+                    credentials: Some(path.clone()),
+                    hook: Some(AuthHook::new(|auth| {
+                        auth.token = auth.jwt.clone();
+                        Ok(())
+                    })),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ));
+        let first = accept_connect(&listener, "first-nonce").await?;
+        let _client = client.await??;
+        assert_eq!(first["name"], "host:test");
+        assert_eq!(first["jwt"], "first.jwt");
+        assert_eq!(first["auth_token"], "first.jwt");
+        assert!(first["sig"].is_string(), "the nonce went unsigned: {first}");
+
+        std::fs::write(&path, creds_file("rotated.jwt", &key.seed()?))?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["name"], "host:test");
+        assert_eq!(second["jwt"], "rotated.jwt");
+        assert_eq!(second["auth_token"], "rotated.jwt");
+        Ok(())
+    }
+
+    /// An embedder that opens its own connection keeps the rereading of
+    /// credential files, and the inbox prefix it sets on top.
+    #[tokio::test]
+    async fn an_embedder_connection_rereads_credentials() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let dir = tempfile::tempdir()?;
+        let token = dir.path().join("token");
+        std::fs::write(&token, "first")?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsAuth::default()
+            .with_token_file(&token)
+            .into_connect_options()?
+            .custom_inbox_prefix("agent.inbox");
+
+        let (first, client) = tokio::try_join!(accept_connect(&listener, "first-nonce"), async {
+            options
+                .connect(format!("nats://{}", listener.local_addr()?))
+                .await
+                .map_err(anyhow::Error::new)
+        },)?;
+        assert_eq!(first["auth_token"], "first");
+        assert!(client.new_inbox().starts_with("agent.inbox."));
+
+        std::fs::write(&token, "second")?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["auth_token"], "second");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn connect_nats_sets_the_inbox_prefix() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsConnectionOptions::default()
+            .with_name("host:test")
+            .with_inbox_prefix("runtime.inbox");
+        let (connect, client) = tokio::try_join!(
+            accept_connect(&listener, "nonce"),
+            connect_nats(format!("nats://{}", listener.local_addr()?), options),
+        )?;
+        assert_eq!(connect["name"], "host:test");
+        assert!(client.new_inbox().starts_with("runtime.inbox."));
+        Ok(())
+    }
+
+    /// A credentials file that cannot be read reads the same on every attempt,
+    /// so it is reported at once rather than retried for the whole window.
+    #[tokio::test]
+    async fn an_unreadable_credentials_file_is_not_retried() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                let _ = accept_connect(&listener, "nonce").await;
+            }
+        }));
+
+        let started = std::time::Instant::now();
+        let err = connect_nats(
+            format!("nats://{addr}"),
+            NatsConnectionOptions {
+                connect_retry: Some(Duration::from_secs(30)),
+                auth: NatsAuth {
+                    credentials: Some("/nonexistent/host.creds".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("the credentials file does not exist");
+        assert!(format!("{err:#}").contains("host.creds"), "{err:#}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        Ok(())
     }
 
     /// A host always keeps a start it can run and a core it can serve on.

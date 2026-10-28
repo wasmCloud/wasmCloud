@@ -42,6 +42,12 @@ enum Task {
     /// oci-registry, and push the fixtures into it. Configured via env
     /// (E2E_IMAGES_MODE, E2E_FIXTURES_DIR); see the e2e_images module.
     E2eImages,
+    /// Run the host density benchmark (`crates/bench-scale`) in release mode,
+    /// forwarding every argument; `cargo xtask bench-scale --help` lists them.
+    BenchScale {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -51,7 +57,24 @@ fn main() -> Result<()> {
         Task::BuildFixtures { names } => build_fixtures(&workspace, &names),
         Task::E2eImages => e2e_images::run(&workspace),
         Task::GenerateProtos => protos::run(&workspace),
+        Task::BenchScale { args } => bench_scale(&workspace, &args),
     }
+}
+
+/// `cargo run -p bench-scale --release -- <args>`, exiting with its status so
+/// the bench's exit code (2: too few workloads served) reaches the caller.
+fn bench_scale(workspace: &Path, args: &[String]) -> Result<()> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let status = Command::new(cargo)
+        .args(["run", "-p", "bench-scale", "--release", "--"])
+        .args(args)
+        .current_dir(workspace)
+        .status()
+        .context("failed to run cargo run -p bench-scale")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
 }
 
 /// Walk up from this crate's manifest dir to the workspace root (the

@@ -1,0 +1,78 @@
+# `cargo deny check licenses` (audit.yml) holds dependencies to the CNCF
+# allowlist: Apache-2.0 plus the licenses approved in
+# https://github.com/cncf/foundation/blob/main/policies-guidance/allowed-third-party-license-policy.md
+# Any other license needs a CNCF exception (https://exceptions.cncf.io/)
+# before its crates are listed under `exceptions`.
+
+[graph]
+all-features = true
+# The targets wash is released for.
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "s390x-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+# The allowlist mirrors the CNCF policy, so not every entry is in use.
+unused-allowed-license = "allow"
+allow = [
+    "Apache-2.0",
+    # Apache-2.0 with an added permission; used by the Bytecode Alliance crates.
+    "Apache-2.0 WITH LLVM-exception",
+    "0BSD",
+    "BSD-2-Clause",
+    "BSD-2-Clause-FreeBSD",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "OpenSSL",
+    "PostgreSQL",
+    "PSF-2.0",
+    "Python-2.0",
+    "Python-2.0.1",
+    "UPL-1.0",
+    "X11",
+    "Zlib",
+]
+exceptions = [
+    # https://github.com/cncf/foundation/issues/1580
+    { crate = "imbl", allow = ["MPL-2.0"] },
+    { crate = "imbl-sized-chunks", allow = ["MPL-2.0"] },
+    # https://github.com/cncf/foundation/issues/1581
+    { crate = "icu_collections", allow = ["Unicode-3.0"] },
+    { crate = "icu_locale_core", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer_data", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties_data", allow = ["Unicode-3.0"] },
+    { crate = "icu_provider", allow = ["Unicode-3.0"] },
+    { crate = "litemap", allow = ["Unicode-3.0"] },
+    { crate = "potential_utf", allow = ["Unicode-3.0"] },
+    { crate = "tinystr", allow = ["Unicode-3.0"] },
+    { crate = "unicode-ident", allow = ["Unicode-3.0"] },
+    { crate = "writeable", allow = ["Unicode-3.0"] },
+    { crate = "yoke", allow = ["Unicode-3.0"] },
+    { crate = "yoke-derive", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom-derive", allow = ["Unicode-3.0"] },
+    { crate = "zerotrie", allow = ["Unicode-3.0"] },
+    { crate = "zerovec", allow = ["Unicode-3.0"] },
+    { crate = "zerovec-derive", allow = ["Unicode-3.0"] },
+    # https://github.com/cncf/foundation/issues/1582
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+    # https://github.com/cncf/foundation/issues/1583
+    { crate = "hexf-parse", allow = ["CC0-1.0"] },
+]
+
+# bench-tools and xtask are unpublished and carry no license.
+[licenses.private]
+ignore = true

@@ -20,7 +20,7 @@
 
 use std::sync::atomic::AtomicBool;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     net::SocketAddr,
     path::Path,
     sync::{Arc, OnceLock},
@@ -30,6 +30,7 @@ use std::{
 use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
+use crate::observability::rate_limit::RateLimitedWarn;
 use crate::{
     engine::ctx::SharedCtx,
     observability::{MeterKind, Meters},
@@ -495,21 +496,13 @@ pub trait Router: Send + Sync + 'static {
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 ///
-/// Requests never lock and never write shared memory to read the table: each
-/// shard is an [`ArcSwap`](arc_swap::ArcSwap) snapshot, and a lookup matches
-/// inside a borrowed guard. Register and unbind therefore never make a request
-/// wait; a request in flight keeps matching against the snapshot it loaded.
-///
-/// A writer copies only the shards its workload's routes hash to, once each,
-/// and that copy is a shallow one (an `Arc` clone per hostname in the shard)
-/// plus a deep copy of just the hostnames it edits. A host holding 100k
-/// workloads cannot afford to copy a whole table on every start and stop
-/// (loading N workloads would cost O(N²)), and many shards keep each copy
-/// small.
+/// Requests read an ArcSwap snapshot without taking the writers' mutex.
+/// Persistent maps and replica sets share unchanged nodes between snapshots,
+/// so an update copies paths through those structures instead of the entire
+/// touched shard or replica set. Path buckets remain a small ordered vector.
 pub struct DynamicRouter {
     /// Maps a hostname to the path-scoped buckets registered under it, split
-    /// across shards by hostname so one write copies a small slice of the
-    /// table.
+    /// across shards by hostname. Updates copy persistent tree paths.
     hosts: Box<[RouteShard; ROUTE_SHARDS]>,
     /// Maps workload_id -> every route (primary + aliases, each with its path
     /// prefix) registered for it, so `on_workload_unbind` can remove all
@@ -525,9 +518,9 @@ pub struct DynamicRouter {
 /// ordered scan that stops at the first match. One hostname carries few
 /// prefixes in practice, so this stays cheaper than a trie.
 ///
-/// Keys and each hostname's buckets sit behind their own `Arc`s so copying a
-/// shard to edit it clones pointers, not strings and buckets.
-type HostBuckets = HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
+/// Cloning a shard shares its root. Mutations copy tree paths and the edited
+/// hostname's bucket vector; replica sets share their unchanged tree nodes.
+type HostBuckets = imbl::HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 
 /// A shard on its own cache line pair, so a writer storing one shard does not
 /// invalidate the line readers of its neighbours load from.
@@ -535,8 +528,14 @@ type HostBuckets = HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 #[derive(Default)]
 struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
 
-/// Enough shards that a write copies a small slice of a large table, few
-/// enough that an empty router stays small (32 KiB of shards).
+/// Bound each snapshot publication to one hostname shard.
+///
+/// An edit copies one persistent-tree path whatever the shard count, so the
+/// shards no longer bound how much a write copies. They keep a writer's store
+/// off the `ArcSwap` and cache lines that requests for other hostnames load,
+/// and keep each shard's tree a level or two shallower. 256 keeps an empty
+/// router small: 32 KiB of 128-byte shards, plus one ~48-byte `Arc` per shard
+/// for its empty map (an empty `imbl::HashMap` allocates no root node).
 const ROUTE_SHARDS: usize = 256;
 
 impl Default for DynamicRouter {
@@ -549,7 +548,7 @@ impl Default for DynamicRouter {
 }
 
 /// Every workload replica serving one `(hostname, path_prefix, scope)` triple.
-/// A `BTreeSet` keeps membership ordered and deterministic; a request picks one
+/// A persistent ordered set keeps membership deterministic; a request picks one
 /// replica at random (see [`DynamicRouter::select_workload`]).
 ///
 /// `scope` is part of the key, not a property of the bucket: the same
@@ -559,7 +558,10 @@ impl Default for DynamicRouter {
 struct PathBucket {
     prefix: NormalizedPathPrefix,
     scope: RouteScope,
-    workloads: BTreeSet<String>,
+    /// NOTE: we use imbl here on purpose; rpds's ordered set will heap-allocate
+    /// an iterator stack in every request's replica selection, which would
+    /// hurt performance.
+    workloads: imbl::OrdSet<String>,
 }
 
 /// Most-specific-first: a longer prefix sorts before a shorter one, and the
@@ -604,7 +606,8 @@ impl PartialEq for PathBucket {
 impl Eq for PathBucket {}
 
 /// Take the writers' lock whether or not a writer panicked holding it: no
-/// write can panic halfway through, so a poisoned table is still a whole one.
+/// snapshots already published remain valid. An interrupted multi-shard update
+/// can be partial; poisoning alone must not make unrelated routes unavailable.
 fn lock_routes<G>(result: std::sync::LockResult<G>) -> G {
     result.unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -674,7 +677,7 @@ impl DynamicRouter {
                     buckets.push(PathBucket {
                         prefix: route.path_prefix.clone(),
                         scope: route.scope,
-                        workloads: BTreeSet::from([workload_id.to_string()]),
+                        workloads: imbl::OrdSet::unit(workload_id.to_string()),
                     });
                     // Most specific first — see `PathBucket`'s `Ord`.
                     buckets.sort();
@@ -768,8 +771,8 @@ impl DynamicRouter {
         } else {
             host.into()
         };
-        // Matched inside the guard: loading it writes nothing shared, where
-        // cloning the `Arc` out would bump a count every request shares.
+        // Keep the ArcSwap guard while matching to avoid an explicit Arc clone
+        // for the common lookup path.
         let table = self.shard(shard_index(&host)).load();
         let Some(buckets) = table.get(&*host) else {
             return Err(RouteError::NoWorkloadForHost(host.into_owned()));
@@ -1441,6 +1444,33 @@ impl HostHandler for NullServer {
     }
 }
 
+/// How the response's consumer recognizes completion.
+#[derive(Clone, Copy, Default)]
+pub(crate) enum ResponseBodyCompletion {
+    #[default]
+    Stream,
+    Http1,
+}
+
+impl ResponseBodyCompletion {
+    fn for_network(version: hyper::Version) -> Self {
+        match version {
+            hyper::Version::HTTP_09 | hyper::Version::HTTP_10 | hyper::Version::HTTP_11 => {
+                Self::Http1
+            }
+            _ => Self::Stream,
+        }
+    }
+
+    pub(crate) fn for_request<B>(req: &hyper::Request<B>) -> Self {
+        req.extensions().get::<Self>().copied().unwrap_or_default()
+    }
+
+    pub(crate) fn is_complete<B: hyper::body::Body>(self, body: &B) -> bool {
+        body.is_end_stream() || matches!(self, Self::Http1) && body.size_hint().exact() == Some(0)
+    }
+}
+
 /// An HTTP response body that keeps its dispatched call condemned-on-drop while
 /// it streams: dropped mid-stream (the client disconnected), the wrapped
 /// [`AbandonOnDrop`] abandons the call; ended cleanly, it disarms. Extends the
@@ -1449,6 +1479,7 @@ impl HostHandler for NullServer {
 /// reachable.
 struct WatchedBody<B> {
     inner: B,
+    completion: ResponseBodyCompletion,
     /// `None` once end-of-stream disarmed it.
     watch: Option<AbandonOnDrop>,
 }
@@ -1463,14 +1494,14 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
     ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
         let poll = std::pin::Pin::new(&mut this.inner).poll_frame(cx);
-        // Clean end of stream: the response was delivered whole, so nothing is
-        // abandoned. An *error* frame deliberately does not disarm — the
-        // exchange broke off, and if the guest is wedged behind it, the armed
-        // flag is what ends it (a completed call deregisters, so arming a
-        // healthy one is harmless).
-        // `is_end_stream` too, since hyper stops polling once a declared
-        // `content-length` is written and never delivers that final `None`.
-        let ended = matches!(poll, std::task::Poll::Ready(None)) || this.inner.is_end_stream();
+        // Errors keep abandonment armed on drop. Only HTTP/1 can finish
+        // at its declared length while trailers are still pending.
+        let ended = match &poll {
+            std::task::Poll::Ready(None) => true,
+            std::task::Poll::Ready(Some(Err(_))) => false,
+            std::task::Poll::Ready(Some(Ok(frame))) if frame.is_trailers() => true,
+            _ => this.completion.is_complete(&this.inner),
+        };
         if ended && let Some(watch) = this.watch.take() {
             watch.disarm();
         }
@@ -1495,14 +1526,19 @@ impl<B: hyper::body::Body + Unpin> hyper::body::Body for WatchedBody<B> {
 /// An already-complete body is left unwrapped and disarmed: hyper never polls
 /// one, so a wrapper would be dropped un-disarmed and arm the flag on a
 /// response that was delivered whole.
-fn watch_body(resp: hyper::Response<WasiBody>, watch: AbandonOnDrop) -> hyper::Response<WasiBody> {
-    if hyper::body::Body::is_end_stream(resp.body()) {
+fn watch_body(
+    resp: hyper::Response<WasiBody>,
+    watch: AbandonOnDrop,
+    completion: ResponseBodyCompletion,
+) -> hyper::Response<WasiBody> {
+    if completion.is_complete(resp.body()) {
         watch.disarm();
         return resp;
     }
     resp.map(|inner| {
         WatchedBody {
             inner,
+            completion,
             watch: Some(watch),
         }
         .boxed_unsync()
@@ -2440,6 +2476,9 @@ async fn dispatch_local(
     target: LocalTarget,
     guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
+    request
+        .extensions_mut()
+        .insert(ResponseBodyCompletion::Stream);
     // Mirror the wire: a network send would carry the request authority as its
     // `Host` header, and handlers routinely read it.
     if !request.headers().contains_key(hyper::header::HOST)
@@ -2471,7 +2510,9 @@ async fn dispatch_local(
                 anyhow::bail!("service HTTP instance for workload {workload_id} is not running");
             }
             return match call.await_head(resp_rx).await {
-                Some((Ok(resp), watch)) => resp.map(|resp| watch_body(resp, watch)),
+                Some((Ok(resp), watch)) => {
+                    resp.map(|resp| watch_body(resp, watch, ResponseBodyCompletion::Stream))
+                }
                 Some((Err(_), _)) => {
                     anyhow::bail!("service HTTP instance dropped the response")
                 }
@@ -2611,9 +2652,33 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             let pool = resolved_handle
                 .instance_pool_for_component(component_id)
                 .await;
+            let targets_p3 = crate::engine::targets_wasip3_http(instance_pre.component());
+            // A wasip2 incoming-handler instance serves one request, so HTTP
+            // never reuses one; asking for a pool there would otherwise look
+            // like it worked while every request still paid for a cold store.
+            // Rate-limited at `warn` across workloads, and logged at `debug`
+            // when suppressed, so every workload that does this is named.
+            if pool.is_some() && !targets_p3 {
+                match P2_POOL_WARN.admit() {
+                    Some(suppressed) => warn!(
+                        workload_id = resolved_handle.id(),
+                        component_id,
+                        suppressed,
+                        "poolSize is set on a wasip2 HTTP handler, which serves one request per \
+                         instance: HTTP requests to it are not pooled. Build it for wasip3 to \
+                         keep instances warm"
+                    ),
+                    None => debug!(
+                        workload_id = resolved_handle.id(),
+                        component_id,
+                        "poolSize is set on a wasip2 HTTP handler, which serves one request per \
+                         instance: HTTP requests to it are not pooled (warning rate-limited)"
+                    ),
+                }
+            }
             let handle = ComponentHandle {
                 workload: resolved_handle.clone(),
-                targets_p3: crate::engine::targets_wasip3_http(instance_pre.component()),
+                targets_p3,
                 instance_pre,
                 component_id: component_id.to_string(),
                 identity,
@@ -3112,7 +3177,12 @@ async fn run_http_server<T: Router>(
                                     let remote_context =
                                         opentelemetry::global::get_text_map_propagator(|propagator| propagator.extract(&extractor));
 
-                                    handle_http_request(handler, req, scheme, handles, service_handlers, guest_meter).with_context(remote_context).await
+                                    // Defer `#[instrument]` until the propagated parent is active.
+                                    async move {
+                                        handle_http_request(handler, req, scheme, handles, service_handlers, guest_meter).await
+                                    }
+                                    .with_context(remote_context)
+                                    .await
                                 }
                             });
 
@@ -3237,67 +3307,13 @@ fn ended_in_timeout(e: &(dyn std::error::Error + 'static)) -> bool {
     e.source().is_some_and(ended_in_timeout)
 }
 
-/// A warning a client can trigger on every request, let through at most once
-/// per interval. In between, the occurrences are logged at DEBUG and counted,
-/// and the next warning says how many it stands for: a scan of unserved
-/// hostnames should still be visible, not cost a log line per request.
-struct RateLimitedWarn {
-    interval_ms: u64,
-    /// When the next warning may be logged, in milliseconds since
-    /// [`warn_clock_ms`] started.
-    next_ms: std::sync::atomic::AtomicU64,
-    suppressed: std::sync::atomic::AtomicU64,
-}
-
-impl RateLimitedWarn {
-    const fn new(interval: Duration) -> Self {
-        Self {
-            interval_ms: interval.as_millis() as u64,
-            next_ms: std::sync::atomic::AtomicU64::new(0),
-            suppressed: std::sync::atomic::AtomicU64::new(0),
-        }
-    }
-
-    /// `Some(suppressed)` when this occurrence should be warned about, with
-    /// how many were held back since the last warning; `None` when it is one
-    /// of those.
-    fn admit(&self) -> Option<u64> {
-        self.admit_at(warn_clock_ms())
-    }
-
-    /// [`Self::admit`] at `now`, in milliseconds on the [`warn_clock_ms`] clock.
-    fn admit_at(&self, now: u64) -> Option<u64> {
-        use std::sync::atomic::Ordering::Relaxed;
-        let next = self.next_ms.load(Relaxed);
-        if now >= next
-            && self
-                .next_ms
-                .compare_exchange(next, now.saturating_add(self.interval_ms), Relaxed, Relaxed)
-                .is_ok()
-        {
-            Some(self.suppressed.swap(0, Relaxed))
-        } else {
-            self.suppressed.fetch_add(1, Relaxed);
-            None
-        }
-    }
-}
-
-fn warn_clock_ms() -> u64 {
-    static START: OnceLock<std::time::Instant> = OnceLock::new();
-    u64::try_from(
-        START
-            .get_or_init(std::time::Instant::now)
-            .elapsed()
-            .as_millis(),
-    )
-    .unwrap_or(u64::MAX)
-}
-
 /// How often each per-request ingress warning may be logged.
 const INGRESS_WARN_INTERVAL: Duration = Duration::from_secs(10);
 static INVALID_AUTHORITY_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 static ROUTE_FAILURE_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
+/// `poolSize` on a wasip2 HTTP handler at `warn`, once per interval however
+/// many bind; the rest are logged at `debug`.
+static P2_POOL_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 static UNBOUND_HOST_WARN: RateLimitedWarn = RateLimitedWarn::new(INGRESS_WARN_INTERVAL);
 
 /// Build an error response with the given status code.
@@ -3322,6 +3338,11 @@ fn error_response(status: u16) -> hyper::Response<WasiBody> {
 ///   collectors can break down requests by 2xx/4xx/5xx.
 /// - `otel.status_code` is set to `ERROR` for 5xx; 4xx stays UNSET per semconv.
 #[instrument(skip_all, fields(
+    // There are no path-based route templates, so the OTel HTTP server span
+    // name falls back to the request method. Keep the static tracing name for
+    // human-readable runtime logs while overriding the exported span name.
+    otel.name = %req.method(),
+    otel.kind = "server",
     // Legacy (pre-semconv) attribute names retained so dashboards built against
     // them keep resolving.
     http.method = %req.method(),
@@ -3347,6 +3368,8 @@ async fn handle_http_request<T: Router>(
     service_handlers: ServiceHandlers,
     guest_meter: GuestMeter,
 ) -> Result<hyper::Response<WasiBody>, hyper::Error> {
+    let completion = ResponseBodyCompletion::for_network(req.version());
+    req.extensions_mut().insert(completion);
     // Every guest reads its scheme and authority off the URI, so they are put
     // there once, here, from this listener rather than from any header.
     if !normalize_ingress_uri(&mut req, &scheme) {
@@ -3420,7 +3443,7 @@ async fn handle_http_request<T: Router>(
             error_response(503)
         } else {
             match call.await_head(resp_rx).await {
-                Some((Ok(Ok(resp)), watch)) => watch_body(resp, watch),
+                Some((Ok(Ok(resp)), watch)) => watch_body(resp, watch, completion),
                 Some((Ok(Err(e)), _)) => {
                     error!(err = ?e, "service HTTP handler failed");
                     error_response(500)
@@ -3450,12 +3473,11 @@ async fn handle_http_request<T: Router>(
 
     let response = match workload_handle {
         Some(handle) => {
-            let req_span = tracing::span!(
-                tracing::Level::INFO,
-                "invoke_component_handler",
-                workload.name = handle.workload.name(),
-                workload.namespace = handle.workload.namespace(),
-                workload.id = handle.workload.id(),
+            let req_span = component_handler_span(
+                &method,
+                handle.workload.name(),
+                handle.workload.namespace(),
+                handle.workload.id(),
             );
             match invoke_component_handler(&handle, req, guest_meter)
                 .instrument(req_span)
@@ -3495,6 +3517,21 @@ async fn handle_http_request<T: Router>(
     Ok(response)
 }
 
+fn component_handler_span(
+    method: &hyper::Method,
+    workload_name: &str,
+    workload_namespace: &str,
+    workload_id: &str,
+) -> tracing::Span {
+    tracing::info_span!(
+        "invoke_component_handler",
+        otel.name = %method,
+        workload.name = workload_name,
+        workload.namespace = workload_namespace,
+        workload.id = workload_id,
+    )
+}
+
 /// Record the response's status on the current span as the OTel HTTP semconv
 /// attribute `http.response.status_code`. 5xx flips `otel.status_code` to
 /// `ERROR` per the HTTP semconv (4xx is a client error and stays UNSET).
@@ -3518,6 +3555,7 @@ fn record_response_status<B>(response: &hyper::Response<B>) {
 fn outbound_client_span(method: &hyper::Method, uri: &hyper::Uri) -> tracing::Span {
     let span = tracing::info_span!(
         "outbound_http_request",
+        otel.name = %method,
         otel.kind = "client",
         { HTTP_REQUEST_METHOD } = %method,
         { URL_FULL } = %uri,
@@ -3692,6 +3730,7 @@ async fn invoke_component_handler(
     req: hyper::Request<WasiBody>,
     guest_meter: GuestMeter,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
+    let completion = ResponseBodyCompletion::for_request(&req);
     let ComponentHandle {
         workload: workload_handle,
         instance_pre,
@@ -3730,7 +3769,7 @@ async fn invoke_component_handler(
                         .ok_or_else(|| anyhow::anyhow!("pooled instance produced no response"))?;
                     let resp =
                         resp.map_err(|_| anyhow::anyhow!("pooled instance dropped the request"))??;
-                    return Ok(watch_body(resp, watch));
+                    return Ok(watch_body(resp, watch, completion));
                 }
                 // Every warm instance was busy; serve it cold below.
                 Err(Declined {
@@ -3765,7 +3804,12 @@ async fn invoke_component_handler(
                 let mut store = workload_handle
                     .new_store_as(component_id, Some(identity))
                     .await?;
-                let instance = instance_pre.instantiate_async(&mut store).await?;
+                let instance = instance_pre
+                    .instantiate_async(&mut store)
+                    .await
+                    .map_err(|e| {
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                    })?;
                 crate::engine::instance_pool::ComponentInstance { store, instance }
             }
         };
@@ -3777,7 +3821,7 @@ async fn invoke_component_handler(
             ))
             .await
             .ok_or_else(|| anyhow::anyhow!("cold instance produced no response"))?;
-        return Ok(watch_body(resp?, watch));
+        return Ok(watch_body(resp?, watch, completion));
     }
 
     // The p2 path still builds and instantiates per request: its store is
@@ -3797,6 +3841,7 @@ pub async fn handle_component_request(
     guest_meter: GuestMeter,
     identity: &crate::observability::WorkloadIdentity,
 ) -> anyhow::Result<hyper::Response<WasiBody>> {
+    let completion = ResponseBodyCompletion::for_request(&req);
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let scheme = match req.uri().scheme() {
         Some(scheme) if scheme == &hyper::http::uri::Scheme::HTTP => Scheme::Http,
@@ -3828,7 +3873,9 @@ pub async fn handle_component_request(
             // Watched for as long as the store runs guest code.
             let _abandoned = watch_guard;
             // Run the http request itself by instantiating and calling the component
-            let proxy = pre.instantiate_async(&mut store).await?;
+            let proxy = pre.instantiate_async(&mut store).await.map_err(|e| {
+                crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+            })?;
 
             guest_meter
                 .observe(&attributes, &mut store, async move |store| {
@@ -3849,7 +3896,7 @@ pub async fn handle_component_request(
     match call.await_head(receiver).await {
         // If the client calls `response-outparam::set` then one of these
         // methods will be called.
-        Some((Ok(Ok(resp)), watch)) => Ok(watch_body(resp, watch)),
+        Some((Ok(Ok(resp)), watch)) => Ok(watch_body(resp, watch, completion)),
         Some((Ok(Err(e)), _)) => Err(e.into()),
 
         // Otherwise the `sender` will get dropped along with the `Store`
@@ -4286,6 +4333,32 @@ async fn send_grpc_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opentelemetry::trace::{SpanKind, TracerProvider as _};
+    use opentelemetry_sdk::{
+        error::OTelSdkResult,
+        trace::{SdkTracerProvider, SpanData, SpanExporter},
+    };
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Clone, Debug, Default)]
+    struct RecordingSpanExporter {
+        spans: Arc<Mutex<Vec<SpanData>>>,
+    }
+
+    impl SpanExporter for RecordingSpanExporter {
+        fn export(
+            &self,
+            batch: Vec<SpanData>,
+        ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
+            self.spans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(batch);
+            std::future::ready(Ok(()))
+        }
+    }
 
     fn build_request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
@@ -4320,6 +4393,36 @@ mod tests {
             &mut req,
             &hyper::http::uri::Scheme::HTTP
         ));
+    }
+
+    #[test]
+    fn component_handler_span_exports_method_name() {
+        let exporter = RecordingSpanExporter::default();
+        let spans = exporter.spans.clone();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+        let tracer = provider.tracer("http-span-name-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let invocation =
+                component_handler_span(&hyper::Method::PATCH, "workload", "namespace", "id");
+            assert_eq!(
+                invocation.metadata().unwrap().name(),
+                "invoke_component_handler"
+            );
+            drop(invocation);
+        });
+
+        provider.force_flush().unwrap();
+        let spans = spans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(spans.len(), 1, "exported spans: {spans:#?}");
+        assert!(spans.iter().all(|span| span.name == "PATCH"));
+        assert_eq!(spans[0].span_kind, SpanKind::Internal);
     }
 
     /// `with_quotas` rebuilds an eagerly-configured client cache and must
@@ -5914,7 +6017,7 @@ mod tests {
         let bucket = |prefix: &str| PathBucket {
             prefix: NormalizedPathPrefix::new(prefix),
             scope: RouteScope::Local,
-            workloads: BTreeSet::new(),
+            workloads: imbl::OrdSet::new(),
         };
         let mut buckets = [
             bucket(""),
@@ -6356,17 +6459,74 @@ mod tests {
         assert_eq!(now, ["b"]);
     }
 
-    /// A per-request warning is let through once per interval, and the next
-    /// one counts the occurrences held back in between.
     #[test]
-    fn a_rate_limited_warning_counts_what_it_held_back() {
-        let limiter = RateLimitedWarn::new(Duration::from_millis(50));
-        assert_eq!(limiter.admit_at(0), Some(0));
-        assert_eq!(limiter.admit_at(10), None);
-        assert_eq!(limiter.admit_at(49), None);
-        assert_eq!(limiter.admit_at(50), Some(2));
-        assert_eq!(limiter.admit_at(60), None);
-        assert_eq!(limiter.admit_at(1_000), Some(1));
+    fn concurrent_route_churn_preserves_shared_replicas_and_held_snapshots() {
+        let router = Arc::new(DynamicRouter::default());
+        let shared = IngressRoute::ingress("shared.example.com");
+        router.register_routes("anchor", std::slice::from_ref(&shared));
+        let held = router.host_buckets("shared.example.com").unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..4 {
+                let router = &router;
+                let shared = &shared;
+                scope.spawn(move || {
+                    for index in 0..1000 {
+                        let id = format!("worker-{worker}-{index}");
+                        let distinct =
+                            IngressRoute::ingress(format!("w{worker}-{index}.example.com"));
+                        router.register_routes(&id, &[shared.clone(), distinct.clone()]);
+                        assert_eq!(
+                            router
+                                .select_workload(&distinct.host, "/", RouteScope::Ingress)
+                                .unwrap(),
+                            id
+                        );
+                        assert!(
+                            router
+                                .select_workload(&shared.host, "/", RouteScope::Ingress)
+                                .is_ok()
+                        );
+                        router.unregister_routes(&id);
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            held[0].workloads.iter().cloned().collect::<Vec<_>>(),
+            ["anchor"]
+        );
+        assert_eq!(
+            router
+                .select_workload(&shared.host, "/", RouteScope::Ingress)
+                .unwrap(),
+            "anchor"
+        );
+    }
+
+    #[test]
+    #[ignore = "100k-route scaling probe; run explicitly with --ignored --nocapture"]
+    fn routing_write_scaling() {
+        for replicas in [false, true] {
+            let router = DynamicRouter::default();
+            let began = std::time::Instant::now();
+            for index in 0..100_000 {
+                let host = if replicas {
+                    "shared.scale.test".to_string()
+                } else {
+                    format!("w{index}.scale.test")
+                };
+                router.register_routes(&format!("w{index}"), &[IngressRoute::ingress(host)]);
+            }
+            let registered = began.elapsed();
+            for index in 0..100_000 {
+                router.unregister_routes(&format!("w{index}"));
+            }
+            assert!(lock_routes(router.workload_to_host.lock()).is_empty());
+            eprintln!(
+                "replicas={replicas}: register={registered:?}, register+remove={:?}",
+                began.elapsed()
+            );
+        }
     }
 
     /// A body error a local dispatch already produced reaches the guest as
@@ -6771,5 +6931,112 @@ mod tests {
             None,
             "paths are case-sensitive even though hostnames are not"
         );
+    }
+
+    /// A fixed-length body: yields `data` once, then waits on trailers that
+    /// never come, reporting how much of its declared length is left.
+    struct FixedLength {
+        data: Option<bytes::Bytes>,
+        remaining: u64,
+    }
+
+    impl hyper::body::Body for FixedLength {
+        type Data = bytes::Bytes;
+        type Error = wasmtime_wasi_http::Error;
+
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+            match self.data.take() {
+                Some(data) => {
+                    self.remaining -= data.len() as u64;
+                    std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(data))))
+                }
+                None => std::task::Poll::Pending,
+            }
+        }
+
+        fn size_hint(&self) -> hyper::body::SizeHint {
+            hyper::body::SizeHint::with_exact(self.remaining)
+        }
+    }
+
+    /// Dropped with `polls` frames read, as hyper drops a body; whether the
+    /// call was left abandoned.
+    async fn abandoned_after(
+        completion: ResponseBodyCompletion,
+        polls: usize,
+        data: &'static [u8],
+        declared: u64,
+    ) -> bool {
+        let call = DispatchedCall::new("test", Duration::from_secs(60));
+        let flag = call.flag();
+        let ((), watch) = call.await_head(async {}).await.expect("a reply");
+        let inner = FixedLength {
+            data: Some(bytes::Bytes::from_static(data)),
+            remaining: declared,
+        }
+        .boxed_unsync();
+        let mut body = watch_body(hyper::Response::new(inner), watch, completion).into_body();
+        for _ in 0..polls {
+            let _ = body.frame().await;
+        }
+        drop(body);
+        flag.is_armed()
+    }
+
+    /// hyper stops polling a fixed-length body once its declared length is
+    /// written, before its trailers resolve: that response was delivered.
+    #[tokio::test]
+    async fn a_spent_fixed_length_body_is_not_abandoned() {
+        assert!(!abandoned_after(ResponseBodyCompletion::Http1, 1, b"hello", 5).await);
+    }
+
+    /// Dropped with bytes still owed, the exchange broke off.
+    #[tokio::test]
+    async fn a_fixed_length_body_dropped_short_is_abandoned() {
+        assert!(abandoned_after(ResponseBodyCompletion::Http1, 0, b"hello", 5).await);
+    }
+
+    #[tokio::test]
+    async fn an_empty_http1_body_is_not_abandoned_without_polling() {
+        assert!(!abandoned_after(ResponseBodyCompletion::Http1, 0, b"", 0).await);
+    }
+
+    #[tokio::test]
+    async fn http2_pending_trailers_keep_abandonment_armed() {
+        let completion = ResponseBodyCompletion::for_network(hyper::Version::HTTP_2);
+        assert!(abandoned_after(completion, 1, b"hello", 5).await);
+        assert!(abandoned_after(completion, 0, b"", 0).await);
+    }
+
+    #[tokio::test]
+    async fn local_pending_trailers_keep_abandonment_armed() {
+        let request = hyper::Request::new(());
+        let completion = ResponseBodyCompletion::for_request(&request);
+        assert!(abandoned_after(completion, 1, b"hello", 5).await);
+    }
+
+    #[tokio::test]
+    async fn completed_trailers_disarm_abandonment() {
+        let call = DispatchedCall::new("test", Duration::from_secs(60));
+        let flag = call.flag();
+        let ((), watch) = call.await_head(async {}).await.expect("a reply");
+        let inner = http_body_util::Full::new(bytes::Bytes::from_static(b"hello"))
+            .map_err(|never| match never {})
+            .with_trailers(std::future::ready(Some(Ok(hyper::HeaderMap::new()))))
+            .boxed_unsync();
+        let mut body = watch_body(
+            hyper::Response::new(inner),
+            watch,
+            ResponseBodyCompletion::Stream,
+        )
+        .into_body();
+        body.frame().await.expect("data").expect("valid frame");
+        let frame = body.frame().await.expect("trailers").expect("valid frame");
+        assert!(frame.is_trailers());
+        drop(body);
+        assert!(!flag.is_armed());
     }
 }

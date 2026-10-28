@@ -43,6 +43,7 @@ jobs:
             relevant:
               - '**/Cargo.toml'
               - '**/Cargo.lock'
+              - 'deny.toml'
               - '.github/workflows/audit.yml'
 
   cargo-audit:
@@ -59,7 +60,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-audit
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -69,10 +70,33 @@ jobs:
       - name: Run cargo audit
         run: cargo audit
 
+  cargo-deny-licenses:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Check dependency licenses
+        run: cargo deny --locked check licenses
+
   gate:
     name: gate-audit
     needs:
       - cargo-audit
+      - cargo-deny-licenses
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:

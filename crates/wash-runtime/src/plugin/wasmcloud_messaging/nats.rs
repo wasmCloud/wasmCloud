@@ -526,6 +526,11 @@ impl HostPlugin for NatsMessaging {
             }
         };
 
+        let admission = match &pre {
+            Some(pre) => admission.with_component(pre.instance_pre().component())?,
+            None => admission,
+        };
+
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let tracker_component_id = component_id.clone();
@@ -715,8 +720,21 @@ impl HostPlugin for NatsMessaging {
                         // while parked on a saturated semaphore, and is
                         // cancel-safe: dropping the future releases whichever
                         // permit it had already taken.
+                        // Looked up before admission: a warm instance already
+                        // holds its pool slots, so only a store of this
+                        // delivery's own reserves them (see `PoolCharge`).
+                        let pool = if pre.serves_async() {
+                            workload.instance_pool_for_component(&component_id).await
+                        } else {
+                            None
+                        };
+                        let charge = if pool.is_some() {
+                            super::PoolCharge::Defer
+                        } else {
+                            super::PoolCharge::Reserve
+                        };
                         let permit = tokio::select! {
-                            admitted = admission.acquire_before_deadline(&component_id, &subject) => {
+                            admitted = admission.acquire_before_deadline(&component_id, &subject, charge) => {
                                 match admitted {
                                     Admitted::Slot(permit) => permit,
                                     // Already logged and counted; drop this
@@ -764,12 +782,6 @@ impl HostPlugin for NatsMessaging {
                         // message: without a pool there is nothing to reuse,
                         // and the sync `@0.2.0` call holds `&mut Store` so it
                         // could not share an instance anyway.
-                        let pool = if pre.serves_async() {
-                            workload.instance_pool_for_component(&component_id).await
-                        } else {
-                            None
-                        };
-
                         if let Some(pool) = pool {
                             let msg = crate::host::trigger_service::BrokerMessage {
                                 subject,
@@ -780,15 +792,19 @@ impl HostPlugin for NatsMessaging {
                             let workload = workload.clone();
                             let component_id = component_id.clone();
                             let instance_pre = pre.instance_pre().clone();
+                            let admission = admission.clone();
                             tokio::spawn(async move {
-                                // Released on completion, trap or not — which
-                                // is what frees the slot this message holds.
-                                let _permit = permit;
+                                // The permit goes along: released on
+                                // completion, trap or not — which is what
+                                // frees the slot this message holds — and
+                                // reserved against if a store gets built.
                                 let result = super::deliver_pooled(
                                     &workload,
                                     &component_id,
                                     &instance_pre,
                                     &pool,
+                                    &admission,
+                                    permit,
                                     msg,
                                     attributes,
                                 )

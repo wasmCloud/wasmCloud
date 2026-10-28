@@ -7,6 +7,21 @@ Thank you for your interest in contributing to wash! This document provides guid
 If you have feature suggestions, find bugs, or have questions, please submit an issue [here][0].
 Pull requests are welcome! The [good first issue][1] label is a great way to find a starting point for new contributors.
 
+## Reporting Bugs
+
+Report bugs as [GitHub issues][2] using the **Bug report** template. Search the [open issues][3] first, and add to an existing report if one matches.
+
+A useful report includes:
+
+- What you ran and what happened, with the full error message or logs.
+- What you expected to happen instead.
+- The smallest set of steps or commands that reproduces it. If it needs files, link a public
+  repository with a minimal reproduction instead of attaching zip files or other archives.
+- Your versions: the output of `wash --version`, and for Kubernetes deployments the runtime-operator chart version.
+- Your operating system and architecture, and your Kubernetes version if one is involved.
+
+Don't report security vulnerabilities as issues. Follow [SECURITY.md](SECURITY.md) to report them privately.
+
 ## Development Environment
 
 ### Prerequisites
@@ -210,3 +225,5 @@ that release. See [RELEASE_RUNBOOK.md](./RELEASE_RUNBOOK.md#release-cadence) for
 
 [0]: https://github.com/wasmcloud/wasmCloud/issues/new/choose
 [1]: https://github.com/wasmcloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22
+[2]: https://github.com/wasmCloud/wasmCloud/issues/new?template=bug_report.yml
+[3]: https://github.com/wasmCloud/wasmCloud/issues?q=is%3Aissue+is%3Aopen

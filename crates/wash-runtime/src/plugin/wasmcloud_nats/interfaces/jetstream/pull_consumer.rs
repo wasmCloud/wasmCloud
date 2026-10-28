@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/jetstream@0.1.2#pull-consumer` — guest-driven batch pulls
+//! `wasmcloud:nats/jetstream@0.1.3#pull-consumer` — guest-driven batch pulls
 //! off an existing durable consumer.
 
 use std::sync::Arc;
@@ -178,13 +178,14 @@ async fn fetch_batch<T: 'static + Send>(
     while let Some(next) = stream.next().await {
         match next {
             Ok(msg) => {
-                let (sequence, delivery_count, stream) = match msg.info() {
+                let (sequence, delivery_count, stream, stored_at_unix_nanos) = match msg.info() {
                     Ok(info) => (
                         info.stream_sequence,
                         info.delivered as u32,
                         info.stream.to_string(),
+                        super::unix_nanos(info.published.unix_timestamp_nanos()),
                     ),
-                    Err(_) => (0, 1, String::new()),
+                    Err(e) => return Ok(Err(super::jetstream_err("invalid message metadata", e))),
                 };
                 // `open` refused a consumer whose filter reaches outside the
                 // grant, so this only fires when the durable's filter was
@@ -214,6 +215,7 @@ async fn fetch_batch<T: 'static + Send>(
                     message,
                     sequence,
                     delivery_count,
+                    stored_at_unix_nanos,
                     charged: Some((budget.clone(), charged)),
                 });
             }

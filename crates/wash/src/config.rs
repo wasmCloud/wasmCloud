@@ -449,9 +449,11 @@ pub struct DevComponent {
     /// How many warm instances a reclaim sweep never retires below.
     ///
     /// Unset (or `0`) lets a fully idle pool empty out, so the next call
-    /// after a quiet spell starts cold. Capped at `poolSize`. A floor on
-    /// reclaim, not a target to grow to: instances are still only built when
-    /// a call needs one. Only meaningful alongside `reclaimWindowSeconds`.
+    /// after a quiet spell starts cold. A value at or above `poolSize`
+    /// disables reclaim entirely, since a sweep could never find a surplus to
+    /// retire. A floor on reclaim, not a target to grow to: instances are
+    /// still only built when a call needs one. Only meaningful alongside
+    /// `reclaimWindowSeconds`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reclaim_min_instances: Option<i32>,
 }
@@ -607,9 +609,9 @@ pub enum WorkloadConfigPolicy {
     Allow,
     /// Host-owned keys come only from the operator.
     ///
-    /// The default on `wash host`. It refuses nothing where nothing is declared
-    /// — a plugin that names no keys of its own, under an entry that sets none,
-    /// owns none — so it is the stricter default without being a breaking one.
+    /// The default on `wash host`. It refuses only the keys a plugin claims or
+    /// an entry sets: a plugin that names no keys of its own, under an entry
+    /// that sets none, owns none.
     #[default]
     Deny,
     /// `allow` plus diagnostics: nothing is refused, but everything `deny`
@@ -1019,7 +1021,10 @@ impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots 
 /// # Errors
 ///
 /// Rejects a zero for any ceiling or for the wait, which would silently mean
-/// "no connections" or "never wait" rather than what the operator meant.
+/// "no connections" or "never wait" rather than what the operator meant, and
+/// any ceiling above [`tokio::sync::Semaphore::MAX_PERMITS`], which would panic
+/// inside the semaphore — for per-workload ceilings, only once the first
+/// workload claims a quota.
 ///
 /// [`QuotaRegistry`]: wash_runtime::host::quota::QuotaRegistry
 pub fn connection_quotas(
@@ -1029,13 +1034,14 @@ pub fn connection_quotas(
     max_inbound_per_workload: Option<usize>,
     http_connection_wait: Option<std::time::Duration>,
 ) -> anyhow::Result<std::sync::Arc<wash_runtime::host::quota::QuotaRegistry>> {
+    let checked = |value: Option<usize>, name: &str| -> anyhow::Result<Option<usize>> {
+        anyhow::ensure!(value != Some(0), "{name} must be at least 1");
+        within_max_permits(value, name)?;
+        Ok(value)
+    };
     let defaults = wash_runtime::host::quota::QuotaLimits::default();
     let resolve = |value: Option<usize>, default: usize, name: &str| -> anyhow::Result<usize> {
-        match value {
-            Some(0) => anyhow::bail!("{name} must be at least 1"),
-            Some(v) => Ok(v),
-            None => Ok(default),
-        }
+        Ok(checked(value, name)?.unwrap_or(default))
     };
     let limits = wash_runtime::host::quota::QuotaLimits {
         outbound_http: resolve(
@@ -1054,9 +1060,7 @@ pub fn connection_quotas(
             "max_inbound_socket_connections_per_workload",
         )?,
     };
-    if max_connections == Some(0) {
-        anyhow::bail!("max_connections must be at least 1");
-    }
+    let max_connections = checked(max_connections, "max_connections")?;
     if let Some(total) = max_connections
         && limits
             .outbound_http
@@ -1098,7 +1102,7 @@ pub fn connection_quotas(
 /// shape, and the same treatment of a zero.
 ///
 /// `None` for either ceiling means the operator said nothing, and the number is
-/// derived from `total_core_instances` — the engine's actual pool budget — so a
+/// derived from all installed pool totals — including independent overrides — so a
 /// host told it is larger sizes its messaging ceiling to match instead of
 /// leaving a stock default silently binding. This is why the flags must not
 /// carry a `default_value_t`: a parse-time default is indistinguishable here
@@ -1117,7 +1121,7 @@ pub fn connection_quotas(
 pub fn wasmcloud_messaging_limits(
     max_in_flight: Option<usize>,
     max_in_flight_per_component: Option<usize>,
-    total_core_instances: Option<u32>,
+    engine: &wash_runtime::engine::Engine,
 ) -> anyhow::Result<wash_runtime::plugin::wasmcloud_messaging::MessagingLimits> {
     use wash_runtime::plugin::wasmcloud_messaging::MessagingLimits;
 
@@ -1142,7 +1146,7 @@ pub fn wasmcloud_messaging_limits(
             max_in_flight_per_component,
             "wasmcloud_messaging_max_in_flight_per_component",
         )?,
-        total_core_instances,
+        engine,
     );
 
     // Both numbers vary by host — pooling on or off, the size of the pool, and
@@ -1154,7 +1158,7 @@ pub fn wasmcloud_messaging_limits(
         per_component_default = limits.per_component_default(),
         host_total_source = if max_in_flight.is_some() {
             "flag"
-        } else if total_core_instances.is_some() {
+        } else if engine.total_memories().is_some() {
             "derived from the instance pool"
         } else {
             "built-in default (pooling disabled)"
@@ -1168,6 +1172,20 @@ pub fn wasmcloud_messaging_limits(
     );
 
     Ok(limits)
+}
+
+/// Rejects a ceiling above [`tokio::sync::Semaphore::MAX_PERMITS`], where
+/// `Semaphore::new` panics, so it fails at startup instead.
+pub fn within_max_permits(value: Option<usize>, name: &str) -> anyhow::Result<()> {
+    const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
+    match value {
+        Some(v) if v > MAX_PERMITS => {
+            anyhow::bail!(
+                "{name} must be at most {MAX_PERMITS} (the most a semaphore can hold), got {v}"
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1955,12 +1973,47 @@ mod tests {
         assert!(connection_quotas(None, None, None, None, Some(Duration::ZERO)).is_err());
     }
 
+    /// A ceiling above `Semaphore::MAX_PERMITS` would panic inside
+    /// `Semaphore::new`, so it must fail at startup instead.
+    #[test]
+    fn connection_quotas_reject_above_max_permits() {
+        let max = tokio::sync::Semaphore::MAX_PERMITS;
+        let over = max + 1;
+        assert!(connection_quotas(Some(over), None, None, None, None).is_err());
+        assert!(connection_quotas(None, Some(over), None, None, None).is_err());
+        assert!(connection_quotas(None, None, Some(over), None, None).is_err());
+        assert!(connection_quotas(None, None, None, Some(over), None).is_err());
+        assert!(connection_quotas(Some(usize::MAX), None, None, None, None).is_err());
+        assert!(connection_quotas(Some(max), Some(max), Some(max), Some(max), None).is_ok());
+    }
+
+    fn messaging_engine(memories: Option<u32>) -> wash_runtime::engine::Engine {
+        let mut builder = wash_runtime::engine::Engine::builder()
+            .without_max_process_memory()
+            .with_pooling_allocator(false);
+        if let Some(memories) = memories {
+            // Install explicit limits so environment overrides cannot change
+            // the test. Small table slots also keep Windows commit use low.
+            let mut pool = wasmtime::PoolingAllocationConfig::default();
+            pool.total_memories(memories)
+                .total_core_instances(memories.saturating_mul(16))
+                .total_tables(memories.saturating_mul(4))
+                .total_component_instances(memories)
+                .total_stacks(memories)
+                .table_elements(1)
+                .max_memory_size(1 << 16);
+            builder = builder.with_pooling_config(pool);
+        }
+        builder.build().expect("messaging test engine should build")
+    }
+
     #[test]
     fn wasmcloud_messaging_limits_reject_zero() {
         // Zero would silently mean "process no messages" — a host that looks
         // healthy and quietly consumes nothing. Better a startup error.
-        assert!(wasmcloud_messaging_limits(Some(0), Some(32), None).is_err());
-        assert!(wasmcloud_messaging_limits(Some(128), Some(0), None).is_err());
+        let engine = messaging_engine(None);
+        assert!(wasmcloud_messaging_limits(Some(0), Some(32), &engine).is_err());
+        assert!(wasmcloud_messaging_limits(Some(128), Some(0), &engine).is_err());
     }
 
     #[test]
@@ -1969,21 +2022,34 @@ mod tests {
         // not a large ceiling but an abort with a backtrace. `usize::MAX` is
         // what a fat-fingered "unlimited" looks like.
         let too_big = wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT + 1;
-        assert!(wasmcloud_messaging_limits(Some(too_big), None, None).is_err());
-        assert!(wasmcloud_messaging_limits(None, Some(too_big), None).is_err());
-        assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, None).is_err());
+        let engine = messaging_engine(None);
+        assert!(wasmcloud_messaging_limits(Some(too_big), None, &engine).is_err());
+        assert!(wasmcloud_messaging_limits(None, Some(too_big), &engine).is_err());
+        assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, &engine).is_err());
+    }
+
+    #[test]
+    fn within_max_permits_rejects_only_what_a_semaphore_cannot_hold() {
+        let max = tokio::sync::Semaphore::MAX_PERMITS;
+        assert!(within_max_permits(None, "x").is_ok());
+        assert!(within_max_permits(Some(max), "x").is_ok());
+        assert!(within_max_permits(Some(max + 1), "x").is_err());
+        assert!(within_max_permits(Some(usize::MAX), "x").is_err());
     }
 
     #[test]
     fn wasmcloud_messaging_limits_apply_overrides() {
-        let limits = wasmcloud_messaging_limits(Some(64), Some(8), None).expect("valid ceilings");
+        let engine = messaging_engine(None);
+        let limits =
+            wasmcloud_messaging_limits(Some(64), Some(8), &engine).expect("valid ceilings");
         assert_eq!(limits.host_total(), 64);
         assert_eq!(limits.per_component_default(), 8);
 
         // An explicit ceiling wins over what the pool would have derived —
         // otherwise the flag would be advisory on a pooled host.
+        let engine = messaging_engine(Some(256));
         let limits =
-            wasmcloud_messaging_limits(Some(64), Some(8), Some(3000)).expect("valid ceilings");
+            wasmcloud_messaging_limits(Some(64), Some(8), &engine).expect("valid ceilings");
         assert_eq!(limits.host_total(), 64);
         assert_eq!(limits.per_component_default(), 8);
     }
@@ -1991,8 +2057,9 @@ mod tests {
     #[test]
     fn wasmcloud_messaging_limits_default_to_the_documented_pair() {
         // No flags and no pool to derive from: the pinned defaults stand.
-        let limits =
-            wasmcloud_messaging_limits(None, None, None).expect("the built-in defaults are valid");
+        let engine = messaging_engine(None);
+        let limits = wasmcloud_messaging_limits(None, None, &engine)
+            .expect("the built-in defaults are valid");
         assert_eq!(limits.host_total(), 128);
         assert_eq!(limits.per_component_default(), 32);
     }
@@ -2004,8 +2071,9 @@ mod tests {
         // ceiling rose, and every component stayed pinned at the pool-derived
         // default — so on any host with fewer than ~31 messaging components the
         // flag changed nothing at all.
-        let derived = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
-        let raised = wasmcloud_messaging_limits(Some(1024), None, Some(1000)).expect("valid");
+        let engine = messaging_engine(Some(256));
+        let derived = wasmcloud_messaging_limits(None, None, &engine).expect("valid");
+        let raised = wasmcloud_messaging_limits(Some(1024), None, &engine).expect("valid");
         assert_eq!(raised.host_total(), 1024);
         assert!(
             raised.per_component_default() > derived.per_component_default(),
@@ -2015,20 +2083,20 @@ mod tests {
 
         // Lowering it must not leave the per-component default stranded above
         // the total the operator just set.
-        let lowered = wasmcloud_messaging_limits(Some(4), None, Some(1000)).expect("valid");
+        let lowered = wasmcloud_messaging_limits(Some(4), None, &engine).expect("valid");
         assert!(lowered.per_component_default() <= lowered.host_total());
     }
 
     #[test]
     fn wasmcloud_messaging_limits_do_not_over_commit_a_small_pool() {
-        // A pool of 16 core instances holds 3 worst-case components. The
-        // derived ceiling must not exceed that: admitting 8 would need 40 core
-        // instances and fail at instantiation, which is the exhaustion these
-        // ceilings exist to prevent.
-        let limits = wasmcloud_messaging_limits(None, None, Some(16)).expect("valid");
+        // A pool of 4 linear memories holds 4 components. The derived ceiling must not
+        // exceed that: admitting 8 would fail at instantiation, which is the
+        // exhaustion these ceilings exist to prevent.
+        let engine = messaging_engine(Some(4));
+        let limits = wasmcloud_messaging_limits(None, None, &engine).expect("valid");
         assert!(
-            limits.host_total() <= 3,
-            "a 16-instance pool derived a ceiling of {} messages",
+            limits.host_total() <= 4,
+            "a pool of 4 linear memories derived a ceiling of {} messages",
             limits.host_total()
         );
     }
@@ -2037,11 +2105,13 @@ mod tests {
     fn wasmcloud_messaging_limits_scale_with_the_pool() {
         // The point of deriving: a host told it is larger gets a larger
         // messaging ceiling, instead of the stock default silently binding.
-        let stock = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
-        let big = wasmcloud_messaging_limits(None, None, Some(8000)).expect("valid");
+        let stock_engine = messaging_engine(Some(32));
+        let stock = wasmcloud_messaging_limits(None, None, &stock_engine).expect("valid");
+        let big_engine = messaging_engine(Some(128));
+        let big = wasmcloud_messaging_limits(None, None, &big_engine).expect("valid");
         assert!(
             big.host_total() > stock.host_total(),
-            "raising WASMTIME_POOLING_TOTAL_CORE_INSTANCES must raise the messaging ceiling: \
+            "raising --max-memories must raise the messaging ceiling: \
              {} vs {}",
             big.host_total(),
             stock.host_total()

@@ -57,6 +57,7 @@ pub struct MessageHandle {
     pub(super) message: async_nats::Message,
     pub(super) sequence: u64,
     pub(super) delivery_count: u32,
+    pub(super) stored_at_unix_nanos: u64,
     /// The binding budget this delivery is charged against, and what it was
     /// charged, released when the handle is dropped.
     ///

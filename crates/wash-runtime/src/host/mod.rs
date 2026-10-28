@@ -983,11 +983,20 @@ impl Host {
         Ok(monitor.cpu_usage().global_usage)
     }
 
+    /// Recheck after queued work obtains a permit and before expensive phases.
+    /// Reserving an ID earlier is still necessary for stop/status correctness.
+    pub(crate) fn check_start_memory(&self) -> Result<(), String> {
+        self.engine
+            .process_memory()
+            .map_or(Ok(()), |guard| guard.admit_start())
+    }
+
     async fn workload_start_inner(
         &self,
         request: WorkloadStartRequest,
         cleanup: &crate::engine::workload::WorkloadResources,
     ) -> anyhow::Result<ResolvedWorkload> {
+        self.check_start_memory().map_err(anyhow::Error::msg)?;
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
 
@@ -1003,6 +1012,10 @@ impl Host {
         let span = tracing::Span::current();
         let unresolved_workload = tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
+            // The blocking executor can queue this after the check above.
+            if let Some(guard) = engine.process_memory() {
+                guard.admit_start().map_err(anyhow::Error::msg)?;
+            }
             engine.initialize_workload(&init_id, workload)
         })
         .await
@@ -1055,6 +1068,11 @@ impl HostApi for Host {
         // different questions: the monitor says how much memory this process
         // holds, the budget says how much of it guests asked for.
         self.engine.guest_memory().report();
+        // RSS from the monitor understates a process under pressure; this
+        // counts swapped and compressed pages too.
+        if let Some(process_memory) = self.engine.process_memory() {
+            process_memory.report();
+        }
 
         let (os_arch, os_name, os_kernel) = self.get_system_info().await;
         let (system_memory_total, system_memory_free) = self
@@ -1415,6 +1433,13 @@ impl WorkloadReservation for Host {
             debug!(workload_id, reason = message, "refused to start workload");
             return Err(message);
         }
+        // After the duplicate check, so a replayed start still reads as the
+        // workload already running rather than as a refusal. The guard logs
+        // its own refusals, rate-limited: a host past its limit can be asked
+        // for thousands of starts a second.
+        if let Some(guard) = self.engine.process_memory() {
+            guard.admit_start()?;
+        }
         workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
         Ok(reservation)
     }
@@ -1668,6 +1693,27 @@ impl HostBuilder {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Sets an ID known before the host connects to its control plane.
+    ///
+    /// The ID must be unique among every host sharing the control plane, and
+    /// never reused by a later host process: the operator may ignore heartbeats
+    /// from a removed host's ID for at least an hour. IDs must contain 1–128
+    /// ASCII letters, digits, hyphens, or underscores so they form one subject
+    /// token.
+    pub fn with_id(mut self, id: impl Into<String>) -> anyhow::Result<Self> {
+        let id = id.into();
+        anyhow::ensure!(
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')),
+            "host ID must contain 1–128 ASCII letters, digits, hyphens, or underscores"
+        );
+        self.id = id;
+        Ok(self)
     }
 
     pub fn with_engine(mut self, engine: Engine) -> Self {
@@ -1927,6 +1973,13 @@ impl HostBuilder {
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
             if let Some(policy) = declared.egress_policy(&engine.socket_policy) {
+                if policy.disabled_loopback_grants() {
+                    warn!(
+                        plugin_id = id,
+                        "host plugin declares allowedHostLoopbackPorts, but host-loopback access \
+                         is disabled; enable the host socket policy"
+                    );
+                }
                 plugin
                     .configure_egress_policy(policy)
                     .with_context(|| format!("invalid egress policy for host plugin '{id}'"))?;
@@ -1999,6 +2052,24 @@ fn reserve_http_ingress(
 mod tests {
     use super::*;
     use crate::types::Component;
+
+    #[test]
+    fn host_id_accepts_one_bounded_subject_token() -> anyhow::Result<()> {
+        for id in ["host-1_A".to_string(), "a".repeat(128)] {
+            assert_eq!(HostBuilder::default().with_id(id.clone())?.id(), id);
+        }
+        for id in ["", "a.b", "*", ">", "a b", "a\tb", "a\nb", "höst", "a:b"] {
+            assert!(HostBuilder::default().with_id(id).is_err(), "{id:?}");
+        }
+        assert!(HostBuilder::default().with_id("a".repeat(129)).is_err());
+        assert_ne!(HostBuilder::default().id(), HostBuilder::default().id());
+        let generated = HostBuilder::default().id().to_string();
+        assert_eq!(
+            HostBuilder::default().with_id(generated.clone())?.id(),
+            generated
+        );
+        Ok(())
+    }
 
     #[test]
     fn http_ingress_is_host_owned() {
@@ -3503,6 +3574,73 @@ mod tests {
         let err =
             build("nats://other.example:4222").expect_err("an undeclared server must fail startup");
         assert!(format!("{err:#}").contains("allowedIpNameLookups"));
+    }
+
+    /// Every plugin that dials a backend takes a declared ceiling rather than
+    /// refusing it as unenforceable, so none falls back to the default refusal.
+    /// wasmcloud-postgres also checks its base url here, so the list names it.
+    #[cfg(all(
+        feature = "wasm_component_model_implements",
+        feature = "wasi-keyvalue",
+        feature = "wasi-blobstore",
+        feature = "wasmcloud-postgres"
+    ))]
+    #[test]
+    fn every_dialing_plugin_accepts_a_declared_egress_policy() {
+        use crate::plugin::wasi_blobstore::{MultiplexedAsyncBlobstore, MultiplexedBlobstore};
+        use crate::plugin::wasi_keyvalue::{MultiplexedAsyncKeyValue, MultiplexedKeyValue};
+        use crate::plugin::wasmcloud_messaging::{MultiplexedAsyncMessaging, MultiplexedMessaging};
+        use crate::plugin::wasmcloud_postgres::WasmcloudPostgres;
+        use std::collections::BTreeSet;
+
+        let postgres =
+            WasmcloudPostgres::new(&url::Url::parse("postgres://u:p@db.internal/").unwrap())
+                .unwrap();
+        let plugins: [Arc<dyn HostPlugin>; 7] = [
+            Arc::new(MultiplexedKeyValue::new()),
+            Arc::new(MultiplexedAsyncKeyValue::new()),
+            Arc::new(MultiplexedBlobstore::new()),
+            Arc::new(MultiplexedAsyncBlobstore::new()),
+            Arc::new(MultiplexedMessaging::new()),
+            Arc::new(MultiplexedAsyncMessaging::new()),
+            Arc::new(postgres),
+        ];
+        let ids: BTreeSet<&str> = plugins.iter().map(|plugin| plugin.id()).collect();
+        assert_eq!(ids.len(), 7, "seven distinct plugin ids: {ids:?}");
+        for plugin in plugins {
+            let declared = crate::plugin::PluginBindingSet::new(plugin.id()).with_egress_policy(
+                Arc::from([
+                    "redis://cache.internal:6379".parse().unwrap(),
+                    "postgres://db.internal:5432".parse().unwrap(),
+                ]),
+                Arc::from([]),
+                Arc::from([]),
+            );
+            let id = plugin.id();
+            Host::builder()
+                .with_plugin(plugin)
+                .unwrap()
+                .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+                .build()
+                .unwrap_or_else(|err| panic!("{id}: {err:#}"));
+        }
+
+        // The base url the unnamed path dials is held to the same list.
+        let outside =
+            WasmcloudPostgres::new(&url::Url::parse("postgres://u:p@other.internal/").unwrap())
+                .unwrap();
+        let declared = crate::plugin::PluginBindingSet::new(outside.id()).with_egress_policy(
+            Arc::from(["postgres://db.internal:5432".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+        );
+        let err = Host::builder()
+            .with_plugin(Arc::new(outside))
+            .unwrap()
+            .with_plugin_bindings(crate::plugin::PluginBindings::new().with_plugin(declared))
+            .build()
+            .expect_err("a base url outside the list must fail startup");
+        assert!(format!("{err:#}").contains("other.internal"), "{err:#}");
     }
 
     /// A start that fails *after* its plugins bound must give the binding back.

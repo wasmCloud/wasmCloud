@@ -3,8 +3,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use redis::AsyncCommands;
 
+use crate::plugin::PluginEgressPolicy;
 use crate::plugin::multiplex::BackendProvider;
 
 use super::{KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError};
@@ -217,7 +219,11 @@ impl BackendProvider<KvId> for RedisProvider {
         "redis"
     }
 
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<KvId> {
+    async fn instantiate(
+        &self,
+        config: &HashMap<String, String>,
+        _egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<KvId> {
         let url = config
             .get("url")
             .ok_or_else(|| anyhow::anyhow!("redis keyvalue backend requires a 'url' config"))?;
@@ -225,5 +231,54 @@ impl BackendProvider<KvId> for RedisProvider {
         let conn = client.get_multiplexed_async_connection().await?;
         let prefix = config.get("prefix").filter(|p| !p.is_empty()).cloned();
         Ok(Arc::new(RedisBackend { conn, prefix }))
+    }
+
+    /// Checks the address `redis` itself parses out of the url. A unix socket
+    /// has no host for `allowedHosts` to name, so it is refused.
+    fn check_egress(
+        &self,
+        config: &HashMap<String, String>,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        let Some(url) = config.get("url") else {
+            return Ok(());
+        };
+        let info = redis::IntoConnectionInfo::into_connection_info(url.as_str())
+            .context("redis url is invalid")?;
+        match info.addr {
+            redis::ConnectionAddr::Tcp(host, port) => policy.check_host_port("redis", &host, port),
+            redis::ConnectionAddr::TcpTls { host, port, .. } => {
+                policy.check_host_port("rediss", &host, port)
+            }
+            redis::ConnectionAddr::Unix(path) => anyhow::bail!(
+                "redis endpoint {path:?} is a unix socket, which allowedHosts cannot permit"
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
+        RedisProvider.check_egress(
+            &HashMap::from([("url".to_string(), url.to_string())]),
+            policy,
+        )
+    }
+
+    #[test]
+    fn egress_is_checked_at_the_address_redis_dials() {
+        let policy =
+            PluginEgressPolicy::allowing(&["redis://cache.internal:6379", "[fd00::5]:6379"]);
+        check("redis://cache.internal", &policy).expect("the default port is 6379");
+        check("redis://:secret@cache.internal:6379/2", &policy).unwrap();
+        check("redis://[fd00::5]:6379", &policy).unwrap();
+
+        let err = check("redis://evil.example:6379", &policy).unwrap_err();
+        assert!(format!("{err:#}").contains("evil.example"), "{err:#}");
+        assert!(check("redis://cache.internal:6380", &policy).is_err());
+        assert!(check("redis+unix:///var/run/redis.sock", &policy).is_err());
     }
 }

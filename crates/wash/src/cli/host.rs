@@ -23,6 +23,53 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-url", default_value = "nats://localhost:4222")]
     pub scheduler_nats_url: String,
 
+    /// NATS credentials file, reread on reconnect
+    #[arg(long, env = "WASH_SCHEDULER_NATS_CREDS", group = "scheduler_nats_auth")]
+    pub scheduler_nats_creds: Option<PathBuf>,
+
+    /// NATS nkey seed file, reread on reconnect
+    #[arg(long, env = "WASH_SCHEDULER_NATS_NKEY", group = "scheduler_nats_auth")]
+    pub scheduler_nats_nkey: Option<PathBuf>,
+
+    /// NATS authentication token file, reread on reconnect
+    #[arg(
+        long,
+        env = "WASH_SCHEDULER_NATS_TOKEN_FILE",
+        group = "scheduler_nats_auth"
+    )]
+    pub scheduler_nats_token_file: Option<PathBuf>,
+
+    /// NATS username
+    #[arg(
+        long,
+        env = "WASH_SCHEDULER_NATS_USER",
+        group = "scheduler_nats_auth",
+        requires = "scheduler_nats_password_file"
+    )]
+    pub scheduler_nats_user: Option<String>,
+
+    /// NATS password file for the username, reread on reconnect
+    #[arg(
+        long,
+        env = "WASH_SCHEDULER_NATS_PASSWORD_FILE",
+        requires = "scheduler_nats_user"
+    )]
+    pub scheduler_nats_password_file: Option<PathBuf>,
+
+    /// Also send the credentials file's user JWT as the token, for an auth
+    /// callout on a NATS server without trusted operators, which drops the
+    /// JWT before the callout sees it
+    //
+    // clap waives `requires` when the required arg conflicts with one that is
+    // present, as members of one group do, so the others are refused here.
+    #[arg(
+        long,
+        env = "WASH_SCHEDULER_NATS_JWT_AS_TOKEN",
+        requires = "scheduler_nats_creds",
+        conflicts_with_all = ["scheduler_nats_nkey", "scheduler_nats_token_file", "scheduler_nats_user"]
+    )]
+    pub scheduler_nats_jwt_as_token: bool,
+
     /// How long to keep retrying NATS at startup before giving up, across both
     /// the scheduler and data connections together.
     ///
@@ -53,6 +100,46 @@ pub struct HostCommand {
     /// NATS URL for Data Plane communications
     #[arg(long = "data-nats-url", default_value = "nats://localhost:4222")]
     pub data_nats_url: String,
+
+    /// NATS credentials file, reread on reconnect
+    #[arg(long, env = "WASH_DATA_NATS_CREDS", group = "data_nats_auth")]
+    pub data_nats_creds: Option<PathBuf>,
+
+    /// NATS nkey seed file, reread on reconnect
+    #[arg(long, env = "WASH_DATA_NATS_NKEY", group = "data_nats_auth")]
+    pub data_nats_nkey: Option<PathBuf>,
+
+    /// NATS authentication token file, reread on reconnect
+    #[arg(long, env = "WASH_DATA_NATS_TOKEN_FILE", group = "data_nats_auth")]
+    pub data_nats_token_file: Option<PathBuf>,
+
+    /// NATS username
+    #[arg(
+        long,
+        env = "WASH_DATA_NATS_USER",
+        group = "data_nats_auth",
+        requires = "data_nats_password_file"
+    )]
+    pub data_nats_user: Option<String>,
+
+    /// NATS password file for the username, reread on reconnect
+    #[arg(
+        long,
+        env = "WASH_DATA_NATS_PASSWORD_FILE",
+        requires = "data_nats_user"
+    )]
+    pub data_nats_password_file: Option<PathBuf>,
+
+    /// Also send the credentials file's user JWT as the token, for an auth
+    /// callout on a NATS server without trusted operators, which drops the
+    /// JWT before the callout sees it
+    #[arg(
+        long,
+        env = "WASH_DATA_NATS_JWT_AS_TOKEN",
+        requires = "data_nats_creds",
+        conflicts_with_all = ["data_nats_nkey", "data_nats_token_file", "data_nats_user"]
+    )]
+    pub data_nats_jwt_as_token: bool,
 
     /// The path to TLS CA certificate file for NATS Data connection
     #[arg(long = "data-nats-tls-ca")]
@@ -242,13 +329,14 @@ pub struct HostCommand {
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
     /// this equally bounds instances. Unset, it is derived from the host's
-    /// instance pool: at the worst measured component shape (Componentize-Go,
-    /// 5 core instances each) a `total_core_instances` of 1000 supports 200
-    /// components, and messaging claims two thirds of that — 133 — leaving the
-    /// rest for HTTP-triggered work, warm pools, and long-lived services.
-    /// Raising `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` raises this with it;
-    /// with pooling disabled there is no budget to divide and the pinned
-    /// default of 128 stands. Set, the number given is used as-is.
+    /// installed instance and memory limits. The stock pool derives 666,
+    /// leaving capacity for HTTP-triggered work, warm pools, and long-lived
+    /// services; independent pool overrides can lower that default.
+    /// Components also acquire pool resources according to their memory and
+    /// table requirements, so compositions can reach a resource limit before
+    /// the message cap. Raising `--max-memories` raises the pool; with pooling
+    /// disabled the pinned default of 128 stands. Set, the number given is the
+    /// message cap, still subject to the installed pool's resource limits.
     //
     // Deliberately no `default_value_t`: a parse-time default is
     // indistinguishable downstream from an operator typing the same number, and
@@ -274,7 +362,7 @@ pub struct HostCommand {
     ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
-    /// 133 of a stock host gives 33, and the pinned 128 of a host with pooling
+    /// 666 of a stock host gives 166, and the pinned 128 of a host with pooling
     /// disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
@@ -289,9 +377,12 @@ pub struct HostCommand {
     /// where there is no cgroup, clamped to 256 MiB..1 TiB. An unset flag means
     /// the derived number, never "unbounded".
     ///
+    /// Swap is not part of the derived number. To let guests use swap, set this
+    /// (and `--max-process-memory`) explicitly.
+    ///
     /// What this bounds is the *total* of every guest's linear memory, which
     /// no other knob does: `--default-heap-memory` bounds one memory and
-    /// `--core-instances` bounds a count of slots. Whether it is enforced or
+    /// `--max-memories` bounds a count of slots. Whether it is enforced or
     /// only accounted is `--guest-memory-mode`, which enforces by default.
     //
     // Deliberately no `default_value_t`: a parse-time default is
@@ -299,6 +390,34 @@ pub struct HostCommand {
     // the derivation has to tell them apart.
     #[arg(long = "max-guest-memory", env = "WASH_HOST_MAX_GUEST_MEMORY")]
     pub max_guest_memory: Option<String>,
+
+    /// Most memory this whole process may use, guests and host together
+    /// (e.g. `48GiB`).
+    ///
+    /// Measured as the process's real footprint, which counts swapped and
+    /// (on macOS) compressed pages that RSS leaves out. On Linux it also
+    /// leaves out shared file and shmem pages, such as wasmtime's memory
+    /// images, which RSS counts once per mapping. Past it, guest memory
+    /// growth and new instances are refused until the footprint falls back
+    /// below 95% of it, or holds under the limit without growing for a
+    /// minute (memory the host itself retains does not shrink because guests
+    /// are refused).
+    ///
+    /// This is sampled admission control. In-flight allocations, writes into
+    /// committed guest memory, and host/plugin buffers can overshoot it.
+    /// Leave headroom and use an OS/container limit for a hard boundary.
+    ///
+    /// Unset, it is 90% of the cgroup limit, or of physical memory where
+    /// there is no cgroup, so the host never sets out to use more memory than
+    /// the machine has. That matters most where nothing else stops it: macOS
+    /// does not OOM-kill an ordinary process, it swaps until the machine
+    /// stalls. `off` (or `none`) holds the process to no limit at all.
+    ///
+    /// Swap is not part of the derived limit, though the footprint counts
+    /// swapped pages. To let the host use swap before refusing guests, set
+    /// this explicitly, e.g. to RAM plus the share of swap it may take.
+    #[arg(long = "max-process-memory", env = "WASH_HOST_MAX_PROCESS_MEMORY")]
+    pub max_process_memory: Option<String>,
 
     /// How `--max-guest-memory` is applied.
     ///
@@ -309,7 +428,8 @@ pub struct HostCommand {
     /// `count` charges every guest `memory.grow` to the budget and records
     /// what it would have refused, but allows the growth anyway. Use it to
     /// size a budget: watch the reported high-water mark and `would_refuse`
-    /// count, then return to `enforce`.
+    /// count, then return to `enforce`. The separate `--max-process-memory`
+    /// limit remains enforced in either mode.
     ///
     /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
     /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
@@ -337,16 +457,44 @@ pub struct HostCommand {
     /// wasmtime's own default of 4 GiB — which is what every host has run to
     /// date, and why an instance count has never implied a byte count.
     ///
-    /// Every slot is sized for this whether or not anything grows into it, so
-    /// raising it raises the pool's whole address-space reservation.
+    /// Every slot reserves wasmtime's 4 GiB plus a 32 MiB guard whether or
+    /// not anything grows into it. Lowering this below 4 GiB caps guest heaps
+    /// but does not shrink the reservation. It cannot go past 4 GiB: the
+    /// pooling allocator refuses a ceiling larger than its reservation, and
+    /// the host will not start.
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
-    /// Instance slots the pooling allocator keeps.
+    /// Linear memories the pooling allocator keeps room for, whatever
+    /// triggers them, and with them the fiber stacks, component instances and
+    /// GC heaps it admits, one count for all: a component instance of the
+    /// usual shape takes one of each.
     ///
-    /// Unset, this stays wasmtime's default of 1000. Multiplied by
-    /// `--default-heap-memory` it is the pool's address-space reservation, so
-    /// the two are worth setting together.
+    /// Unset, this is wasmtime's default of 1000, or the `--core-instances`
+    /// count when only that is given. Multiplied by one
+    /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
+    /// `--default-heap-memory` is) it is the pool's address-space reservation,
+    /// so it is the knob that sizes the pool. The core-instance and table
+    /// totals are multiples of it, since a component spends several of each
+    /// and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set any
+    /// total on its own.
+    #[arg(long = "max-memories", env = "WASH_MAX_MEMORIES")]
+    pub max_memories: Option<u32>,
+
+    /// Core instances (WebAssembly core modules) the pooling allocator admits
+    /// at once. A component is several: a Rust HTTP handler is four, a
+    /// Componentize-Go one five, and a composition adds every member's.
+    ///
+    /// Unset, this is sixteen per memory of `--max-memories`, which a
+    /// component of the usual shape never fills, so that the linear memories
+    /// are what a full pool runs out of first. Set alone, it sizes
+    /// `--max-memories` to the same count, the pool it sized before that flag
+    /// existed, with a warning at startup to move to `--max-memories`. Set
+    /// beside `--max-memories`, both are installed as given, with a warning
+    /// at startup when they do not match. A core instance reserves nothing,
+    /// so this is a counter, not a memory budget.
+    /// `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` overrides it, as it does every
+    /// total.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
 
@@ -737,15 +885,66 @@ fn host_plugin_registry_credentials(
     }
 }
 
+/// How one NATS connection authenticates, from its flags.
+fn nats_auth(
+    credentials: &Option<PathBuf>,
+    nkey: &Option<PathBuf>,
+    token_file: &Option<PathBuf>,
+    user: &Option<String>,
+    password_file: &Option<PathBuf>,
+    jwt_as_token: bool,
+) -> wash_runtime::washlet::NatsAuth {
+    let mut auth = wash_runtime::washlet::NatsAuth::default();
+    auth.credentials = credentials.clone();
+    auth.nkey = nkey.clone();
+    auth.token_file = token_file.clone();
+    auth.user = user.clone();
+    auth.password_file = password_file.clone();
+    auth.hook = jwt_as_token.then(wash_runtime::washlet::AuthHook::jwt_as_token);
+    auth
+}
+
 impl HostCommand {
+    /// How the scheduler connection authenticates.
+    fn scheduler_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
+        nats_auth(
+            &self.scheduler_nats_creds,
+            &self.scheduler_nats_nkey,
+            &self.scheduler_nats_token_file,
+            &self.scheduler_nats_user,
+            &self.scheduler_nats_password_file,
+            self.scheduler_nats_jwt_as_token,
+        )
+    }
+
+    /// How the data connection authenticates.
+    fn data_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
+        nats_auth(
+            &self.data_nats_creds,
+            &self.data_nats_nkey,
+            &self.data_nats_token_file,
+            &self.data_nats_user,
+            &self.data_nats_password_file,
+            self.data_nats_jwt_as_token,
+        )
+    }
+
     /// Every path this host reads credentials or configuration from, which no
     /// workload volume may expose.
     fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
         let project_dir = ctx.project_dir();
         let mut paths: Vec<PathBuf> = [
+            &self.scheduler_nats_creds,
+            &self.scheduler_nats_nkey,
+            &self.scheduler_nats_token_file,
+            &self.scheduler_nats_password_file,
             &self.scheduler_nats_tls_ca,
             &self.scheduler_nats_tls_cert,
             &self.scheduler_nats_tls_key,
+            &self.data_nats_creds,
+            &self.data_nats_nkey,
+            &self.data_nats_token_file,
+            &self.data_nats_password_file,
             &self.data_nats_tls_ca,
             &self.data_nats_tls_cert,
             &self.data_nats_tls_key,
@@ -784,6 +983,17 @@ impl HostCommand {
                     }
                 }),
         );
+        // A credential file a `wasmcloud:nats` binding names, so a workload
+        // cannot mount the Secret the binding authenticates with.
+        if let Ok(bindings) = self.plugin_bindings(config, project_dir) {
+            let nats = bindings.for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID);
+            let names: Vec<&str> = std::iter::once("").chain(nats.binding_names()).collect();
+            for name in names {
+                paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
+                    &nats.host_layer(name),
+                ));
+            }
+        }
         paths.extend(
             self.host_plugins
                 .iter()
@@ -921,13 +1131,20 @@ impl CliCommand for HostCommand {
         let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
+            self.max_memories,
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
+        let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
         );
+        crate::config::within_max_permits(
+            self.max_http_ingress_connections,
+            "max_http_ingress_connections",
+        )?;
+        crate::config::within_max_permits(self.max_concurrent_starts, "max_concurrent_starts")?;
 
         // Installed before connect_nats so TLS-enabled NATS clusters have a
         // crypto provider available. Idempotent; also called by Ingress::new.
@@ -956,40 +1173,38 @@ impl CliCommand for HostCommand {
         let connect_retry =
             (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
 
-        let scheduler_nats_client = wash_runtime::washlet::connect_nats(
-            self.scheduler_nats_url.clone(),
-            wash_runtime::washlet::NatsConnectionOptions {
-                request_timeout: None,
-                tls_ca: self.scheduler_nats_tls_ca.clone(),
-                tls_first: self.scheduler_nats_tls_first,
-                tls_cert: self.scheduler_nats_tls_cert.clone(),
-                tls_key: self.scheduler_nats_tls_key.clone(),
-                connect_retry,
-            },
-        )
-        .await
-        .context("failed to connect to NATS Scheduler URL")?;
+        let cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default();
+        let mut scheduler_options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{}", cluster_host_builder.host_id()))
+            .with_auth(self.scheduler_nats_auth())
+            .with_tls_first(self.scheduler_nats_tls_first);
+        scheduler_options.tls_ca = self.scheduler_nats_tls_ca.clone();
+        scheduler_options.tls_cert = self.scheduler_nats_tls_cert.clone();
+        scheduler_options.tls_key = self.scheduler_nats_tls_key.clone();
+        scheduler_options.connect_retry = connect_retry;
+        let scheduler_nats_client =
+            wash_runtime::washlet::connect_nats(self.scheduler_nats_url.clone(), scheduler_options)
+                .await
+                .context("failed to connect to NATS Scheduler URL")?;
 
-        let data_nats_client = wash_runtime::washlet::connect_nats(
-            self.data_nats_url.clone(),
-            wash_runtime::washlet::NatsConnectionOptions {
-                request_timeout: None,
-                tls_ca: self.data_nats_tls_ca.clone(),
-                tls_first: self.data_nats_tls_first,
-                tls_cert: self.data_nats_tls_cert.clone(),
-                tls_key: self.data_nats_tls_key.clone(),
-                // Whatever the scheduler connection left of the budget. A
-                // budget already spent becomes `None`, so the failure reads as
-                // the refusal it is rather than as a timeout of no length.
-                connect_retry: connect_retry.and_then(|_| {
-                    let left =
-                        connect_deadline.saturating_duration_since(tokio::time::Instant::now());
-                    (!left.is_zero()).then_some(left)
-                }),
-            },
-        )
-        .await
-        .context("failed to connect to NATS")?;
+        let mut data_options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{}:data", cluster_host_builder.host_id()))
+            .with_auth(self.data_nats_auth())
+            .with_tls_first(self.data_nats_tls_first);
+        data_options.tls_ca = self.data_nats_tls_ca.clone();
+        data_options.tls_cert = self.data_nats_tls_cert.clone();
+        data_options.tls_key = self.data_nats_tls_key.clone();
+        // Whatever the scheduler connection left of the budget. A budget
+        // already spent becomes `None`, so the failure reads as the refusal it
+        // is rather than as a timeout of no length.
+        data_options.connect_retry = connect_retry.and_then(|_| {
+            let left = connect_deadline.saturating_duration_since(tokio::time::Instant::now());
+            (!left.is_zero()).then_some(left)
+        });
+        let data_nats_client =
+            wash_runtime::washlet::connect_nats(self.data_nats_url.clone(), data_options)
+                .await
+                .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
         let host_config = wash_runtime::host::HostConfig {
@@ -1059,6 +1274,15 @@ impl CliCommand for HostCommand {
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
+        match process_memory_policy {
+            ProcessMemoryPolicy::Limit(bytes) => {
+                engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
+            }
+            ProcessMemoryPolicy::Disabled => {
+                engine_builder = engine_builder.without_max_process_memory()
+            }
+            ProcessMemoryPolicy::Automatic => {}
+        }
 
         let engine = engine_builder.build()?;
 
@@ -1073,7 +1297,7 @@ impl CliCommand for HostCommand {
         let messaging_limits = crate::config::wasmcloud_messaging_limits(
             self.wasmcloud_messaging_max_in_flight,
             self.wasmcloud_messaging_max_in_flight_per_component,
-            engine.total_core_instances(),
+            &engine,
         )?;
 
         if let Some(value) = &self.removed_wasmcloud_nats_workload_config {
@@ -1112,7 +1336,7 @@ impl CliCommand for HostCommand {
             }
         }
 
-        let mut cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default()
+        let mut cluster_host_builder = cluster_host_builder
             .with_engine(engine.clone())
             .with_host_config(host_config)
             .with_nats_client(Arc::new(scheduler_nats_client))
@@ -1428,6 +1652,134 @@ mod nats_tests {
 
     fn parse(args: &[&str]) -> HostCommand {
         TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    #[test]
+    fn host_nats_auth_flags_are_per_connection() {
+        let host = parse(&[
+            "--scheduler-nats-creds=scheduler.creds",
+            "--data-nats-user=data-user",
+            "--data-nats-password-file=data.password",
+        ]);
+        assert_eq!(host.scheduler_nats_creds, Some("scheduler.creds".into()));
+        assert_eq!(host.data_nats_creds, None);
+        assert_eq!(host.data_nats_user.as_deref(), Some("data-user"));
+        assert_eq!(host.data_nats_password_file, Some("data.password".into()));
+        let host = parse(&["--data-nats-token-file=data.token"]);
+        assert_eq!(host.data_nats_token_file, Some("data.token".into()));
+        assert_eq!(host.scheduler_nats_token_file, None);
+    }
+
+    #[test]
+    fn host_nats_auth_takes_one_credential_per_connection() {
+        for plane in ["scheduler", "data"] {
+            let creds = format!("--{plane}-nats-creds=a.creds");
+            let nkey = format!("--{plane}-nats-nkey=a.nk");
+            let token = format!("--{plane}-nats-token-file=a.token");
+            let user = format!("--{plane}-nats-user=a-user");
+            let password = format!("--{plane}-nats-password-file=a.password");
+            for args in [
+                vec![&creds, &nkey],
+                vec![&creds, &token],
+                vec![&nkey, &user, &password],
+                vec![&token, &user, &password],
+                vec![&user],
+                vec![&password],
+            ] {
+                let args = std::iter::once("wash-host").chain(args.iter().map(|a| a.as_str()));
+                assert!(TestCli::try_parse_from(args).is_err(), "{plane}");
+            }
+        }
+    }
+
+    #[test]
+    fn host_nats_jwt_as_token_is_per_connection() {
+        let host = parse(&[
+            "--scheduler-nats-creds=scheduler.creds",
+            "--scheduler-nats-jwt-as-token",
+            "--data-nats-creds=data.creds",
+        ]);
+        assert!(host.scheduler_nats_jwt_as_token);
+        assert!(!host.data_nats_jwt_as_token);
+        assert!(host.scheduler_nats_auth().hook.is_some());
+        assert!(host.data_nats_auth().hook.is_none());
+    }
+
+    /// Only a credentials file carries a JWT to repeat.
+    #[test]
+    fn host_nats_jwt_as_token_requires_credentials() {
+        for plane in ["scheduler", "data"] {
+            let jwt_as_token = format!("--{plane}-nats-jwt-as-token");
+            let nkey = format!("--{plane}-nats-nkey=a.nk");
+            let token = format!("--{plane}-nats-token-file=a.token");
+            for args in [
+                vec![&jwt_as_token],
+                vec![&jwt_as_token, &nkey],
+                vec![&jwt_as_token, &token],
+            ] {
+                let argv: Vec<&str> = std::iter::once("wash-host")
+                    .chain(args.iter().map(|a| a.as_str()))
+                    .collect();
+                assert!(TestCli::try_parse_from(&argv).is_err(), "{argv:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn host_nats_auth_files_are_reserved() -> anyhow::Result<()> {
+        let host = parse(&[
+            "--scheduler-nats-creds=scheduler.creds",
+            "--data-nats-user=data-user",
+            "--data-nats-password-file=data.password",
+        ]);
+        let ctx = crate::cli::CliContextBuilder::default()
+            .keep_working_dir()
+            .build()
+            .await?;
+        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
+        assert!(paths.contains(&std::path::PathBuf::from("scheduler.creds")));
+        assert!(paths.contains(&std::path::PathBuf::from("data.password")));
+        let host = parse(&[
+            "--scheduler-nats-nkey=scheduler.nk",
+            "--data-nats-token-file=data.token",
+        ]);
+        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
+        assert!(paths.contains(&std::path::PathBuf::from("scheduler.nk")));
+        assert!(paths.contains(&std::path::PathBuf::from("data.token")));
+        Ok(())
+    }
+
+    /// The files a `wasmcloud:nats` binding authenticates with are reserved,
+    /// from the base config and from each named binding.
+    #[tokio::test]
+    async fn reserved_paths_cover_nats_binding_files() -> anyhow::Result<()> {
+        let config = config_from(
+            r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      config:
+        creds: /secrets/base.creds
+      bindings:
+        orders:
+          config:
+            token-file: /secrets/orders.token
+            password-file: /secrets/orders.password
+"#,
+        );
+        let ctx = crate::cli::CliContextBuilder::default()
+            .keep_working_dir()
+            .build()
+            .await?;
+        let paths = parse(&[]).reserved_paths(&config, &ctx);
+        for path in [
+            "/secrets/base.creds",
+            "/secrets/orders.token",
+            "/secrets/orders.password",
+        ] {
+            assert!(paths.contains(&std::path::PathBuf::from(path)), "{path}");
+        }
+        Ok(())
     }
 
     fn config_from(yaml: &str) -> crate::config::Config {
@@ -1763,8 +2115,60 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, St
         .map_err(|e| e.to_string())
 }
 
-/// [`GuestMemoryMode`] from a flag or environment value, reading a blank one
-/// as unset.
+/// The three distinct meanings of the process-memory flag.
+#[derive(Debug, PartialEq, Eq)]
+enum ProcessMemoryPolicy {
+    Automatic,
+    Disabled,
+    Limit(u64),
+}
+
+impl ProcessMemoryPolicy {
+    fn parse(raw: Option<&str>) -> anyhow::Result<Self> {
+        let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+            return Ok(Self::Automatic);
+        };
+        if raw.eq_ignore_ascii_case("off") || raw.eq_ignore_ascii_case("none") {
+            return Ok(Self::Disabled);
+        }
+        let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
+            .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
+        anyhow::ensure!(
+            bytes > 0,
+            "max-process-memory must be greater than zero; use `off` for no limit"
+        );
+        Ok(Self::Limit(bytes))
+    }
+}
+
+#[cfg(test)]
+mod process_memory_policy_tests {
+    use super::*;
+    #[test]
+    fn distinguishes_automatic_disabled_and_explicit_limits() -> anyhow::Result<()> {
+        for raw in [None, Some(""), Some("  ")] {
+            assert_eq!(
+                ProcessMemoryPolicy::parse(raw)?,
+                ProcessMemoryPolicy::Automatic
+            );
+        }
+        for raw in ["off", " NONE "] {
+            assert_eq!(
+                ProcessMemoryPolicy::parse(Some(raw))?,
+                ProcessMemoryPolicy::Disabled
+            );
+        }
+        assert_eq!(
+            ProcessMemoryPolicy::parse(Some("1GiB"))?,
+            ProcessMemoryPolicy::Limit(1 << 30)
+        );
+        assert!(ProcessMemoryPolicy::parse(Some("0")).is_err());
+        assert!(ProcessMemoryPolicy::parse(Some("invalid")).is_err());
+        Ok(())
+    }
+}
+
+/// Parse the guest mode, treating a blank environment value as unset.
 fn parse_guest_memory_mode(raw: &str) -> Result<GuestMemoryMode, String> {
     let raw = raw.trim();
     if raw.is_empty() {

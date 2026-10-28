@@ -132,7 +132,10 @@ impl ResolvedWorkload {
         let result = if p3 {
             let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
                 .instantiate_async(&mut store)
-                .await?;
+                .await
+                .map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })?;
             store
                 .run_concurrent(async move |accessor| {
                     command.wasi_cli_run().call_run(accessor).await
@@ -142,7 +145,10 @@ impl ResolvedWorkload {
         } else {
             let command = wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
                 .instantiate_async(&mut store)
-                .await?;
+                .await
+                .map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })?;
             command.wasi_cli_run().call_run(&mut store).await
         };
         match result {

@@ -7,7 +7,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::plugin::multiplex::BackendProvider;
+use crate::plugin::PluginEgressPolicy;
+use crate::plugin::multiplex::{BackendProvider, check_nats_url, connect_nats};
 
 use super::{BrokerMessage, MsgBackend, MsgError, MsgId};
 
@@ -82,13 +83,25 @@ impl BackendProvider<MsgId> for NatsMsgProvider {
         "nats"
     }
 
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<MsgId> {
+    async fn instantiate(
+        &self,
+        config: &HashMap<String, String>,
+        egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<MsgId> {
         let url = config
             .get("url")
             .ok_or_else(|| anyhow::anyhow!("nats messaging backend requires a 'url' config"))?;
-        let client = async_nats::connect(url).await?;
+        let client = connect_nats(url, egress).await?;
         Ok(Arc::new(NatsMsgBackend {
             client: Arc::new(client),
         }))
+    }
+
+    fn check_egress(
+        &self,
+        config: &HashMap<String, String>,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        check_nats_url(config, policy)
     }
 }
