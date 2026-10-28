@@ -37,7 +37,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/component-matrix.yml
+    uses: $/.github/workflows/component-matrix.yml
     with:
       # `env` isn't an available context for a reusable-workflow call's
       # `with:`, so these live here directly rather than in a top-level
@@ -89,7 +89,7 @@ jobs:
           # clone source a regular commit instead of detached HEAD.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - uses: ./.github/actions/setup-rust
+      - uses: $/.github/actions/setup-rust
         with:
           install-nightly: "true"
 
@@ -114,7 +114,7 @@ jobs:
           # TODO: drop once a wash release with the #5152 fix is out.
           printf 'y\ny\ny\n' | script -qec "wash new 'file://${WORKSPACE}' --subfolder '${SUBFOLDER}' --name '${TEMPLATE}' --non-interactive" /dev/null
 
-      - uses: ./.github/actions/build-rust-component
+      - uses: $/.github/actions/build-rust-component
         with:
           working-directory: ${{ runner.temp }}/${{ matrix.key }}
 
