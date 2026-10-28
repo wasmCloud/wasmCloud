@@ -1214,7 +1214,7 @@ mod tests {
     /// entry that omits them round-trips as "unset" rather than zero.
     #[test]
     fn dev_component_warm_instance_limits_deserialize() {
-        let with: DevComponent = serde_yaml_ng::from_str(
+        let with: DevComponent = serde_saphyr::from_str(
             "name: pooled\nfile: pooled.wasm\npoolSize: 8\nmaxInvocations: 50\n\
              reclaimWindowSeconds: 60\nreclaimMinInstances: 2",
         )
@@ -1225,7 +1225,7 @@ mod tests {
         assert_eq!(with.reclaim_min_instances, Some(2));
 
         let without: DevComponent =
-            serde_yaml_ng::from_str("name: plain\nfile: plain.wasm").unwrap();
+            serde_saphyr::from_str("name: plain\nfile: plain.wasm").unwrap();
         assert_eq!(without.pool_size, None);
         assert_eq!(without.max_invocations, None);
         assert_eq!(without.reclaim_window_seconds, None);

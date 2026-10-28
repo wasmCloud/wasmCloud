@@ -459,7 +459,7 @@ workload:
     config:
       LOG: debug
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let project = TempDir::new().unwrap();
         let resolved = resolve_workload(&config, project.path(), Some(project.path())).unwrap();
         assert_eq!(resolved.allowed_hosts, vec![AllowedHost::Any]);
@@ -474,7 +474,7 @@ workload:
 workload:
   allowedHosts: []
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let project = TempDir::new().unwrap();
         let resolved = resolve_workload(&config, project.path(), Some(project.path())).unwrap();
         assert!(resolved.allowed_hosts.is_empty());
@@ -484,7 +484,7 @@ workload:
     fn resolve_workload_empty_allowed_hosts_denied_by_runtime_check() {
         use wash_runtime::host::http::check_allowed_hosts;
         let yaml = "workload:\n  allowedHosts: []\n";
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let project = TempDir::new().unwrap();
         let resolved = resolve_workload(&config, project.path(), Some(project.path())).unwrap();
         let req = hyper::Request::builder()
@@ -498,7 +498,7 @@ workload:
     fn resolve_workload_default_allowed_hosts_allowed_by_runtime_check() {
         use wash_runtime::host::http::check_allowed_hosts;
         let yaml = "workload:\n  environment:\n    config:\n      X: \"1\"\n";
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let project = TempDir::new().unwrap();
         let resolved = resolve_workload(&config, project.path(), Some(project.path())).unwrap();
         let req = hyper::Request::builder()
