@@ -404,9 +404,14 @@ fn signal_or_shared(signal_var: &str, shared_var: &str) -> Option<String> {
 }
 
 /// What `SdkProvidedResourceDetector` emits for `service.name` when nothing
-/// named the service. The Rust SDK uses the bare literal, not the
-/// specification's `unknown_service:<executable>`.
+/// named the service: `unknown_service:<executable>`, or the bare literal when
+/// the executable name is unavailable.
 const UNKNOWN_SERVICE: &str = "unknown_service";
+
+fn is_unknown_service(name: &str) -> bool {
+    name.strip_prefix(UNKNOWN_SERVICE)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+}
 
 /// This runtime's own `service.name`, or `None` when the environment already
 /// named one.
@@ -418,7 +423,7 @@ const UNKNOWN_SERVICE: &str = "unknown_service";
 fn default_service_name(detected: &Resource) -> Option<KeyValue> {
     let named = detected
         .get(&Key::from_static_str(resource::SERVICE_NAME))
-        .is_some_and(|value| value.as_str() != UNKNOWN_SERVICE);
+        .is_some_and(|value| !is_unknown_service(&value.as_str()));
     (!named).then(|| KeyValue::new(resource::SERVICE_NAME.to_string(), env!("CARGO_PKG_NAME")))
 }
 
@@ -1220,7 +1225,9 @@ mod tests {
             default_service_name(&named(UNKNOWN_SERVICE)).map(|kv| kv.value.as_str().to_string()),
             Some(env!("CARGO_PKG_NAME").to_string()),
         );
+        assert!(default_service_name(&named("unknown_service:wash")).is_some());
         assert!(default_service_name(&named("checkout")).is_none());
+        assert!(default_service_name(&named("unknown_services")).is_none());
         // Nothing detected at all is still nobody naming it.
         assert!(default_service_name(&Resource::builder_empty().build()).is_some());
     }

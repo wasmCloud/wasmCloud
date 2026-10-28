@@ -49,8 +49,11 @@ use opentelemetry::KeyValue;
 use opentelemetry::context::FutureExt;
 use opentelemetry_semantic_conventions::attribute::{
     ERROR_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE,
-    OTEL_STATUS_CODE, RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
+    OTEL_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
 };
+// Deprecated by semconv 1.42 for the string-valued `rpc.response.status_code`.
+#[allow(deprecated)]
+use opentelemetry_semantic_conventions::attribute::RPC_GRPC_STATUS_CODE;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tracing::{Instrument, debug, error, info, instrument, warn};
@@ -3552,6 +3555,7 @@ fn record_response_status<B>(response: &hyper::Response<B>) {
 /// The span must be entered (e.g. via [`tracing::Instrument::instrument`]) for
 /// the duration of the request so that status recorded on the *current* span
 /// from inside the async work lands on this span.
+#[allow(deprecated)]
 fn outbound_client_span(method: &hyper::Method, uri: &hyper::Uri) -> tracing::Span {
     let span = tracing::info_span!(
         "outbound_http_request",
@@ -3596,6 +3600,7 @@ fn record_outbound_error() {
 /// trailers-only responses that put the status in headers, so this captures
 /// them; a status delivered in actual trailers (the streaming-success case) is
 /// not read here.
+#[allow(deprecated)]
 fn record_grpc_status(headers: &hyper::HeaderMap) {
     if let Some(code) = headers
         .get("grpc-status")
