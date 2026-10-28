@@ -304,7 +304,7 @@ impl From<&HostWorkload> for WorkloadState {
 
 type WorkloadMap = HashMap<String, HostWorkload>;
 
-/// Read the workload map, ignoring poison as the tokio lock it replaced did.
+/// Read the workload map. Poison is ignored: every write is a single step.
 fn read_workloads(
     map: &std::sync::RwLock<WorkloadMap>,
 ) -> std::sync::RwLockReadGuard<'_, WorkloadMap> {
@@ -312,7 +312,7 @@ fn read_workloads(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Write the workload map, ignoring poison as the tokio lock it replaced did.
+/// Write the workload map. Poison is ignored: every write is a single step.
 fn write_workloads(
     map: &std::sync::RwLock<WorkloadMap>,
 ) -> std::sync::RwLockWriteGuard<'_, WorkloadMap> {
@@ -673,12 +673,7 @@ impl Host {
     /// most of all a *different* workload that claimed the id in the meantime —
     /// it is not this teardown's to write, and removing it would leave that
     /// workload running with nothing tracking it.
-    async fn finish_teardown(
-        &self,
-        workload_id: &str,
-        reservation: Reservation,
-        reason: Option<String>,
-    ) {
+    fn finish_teardown(&self, workload_id: &str, reservation: Reservation, reason: Option<String>) {
         let mut workloads = write_workloads(&self.workloads);
         let failure = match workloads.get(workload_id) {
             Some(HostWorkload::Stopping(held)) if *held == reservation => None,
@@ -744,8 +739,7 @@ impl Host {
             release(workload_id, &resolved).await;
             // The id was held as `Stopping` for the teardown; publish the
             // failure now that letting a stop free it is safe.
-            self.finish_teardown(workload_id, reservation, Some(reason.clone()))
-                .await;
+            self.finish_teardown(workload_id, reservation, Some(reason.clone()));
         }
         warn!(
             workload_id,
@@ -1031,7 +1025,12 @@ impl Host {
         let unresolved_workload = match engine.pin_compiled_components(&workload) {
             // Nothing to compile and no files to open: cheaper here than the
             // blocking pool's two thread handoffs.
-            Some(_pinned) => engine.initialize_workload(&init_id, workload)?,
+            // A panic fails this start, as it did on the blocking pool.
+            Some(_pinned) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                engine.initialize_workload(&init_id, workload)
+            }))
+            .map_err(|_| anyhow::anyhow!("workload initialization panicked"))
+            .context("workload initialization task failed")??,
             None => {
                 let span = tracing::Span::current();
                 tokio::task::spawn_blocking(move || {
@@ -1360,8 +1359,7 @@ impl HostApi for Host {
                     Ok(()) => {
                         // Dropped only now, so the id stays reserved for the
                         // whole teardown.
-                        self.finish_teardown(&request.workload_id, reservation, None)
-                            .await;
+                        self.finish_teardown(&request.workload_id, reservation, None);
                         cleanup_guard.disarm();
                     }
                     // Left armed: dropping the guard hands what is still bound
@@ -1495,9 +1493,13 @@ impl WorkloadReservation for Host {
     ) -> anyhow::Result<WorkloadStartResponse> {
         let workload_id = request.workload_id.clone();
         let mut start_guard = self.workload_cleanup_guard(&workload_id, reservation);
-        let started = self
+        let mut started = self
             .workload_start_inner(request, &start_guard.cleanup())
             .await;
+        // Before the lock below: this copies the binding journal.
+        if let Ok(resolved) = &mut started {
+            start_guard.cleanup().commit(resolved);
+        }
 
         // Commit under the same lock the id was reserved under, and only into
         // the slot this start reserved. Anything else in that slot means the
@@ -1518,8 +1520,7 @@ impl WorkloadReservation for Host {
                 _ => None,
             };
             match started {
-                Ok(mut resolved) if mine => {
-                    start_guard.cleanup().commit(&mut resolved);
+                Ok(resolved) if mine => {
                     start_guard.disarm();
                     workloads.insert(
                         workload_id.clone(),
@@ -1574,7 +1575,7 @@ impl WorkloadReservation for Host {
         if release_start_resources {
             match start_guard.cleanup().release(&workload_id).await {
                 Ok(()) => {
-                    self.finish_teardown(&workload_id, reservation, None).await;
+                    self.finish_teardown(&workload_id, reservation, None);
                     start_guard.disarm();
                 }
                 // Keep the guard armed so unfinished cleanup stays retryable by a stop.
