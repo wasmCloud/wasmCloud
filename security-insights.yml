@@ -36,9 +36,9 @@ project:
       email: security@wasmcloud.com
       primary: true
     comment: >-
-      Email security@wasmcloud.com, or use GitHub private vulnerability
-      reporting at https://github.com/wasmCloud/wasmCloud/security/advisories/new.
-      Reports are acknowledged within 3 business days. Advisories are published as GitHub
+      Report privately through GitHub at
+      https://github.com/wasmCloud/wasmCloud/security/advisories/new or by email
+      to security@wasmcloud.com. Reports are acknowledged within 3 business days. Advisories are published as GitHub
       Security Advisories in the affected repository.
     in-scope:
       - Any repository in the wasmCloud GitHub organization
