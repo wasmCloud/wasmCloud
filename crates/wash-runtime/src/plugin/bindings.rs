@@ -906,7 +906,7 @@ impl PluginBindingSet {
 
     /// The binding name an interface routes under: its `(implements ..)` label,
     /// or the unnamed binding. See [`binding_of`].
-    fn binding_name<'a>(&self, interface: &'a WitInterface) -> &'a str {
+    pub(crate) fn binding_name<'a>(&self, interface: &'a WitInterface) -> &'a str {
         binding_of(&self.plugin_id, interface.name.as_deref()).unwrap_or(UNNAMED_BINDING)
     }
 
@@ -1312,20 +1312,72 @@ impl PluginBindingSet {
     /// the layer without the bundle refuses the ordinary case: a second
     /// binding on the same cluster, declared only to carry a narrower grant.
     ///
-    /// A binding still waiting on a plugin secret is left out: its values exist
-    /// only once a workload binds it, and the host checks it then.
+    /// A key still waiting on a plugin secret is absent from its layer; see
+    /// [`Self::pending_secret_keys`]. The host checks the filled layer again
+    /// when a workload binds it.
     pub fn host_layers<'a>(
         &'a self,
         schema: &'a BindingSchema,
     ) -> impl Iterator<Item = (&'a str, HashMap<String, String>)> {
-        self.bindings
+        self.bindings.keys().map(move |name| {
+            let mut layer = self.host_layer_with(name, schema);
+            self.apply_default_bundles(name, &mut layer, schema);
+            (name.as_str(), layer)
+        })
+    }
+
+    /// The keys of binding `name`'s layer that still wait on a plugin secret,
+    /// by the schema's identity for them: its own, and the entry's unless the
+    /// binding sets that key itself.
+    #[must_use]
+    pub fn pending_secret_keys(&self, name: &str, schema: &BindingSchema) -> BTreeSet<String> {
+        let own_config = self.bindings.get(name);
+        let own_secrets = self.binding_secrets.get(name);
+        let set_here = |key: &str| {
+            let key = schema.canonical(key);
+            own_config
+                .into_iter()
+                .flat_map(HashMap::keys)
+                .chain(own_secrets.into_iter().flat_map(HashMap::keys))
+                .any(|k| schema.canonical(k) == key)
+        };
+        self.base_secrets
             .keys()
-            .filter(|name| !self.reads_pending_secret(name))
-            .map(move |name| {
-                let mut layer = self.host_layer_with(name, schema);
-                self.apply_default_bundles(name, &mut layer, schema);
-                (name.as_str(), layer)
-            })
+            .filter(|key| !set_here(key))
+            .chain(own_secrets.into_iter().flat_map(HashMap::keys))
+            .map(|key| schema.canonical(key))
+            .collect()
+    }
+
+    /// This set with only the bindings in `names`, for re-checking just the
+    /// layers a bind filled.
+    #[must_use]
+    pub fn only_bindings(&self, names: &BTreeSet<String>) -> Self {
+        let keep = |name: &String| names.contains(name);
+        Self {
+            plugin_id: self.plugin_id.clone(),
+            base: self.base.clone(),
+            bindings: self
+                .bindings
+                .iter()
+                .filter(|(name, _)| keep(name))
+                .map(|(name, config)| (name.clone(), config.clone()))
+                .collect(),
+            base_secrets: self.base_secrets.clone(),
+            binding_secrets: self
+                .binding_secrets
+                .iter()
+                .filter(|(name, _)| keep(name))
+                .map(|(name, secrets)| (name.clone(), secrets.clone()))
+                .collect(),
+            declared_host_owned: self.declared_host_owned.clone(),
+            workload_config: self.workload_config,
+            default_bundles: self.default_bundles.clone(),
+            allowed_hosts: Arc::clone(&self.allowed_hosts),
+            allowed_ip_name_lookups: Arc::clone(&self.allowed_ip_name_lookups),
+            allowed_host_loopback_ports: Arc::clone(&self.allowed_host_loopback_ports),
+            egress_policy_declared: self.egress_policy_declared,
+        }
     }
 
     /// Whether any key still waits on a plugin secret.
@@ -1348,32 +1400,35 @@ impl PluginBindingSet {
         base.chain(named)
     }
 
-    /// Whether binding `name`'s config still waits on a plugin secret, its own
-    /// or the entry's.
-    fn reads_pending_secret(&self, name: &str) -> bool {
-        !self.base_secrets.is_empty() || self.binding_secrets.contains_key(name)
-    }
-
     /// This set with the plugin secrets of `bindings` (and of the entry
-    /// itself) written into their layers, taking each value from `value`.
-    /// Layers left out stay pending, and resolving a binding that reads one
-    /// fails. This is where a [`SecretValue`] becomes the consuming plugin's
-    /// config.
+    /// itself) written into their layers, taking each value from `value`, and
+    /// the named bindings whose layers changed. Layers left out stay pending,
+    /// and resolving a binding that reads one fails. This is where a
+    /// [`SecretValue`] becomes the consuming plugin's config.
     ///
     /// # Errors
     ///
     /// Whatever `value` returns.
     pub fn fill_plugin_secrets(
         mut self,
-        bindings: &BTreeSet<&str>,
+        bindings: &BTreeSet<String>,
         mut value: impl FnMut(Option<&str>, &PluginSecretRef) -> anyhow::Result<SecretValue>,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<(Self, BTreeSet<String>)> {
+        let mut changed = BTreeSet::new();
+        if !self.base_secrets.is_empty() {
+            changed.extend(
+                self.bindings
+                    .keys()
+                    .filter(|name| bindings.contains(*name))
+                    .cloned(),
+            );
+        }
         for (key, r) in std::mem::take(&mut self.base_secrets) {
             let v = value(None, &r)?;
             self.base.insert(key, v.into_exposed());
         }
         for (name, secrets) in std::mem::take(&mut self.binding_secrets) {
-            if !bindings.contains(name.as_str()) {
+            if !bindings.contains(&name) {
                 self.binding_secrets.insert(name, secrets);
                 continue;
             }
@@ -1384,8 +1439,9 @@ impl PluginBindingSet {
                     .or_default()
                     .insert(key, v.into_exposed());
             }
+            changed.insert(name);
         }
-        Ok(self)
+        Ok((self, changed))
     }
 
     /// The base layer on its own, for a plugin checking a key that is only

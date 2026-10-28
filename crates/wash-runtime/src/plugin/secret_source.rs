@@ -13,7 +13,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 
 use super::HostPlugin;
-use super::bindings::{BindingSchema, KeyOwnership, PluginBindingSet, UNNAMED_BINDING, binding_of};
+use super::bindings::{BindingSchema, KeyOwnership, PluginBindingSet};
 use crate::wit::WitInterface;
 
 /// What the host asks a [`HostSecretSource`] for, and on whose behalf.
@@ -140,8 +140,10 @@ pub(crate) fn validate_plugin_secrets(
 }
 
 /// `declared` with the plugin secrets of every binding in `interfaces` filled
-/// in. Each source declared on a layer is resolved with one call, keys
-/// deduplicated, however many keys and entries read it.
+/// in, and the bindings a fill changed (`None` when it filled nothing), the
+/// layers to check again. Each source declared on a layer is resolved with one
+/// call, keys deduplicated, however many keys and entries read it; the calls
+/// run concurrently.
 ///
 /// # Errors
 ///
@@ -152,14 +154,14 @@ pub(crate) async fn resolve_plugin_secrets(
     plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     declared: PluginBindingSet,
     interfaces: &HashSet<WitInterface>,
-) -> anyhow::Result<PluginBindingSet> {
+) -> anyhow::Result<(PluginBindingSet, Option<BTreeSet<String>>)> {
     if !declared.has_plugin_secrets() {
-        return Ok(declared);
+        return Ok((declared, None));
     }
     let plugin_id = declared.plugin_id().to_string();
     let in_use: BTreeSet<&str> = interfaces
         .iter()
-        .map(|i| binding_of(&plugin_id, i.name.as_deref()).unwrap_or(UNNAMED_BINDING))
+        .map(|i| declared.binding_name(i))
         .collect();
 
     let mut requests: BTreeMap<LayerSource<'_>, (&str, BTreeSet<&str>)> = BTreeMap::new();
@@ -174,48 +176,59 @@ pub(crate) async fn resolve_plugin_secrets(
             .insert(secret.key.as_str());
     }
 
-    let mut values: HashMap<(Option<String>, String), HashMap<String, SecretValue>> =
-        HashMap::new();
-    for ((binding, source), (plugin, keys)) in requests {
-        let place = match binding {
-            Some(name) => format!("binding `{name}` of `{plugin_id}`"),
-            None => format!("`{plugin_id}`"),
-        };
-        let resolver = plugins
-            .get(plugin)
-            .and_then(|p| p.secret_source())
-            .with_context(|| {
-                format!("secret `{source}` for {place}: plugin `{plugin}` serves no secret-source")
-            })?;
-        let resolved = resolver
-            .resolve(SecretRequest {
-                consumer: plugin_id.clone(),
-                binding: binding.map(str::to_string),
-                keys: keys.iter().map(|k| k.to_string()).collect(),
-            })
-            .await
-            .map_err(|e| {
-                anyhow::Error::new(e).context(format!(
-                    "secret `{source}` for {place}: plugin `{plugin}` did not resolve it"
-                ))
-            })?;
-        values.insert((binding.map(str::to_string), source.to_string()), resolved);
-    }
+    let calls = requests
+        .into_iter()
+        .map(|((binding, source), (plugin, keys))| {
+            let plugin_id = plugin_id.as_str();
+            async move {
+                let place = match binding {
+                    Some(name) => format!("binding `{name}` of `{plugin_id}`"),
+                    None => format!("`{plugin_id}`"),
+                };
+                let resolver = plugins
+                    .get(plugin)
+                    .and_then(|p| p.secret_source())
+                    .with_context(|| {
+                        format!(
+                            "secret `{source}` for {place}: plugin `{plugin}` serves no \
+                             secret-source"
+                        )
+                    })?;
+                let resolved = resolver
+                    .resolve(SecretRequest {
+                        consumer: plugin_id.to_string(),
+                        binding: binding.map(str::to_string),
+                        keys: keys.iter().map(|k| k.to_string()).collect(),
+                    })
+                    .await
+                    .map_err(|e| {
+                        anyhow::Error::new(e).context(format!(
+                            "secret `{source}` for {place}: plugin `{plugin}` did not resolve it"
+                        ))
+                    })?;
+                anyhow::Ok(((binding.map(str::to_string), source.to_string()), resolved))
+            }
+        });
+    let values: HashMap<(Option<String>, String), HashMap<String, SecretValue>> =
+        futures::future::try_join_all(calls)
+            .await?
+            .into_iter()
+            .collect();
 
-    declared
-        .clone()
-        .fill_plugin_secrets(&in_use, |binding, secret| {
-            values
-                .get(&(binding.map(str::to_string), secret.source.clone()))
-                .and_then(|resolved| resolved.get(&secret.key))
-                .cloned()
-                .with_context(|| {
-                    format!(
-                        "secret `{}` for `{plugin_id}`: plugin `{}` has no key `{}`",
-                        secret.source, secret.plugin, secret.key
-                    )
-                })
-        })
+    let in_use: BTreeSet<String> = in_use.into_iter().map(str::to_string).collect();
+    let (filled, refilled) = declared.fill_plugin_secrets(&in_use, |binding, secret| {
+        values
+            .get(&(binding.map(str::to_string), secret.source.clone()))
+            .and_then(|resolved| resolved.get(&secret.key))
+            .cloned()
+            .with_context(|| {
+                format!(
+                    "secret `{}` for `{plugin_id}`: plugin `{}` has no key `{}`",
+                    secret.source, secret.plugin, secret.key
+                )
+            })
+    })?;
+    Ok((filled, Some(refilled)))
 }
 
 #[cfg(test)]
@@ -327,13 +340,24 @@ mod tests {
     #[tokio::test]
     async fn only_the_bindings_in_use_are_resolved() {
         let source = fixed();
-        let filled = resolve_plugin_secrets(
+        let (filled, refilled) = resolve_plugin_secrets(
             &plugins(source.clone()),
             declared(),
             &HashSet::from([postgres("app-db")]),
         )
         .await
         .unwrap();
+        // Only the filled binding is checked again, so a bad unrelated one
+        // cannot fail this bind.
+        let refilled = refilled.unwrap();
+        assert_eq!(refilled, BTreeSet::from(["app-db".to_string()]));
+        assert_eq!(
+            filled
+                .only_bindings(&refilled)
+                .binding_names()
+                .collect::<Vec<_>>(),
+            ["app-db"]
+        );
         assert_eq!(
             filled.host_layer("app-db")["url"],
             "postgres://app:pw@db/app"
@@ -388,13 +412,20 @@ mod tests {
                 secret("shared", "pg-url-reports"),
             ),
         ]));
-        resolve_plugin_secrets(
+        let (_, refilled) = resolve_plugin_secrets(
             &plugins(source.clone()),
             set,
             &HashSet::from([postgres("app-db"), postgres("reports-db")]),
         )
         .await
         .unwrap();
+        assert_eq!(
+            refilled,
+            Some(BTreeSet::from([
+                "app-db".to_string(),
+                "reports-db".to_string()
+            ]))
+        );
         let requests = source.1.lock().unwrap();
         let shared: Vec<_> = requests.iter().filter(|r| r.binding.is_none()).collect();
         assert_eq!(shared.len(), 1);
@@ -451,14 +482,20 @@ mod tests {
         );
     }
 
-    /// Before a bind fills it, a pending secret's binding is not handed to the
-    /// plugin's own checks, and does not resolve.
+    /// Before a bind fills it, a pending secret's key is absent from the layer
+    /// the plugin checks and named beside it, and its binding does not
+    /// resolve.
     #[test]
-    fn a_pending_secret_is_neither_validated_nor_resolved() {
+    fn a_pending_secret_is_named_but_not_resolved() {
         let set = declared();
         let schema = BindingSchema::empty();
-        assert_eq!(set.host_layers(&schema).count(), 0);
-        assert!(!set.host_layer("app-db").contains_key("url"));
+        let layers: BTreeMap<_, _> = set.host_layers(&schema).collect();
+        assert_eq!(layers.len(), 2);
+        assert!(!layers["app-db"].contains_key("url"));
+        assert_eq!(
+            set.pending_secret_keys("app-db", &schema),
+            BTreeSet::from(["url".to_string()])
+        );
         assert!(
             set.resolve("app-db", &HashMap::new(), &schema, &|_, _, _| false)
                 .is_err()

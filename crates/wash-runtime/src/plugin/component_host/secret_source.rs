@@ -45,9 +45,10 @@ pub(crate) type SecretSourceResolve =
 pub(super) const HOST_SECRET_SOURCE_EXPORT: &str = "secret-source";
 const RESOLVE: &str = "resolve";
 
-/// Check the export's top-level shape at registration, so a grossly
-/// mismatched plugin fails host start. The exact types are checked by
-/// [`secret_source_resolve`] when each incarnation instantiates.
+/// Check `resolve` against the published WIT at registration, so a plugin
+/// built against another `request` or `source-error` shape fails host start
+/// rather than every incarnation's prepare. Mirrors the record field and
+/// variant case names and order that [`secret_source_resolve`] typechecks.
 pub(super) fn check_secret_source_export(
     id: &str,
     export: &ExportedInterface,
@@ -60,11 +61,59 @@ pub(super) fn check_secret_source_export(
             format!("host component plugin '{id}' secret-source export is missing {RESOLVE}")
         })?;
     anyhow::ensure!(
-        matches!(resolve.param_tys.as_ref(), [Type::Record(_)])
-            && matches!(resolve.result_tys.as_ref(), [Type::Result(_)]),
-        "host component plugin '{id}' {RESOLVE} must take the request record and return a result"
+        resolve.is_async
+            && matches!(resolve.param_tys.as_ref(), [request] if is_request(request))
+            && matches!(resolve.result_tys.as_ref(), [result] if is_resolve_result(result)),
+        "host component plugin '{id}' {RESOLVE} does not match wasmcloud:host/secret-source: \
+         expected `async func(request: request) -> result<list<tuple<secret-key, string>>, \
+         source-error>`"
     );
     Ok(())
+}
+
+/// `record request { consumer: string, binding: option<string>, keys: list<string> }`
+fn is_request(ty: &Type) -> bool {
+    let Type::Record(record) = ty else {
+        return false;
+    };
+    let fields: Vec<_> = record.fields().map(|f| (f.name, f.ty)).collect();
+    matches!(
+        fields.as_slice(),
+        [("consumer", Type::String), ("binding", Type::Option(binding)), ("keys", Type::List(keys))]
+            if matches!(binding.ty(), Type::String) && matches!(keys.ty(), Type::String)
+    )
+}
+
+/// `result<list<tuple<string, string>>, source-error>`
+fn is_resolve_result(ty: &Type) -> bool {
+    let Type::Result(result) = ty else {
+        return false;
+    };
+    let ok = match result.ok() {
+        Some(Type::List(list)) => match list.ty() {
+            Type::Tuple(pair) => {
+                let types: Vec<_> = pair.types().collect();
+                matches!(types.as_slice(), [Type::String, Type::String])
+            }
+            _ => false,
+        },
+        _ => false,
+    };
+    let err = match result.err() {
+        Some(Type::Variant(variant)) => {
+            let cases: Vec<_> = variant.cases().map(|c| (c.name, c.ty)).collect();
+            cases.len() == 3
+                && cases
+                    .iter()
+                    .zip(["access-denied", "unavailable", "other"])
+                    .all(|((name, ty), expected)| {
+                        *name == expected
+                            && matches!(ty, Some(Type::Option(o)) if matches!(o.ty(), Type::String))
+                    })
+        }
+        _ => false,
+    };
+    ok && err
 }
 
 /// The typed `resolve` of the plugin's `interface` export.

@@ -176,8 +176,8 @@ impl Ingress {
                         .or_default()
                         .insert(func, func_idx);
                 }
-                // Typed against the published WIT, so an export that does
-                // not match it fails here rather than on a bind.
+                // Registration already checked the shape against the published
+                // WIT, so this only fails if that check and wasmtime disagree.
                 let secret_source = secret_source
                     .map(|interface| {
                         crate::plugin::component_host::secret_source_resolve(

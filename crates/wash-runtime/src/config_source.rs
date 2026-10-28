@@ -171,14 +171,39 @@ pub fn resolve_environment_layer(
     let Some(env) = env else {
         return Ok(HashMap::new());
     };
+    let mut out = HashMap::new();
+    resolve_layer(
+        env,
+        owner,
+        configs,
+        secrets,
+        project_dir,
+        repo_root,
+        &mut out,
+        None,
+    )?;
+    Ok(out)
+}
 
-    let mut out: HashMap<String, String> = HashMap::new();
-
+/// The shared walk behind [`resolve_environment_layer`] and
+/// [`resolve_plugin_environment_layer`]. With `pending`, a plugin-backed
+/// secret's keys land there instead of being read.
+#[allow(clippy::too_many_arguments)]
+fn resolve_layer(
+    env: &EnvironmentLayer,
+    owner: &str,
+    configs: &BTreeMap<String, ConfigSource>,
+    secrets: &BTreeMap<String, SecretSource>,
+    project_dir: &Path,
+    repo_root: Option<&Path>,
+    out: &mut HashMap<String, String>,
+    pending: Option<&mut HashMap<String, crate::plugin::PluginSecretRef>>,
+) -> Result<()> {
     // Layer order matches K8s envFrom: inline values first, then configFrom,
     // then secretFrom. Later layers overwrite earlier on key conflicts.
     out.extend(env.config.clone());
 
-    apply_config_refs(&env.config_from, owner, configs, project_dir, &mut out)
+    apply_config_refs(&env.config_from, owner, configs, project_dir, out)
         .with_context(|| format!("failed to resolve {owner} environment.configFrom"))?;
     apply_secret_refs(
         &env.secret_from,
@@ -186,11 +211,10 @@ pub fn resolve_environment_layer(
         secrets,
         project_dir,
         repo_root,
-        &mut out,
+        out,
+        pending,
     )
-    .with_context(|| format!("failed to resolve {owner} environment.secretFrom"))?;
-
-    Ok(out)
+    .with_context(|| format!("failed to resolve {owner} environment.secretFrom"))
 }
 
 /// Looks up each named reference in `catalog`, resolves its
@@ -230,47 +254,28 @@ pub fn resolve_plugin_environment_layer(
     HashMap<String, String>,
     HashMap<String, crate::plugin::PluginSecretRef>,
 )> {
-    let mut out: HashMap<String, String> = env.config.clone();
-    apply_config_refs(&env.config_from, owner, configs, project_dir, &mut out)
-        .with_context(|| format!("failed to resolve {owner} environment.configFrom"))?;
+    let mut out = HashMap::new();
     let mut pending = HashMap::new();
-    for name in &env.secret_from {
-        let Some(source) = secrets.get(name) else {
-            bail!(
-                "{owner} references secret '{name}' which is not defined in the top-level `secrets:` block",
-            );
-        };
-        match source.plugin_keys(name)? {
-            Some((plugin, keys)) => {
-                for (key, backend_key) in keys {
-                    out.remove(key);
-                    pending.insert(
-                        key.clone(),
-                        crate::plugin::PluginSecretRef {
-                            source: name.clone(),
-                            plugin: plugin.to_string(),
-                            key: backend_key.clone(),
-                        },
-                    );
-                }
-            }
-            None => {
-                let resolved = source
-                    .resolve(name, project_dir, repo_root)
-                    .with_context(|| format!("failed to resolve {owner} environment.secretFrom"))?;
-                for key in resolved.keys() {
-                    pending.remove(key);
-                }
-                out.extend(resolved);
-            }
-        }
-    }
+    resolve_layer(
+        env,
+        owner,
+        configs,
+        secrets,
+        project_dir,
+        repo_root,
+        &mut out,
+        Some(&mut pending),
+    )?;
     Ok((out, pending))
 }
 
 /// Looks up each named reference in `catalog`, resolves its
 /// [`SecretSource`], and merges the result into `out`. Missing names are
 /// a hard error so typos in `secretFrom` fail loudly.
+///
+/// With `pending`, a plugin-backed entry's keys go there for the bind to
+/// resolve, and a later entry of either kind replaces an earlier one's key.
+/// Without it, [`SecretSource::resolve`] refuses a plugin-backed entry.
 fn apply_secret_refs(
     refs: &[String],
     owner: &str,
@@ -278,6 +283,7 @@ fn apply_secret_refs(
     project_dir: &Path,
     repo_root: Option<&Path>,
     out: &mut HashMap<String, String>,
+    mut pending: Option<&mut HashMap<String, crate::plugin::PluginSecretRef>>,
 ) -> Result<()> {
     for name in refs {
         let Some(source) = catalog.get(name) else {
@@ -285,7 +291,28 @@ fn apply_secret_refs(
                 "{owner} references secret '{name}' which is not defined in the top-level `secrets:` block",
             );
         };
+        if let Some(pending) = pending.as_deref_mut()
+            && let Some((plugin, keys)) = source.plugin_keys(name)?
+        {
+            for (key, backend_key) in keys {
+                out.remove(key);
+                pending.insert(
+                    key.clone(),
+                    crate::plugin::PluginSecretRef {
+                        source: name.clone(),
+                        plugin: plugin.to_string(),
+                        key: backend_key.clone(),
+                    },
+                );
+            }
+            continue;
+        }
         let resolved = source.resolve(name, project_dir, repo_root)?;
+        if let Some(pending) = pending.as_deref_mut() {
+            for key in resolved.keys() {
+                pending.remove(key);
+            }
+        }
         out.extend(resolved);
     }
     Ok(())

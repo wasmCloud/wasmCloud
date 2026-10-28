@@ -3354,15 +3354,14 @@ impl UnresolvedWorkload {
                     .collect();
                 // Plugin-backed secrets become operator config before the
                 // policy runs, so it judges them like any other host key. The
-                // plugin's own checks skipped their bindings at host start, so
-                // they run now, on the values.
-                let had_secrets = declared.has_plugin_secrets();
+                // plugin checked those layers at host start without the values,
+                // so it checks the ones this bind filled again, and only those.
                 let filled =
                     crate::plugin::resolve_plugin_secrets(plugins, declared, &requested_interfaces)
                         .await
-                        .and_then(|declared| {
-                            if had_secrets {
-                                p.validate_bindings(&declared)
+                        .and_then(|(declared, refilled)| {
+                            if let Some(refilled) = refilled {
+                                p.validate_bindings(&declared.only_bindings(&refilled))
                                     .map_err(|e| e.context("invalid `host.plugins` declaration"))?;
                             }
                             Ok(declared)
