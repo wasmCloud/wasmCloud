@@ -1,0 +1,397 @@
+# Threats to the wasmCloud host, grouped by STRIDE. Each links to the
+# capabilities in capability-catalog.yaml it exploits. THREAT_MODEL.md says
+# which are vulnerabilities, which are known limitations, and which an
+# operator owns.
+metadata:
+  id: WASMCLOUD.WASH.HOST.THREATS
+  type: ThreatCatalog
+  gemara-version: "1.6.0"
+  version: "0.1.0"
+  description: >-
+    Threats to the wasmCloud host (`wash host` and the `wash-runtime` crate,
+    with the plugins it ships), assessed against the security goals in
+    THREAT_MODEL.md.
+  author:
+    id: wasmcloud-maintainers
+    name: wasmCloud maintainers
+    type: Human
+  mapping-references:
+    - id: CCC
+      title: Common Cloud Controls Core
+      version: v2025.10
+      url: https://github.com/finos/common-cloud-controls/releases
+    - id: WASMCLOUD.WASH.HOST.CAPS
+      title: wasmCloud Host Capabilities
+      version: "0.1.0"
+
+title: wasmCloud Host Threats
+
+groups:
+  - id: spoofing
+    title: Spoofing
+    description: Acting under an identity that is not your own
+  - id: tampering
+    title: Tampering
+    description: Modifying code or data without authorization
+  - id: repudiation
+    title: Repudiation
+    description: Making records unreliable as evidence of what happened
+  - id: information-disclosure
+    title: Information Disclosure
+    description: Reading data a party is not entitled to
+  - id: denial-of-service
+    title: Denial of Service
+    description: Making the host or other workloads unavailable
+  - id: elevation-of-privilege
+    title: Elevation of Privilege
+    description: Gaining access beyond what was granted
+
+imports:
+  - reference-id: CCC
+    entries:
+      - reference-id: CCC.Core.TH01
+        remarks: Access is Granted to Unauthorized Users. Applies to workload grants and plugin authorization.
+      - reference-id: CCC.Core.TH02
+        remarks: Data is Intercepted in Transit. Applies to registry pulls with --allow-insecure-registries.
+      - reference-id: CCC.Core.TH12
+        remarks: Resource Constraints are Exhausted. Applies to guest CPU, memory, connections and scratch disk.
+      - reference-id: CCC.Core.TH14
+        remarks: Older Resource Versions are Used. Applies to components pulled by mutable tag.
+      - reference-id: CCC.Core.TH17
+        remarks: Responses are Generated for Unauthorized Requests. Applies to unauthenticated ingress.
+
+threats:
+  - id: WASMCLOUD.WASH.HOST.THR01
+    title: Sandbox Escape by a Hostile Component
+    description: |
+      A component crafted to exploit a bug in wasmtime or in a host function
+      executes native code, reads or writes memory outside its own linear
+      memories and tables, or calls a host function it was not linked to.
+      This breaks every other guarantee on the host (security goal 1).
+      wasmtime bugs are reported upstream, and reach hosts only through a
+      wasmCloud release.
+    group: elevation-of-privilege
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP01
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR02
+    title: Host Crash from Malformed Input
+    description: |
+      A malformed component binary, HTTP request or response, TLS handshake,
+      NATS message or OCI registry response crashes, hangs or corrupts the
+      host while it is being parsed, taking down every workload on it
+      (security goal 7).
+    group: denial-of-service
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP01
+          - reference-id: WASMCLOUD.WASH.HOST.CAP02
+          - reference-id: WASMCLOUD.WASH.HOST.CAP04
+          - reference-id: WASMCLOUD.WASH.HOST.CAP05
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP29
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+      - id: network-peer
+        name: Untrusted network peer
+        type: Human
+
+  - id: WASMCLOUD.WASH.HOST.THR03
+    title: Reaching Resources the Spec Does Not Grant
+    description: |
+      A component reaches a host, address, file, config value, secret or
+      interface its workload spec does not grant, by bypassing allowedHosts,
+      the socket address policy, a volume's bounds, or the bindings the host
+      links (security goal 2).
+    group: elevation-of-privilege
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP05
+          - reference-id: WASMCLOUD.WASH.HOST.CAP06
+          - reference-id: WASMCLOUD.WASH.HOST.CAP07
+          - reference-id: WASMCLOUD.WASH.HOST.CAP08
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP23
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR04
+    title: Cross-Workload Access
+    description: |
+      One workload reads, modifies or impersonates another's memory, files,
+      connections or state, or reaches its services other than through an
+      interface the host linked between them (security goal 3). With
+      --http-local-routing on, any workload can claim a hostname and receive
+      its neighbors' requests in plaintext, by design.
+    group: information-disclosure
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP04
+          - reference-id: WASMCLOUD.WASH.HOST.CAP06
+          - reference-id: WASMCLOUD.WASH.HOST.CAP13
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR05
+    title: Exposure of Host Credentials and Kernel Filesystems
+    description: |
+      A workload reaches the host's own credential files, configuration,
+      kernel filesystems or the scratch directory holding other workloads'
+      volumes, through a hostPath volume (security goal 4). The
+      --allowed-host-path list is host-wide, so every workload on a host may
+      mount any directory the operator allowed.
+    group: information-disclosure
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP07
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP26
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR06
+    title: Egress to Loopback, Link-Local or Cloud Metadata
+    description: |
+      A workload makes the host connect to loopback, link-local addresses
+      including cloud metadata, or the host's own listeners (security goals
+      4 and 5). Sockets are checked by address, but wasi:http egress is
+      checked by name only, so a wildcard allowedHosts entry or a name whose
+      DNS points at a special address reaches it. Native plugins resolve
+      their own names and bypass the address check.
+    group: elevation-of-privilege
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP05
+          - reference-id: WASMCLOUD.WASH.HOST.CAP06
+          - reference-id: WASMCLOUD.WASH.HOST.CAP09
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP23
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+      - id: dns-controller
+        name: Whoever controls an allowed DNS name
+        type: Human
+
+  - id: WASMCLOUD.WASH.HOST.THR07
+    title: Forged Workload Identity at a Plugin
+    description: |
+      A workload makes a plugin act for another workload, by forging the
+      identity the host asserts, or by passing an identity in a call's
+      arguments to a plugin that authorizes on it instead of on the asserted
+      one.
+    group: spoofing
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP09
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR08
+    title: Shared Wasm Plugin as a Cross-Tenant Channel
+    description: |
+      A Wasm host component plugin serves every workload that binds it, so a
+      bug in one lets one workload affect or read another's calls through it.
+      A plugin that fails restarts, losing the calls in flight.
+    group: information-disclosure
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP09
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR09
+    title: Exhaustion of Host Resources by a Workload
+    description: |
+      A workload consumes memory, connections or file descriptors beyond the
+      limits the operator set, starving other workloads (security goal 6).
+      CPU share, pooling-allocator instance slots and scratch volume size
+      have no per-workload limit, so a workload can consume them up to the
+      host's own bounds.
+    group: denial-of-service
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP01
+          - reference-id: WASMCLOUD.WASH.HOST.CAP07
+          - reference-id: WASMCLOUD.WASH.HOST.CAP11
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP24
+          - reference-id: CCC.Core.CP25
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR10
+    title: Disproportionate Work for Unauthenticated Peers
+    description: |
+      An unauthenticated peer, or a component, makes the host spend resources
+      far out of proportion to its request, for example through slow or
+      oversized requests to ingress.
+    group: denial-of-service
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP04
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP29
+    actors:
+      - id: network-peer
+        name: Untrusted network peer
+        type: Human
+
+  - id: WASMCLOUD.WASH.HOST.THR11
+    title: Unauthorized Control-Plane Publisher
+    description: |
+      Anyone who can publish on the host's runtime.host.> NATS subjects can
+      start any workload with any grant. The host trusts the control plane,
+      so this is mitigated by the operator securing NATS with TLS and
+      authentication and restricting who may publish there.
+    group: spoofing
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP03
+    actors:
+      - id: nats-client
+        name: Unauthorized NATS client
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR12
+    title: Malicious or Stale Component from a Registry
+    description: |
+      A tag in a registry is repointed at a malicious or outdated component,
+      and the host runs it. The host does not verify component signatures;
+      operators pin components by digest and choose which registries a host
+      may pull from. Components are sandboxed either way.
+    group: tampering
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP02
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP18
+    actors:
+      - id: registry-publisher
+        name: Registry account holder or compromised registry
+        type: Human
+
+  - id: WASMCLOUD.WASH.HOST.THR13
+    title: Registry Credentials Sent in Plaintext
+    description: |
+      With --allow-insecure-registries, pulls use plain HTTP, so registry
+      credentials and component bytes cross the network unencrypted and can
+      be read or replaced.
+    group: information-disclosure
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP02
+          - reference-id: WASMCLOUD.WASH.HOST.CAP13
+    actors:
+      - id: network-observer
+        name: Observer on the network path to the registry
+        type: Human
+
+  - id: WASMCLOUD.WASH.HOST.THR14
+    title: Log Injection from Guest Output
+    description: |
+      Guest log output reaches host logs unmodified, so a component can write
+      lines that impersonate host or other workloads' entries and mislead
+      whoever reads them.
+    group: repudiation
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP12
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP10
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR15
+    title: Secret Leakage
+    description: |
+      A secret reaches a workload it is not bound to, or appears in a host
+      log or metric.
+    group: information-disclosure
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP08
+          - reference-id: WASMCLOUD.WASH.HOST.CAP12
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR16
+    title: Workload ID Reuse Inherits Pooled Connections
+    description: |
+      The host relies on the control plane to give each workload a unique
+      ID. A new workload started under a reused ID inherits the old one's
+      pooled outbound HTTP connections.
+    group: spoofing
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP03
+          - reference-id: WASMCLOUD.WASH.HOST.CAP05
+
+  - id: WASMCLOUD.WASH.HOST.THR17
+    title: Side Channels between Co-Located Workloads
+    description: |
+      Workloads on one host are separated by wasmtime alone, so Spectre-class
+      and timing side channels can leak data between them. This is an
+      accepted risk: mutually hostile tenants get separate host groups or
+      nodes.
+    group: information-disclosure
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP01
+      - reference-id: CCC
+        entries:
+          - reference-id: CCC.Core.CP24
+          - reference-id: CCC.Core.CP25
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software

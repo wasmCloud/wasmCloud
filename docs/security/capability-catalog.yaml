@@ -1,0 +1,183 @@
+# Capabilities of the wasmCloud host. Each one names the code that provides it.
+# The trust model and security goals behind these are in THREAT_MODEL.md.
+metadata:
+  id: WASMCLOUD.WASH.HOST.CAPS
+  type: CapabilityCatalog
+  gemara-version: "1.6.0"
+  version: "0.1.0"
+  description: >-
+    Capabilities of the wasmCloud host (`wash host` and the `wash-runtime`
+    crate, with the plugins it ships), the attack surface for
+    WASMCLOUD.WASH.HOST.THREATS.
+  author:
+    id: wasmcloud-maintainers
+    name: wasmCloud maintainers
+    type: Human
+  mapping-references:
+    - id: CCC
+      title: Common Cloud Controls Core
+      version: v2025.10
+      url: https://github.com/finos/common-cloud-controls/releases
+      description: Reusable security controls, capabilities, and threats maintained by FINOS.
+
+title: wasmCloud Host Capabilities
+
+groups:
+  - id: execution
+    title: Execution
+    description: Compiling, instantiating and running untrusted WebAssembly components
+  - id: ingestion
+    title: Ingestion
+    description: Inputs the host accepts from the control plane, registries and network peers
+  - id: egress
+    title: Egress
+    description: Connections a workload originates through the host
+  - id: data-access
+    title: Data Access
+    description: Files, configuration and secrets the host grants to a workload
+  - id: extension
+    title: Extension
+    description: Plugins and component linking that extend what a workload can call
+  - id: resources
+    title: Resource Management
+    description: Limits on what a workload may consume
+  - id: observability
+    title: Observability
+    description: Logs and telemetry the host publishes
+  - id: configuration
+    title: Operator Configuration
+    description: Host settings that set or relax policy
+
+imports:
+  - reference-id: CCC
+    entries:
+      - reference-id: CCC.Core.CP29
+        remarks: Active Ingestion. Inbound HTTP, NATS control-plane messages and OCI pulls.
+      - reference-id: CCC.Core.CP18
+        remarks: Resource Versioning. Components are referenced by OCI tag or digest.
+      - reference-id: CCC.Core.CP23
+        remarks: Network Access Rules. allowedHosts and the host's address policy.
+      - reference-id: CCC.Core.CP24
+        remarks: Core Processing Units. Workloads share the host's CPUs.
+      - reference-id: CCC.Core.CP25
+        remarks: Random Access Memory Allocation. Guest linear memories and tables.
+      - reference-id: CCC.Core.CP26
+        remarks: Persistent Storage. hostPath volumes.
+      - reference-id: CCC.Core.CP10
+        remarks: Log Publication. Guest and host logs.
+
+capabilities:
+  - id: WASMCLOUD.WASH.HOST.CAP01
+    title: Untrusted Component Execution
+    description: |
+      Validates, compiles and instantiates WebAssembly components from
+      untrusted bytes with wasmtime, and runs each in its own instance with
+      only the imports its workload spec grants
+      (crates/wash-runtime/src/engine/mod.rs,
+      crates/wash-runtime/src/engine/instance_pool.rs).
+    group: execution
+  - id: WASMCLOUD.WASH.HOST.CAP02
+    title: Component Retrieval from OCI Registries
+    description: |
+      Pulls components by tag or digest from OCI registries, with optional
+      registry credentials, and caches them on disk
+      (crates/wash-runtime/src/oci/client.rs,
+      crates/wash-runtime/src/oci/credentials.rs,
+      crates/wash-runtime/src/oci/disk_cache.rs). The host does not verify
+      signatures.
+    group: ingestion
+  - id: WASMCLOUD.WASH.HOST.CAP03
+    title: Control-Plane Workload Management over NATS
+    description: |
+      Accepts workload start, update and stop requests on the host's
+      runtime.host.> NATS subjects, normally from runtime-operator, and runs
+      each workload under the ID and grants the request carries
+      (crates/wash-runtime/src/washlet/mod.rs).
+    group: ingestion
+  - id: WASMCLOUD.WASH.HOST.CAP04
+    title: HTTP Ingress to Workloads
+    description: |
+      Terminates inbound HTTP and TLS and routes each request to the workload
+      that declared the route (crates/wash-runtime/src/host/http.rs,
+      crates/wash-runtime/src/host/http_p3.rs,
+      crates/wash-runtime/src/host/accept.rs).
+    group: ingestion
+  - id: WASMCLOUD.WASH.HOST.CAP05
+    title: Outbound HTTP for Workloads
+    description: |
+      Sends wasi:http requests on a workload's behalf to the hosts its
+      allowedHosts names, over a pooled client
+      (crates/wash-runtime/src/host/http_client.rs,
+      crates/wash-runtime/src/host/allowed_hosts.rs,
+      crates/wash-runtime/src/host/egress_policy.rs).
+    group: egress
+  - id: WASMCLOUD.WASH.HOST.CAP06
+    title: Socket Networking for Workloads
+    description: |
+      Gives workloads TCP and UDP sockets and name lookup, checked against
+      the spec and the host's address policy, and a per-workload virtual
+      loopback network (crates/wash-runtime/src/sockets/policy.rs,
+      crates/wash-runtime/src/sockets/host_tcp.rs,
+      crates/wash-runtime/src/sockets/host_udp.rs,
+      crates/wash-runtime/src/sockets/loopback/).
+    group: egress
+  - id: WASMCLOUD.WASH.HOST.CAP07
+    title: Volume Mounts
+    description: |
+      Mounts hostPath directories inside the operator's --allowed-host-path
+      list, and per-workload emptyDir scratch volumes, into a workload's
+      filesystem (crates/wash-runtime/src/engine/volumes.rs,
+      crates/wash-runtime/src/engine/scratch.rs). Reserved host paths are
+      refused (crates/wash/src/cli/host.rs).
+    group: data-access
+  - id: WASMCLOUD.WASH.HOST.CAP08
+    title: Configuration and Secret Delivery
+    description: |
+      Delivers the configuration and secrets bound to a workload through
+      wasi:config and wasmcloud:secrets
+      (crates/wash-runtime/src/config_source.rs,
+      crates/wash-runtime/src/plugin/wasi_config/,
+      crates/wash-runtime/src/plugin/wasmcloud_secrets/).
+    group: data-access
+  - id: WASMCLOUD.WASH.HOST.CAP09
+    title: Host Plugins with Asserted Workload Identity
+    description: |
+      Serves host interfaces from native plugins and from sandboxed Wasm host
+      component plugins shared by every workload that binds them, asserting
+      the calling workload's identity to the plugin
+      (crates/wash-runtime/src/plugin/mod.rs,
+      crates/wash-runtime/src/plugin/bindings.rs,
+      crates/wash-runtime/src/plugin/component_host/).
+    group: extension
+  - id: WASMCLOUD.WASH.HOST.CAP10
+    title: Component Linking within a Workload
+    description: |
+      Links one component's import to the component in the same workload that
+      exports it, so calls cross between component instances
+      (crates/wash-runtime/src/engine/linked_call.rs,
+      crates/wash-runtime/src/engine/ctx.rs).
+    group: extension
+  - id: WASMCLOUD.WASH.HOST.CAP11
+    title: Per-Workload and Host-Wide Resource Limits
+    description: |
+      Enforces limits on guest memory, connections and file descriptors per
+      workload and across the host
+      (crates/wash-runtime/src/engine/guest_memory.rs,
+      crates/wash-runtime/src/host/quota.rs).
+    group: resources
+  - id: WASMCLOUD.WASH.HOST.CAP12
+    title: Guest Logging and Telemetry
+    description: |
+      Publishes guest log output and host traces, metrics and logs
+      (crates/wash-runtime/src/plugin/wasi_logging/,
+      crates/wash-runtime/src/plugin/wasi_otel/,
+      crates/wash-runtime/src/observability/).
+    group: observability
+  - id: WASMCLOUD.WASH.HOST.CAP13
+    title: Policy-Relaxing Host Settings
+    description: |
+      Host flags that weaken a security goal when set, such as the count
+      modes, --deny-special-ranges=false, --http-local-routing, --wasi-webgpu
+      and --allow-insecure-registries (crates/wash/src/cli/host.rs). The
+      table in THREAT_MODEL.md lists each one and the goal it weakens.
+    group: configuration
