@@ -8,9 +8,47 @@ use wasmcloud_component::{
 
 struct Component;
 
+const CONTAINER: &str = "my-container-real";
+const OBJECT: &str = "hi.txt";
+
 enum ResponseBody {
     String(String),
     Stream(InputStream),
+}
+
+/// Answers a blobstore operation: 200 with its result, or 500 with its error.
+fn operation_response(
+    result: Result<String, String>,
+) -> http::Result<http::Response<ResponseBody>> {
+    let (status, body) = match result {
+        Ok(body) => (200, body),
+        Err(e) => (500, e),
+    };
+    Ok(http::Response::builder()
+        .status(status)
+        .body(ResponseBody::String(body))
+        .expect("failed to create HTTP body for operation response"))
+}
+
+/// The names of the container's objects, sorted and comma-separated.
+fn list_names(
+    container: &wasmcloud_component::wasi::blobstore::container::Container,
+) -> Result<String, String> {
+    let stream = container
+        .list_objects()
+        .map_err(|e| format!("list_objects: {e:?}"))?;
+    let mut names = Vec::new();
+    loop {
+        let (mut batch, done) = stream
+            .read_stream_object_names(16)
+            .map_err(|e| format!("read_stream_object_names: {e:?}"))?;
+        names.append(&mut batch);
+        if done {
+            break;
+        }
+    }
+    names.sort();
+    Ok(names.join(","))
 }
 
 impl http::OutgoingBody for ResponseBody {
@@ -31,11 +69,11 @@ impl http::Server for Component {
         request: http::IncomingRequest,
     ) -> http::Result<http::Response<impl http::OutgoingBody>> {
         let container = match wasmcloud_component::wasi::blobstore::blobstore::get_container(
-            &String::from("my-container-real"),
+            &String::from(CONTAINER),
         ) {
             Ok(c) => c,
             Err(_) => match wasmcloud_component::wasi::blobstore::blobstore::create_container(
-                &String::from("my-container-real"),
+                &String::from(CONTAINER),
             ) {
                 Ok(c) => c,
                 Err(e) => {
@@ -50,7 +88,28 @@ impl http::Server for Component {
             },
         };
 
-        let (_parts, mut body) = request.into_parts();
+        let (parts, mut body) = request.into_parts();
+
+        match parts.uri.path() {
+            "/op/has-object" => {
+                return operation_response(
+                    container
+                        .has_object(&String::from(OBJECT))
+                        .map(|found| found.to_string())
+                        .map_err(|e| format!("has_object: {e:?}")),
+                );
+            }
+            "/op/object-info" => {
+                return operation_response(
+                    container
+                        .object_info(&String::from(OBJECT))
+                        .map(|info| format!("{} {} {}", info.name, info.size, info.container))
+                        .map_err(|e| format!("object_info: {e:?}")),
+                );
+            }
+            "/op/list" => return operation_response(list_names(&container)),
+            _ => {}
+        }
 
         let outgoing_value = OutgoingValue::new_outgoing_value();
         let mut output_stream = match outgoing_value.outgoing_value_write_body() {
@@ -66,7 +125,7 @@ impl http::Server for Component {
             }
         };
 
-        if let Err(e) = container.write_data(&String::from("hi.txt"), &outgoing_value) {
+        if let Err(e) = container.write_data(&String::from(OBJECT), &outgoing_value) {
             return Ok(http::Response::builder()
                 .status(500)
                 .body(ResponseBody::String(format!(
@@ -96,7 +155,7 @@ impl http::Server for Component {
                 .expect("failed to create HTTP body for finish writing file error"));
         }
 
-        let data = match container.get_data(&String::from("hi.txt"), 0, u64::MAX) {
+        let data = match container.get_data(&String::from(OBJECT), 0, u64::MAX) {
             Ok(d) => d,
             Err(e) => {
                 return Ok(http::Response::builder()
