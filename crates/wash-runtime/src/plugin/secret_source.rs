@@ -295,6 +295,9 @@ pub enum SecretSourceError {
     Unavailable(Option<String>),
     /// Any other failure the source reported.
     Other(Option<String>),
+    /// The source answered `ok`, but not with exactly the requested keys,
+    /// each once.
+    InvalidAnswer(String),
     /// The source was not called, or the call did not return: the plugin is
     /// not running, trapped, or timed out.
     Call(anyhow::Error),
@@ -311,6 +314,7 @@ impl std::fmt::Display for SecretSourceError {
                 return write!(f, "no key {}", keys.join(", "));
             }
             Self::Call(e) => return write!(f, "the call failed: {e:#}"),
+            Self::InvalidAnswer(detail) => return write!(f, "invalid answer: {detail}"),
         };
         match detail {
             Some(detail) => write!(f, "{case}: {detail}"),
@@ -508,9 +512,13 @@ pub(crate) async fn resolve_plugin_secrets(
                             binding: binding.map(BindingName::from),
                         },
                         workload: workload.clone(),
-                        keys: keys.into_iter().cloned().collect(),
+                        keys: keys.iter().map(|k| (*k).clone()).collect(),
                     })
                     .await
+                    .and_then(|answer| {
+                        check_answer(&keys, &answer)?;
+                        Ok(answer)
+                    })
                     .map_err(|e| {
                         anyhow::Error::new(e).context(format!(
                             "secret `{source}` for {place}: plugin `{plugin}` did not resolve it"
@@ -551,6 +559,37 @@ pub(crate) async fn resolve_plugin_secrets(
     })
 }
 
+/// Holds a source's answer to the contract: every requested key, and no
+/// other.
+fn check_answer(
+    requested: &BTreeSet<&SecretKey>,
+    answer: &BTreeMap<SecretKey, SecretValue>,
+) -> Result<(), SecretSourceError> {
+    let named = |keys: Vec<&SecretKey>| {
+        keys.into_iter()
+            .map(|k| format!("`{k}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let missing: Vec<&SecretKey> = requested
+        .iter()
+        .copied()
+        .filter(|k| !answer.contains_key(*k))
+        .collect();
+    let unrequested: Vec<&SecretKey> = answer.keys().filter(|k| !requested.contains(k)).collect();
+    let mut faults = Vec::new();
+    if !missing.is_empty() {
+        faults.push(format!("left out {}", named(missing)));
+    }
+    if !unrequested.is_empty() {
+        faults.push(format!("answered unrequested {}", named(unrequested)));
+    }
+    match faults.is_empty() {
+        true => Ok(()),
+        false => Err(SecretSourceError::InvalidAnswer(faults.join("; "))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -575,11 +614,23 @@ mod tests {
             if request.keys.iter().any(|k| k.as_str() == "denied") {
                 return Err(SecretSourceError::AccessDenied(Some("not for you".into())));
             }
-            let found = request
+            let missing: Vec<SecretKey> = request
                 .keys
                 .iter()
-                .filter_map(|k| Some((k.clone(), SecretValue::new(*self.0.get(k.as_str())?))))
+                .filter(|k| !self.0.contains_key(k.as_str()))
+                .cloned()
                 .collect();
+            if !missing.is_empty() {
+                return Err(SecretSourceError::NotFound(missing));
+            }
+            let mut found: BTreeMap<SecretKey, SecretValue> = request
+                .keys
+                .iter()
+                .map(|k| (k.clone(), SecretValue::new(self.0[k.as_str()])))
+                .collect();
+            if found.remove(&SecretKey::from("silent")).is_some() {
+                found.insert("chatty".into(), SecretValue::new("extra"));
+            }
             self.1.lock().unwrap().push(request);
             Ok(found)
         }
@@ -619,6 +670,7 @@ mod tests {
             HashMap::from([
                 ("pg-url-app", "postgres://app:pw@db/app"),
                 ("pg-url-reports", "postgres://reports:pw@db/app"),
+                ("silent", "never sent"),
             ]),
             Mutex::default(),
         ))
@@ -763,7 +815,8 @@ mod tests {
         }
     }
 
-    /// A key the source leaves out fails the bind, naming the source and key.
+    /// A key the source does not have fails the bind, naming the source and
+    /// key.
     #[tokio::test]
     async fn a_missing_key_names_the_source_and_key() {
         let set = PluginBindingSet::new("wasmcloud-postgres")
@@ -783,6 +836,35 @@ mod tests {
         .unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("`app`") && msg.contains("`nope`"), "{msg}");
+    }
+
+    /// An answer that leaves out a requested key or adds one nobody asked for
+    /// fails the bind as an invalid answer.
+    #[tokio::test]
+    async fn an_answer_must_name_exactly_the_requested_keys() {
+        let set = PluginBindingSet::new("wasmcloud-postgres")
+            .with_binding("app-db", HashMap::new())
+            .with_binding_secrets(
+                "app-db",
+                HashMap::from([("url".to_string(), secret("app", "silent"))]),
+            );
+        let err = resolve_plugin_secrets(
+            &plugins(fixed()),
+            &requesting(),
+            set,
+            &HashSet::from([postgres("app-db")]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(
+                err.downcast_ref::<SecretSourceError>(),
+                Some(SecretSourceError::InvalidAnswer(detail))
+                    if detail == "left out `silent`; answered unrequested `chatty`"
+            ),
+            "{err:#}"
+        );
     }
 
     /// One source on the entry is one call per bind, however many keys and
