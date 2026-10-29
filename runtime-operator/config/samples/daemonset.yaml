@@ -1,0 +1,23 @@
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDaemonSet
+metadata:
+  name: hello-everywhere
+spec:
+  # Instances on each matching host.
+  replicas: 1
+  template:
+    spec:
+      # Run on every host in the chart's default hostgroup.
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            # public dns alias for 127.0.0.1
+            host: hello.localhost.direct
+      components:
+        - name: hello-world
+          image: ghcr.io/wasmcloud/components/http-hello-world-rust:0.1.0

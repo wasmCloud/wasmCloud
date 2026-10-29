@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +26,9 @@ const (
 	workloadReplicaSetGenerationAnnotation = "runtime.wasmcloud.dev/workload-replica-set-generation"
 	workloadReplicaSetNameAnnotation       = "runtime.wasmcloud.dev/workload-replicaset-name"
 	workloadDeploymentNameAnnotation       = "runtime.wasmcloud.dev/workload-deployment"
+	// workloadReplicaSetNameLabel is stamped onto the Workloads a ReplicaSet
+	// owns and exposed via its /scale subresource's selector.
+	workloadReplicaSetNameLabel = "runtime.wasmcloud.dev/workload-replicaset"
 )
 
 // WorkloadReplicaSetReconciler reconciles a WorkloadReplicaSet object
@@ -74,11 +78,17 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 			annotations[workloadDeploymentNameAnnotation] = replicaSet.Labels[workloadDeploymentNameLabel]
 		}
 
+		workloadLabels := make(map[string]string, len(replicaSet.Spec.Template.Labels)+1)
+		for k, v := range replicaSet.Spec.Template.Labels {
+			workloadLabels[k] = v
+		}
+		workloadLabels[workloadReplicaSetNameLabel] = replicaSet.Name
+
 		workload := &runtimev1alpha1.Workload{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        fmt.Sprintf("%s-%s", replicaSet.Name, randHash()),
 				Namespace:   replicaSet.Namespace,
-				Labels:      replicaSet.Spec.Template.Labels,
+				Labels:      workloadLabels,
 				Annotations: annotations,
 			},
 			Spec: replicaSet.Spec.Template.Spec,
@@ -168,6 +178,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 	}
 
 	replicaSet.Status.Replicas = replicaStatus
+	replicaSet.Status.CurrentReplicas = currentReplicas
+	replicaSet.Status.Selector = labels.Set{workloadReplicaSetNameLabel: replicaSet.Name}.String()
 
 	if unavailableCount > 0 {
 		return fmt.Errorf("%d workloads are not available", unavailableCount)
@@ -243,39 +255,44 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 	}
 
 	for _, workload := range workloads.Items {
-		// catches workloads already being deleted
-		if workload.DeletionTimestamp != nil {
+		if !isFailedPastGracePeriod(&workload) {
 			continue
 		}
-		// catches ready workloads
-		if workload.Status.IsAvailable() {
-			continue
-		}
-
-		// catches workloads that are still syncing
-		// they might have not been placed or sync failing. in most cases host is down/gone.
-
-		syncStatus := workload.Status.GetCondition(runtimev1alpha1.WorkloadConditionSync)
-		if syncStatus.Status == condition.ConditionTrue {
-			continue
-		}
-
-		// this was the first failure, give it some time to recover
-		if syncStatus.LastTransitionTime.IsZero() {
-			continue
-		}
-
-		// If the workload has failed recently, give it some time to recover
-		if syncStatus.LastTransitionTime.Time.Add(workloadReplicaSetReplicaGracePeriod).After(time.Now()) {
-			continue
-		}
-		// At this point, the workload is not ready, has failed, and has not recovered within the grace period
 		// Delete the workload, which will be replaced by the scale-up logic
 		if err := r.Delete(ctx, &workload); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// isFailedPastGracePeriod reports whether workload is not ready, has failed,
+// and has not recovered within the grace period, so it should be replaced.
+func isFailedPastGracePeriod(workload *runtimev1alpha1.Workload) bool {
+	// catches workloads already being deleted
+	if workload.DeletionTimestamp != nil {
+		return false
+	}
+	// catches ready workloads
+	if workload.Status.IsAvailable() {
+		return false
+	}
+
+	// catches workloads that are still syncing
+	// they might have not been placed or sync failing. in most cases host is down/gone.
+
+	syncStatus := workload.Status.GetCondition(runtimev1alpha1.WorkloadConditionSync)
+	if syncStatus.Status == condition.ConditionTrue {
+		return false
+	}
+
+	// this was the first failure, give it some time to recover
+	if syncStatus.LastTransitionTime.IsZero() {
+		return false
+	}
+
+	// If the workload has failed recently, give it some time to recover
+	return !syncStatus.LastTransitionTime.Time.Add(workloadReplicaSetReplicaGracePeriod).After(time.Now())
 }
 
 // SetupWithManager sets up the controller with the Manager.

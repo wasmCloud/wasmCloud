@@ -49,6 +49,7 @@ const WATCH_SCOPED_RESOURCES = [
   'workloads',
   'workloadreplicasets',
   'workloaddeployments',
+  'workloaddaemonsets',
 ];
 
 const WATCHED_NS = 'ns-a';

@@ -56,4 +56,13 @@ resources:
   kind: WorkloadDeployment
   path: go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: wasmcloud.dev
+  group: runtime
+  kind: WorkloadDaemonSet
+  path: go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1
+  version: v1alpha1
 version: "3"
