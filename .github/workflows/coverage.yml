@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/coverage.yml'
+      - '.github/scripts/coverage-summary.mjs'
       - '.github/actions/setup-rust/**'
       - '.github/tool-versions.env'
       - '.cargo/**'
@@ -85,22 +86,7 @@ jobs:
         env:
           TEST_RESULT: ${{ steps.tests.outcome }}
           THRESHOLD_RESULT: ${{ steps.threshold.outcome }}
-        run: |
-          {
-            echo '## Native Rust coverage'
-            echo
-            echo "Commit: $GITHUB_SHA"
-            echo "Tests: $TEST_RESULT; 80% lines and regions: $THRESHOLD_RESULT"
-            echo
-            echo 'Rust compiler regions and lines are reported separately from statement coverage.'
-            echo 'See CONTRIBUTING.md for scope and the OpenSSF evidence requirements.'
-            echo
-            echo '```text'
-            cat target/coverage/summary.txt
-            echo '```'
-            echo
-            echo 'Download rust-coverage for HTML, JSON, LCOV, and toolchain provenance.'
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: node .github/scripts/coverage-summary.mjs
       - name: Preserve coverage evidence
         if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
