@@ -124,6 +124,21 @@ impl PoolCost {
             .min(per(totals.stacks, self.stacks))
             .min(per(totals.gc_heaps, self.gc_heaps))
     }
+
+    /// `self` and `other` instantiated into one store: memories, tables, GC
+    /// heaps and instances add, and the store's one fiber stack is shared.
+    fn in_one_store_with(self, other: Self) -> Self {
+        Self {
+            memories: self.memories.saturating_add(other.memories),
+            tables: self.tables.saturating_add(other.tables),
+            core_instances: self.core_instances.saturating_add(other.core_instances),
+            component_instances: self
+                .component_instances
+                .saturating_add(other.component_instances),
+            stacks: self.stacks.max(other.stacks),
+            gc_heaps: self.gc_heaps.saturating_add(other.gc_heaps),
+        }
+    }
 }
 
 /// The fraction of each installed pool total a [`PoolShare`] may hold,
@@ -376,13 +391,7 @@ impl PoolShare {
         let mut measured_tables = 0_u32;
         for component in components {
             let next = PoolCost::of(component);
-            cost.memories = cost.memories.saturating_add(next.memories);
-            cost.tables = cost.tables.saturating_add(next.tables);
-            cost.core_instances = cost.core_instances.saturating_add(next.core_instances);
-            cost.component_instances = cost
-                .component_instances
-                .saturating_add(next.component_instances);
-            cost.stacks = cost.stacks.max(next.stacks);
+            cost = cost.in_one_store_with(next);
             if component.resources_required().is_some() {
                 measured_tables = measured_tables.saturating_add(next.tables);
             }
@@ -533,7 +542,7 @@ mod tests {
     /// the queued reservation through and its instantiation succeed.
     async fn fill(engine: &Engine, component: &Component) -> usize {
         let pool_share = pool_share(engine);
-        let cost = pool_share.admit_store([component], false).unwrap();
+        let cost = pool_share.admit(component).unwrap();
         let linker = Linker::<()>::new(engine.inner());
         let mut held = Vec::new();
         for _ in 0..=u32::MAX {
@@ -685,7 +694,10 @@ mod tests {
             .admit_store([&component], true)
             .expect_err("a pool with no GC heaps cannot hold a GC store");
         let message = error.to_string();
-        assert!(message.contains("WASMTIME_POOLING_TOTAL_GC_HEAPS is 0"), "{message}");
+        assert!(
+            message.contains("WASMTIME_POOLING_TOTAL_GC_HEAPS is 0"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -699,9 +711,7 @@ mod tests {
         config.total_tables(1).total_core_instances(4);
         let engine = engine(config);
         let pool_share = pool_share(&engine);
-        let cost = pool_share
-            .admit_store([&hidden_component(&engine)], false)
-            .unwrap();
+        let cost = pool_share.admit(&hidden_component(&engine)).unwrap();
         assert_eq!(cost.memories, 1);
         assert_eq!(cost.tables, 1);
         assert_eq!(cost.core_instances, 4);
@@ -709,15 +719,13 @@ mod tests {
         // hold them, since a reservation capped at the share would hold
         // every table permit and still fail at instantiation.
         let err = pool_share
-            .admit_store([&component(&engine, 1, 2, 2)], false)
+            .admit(&component(&engine, 1, 2, 2))
             .expect_err("two measured tables do not fit a share of one");
         let text = format!("{err:#}");
         assert!(text.contains("2 tables"), "{text}");
         assert!(text.contains("WASMTIME_POOLING_TOTAL_TABLES"), "{text}");
         // And a measured table within the share is charged as measured.
-        let cost = pool_share
-            .admit_store([&component(&engine, 1, 1, 2)], false)
-            .unwrap();
+        let cost = pool_share.admit(&component(&engine, 1, 1, 2)).unwrap();
         assert_eq!(cost.tables, 1);
     }
 
@@ -772,7 +780,7 @@ mod tests {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
         let err = pool_share
-            .admit_store([&component(&engine, 25, 0, 25)], false)
+            .admit(&component(&engine, 25, 0, 25))
             .expect_err("25 memories do not fit a share of 21 memories");
         let text = format!("{err:#}");
         assert!(text.contains("25 memories"), "{text}");
@@ -780,18 +788,14 @@ mod tests {
         assert!(text.contains("--max-memories"), "{text}");
         assert!(text.contains("WASMTIME_POOLING_TOTAL_MEMORIES"), "{text}");
         // Exactly the share of memories fits.
-        pool_share
-            .admit_store([&component(&engine, 21, 0, 21)], false)
-            .unwrap();
+        pool_share.admit(&component(&engine, 21, 0, 21)).unwrap();
     }
 
     #[tokio::test]
     async fn cancelling_a_reservation_returns_every_earlier_permit() {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
-        let cost = pool_share
-            .admit_store([&component(&engine, 1, 1, 4)], false)
-            .unwrap();
+        let cost = pool_share.admit(&component(&engine, 1, 1, 4)).unwrap();
         let g = &*pool_share.gates;
         for blocked in [
             &g.memories,
@@ -824,12 +828,8 @@ mod tests {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
         let other = pool_share.clone();
-        let small = pool_share
-            .admit_store([&component(&engine, 1, 0, 1)], false)
-            .unwrap();
-        let composed = other
-            .admit_store([&component(&engine, 2, 0, 2)], false)
-            .unwrap();
+        let small = pool_share.admit(&component(&engine, 1, 0, 1)).unwrap();
+        let composed = other.admit(&component(&engine, 2, 0, 2)).unwrap();
         let mut held = Vec::new();
         for i in 0..14 {
             let (pool_share, cost) = if i < 7 {

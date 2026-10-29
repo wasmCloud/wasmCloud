@@ -477,16 +477,16 @@ pub struct HostCommand {
     /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
     /// accounting or a finite data-size limit keep: there the stack and
     /// table pools are committed at startup rather than reserved, 2.6 GiB at
-    /// the floor, and `--set-max-memories-from-memory-precommit-limit` is how such a host
-    /// asks to be sized past it. With a 65,530 mapping limit and 47-bit
-    /// address space, Linux derives 9,829 memories.
-    /// Multiplied by one
-    /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
-    /// `--default-heap-memory` is) it is the pool's address-space reservation,
-    /// so it is the knob that sizes the pool. The core-instance and table
-    /// totals are multiples of it, since a component spends several of each
-    /// and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set any
-    /// total on its own.
+    /// the floor, and `--set-max-memories-from-memory-precommit-limit` is how
+    /// such a host asks to be sized past it. With a 65,530 mapping limit and
+    /// 47-bit address space, Linux derives 9,829 memories.
+    ///
+    /// Multiplied by one memory's reservation (4 GiB plus a 32 MiB guard,
+    /// whatever `--default-heap-memory` is) it is the pool's address-space
+    /// reservation, so it is the knob that sizes the pool. The core-instance
+    /// and table totals are multiples of it, since a component spends several
+    /// of each and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set
+    /// any total on its own.
     #[arg(long = "max-memories", env = "WASH_MAX_MEMORIES")]
     pub max_memories: Option<u32>,
 
@@ -1170,21 +1170,19 @@ impl CliCommand for HostCommand {
         // in a flag, and reporting it after a NATS dial has already failed
         // buries the actionable error under an unrelated one. The resolved
         // numbers are reported later, by the engine that installs them.
-        // A host runs one engine, so an unset linear-memory count is sized to the
+        // A host runs one engine, so a pool count nobody named is sized to the
         // machine here rather than left at the engine's library default.
-        let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
+        use wash_runtime::engine::host_memory as hm;
+        let derive = self.max_memories.is_none() && self.core_instances.is_none();
+        let derived_max_memories = derive.then(|| {
+            let derivation = hm::MaxMemoriesDerivation::default()
+                .with_memory_precommit_limit(self.max_memories_from_memory_precommit_limit);
+            hm::derive_max_memories_with(derivation)
+        });
+        let host_memory = hm::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
-            self.max_memories.or_else(|| {
-                self.core_instances.is_none().then(|| {
-                    use wash_runtime::engine::host_memory as hm;
-                    if self.max_memories_from_memory_precommit_limit {
-                        hm::derive_max_memories_from_memory_precommit_limit()
-                    } else {
-                        hm::derive_max_memories()
-                    }
-                })
-            }),
+            self.max_memories.or(derived_max_memories),
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -1329,11 +1327,9 @@ impl CliCommand for HostCommand {
         // Only when the count was derived: a count the operator named was
         // never sized against the precommit limit, so the advisories keep
         // their usual threshold for it, as the flag's help promises.
-        let from_precommit_limit = self.max_memories_from_memory_precommit_limit
-            && self.max_memories.is_none()
-            && self.core_instances.is_none();
-        engine_builder =
-            engine_builder.with_max_memories_from_memory_precommit_limit(from_precommit_limit);
+        engine_builder = engine_builder.with_max_memories_from_memory_precommit_limit(
+            self.max_memories_from_memory_precommit_limit && derived_max_memories.is_some(),
+        );
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
