@@ -2,13 +2,13 @@ all: proto
 
 .PHONY: coverage coverage-report coverage-check
 coverage:
-	bash scripts/coverage.sh
+	node scripts/coverage.mjs
 
 coverage-report:
-	bash scripts/coverage.sh report
+	node scripts/coverage.mjs report
 
 coverage-check:
-	bash scripts/coverage.sh check
+	node scripts/coverage.mjs check
 
 # protobuf
 .PHONY: proto
