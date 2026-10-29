@@ -4,7 +4,7 @@
 //! a plugin sees this map, so credentials arrive here already resolved and are
 //! never read from a manifest by this module.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -295,13 +295,17 @@ pub enum AckMode {
 }
 
 /// A workload's complete NATS configuration.
+///
+/// `A` is how it authenticates: [`NatsAuth`] once every value is known, and
+/// `Option<NatsAuth>` for a layer read by [`NatsConfig::from_layer`], `None`
+/// when a key a plugin secret supplies decides the credentials.
 #[derive(Debug)]
-pub struct NatsConfig {
+pub struct NatsConfig<A = NatsAuth> {
     pub servers: Vec<String>,
     pub name: Option<String>,
     pub jetstream_domain: Option<String>,
     pub inbox_prefix: Option<String>,
-    pub auth: NatsAuth,
+    pub auth: A,
     pub tls: TlsConfig,
     pub policy: PolicySpec,
     pub limits: Limits,
@@ -309,89 +313,118 @@ pub struct NatsConfig {
     pub request_timeout: Option<Duration>,
 }
 
-/// Reads a key through the plugin's key table, in whichever spelling — or
-/// alias — a manifest used.
+/// A config map, and the keys of it a plugin secret supplies at bind.
 ///
-/// Going through [`super::keys`] rather than reading the map directly is what
-/// keeps this reader and [`super::binding_schema`] from drifting: a key asked
-/// for here that the table does not name trips a debug assertion, and a key in
-/// the table nothing asks for is dead weight the table's own tests name.
-fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
-    super::keys::get(cfg, key)
+/// A pending key counts as set for every rule its presence decides. Its value
+/// is not read, so each rule on a value is checked at bind, once it has one.
+struct Layer<'a> {
+    cfg: &'a HashMap<String, String>,
+    pending: &'a BTreeSet<String>,
 }
 
-/// Splits a comma-separated list, dropping empties.
-fn list(cfg: &HashMap<String, String>, key: &str) -> Vec<String> {
-    get(cfg, key)
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
+impl Layer<'_> {
+    /// Reads a key through the plugin's key table, in whichever spelling — or
+    /// alias — a manifest used.
+    ///
+    /// Going through [`super::keys`] rather than reading the map directly is
+    /// what keeps this reader and [`super::binding_schema`] from drifting: a key
+    /// asked for here that the table does not name trips a debug assertion, and
+    /// a key in the table nothing asks for is dead weight the table's own tests
+    /// name.
+    fn get(&self, key: &str) -> Option<&str> {
+        super::keys::get(self.cfg, key)
+    }
+
+    /// Whether a plugin secret supplies `key`, in any spelling.
+    fn is_pending(&self, key: &str) -> bool {
+        super::keys::find(key).is_some_and(|row| row.spellings().any(|s| self.pending.contains(s)))
+    }
+
+    /// Whether `key` has a value, or will have one at bind.
+    fn is_set(&self, key: &str) -> bool {
+        self.get(key).is_some() || self.is_pending(key)
+    }
+
+    /// Splits a comma-separated list, dropping empties.
+    fn list(&self, key: &str) -> Vec<String> {
+        self.get(key)
+            .map(|raw| {
+                raw.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn parse_usize(&self, key: &str, default: usize) -> anyhow::Result<usize> {
+        match self.get(key) {
+            Some(raw) => raw
+                .parse()
+                .with_context(|| format!("`{key}` must be a positive integer, got `{raw}`")),
+            None => Ok(default),
+        }
+    }
+
+    fn parse_bool(&self, key: &str) -> anyhow::Result<bool> {
+        match self.get(key) {
+            Some(raw) => raw
+                .parse()
+                .with_context(|| format!("`{key}` must be `true` or `false`, got `{raw}`")),
+            None => Ok(false),
+        }
+    }
+
+    /// A secret given inline as `key` or as a file named by `file_key`, but
+    /// not both. `None` when neither has a value yet.
+    fn secret(&self, key: &str, file_key: &str) -> anyhow::Result<Option<Secret>> {
+        if self.is_set(key) && self.is_set(file_key) {
+            bail!("`{key}` and `{file_key}` were both supplied; set one");
+        }
+        Ok(match (self.get(key), self.get(file_key)) {
+            (Some(value), _) => Some(Secret::Value(Zeroizing::new(value.to_string()))),
+            (None, Some(path)) => Some(Secret::File(PathBuf::from(path))),
+            (None, None) => None,
         })
-        .unwrap_or_default()
-}
-
-fn parse_usize(cfg: &HashMap<String, String>, key: &str, default: usize) -> anyhow::Result<usize> {
-    match get(cfg, key) {
-        Some(raw) => raw
-            .parse()
-            .with_context(|| format!("`{key}` must be a positive integer, got `{raw}`")),
-        None => Ok(default),
-    }
-}
-
-fn parse_bool(cfg: &HashMap<String, String>, key: &str) -> anyhow::Result<bool> {
-    match get(cfg, key) {
-        Some(raw) => raw
-            .parse()
-            .with_context(|| format!("`{key}` must be `true` or `false`, got `{raw}`")),
-        None => Ok(false),
-    }
-}
-
-/// A secret given inline as `key` or as a file named by `file_key`, but not
-/// both.
-fn secret(
-    cfg: &HashMap<String, String>,
-    key: &str,
-    file_key: &str,
-) -> anyhow::Result<Option<Secret>> {
-    match (get(cfg, key), get(cfg, file_key)) {
-        (Some(_), Some(_)) => bail!("`{key}` and `{file_key}` were both supplied; set one"),
-        (Some(value), None) => Ok(Some(Secret::Value(Zeroizing::new(value.to_string())))),
-        (None, Some(path)) => Ok(Some(Secret::File(PathBuf::from(path)))),
-        (None, None) => Ok(None),
     }
 }
 
 /// Selects exactly one auth mechanism, or fails.
 ///
 /// Silently preferring one when several are set hides a misconfiguration until
-/// the connection is refused, so a conflict is an error at bind time.
-fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
+/// the connection is refused, so a conflict is an error at bind time. `None`
+/// when a pending key is part of the mechanism selected.
+fn parse_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
     // One `get` per setting: aliases are resolved by the key table, so
     // `creds-file` and `creds` are the same lookup rather than two.
-    let creds = get(cfg, "creds");
-    let jwt = get(cfg, "jwt");
-    let seed = secret(cfg, "nkey-seed", "nkey-seed-file")?;
-    let username = get(cfg, "username");
-    let password = secret(cfg, "password", "password-file")?;
-    let token = secret(cfg, "token", "token-file")?;
-    let jwt_as_token = parse_bool(cfg, "jwt-as-token")?;
+    let creds = r.get("creds");
+    let jwt = r.get("jwt");
+    let seed = r.secret("nkey-seed", "nkey-seed-file")?;
+    let username = r.get("username");
+    let password = r.secret("password", "password-file")?;
+    let token = r.secret("token", "token-file")?;
+    let jwt_as_token = r.parse_bool("jwt-as-token")?;
+    let jwt_as_token_pending = r.is_pending("jwt-as-token");
+
+    let has_creds = r.is_set("creds");
+    let has_jwt = r.is_set("jwt");
+    let has_seed = r.is_set("nkey-seed") || r.is_set("nkey-seed-file");
+    let has_username = r.is_set("username");
+    let has_password = r.is_set("password") || r.is_set("password-file");
+    let has_token = r.is_set("token") || r.is_set("token-file");
 
     let mut selected: Vec<&str> = Vec::new();
-    if creds.is_some() {
+    if has_creds {
         selected.push("creds");
     }
-    if jwt.is_some() || seed.is_some() {
+    if has_jwt || has_seed {
         selected.push("jwt/nkey-seed");
     }
-    if username.is_some() || password.is_some() {
+    if has_username || has_password {
         selected.push("username/password");
     }
-    if token.is_some() {
+    if has_token {
         selected.push("token");
     }
 
@@ -402,149 +435,192 @@ fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
         );
     }
 
-    if let Some(path) = creds {
-        return Ok(NatsAuth::CredsFile {
-            path: PathBuf::from(path),
-            jwt_as_token,
+    if has_creds {
+        return Ok(match (creds, jwt_as_token_pending) {
+            (Some(path), false) => Some(NatsAuth::CredsFile {
+                path: PathBuf::from(path),
+                jwt_as_token,
+            }),
+            _ => None,
         });
     }
-    if jwt_as_token && jwt.is_none() {
+    if jwt_as_token && !has_jwt {
         bail!("`jwt-as-token` requires `creds` or `jwt`");
     }
-    match (jwt, seed) {
-        (Some(jwt), Some(seed)) => {
-            return Ok(NatsAuth::JwtNkey {
-                jwt: jwt.to_string(),
-                seed,
-                jwt_as_token,
+    match (has_jwt, has_seed) {
+        (true, true) => {
+            return Ok(match (jwt, seed, jwt_as_token_pending) {
+                (Some(jwt), Some(seed), false) => Some(NatsAuth::JwtNkey {
+                    jwt: jwt.to_string(),
+                    seed,
+                    jwt_as_token,
+                }),
+                _ => None,
             });
         }
-        (Some(_), None) => bail!("`jwt` requires `nkey-seed` or `nkey-seed-file`"),
-        (None, Some(seed)) => return Ok(NatsAuth::NkeySeed(seed)),
-        (None, None) => {}
+        (true, false) => bail!("`jwt` requires `nkey-seed` or `nkey-seed-file`"),
+        (false, true) => return Ok(seed.map(NatsAuth::NkeySeed)),
+        (false, false) => {}
     }
-    match (username, password) {
-        (Some(username), Some(password)) => {
-            return Ok(NatsAuth::UserPassword {
-                username: username.to_string(),
-                password,
-            });
+    match (has_username, has_password) {
+        (true, true) => {
+            return Ok(username
+                .zip(password)
+                .map(|(username, password)| NatsAuth::UserPassword {
+                    username: username.to_string(),
+                    password,
+                }));
         }
-        (Some(_), None) => bail!("`username` requires `password` or `password-file`"),
-        (None, Some(_)) => bail!("`password` requires `username`"),
-        (None, None) => {}
+        (true, false) => bail!("`username` requires `password` or `password-file`"),
+        (false, true) => bail!("`password` requires `username`"),
+        (false, false) => {}
     }
-    if let Some(token) = token {
-        return Ok(NatsAuth::Token(token));
+    if has_token {
+        return Ok(token.map(NatsAuth::Token));
     }
-    Ok(NatsAuth::Anonymous)
+    Ok(Some(NatsAuth::Anonymous))
+}
+
+/// Parses and validates a config layer, leaving its pending keys unread.
+fn read(r: &Layer<'_>) -> anyhow::Result<NatsConfig<Option<NatsAuth>>> {
+    let servers = r.list("servers");
+    if servers.is_empty() && !r.is_pending("servers") {
+        bail!("wasmcloud:nats requires a `servers` config value");
+    }
+    for server in &servers {
+        if server.contains('@') {
+            bail!(
+                "credentials embedded in `servers` are not applied by the NATS client and \
+                 would connect unauthenticated; use `creds`, `jwt`/`nkey-seed`, \
+                 `username`/`password`, `token`, or their `-file` keys instead"
+            );
+        }
+    }
+
+    let ack_mode = match r.get("ack-mode") {
+        None | Some("auto") => AckMode::Auto,
+        Some("manual") => AckMode::Manual,
+        Some(other) => bail!("`ack-mode` must be `auto` or `manual`, got `{other}`"),
+    };
+
+    let request_timeout = match r.get("request-timeout-ms") {
+        Some(raw) => Some(Duration::from_millis(raw.parse().with_context(|| {
+            format!("`request-timeout-ms` must be a positive integer, got `{raw}`")
+        })?)),
+        None => None,
+    };
+
+    let limits = Limits {
+        max_in_flight: r.parse_usize("max-in-flight", DEFAULT_MAX_IN_FLIGHT)?,
+        subscription_capacity: r
+            .parse_usize("subscription-capacity", DEFAULT_SUBSCRIPTION_CAPACITY)?,
+        subscription_capacity_bytes: r.parse_usize(
+            "subscription-capacity-bytes",
+            DEFAULT_SUBSCRIPTION_CAPACITY_BYTES,
+        )?,
+        // Zero is meaningful here -- it is how an operator says "server
+        // default" -- so unlike the other two it is not rejected.
+        max_ack_pending: match r.get("max-ack-pending") {
+            Some(raw) => Some(raw.parse().with_context(|| {
+                format!("`max-ack-pending` must be a non-negative integer, got `{raw}`")
+            })?),
+            None => None,
+        },
+        // Zero is meaningful here too: it is how an operator asks for the
+        // server's unlimited redelivery back.
+        max_deliver: match r.get("max-deliver") {
+            Some(raw) => Some(raw.parse().with_context(|| {
+                format!("`max-deliver` must be a non-negative integer, got `{raw}`")
+            })?),
+            None => None,
+        },
+    };
+    if limits.max_in_flight == 0 {
+        bail!("`max-in-flight` must be greater than zero");
+    }
+    if limits.subscription_capacity == 0 {
+        bail!("`subscription-capacity` must be greater than zero");
+    }
+    if limits.subscription_capacity_bytes == 0 {
+        bail!("`subscription-capacity-bytes` must be greater than zero");
+    }
+    // Each sizes a semaphore or a bounded channel, which panic above this.
+    const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
+    for (key, value) in [
+        ("max-in-flight", limits.max_in_flight),
+        ("subscription-capacity", limits.subscription_capacity),
+    ] {
+        if value > MAX_PERMITS {
+            bail!("`{key}` must be at most {MAX_PERMITS}, got {value}");
+        }
+    }
+
+    let tls = TlsConfig {
+        ca: r.get("tls-ca").map(PathBuf::from),
+        cert: r.get("tls-cert").map(PathBuf::from),
+        key: r.get("tls-key").map(PathBuf::from),
+        first: r.parse_bool("tls-first")?,
+    };
+    if r.is_set("tls-cert") != r.is_set("tls-key") {
+        bail!("`tls-cert` and `tls-key` must be set together");
+    }
+
+    Ok(NatsConfig {
+        servers,
+        name: r.get("name").map(String::from),
+        jetstream_domain: r.get("jetstream-domain").map(String::from),
+        inbox_prefix: r.get("inbox-prefix").map(String::from),
+        auth: parse_auth(r)?,
+        tls,
+        policy: PolicySpec {
+            subject_allow: r.list("subject-allow"),
+            stream_allow: r.list("stream-allow"),
+            stream_delete_allow: r.list("stream-delete-allow"),
+            bucket_allow: r.list("bucket-allow"),
+        },
+        limits,
+        ack_mode,
+        request_timeout,
+    })
+}
+
+impl NatsConfig<Option<NatsAuth>> {
+    /// Parses and validates a binding's layer before bind, with the keys in
+    /// `pending` still waiting on a plugin secret.
+    ///
+    /// `servers` holds only the addresses known now, and `auth` is `None` when
+    /// a pending key decides the credentials.
+    pub fn from_layer(
+        cfg: &HashMap<String, String>,
+        pending: &BTreeSet<String>,
+    ) -> anyhow::Result<Self> {
+        read(&Layer { cfg, pending })
+    }
 }
 
 impl NatsConfig {
     /// Parses and validates a workload's config map.
     pub fn from_map(cfg: &HashMap<String, String>) -> anyhow::Result<Self> {
-        let servers = list(cfg, "servers");
-        if servers.is_empty() {
-            bail!("wasmcloud:nats requires a `servers` config value");
-        }
-        for server in &servers {
-            if server.contains('@') {
-                bail!(
-                    "credentials embedded in `servers` are not applied by the NATS client and \
-                     would connect unauthenticated; use `creds`, `jwt`/`nkey-seed`, \
-                     `username`/`password`, `token`, or their `-file` keys instead"
-                );
-            }
-        }
-
-        let ack_mode = match get(cfg, "ack-mode") {
-            None | Some("auto") => AckMode::Auto,
-            Some("manual") => AckMode::Manual,
-            Some(other) => bail!("`ack-mode` must be `auto` or `manual`, got `{other}`"),
+        let layer = read(&Layer {
+            cfg,
+            pending: &BTreeSet::new(),
+        })?;
+        // With nothing pending, every mechanism `parse_auth` selects has its
+        // values.
+        let Some(auth) = layer.auth else {
+            bail!("NATS credentials have no value");
         };
-
-        let request_timeout = match get(cfg, "request-timeout-ms") {
-            Some(raw) => Some(Duration::from_millis(raw.parse().with_context(|| {
-                format!("`request-timeout-ms` must be a positive integer, got `{raw}`")
-            })?)),
-            None => None,
-        };
-
-        let limits = Limits {
-            max_in_flight: parse_usize(cfg, "max-in-flight", DEFAULT_MAX_IN_FLIGHT)?,
-            subscription_capacity: parse_usize(
-                cfg,
-                "subscription-capacity",
-                DEFAULT_SUBSCRIPTION_CAPACITY,
-            )?,
-            subscription_capacity_bytes: parse_usize(
-                cfg,
-                "subscription-capacity-bytes",
-                DEFAULT_SUBSCRIPTION_CAPACITY_BYTES,
-            )?,
-            // Zero is meaningful here -- it is how an operator says "server
-            // default" -- so unlike the other two it is not rejected.
-            max_ack_pending: match get(cfg, "max-ack-pending") {
-                Some(raw) => Some(raw.parse().with_context(|| {
-                    format!("`max-ack-pending` must be a non-negative integer, got `{raw}`")
-                })?),
-                None => None,
-            },
-            // Zero is meaningful here too: it is how an operator asks for the
-            // server's unlimited redelivery back.
-            max_deliver: match get(cfg, "max-deliver") {
-                Some(raw) => Some(raw.parse().with_context(|| {
-                    format!("`max-deliver` must be a non-negative integer, got `{raw}`")
-                })?),
-                None => None,
-            },
-        };
-        if limits.max_in_flight == 0 {
-            bail!("`max-in-flight` must be greater than zero");
-        }
-        if limits.subscription_capacity == 0 {
-            bail!("`subscription-capacity` must be greater than zero");
-        }
-        if limits.subscription_capacity_bytes == 0 {
-            bail!("`subscription-capacity-bytes` must be greater than zero");
-        }
-        // Each sizes a semaphore or a bounded channel, which panic above this.
-        const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
-        for (key, value) in [
-            ("max-in-flight", limits.max_in_flight),
-            ("subscription-capacity", limits.subscription_capacity),
-        ] {
-            if value > MAX_PERMITS {
-                bail!("`{key}` must be at most {MAX_PERMITS}, got {value}");
-            }
-        }
-
-        let tls = TlsConfig {
-            ca: get(cfg, "tls-ca").map(PathBuf::from),
-            cert: get(cfg, "tls-cert").map(PathBuf::from),
-            key: get(cfg, "tls-key").map(PathBuf::from),
-            first: parse_bool(cfg, "tls-first")?,
-        };
-        if tls.cert.is_some() != tls.key.is_some() {
-            bail!("`tls-cert` and `tls-key` must be set together");
-        }
-
-        Ok(Self {
-            servers,
-            name: get(cfg, "name").map(String::from),
-            jetstream_domain: get(cfg, "jetstream-domain").map(String::from),
-            inbox_prefix: get(cfg, "inbox-prefix").map(String::from),
-            auth: parse_auth(cfg)?,
-            tls,
-            policy: PolicySpec {
-                subject_allow: list(cfg, "subject-allow"),
-                stream_allow: list(cfg, "stream-allow"),
-                stream_delete_allow: list(cfg, "stream-delete-allow"),
-                bucket_allow: list(cfg, "bucket-allow"),
-            },
-            limits,
-            ack_mode,
-            request_timeout,
+        Ok(NatsConfig {
+            servers: layer.servers,
+            name: layer.name,
+            jetstream_domain: layer.jetstream_domain,
+            inbox_prefix: layer.inbox_prefix,
+            auth,
+            tls: layer.tls,
+            policy: layer.policy,
+            limits: layer.limits,
+            ack_mode: layer.ack_mode,
+            request_timeout: layer.request_timeout,
         })
     }
 
@@ -895,6 +971,47 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    fn pending(keys: &[&str]) -> BTreeSet<String> {
+        keys.iter().map(|k| k.to_string()).collect()
+    }
+
+    /// A layer whose credentials wait on a secret reads, with no credentials
+    /// yet; one whose secret supplies only an unrelated key keeps its own.
+    #[test]
+    fn a_pending_key_leaves_its_credentials_unresolved() {
+        let layer = map(&[("servers", "nats://a:4222"), ("username", "svc")]);
+        let read = NatsConfig::from_layer(&layer, &pending(&["password"])).unwrap();
+        assert!(read.auth.is_none());
+
+        let layer = map(&[("servers", "nats://a:4222"), ("token", "t")]);
+        let read = NatsConfig::from_layer(&layer, &pending(&["name"])).unwrap();
+        assert!(matches!(read.auth, Some(NatsAuth::Token(_))));
+        assert_eq!(read.name, None);
+    }
+
+    /// A pending alias is the same key as its canonical spelling.
+    #[test]
+    fn a_pending_alias_reads_as_set() {
+        let layer = map(&[("servers", "nats://a:4222")]);
+        let read = NatsConfig::from_layer(&layer, &pending(&["creds-file"])).unwrap();
+        assert!(read.auth.is_none());
+        let err = NatsConfig::from_layer(
+            &map(&[("servers", "nats://a:4222"), ("token", "t")]),
+            &pending(&["creds-file"]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("conflicting"), "{err:#}");
+    }
+
+    /// A pending `servers` satisfies the requirement and contributes no
+    /// address.
+    #[test]
+    fn a_pending_servers_is_present_with_no_address() {
+        let read = NatsConfig::from_layer(&map(&[]), &pending(&["servers"])).unwrap();
+        assert!(read.servers.is_empty());
+        assert!(matches!(read.auth, Some(NatsAuth::Anonymous)));
     }
 
     #[test]
