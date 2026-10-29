@@ -1,7 +1,9 @@
 //! Integration tests for the `wasmcloud:host/secret-source` export: a
 //! plugin-backed `secrets:` entry resolved through a real host component
 //! plugin (`secret-source-plugin`) and delivered to another component plugin
-//! (`kv-plugin`) as its binding config, read back through a caller workload.
+//! (`kv-plugin`) as its binding config, read back through a caller workload;
+//! and the same source serving a workload its own secrets through the native
+//! `wasmcloud-secrets` plugin, limited to the workloads the entry grants.
 
 #![cfg(feature = "host-component-plugins")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -19,12 +21,15 @@ use wash_runtime::types::{LocalResources, WorkloadState};
 mod common;
 use common::{
     component_workload_request, kv_plugin_caller_host_interfaces, req,
-    start_host_with_component_plugins,
+    secrets_caller_host_interfaces_with_config, start_host_with_component_plugins,
 };
 
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("wasm/kv_plugin.wasm");
 const KV_PLUGIN_CALLER_WASM: &[u8] = include_bytes!("wasm/kv_plugin_caller.wasm");
 const SECRET_SOURCE_WASM: &[u8] = include_bytes!("wasm/secret_source_plugin.wasm");
+const SECRETS_CALLER_WASM: &[u8] = include_bytes!("wasm/secrets_caller.wasm");
+/// The native plugin serving `wasmcloud:secrets` to workloads.
+const WORKLOAD_SECRETS_ID: &str = "wasmcloud-secrets";
 const KV_ID: &str = "acme-kv-plugin";
 const SECRETS_ID: &str = "acme-secrets";
 
@@ -145,5 +150,97 @@ async fn a_secret_that_could_never_resolve_fails_host_start() -> Result<()> {
         };
         assert!(format!("{err:#}").contains(expect), "{plugin}: {err:#}");
     }
+    Ok(())
+}
+
+/// `wasmcloud-secrets`' entry serving workloads `db-password`, and
+/// `requested-by` (the workload the source was told it resolved for), from
+/// `acme-secrets` to the workloads `grant` admits.
+fn workload_secrets(grant: WorkloadGrant) -> PluginBindings {
+    let secret = |key: &str| PluginSecretRef {
+        source: "billing-pw".into(),
+        plugin: SECRETS_ID.into(),
+        key: key.into(),
+        grant: grant.clone(),
+    };
+    PluginBindings::new().with_plugin(
+        PluginBindingSet::new(WORKLOAD_SECRETS_ID).with_base_secrets(HashMap::from([
+            ("db-password".to_string(), secret("db-password")),
+            ("requested-by".to_string(), secret("workload")),
+        ])),
+    )
+}
+
+/// A `secrets-caller` workload called `name` in namespace `test`, reading its
+/// secrets through `wasmcloud:secrets/store` and `reveal`, with none of its
+/// own config.
+fn secrets_caller(name: &str) -> wash_runtime::types::WorkloadStartRequest {
+    component_workload_request(
+        "secrets-caller",
+        name,
+        SECRETS_CALLER_WASM,
+        LocalResources::default(),
+        secrets_caller_host_interfaces_with_config(name, HashMap::new()),
+    )
+}
+
+/// A granted workload reads its own secret from the secret-source plugin with
+/// `store.get` + `reveal`, and the source was told which workload asked.
+#[tokio::test]
+async fn a_granted_workload_reads_its_own_secret() -> Result<()> {
+    for grant in [
+        WorkloadSelector::workload("test", "billing-api"),
+        WorkloadSelector::namespace("test"),
+    ] {
+        let (addr, h) = start(workload_secrets(WorkloadGrant::Only(vec![grant.clone()]))).await?;
+        let resp = h.workload_start(secrets_caller("billing-api")).await?;
+        assert_eq!(
+            resp.workload_status.workload_state,
+            WorkloadState::Running,
+            "{grant:?}: {}",
+            resp.workload_status.message
+        );
+        let client = reqwest::Client::new();
+        let (status, body) = req(&client, &addr, "billing-api", "/get?key=db-password").await?;
+        assert_eq!(status.as_u16(), 200, "{grant:?}");
+        assert_eq!(body, "hunter2");
+        let (_, body) = req(&client, &addr, "billing-api", "/get?key=requested-by").await?;
+        assert_eq!(body, "test/billing-api");
+    }
+    Ok(())
+}
+
+/// A workload outside the grant fails to deploy, naming the workload but not
+/// the entry, while a granted one on the same host binds the same entry.
+#[tokio::test]
+async fn a_workload_outside_the_grant_cannot_read_the_secret() -> Result<()> {
+    let (addr, h) = start(workload_secrets(WorkloadGrant::Only(vec![
+        WorkloadSelector::workload("test", "billing-api"),
+    ])))
+    .await?;
+
+    let resp = h.workload_start(secrets_caller("intruder")).await?;
+    assert_eq!(resp.workload_status.workload_state, WorkloadState::Error);
+    let message = &resp.workload_status.message;
+    assert!(
+        message.contains("not granted to workload `test/intruder`"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("billing-pw") && !message.contains("hunter2"),
+        "{message}"
+    );
+
+    let resp = h.workload_start(secrets_caller("billing-api")).await?;
+    assert_eq!(
+        resp.workload_status.workload_state,
+        WorkloadState::Running,
+        "{}",
+        resp.workload_status.message
+    );
+    let client = reqwest::Client::new();
+    let (status, body) = req(&client, &addr, "billing-api", "/get?key=db-password").await?;
+    assert_eq!(status.as_u16(), 200);
+    assert_eq!(body, "hunter2");
     Ok(())
 }
