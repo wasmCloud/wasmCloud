@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/free-disk-space
+      - uses: $/.github/actions/free-disk-space
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: runtime-operator/go.mod
@@ -52,7 +52,7 @@ jobs:
       - uses: bytecodealliance/actions/wasm-tools/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
         with:
           version: ${{ env.WASM_TOOLS_VERSION }}
-      - uses: ./.github/actions/setup-rust
+      - uses: $/.github/actions/setup-rust
       - name: Install matching LLVM tools
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
