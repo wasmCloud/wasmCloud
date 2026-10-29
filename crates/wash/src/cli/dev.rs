@@ -1113,7 +1113,7 @@ mod lifecycle_tests {
         let old = host
             .workload_status(WorkloadStatusRequest { workload_id: first })
             .await?;
-        assert_ne!(old.workload_status.workload_state, WorkloadState::Running);
+        assert_eq!(old.workload_status.workload_state, WorkloadState::NotFound);
         let current = host
             .workload_status(WorkloadStatusRequest {
                 workload_id: second,

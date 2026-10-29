@@ -165,7 +165,9 @@ async fn dev_serves_http_and_stops_on_sigterm() -> Result<()> {
     let home = dev_project(json!({ "address": address }))?;
     let mut wash = WashProcess::spawn(home.path(), &["dev"], "listening for HTTP requests")?;
     wash.wait_ready().await?;
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .no_proxy()
+        .build()?
         .get(format!("http://{address}/"))
         .timeout(Duration::from_secs(5))
         .send()
@@ -199,6 +201,7 @@ async fn dev_serves_https_with_filesystem_plugins_and_sidecars() -> Result<()> {
     wash.wait_ready().await?;
     let ca = reqwest::Certificate::from_pem(&std::fs::read(&cert)?)?;
     let response = reqwest::Client::builder()
+        .no_proxy()
         .add_root_certificate(ca)
         .build()?
         .get(format!("https://{address}/"))
@@ -314,6 +317,7 @@ async fn host_serves_probes_and_ingress_and_shuts_down() -> Result<()> {
     )?;
     wash.wait_ready().await?;
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(5))
         .build()?;
     for path in ["/livez", "/readyz"] {
@@ -376,6 +380,7 @@ async fn host_serves_https_with_outbound_identity_refresh() -> Result<()> {
     wash.wait_ready().await?;
     let ca = reqwest::Certificate::from_pem(&std::fs::read(cert)?)?;
     let response = reqwest::Client::builder()
+        .no_proxy()
         .add_root_certificate(ca)
         .build()?
         .get(format!("https://{ingress}/"))
