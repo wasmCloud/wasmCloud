@@ -93,6 +93,7 @@ impl Guest for Component {
     async fn run() -> Result<(), ()> {
         test_tcp_loopback().await;
         test_udp_loopback().await;
+        bindings::wasmcloud::test_p3::completion::done();
         Ok(())
     }
 }

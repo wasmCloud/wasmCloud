@@ -1090,18 +1090,18 @@ impl TcpSocket {
                     return Err(ErrorCode::InvalidState);
                 }
 
-                let mut local_address = *addr;
-                local_address.set_port(0);
-                let local_address = match loopback.bind_tcp(local_address) {
-                    Ok(addr) => addr,
+                let tx = match loopback.connect_tcp(addr) {
+                    Ok(tx) => tx.clone(),
                     Err(err) => {
                         *self = Self::Network(socket);
                         return Err(err);
                     }
                 };
 
-                let tx = match loopback.connect_tcp(addr) {
-                    Ok(tx) => tx,
+                let mut local_address = *addr;
+                local_address.set_port(0);
+                let local_address = match loopback.bind_tcp(local_address) {
+                    Ok(addr) => addr,
                     Err(err) => {
                         *self = Self::Network(socket);
                         return Err(err);
@@ -1118,9 +1118,12 @@ impl TcpSocket {
                 ) {
                     Ok(socket) => {
                         *self = Self::Loopback(socket);
-                        Ok(ConnectingTcpSocket::Loopback(tx.clone()))
+                        Ok(ConnectingTcpSocket::Loopback(tx))
                     }
                     Err(err) => {
+                        if let Some(port) = core::num::NonZeroU16::new(local_address.port()) {
+                            loopback.get_tcp_net_mut(local_address.ip()).remove(&port);
+                        }
                         *self = Self::Network(socket);
                         Err(err)
                     }

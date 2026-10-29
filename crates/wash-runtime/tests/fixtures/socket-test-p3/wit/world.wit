@@ -1,6 +1,11 @@
 package wasmcloud:test-p3@0.1.0;
 
+interface completion {
+    done: func();
+}
+
 world socket-test {
+    import completion;
     import wasi:cli/environment@0.3.0;
     import wasi:cli/stderr@0.3.0;
     import wasi:cli/types@0.3.0;
