@@ -3059,6 +3059,33 @@ host:
         assert!(!owned.contains("subject-allow"));
     }
 
+    /// A `secrets:` entry refuses an unknown field, and a bad value is
+    /// reported at its own key.
+    #[test]
+    fn a_secrets_entry_error_names_its_field() {
+        let load = |yaml: &str| {
+            Figment::from(Yaml::string(yaml))
+                .extract::<Config>()
+                .unwrap_err()
+                .to_string()
+        };
+        let err = load("secrets:\n  db:\n    inline:\n      ON: true\n");
+        assert!(err.contains("secrets.db.inline.ON"), "{err}");
+        let err = load("secrets:\n  db:\n    fromenv: [X]\n");
+        assert!(
+            err.contains("unknown field") && err.contains("fromenv"),
+            "{err}"
+        );
+        let err = load(
+            "secrets:\n  db:\n    plugin: vault\n    keys: {url: k}\n    workloads:\n      - \
+             {namespace: a, nmae: b}\n",
+        );
+        assert!(
+            err.contains("unknown field") && err.contains("nmae"),
+            "{err}"
+        );
+    }
+
     /// A plugin-backed `secrets:` entry named by a binding's `secretFrom`
     /// carries its keys into the set without values, and a component plugin
     /// cannot take one into its own config.

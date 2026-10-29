@@ -178,8 +178,8 @@ impl From<PluginSecretSource> for SecretEntry {
 /// A `secrets:` entry a host plugin serves through
 /// `wasmcloud:host/secret-source`. It is resolved each time a workload binds,
 /// and only a `host.plugins` entry or binding can name it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct PluginSecretSource {
     /// The plugin that serves the entry.
@@ -209,12 +209,19 @@ impl PluginSecretSource {
 }
 
 /// The wire shape of a [`SecretEntry`]: either kind's fields, so a mix of the
-/// two is refused by name rather than half-ignored.
+/// two is refused by name rather than half-ignored. Spelled out rather than
+/// flattened, so an unknown field is refused and an error names its field.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawSecretEntry {
-    #[serde(flatten)]
-    source: SecretSource,
+    #[serde(default)]
+    inline: HashMap<String, String>,
+    #[serde(default)]
+    file: Option<PathBuf>,
+    #[serde(default)]
+    dir: Option<PathBuf>,
+    #[serde(default)]
+    from_env: Vec<String>,
     #[serde(default)]
     plugin: Option<crate::plugin::PluginId>,
     #[serde(default)]
@@ -227,13 +234,19 @@ impl TryFrom<RawSecretEntry> for SecretEntry {
     type Error = String;
 
     fn try_from(raw: RawSecretEntry) -> std::result::Result<Self, String> {
+        let source = SecretSource {
+            inline: raw.inline,
+            file: raw.file,
+            dir: raw.dir,
+            from_env: raw.from_env,
+        };
         match (raw.plugin, raw.keys) {
-            (None, None) if raw.workloads.is_none() => Ok(Self::Static(raw.source)),
+            (None, None) if raw.workloads.is_none() => Ok(Self::Static(source)),
             (None, _) => {
                 Err("`keys`/`workloads` are set without the `plugin` that serves them".into())
             }
             (Some(plugin), keys) => {
-                if raw.source != SecretSource::default() {
+                if source != SecretSource::default() {
                     return Err(format!(
                         "names plugin '{plugin}' and also `inline`/`file`/`dir`/`fromEnv`; a \
                          plugin entry sets only `keys`"
@@ -1079,8 +1092,13 @@ mod tests {
             ),
             (
                 r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "a", "nmae": "b"}]}"#,
-                "",
+                "unknown field `nmae`",
             ),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": "all", "rotate": "1h"}"#,
+                "unknown field `rotate`",
+            ),
+            (r#"{"fromenv": ["X"]}"#, "unknown field `fromenv`"),
         ] {
             let err = parse(json).unwrap_err();
             assert!(err.contains(expect), "{json}: {err}");
