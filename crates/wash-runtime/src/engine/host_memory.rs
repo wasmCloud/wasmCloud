@@ -237,6 +237,7 @@ pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
         usable_address_space_within(limits.as_deref()),
         max_map_count(),
         bound,
+        PoolCommitShape::from_env(),
     )
 }
 
@@ -251,6 +252,7 @@ fn derive_max_memories_within(
     address_space: u64,
     max_map_count: Option<u64>,
     commit: CommitBound,
+    shape: PoolCommitShape,
 ) -> u32 {
     if cfg!(not(target_pointer_width = "64")) {
         return WASMTIME_DEFAULT_MAX_MEMORIES;
@@ -258,7 +260,7 @@ fn derive_max_memories_within(
     let by_commit = match commit {
         CommitBound::Unaccounted => u64::MAX,
         CommitBound::Floor => return WASMTIME_DEFAULT_MAX_MEMORIES,
-        CommitBound::Within(bytes) => bytes / committed_bytes_per_memory(),
+        CommitBound::Within(bytes) => shape.memories_within(bytes),
     };
     let by_address_space = share_of(address_space, DERIVED_POOL_ADDRESS_SPACE_PERCENT)
         / pool_slot_bytes(WASMTIME_DEFAULT_HEAP_MEMORY);
@@ -270,20 +272,63 @@ fn derive_max_memories_within(
         .max(WASMTIME_DEFAULT_MAX_MEMORIES)
 }
 
-/// Bytes of accessible mapping one linear memory brings with it at wasmtime's
-/// defaults: its pooled stack where the stack pool is mapped at startup
-/// ([`STACK_POOL_MAPPED_AT_STARTUP`]), and the tables the engine admits per
-/// memory ([`super::TABLES_PER_MEMORY`]). What a memory costs where those
-/// mappings are committed (see [`CommitBound`]); the address space its own
-/// reservation takes is [`pool_slot_bytes`].
-fn committed_bytes_per_memory() -> u64 {
-    let stack = if STACK_POOL_MAPPED_AT_STARTUP {
-        pool_stack_bytes(1, WASMTIME_DEFAULT_ASYNC_STACK_SIZE)
-    } else {
-        0
-    };
-    let tables = pool_table_bytes(super::TABLES_PER_MEMORY, WASMTIME_DEFAULT_TABLE_ELEMENTS);
-    stack.saturating_add(tables)
+/// What the stack and table pools commit where their mappings are committed
+/// (see [`CommitBound`]), split into what grows with the memory count and
+/// what does not. The address space a memory's own reservation takes is
+/// [`pool_slot_bytes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PoolCommitShape {
+    /// Bytes each memory adds: its pooled stack where the stack pool is
+    /// mapped at startup ([`STACK_POOL_MAPPED_AT_STARTUP`]) and the tables
+    /// the engine admits per memory ([`super::TABLES_PER_MEMORY`]), each
+    /// unless its total is pinned.
+    per_memory: u64,
+    /// Bytes of a stack or table total pinned whatever the memory count.
+    fixed: u64,
+}
+
+impl PoolCommitShape {
+    /// The shape at the given table size and pinned totals, with stacks of
+    /// wasmtime's default size: the builder never sets one.
+    fn new(table_elements: usize, pinned_stacks: Option<u32>, pinned_tables: Option<u32>) -> Self {
+        let stacks = |count| {
+            if STACK_POOL_MAPPED_AT_STARTUP {
+                pool_stack_bytes(count, WASMTIME_DEFAULT_ASYNC_STACK_SIZE)
+            } else {
+                0
+            }
+        };
+        let tables = |count| pool_table_bytes(count, table_elements);
+        let (stack_per_memory, stack_fixed) =
+            pinned_stacks.map_or((stacks(1), 0), |count| (0, stacks(count)));
+        let (tables_per_memory, tables_fixed) = pinned_tables
+            .map_or((tables(super::TABLES_PER_MEMORY), 0), |count| {
+                (0, tables(count))
+            });
+        Self {
+            per_memory: stack_per_memory.saturating_add(tables_per_memory),
+            fixed: stack_fixed.saturating_add(tables_fixed),
+        }
+    }
+
+    /// The shape the engine will install, read from the same
+    /// `WASMTIME_POOLING_*` overrides it applies.
+    fn from_env() -> Self {
+        Self::new(
+            super::pooling_env_quiet("WASMTIME_POOLING_TABLE_ELEMENTS")
+                .unwrap_or(WASMTIME_DEFAULT_TABLE_ELEMENTS),
+            super::pooling_env_total_quiet("WASMTIME_POOLING_TOTAL_STACKS"),
+            super::pooling_env_total_quiet("WASMTIME_POOLING_TOTAL_TABLES"),
+        )
+    }
+
+    /// How many memories fit in `bytes` of commit, after the pinned totals.
+    fn memories_within(self, bytes: u64) -> u64 {
+        bytes
+            .saturating_sub(self.fixed)
+            .checked_div(self.per_memory)
+            .unwrap_or(u64::MAX)
+    }
 }
 
 /// Whether wasmtime maps the stack pool when the engine is built. Only its
@@ -1479,6 +1524,27 @@ impl fmt::Display for HostMemoryBudgets {
 mod tests {
     use super::*;
 
+    impl PoolCommitShape {
+        /// The shape with no `WASMTIME_POOLING_*` overrides.
+        fn defaults() -> Self {
+            Self::new(WASMTIME_DEFAULT_TABLE_ELEMENTS, None, None)
+        }
+    }
+
+    /// [`derive_max_memories_within`] for pools with no overrides.
+    fn derive_at_defaults(
+        address_space: u64,
+        max_map_count: Option<u64>,
+        commit: CommitBound,
+    ) -> u32 {
+        derive_max_memories_within(
+            address_space,
+            max_map_count,
+            commit,
+            PoolCommitShape::defaults(),
+        )
+    }
+
     /// The pool a host with these knobs and no environment overrides installs:
     /// one memory per core instance.
     fn reservation_advisory(budgets: &HostMemoryBudgets, address_space: u64) -> Option<String> {
@@ -1584,11 +1650,11 @@ mod tests {
         let advisory =
             pool_stack_commit_advisory(1000, WASMTIME_DEFAULT_ASYNC_STACK_SIZE, &committed);
         if cfg!(unix) {
-            assert_eq!(committed_bytes_per_memory(), stack + tables);
+            assert_eq!(PoolCommitShape::defaults().per_memory, stack + tables);
             assert!(advisory.is_some());
         } else {
             // Windows maps each stack when a store first needs it.
-            assert_eq!(committed_bytes_per_memory(), tables);
+            assert_eq!(PoolCommitShape::defaults().per_memory, tables);
             assert!(advisory.is_none(), "{advisory:?}");
         }
     }
@@ -2050,7 +2116,7 @@ mod tests {
             (USER_ADDRESS_SPACE, 1_048_576),
         ] {
             let memories =
-                derive_max_memories_within(address_space, Some(mappings), CommitBound::Unaccounted);
+                derive_at_defaults(address_space, Some(mappings), CommitBound::Unaccounted);
             let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
             assert_eq!(reservation_advisory(&derived, address_space), None);
             assert_eq!(map_count_advisory(&derived, mappings), None);
@@ -2060,7 +2126,7 @@ mod tests {
         // count needs an advisory. Automatic sizing does not promise silence.
         let small_address_space = 1024 * 1024 * MIB;
         let memories =
-            derive_max_memories_within(small_address_space, Some(4096), CommitBound::Unaccounted);
+            derive_at_defaults(small_address_space, Some(4096), CommitBound::Unaccounted);
         assert_eq!(memories, WASMTIME_DEFAULT_MAX_MEMORIES);
         let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
         assert!(reservation_advisory(&derived, small_address_space).is_some());
@@ -2072,7 +2138,7 @@ mod tests {
         // A finite data limit or strict commit accounting must not turn the
         // old 2.6 GiB of writable pools into roughly 25 GiB at startup.
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Floor),
+            derive_at_defaults(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Floor),
             WASMTIME_DEFAULT_MAX_MEMORIES
         );
         let limits = "Max data size             4294967296 8589934592 bytes\n\
@@ -2096,7 +2162,7 @@ mod tests {
     #[cfg(all(unix, target_pointer_width = "64"))]
     #[test]
     fn sizing_against_the_commit_limit_bounds_the_count_instead_of_flooring_it() {
-        let per_memory = committed_bytes_per_memory();
+        let per_memory = PoolCommitShape::defaults().per_memory;
         // 2 MiB of stack plus its guard page, and four tables of 160 KiB
         // rounded up to the host's page: about 2.6 MiB.
         assert!(per_memory > 2 * MIB + 640 * 1024, "{per_memory}");
@@ -2105,7 +2171,7 @@ mod tests {
             "{per_memory}"
         );
         let within = |bytes: u64| {
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Within(bytes))
+            derive_at_defaults(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Within(bytes))
         };
         // 4 GiB of commit holds about 1,550 memories, fewer than the mapping
         // limit's 9,829: the commit bound binds.
@@ -2119,24 +2185,68 @@ mod tests {
         assert_eq!(within(1024 * MIB), WASMTIME_DEFAULT_MAX_MEMORIES);
     }
 
+    /// The commit bound costs the pools the engine will install, so a larger
+    /// table or a pinned total moves it rather than overshooting the share.
+    #[cfg(all(unix, target_pointer_width = "64"))]
+    #[test]
+    fn the_commit_bound_follows_the_installed_table_size_and_pinned_totals() {
+        let within = |bytes, shape| {
+            derive_max_memories_within(
+                USER_ADDRESS_SPACE,
+                Some(65_530),
+                CommitBound::Within(bytes),
+                shape,
+            )
+        };
+        // 16 GiB holds about 6,000 memories at the default tables and about
+        // 3,000 at five times the elements: both between the floor and the
+        // mapping limit, so the commit bound decides each.
+        let sixteen = 16 * 1024 * MIB;
+        let defaults = within(sixteen, PoolCommitShape::defaults());
+        let large_tables = PoolCommitShape::new(5 * WASMTIME_DEFAULT_TABLE_ELEMENTS, None, None);
+        assert!(large_tables.per_memory > PoolCommitShape::defaults().per_memory);
+        assert_eq!(
+            u64::from(within(sixteen, large_tables)),
+            sixteen / large_tables.per_memory
+        );
+        assert!(within(sixteen, large_tables) < defaults);
+        // Pinned stacks no longer grow with the count, but still take their
+        // commit off the top: 4 GiB less 1 GiB of stacks, at 640 KiB of
+        // tables a memory, is about 4,900.
+        let four = 4 * 1024 * MIB;
+        let pinned = PoolCommitShape::new(WASMTIME_DEFAULT_TABLE_ELEMENTS, Some(500), None);
+        assert_eq!(
+            pinned.fixed,
+            pool_stack_bytes(500, WASMTIME_DEFAULT_ASYNC_STACK_SIZE)
+        );
+        assert_eq!(
+            u64::from(within(four, pinned)),
+            (four - pinned.fixed) / pinned.per_memory
+        );
+        // Both pinned: the memory count commits nothing more.
+        let both = PoolCommitShape::new(WASMTIME_DEFAULT_TABLE_ELEMENTS, Some(500), Some(2000));
+        assert_eq!(both.per_memory, 0);
+        assert_eq!(within(four, both), 9_829);
+    }
+
     #[cfg(all(unix, target_pointer_width = "64"))]
     #[test]
     fn the_memory_count_derives_from_address_space_and_mappings() {
         // A default Linux: 47 bits of address space and 65,530 mappings. The
         // mapping limit binds: 65,530 x 90% / 6 per warm component.
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Unaccounted),
+            derive_at_defaults(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Unaccounted),
             9_829
         );
         // No mapping limit (macOS, or a kernel that reports none): half the
         // address space at 4 GiB + 32 MiB a memory.
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, None, CommitBound::Unaccounted),
+            derive_at_defaults(USER_ADDRESS_SPACE, None, CommitBound::Unaccounted),
             16_256
         );
         // A raised mapping limit hands the decision back to the address space.
         assert_eq!(
-            derive_max_memories_within(
+            derive_at_defaults(
                 USER_ADDRESS_SPACE,
                 Some(1_048_576),
                 CommitBound::Unaccounted
@@ -2145,11 +2255,11 @@ mod tests {
         );
         // A tight RLIMIT_AS or mapping limit never goes below the old default.
         assert_eq!(
-            derive_max_memories_within(1024 * 1024 * MIB, Some(65_530), CommitBound::Unaccounted),
+            derive_at_defaults(1024 * 1024 * MIB, Some(65_530), CommitBound::Unaccounted),
             WASMTIME_DEFAULT_MAX_MEMORIES
         );
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(4_096), CommitBound::Unaccounted),
+            derive_at_defaults(USER_ADDRESS_SPACE, Some(4_096), CommitBound::Unaccounted),
             WASMTIME_DEFAULT_MAX_MEMORIES
         );
     }

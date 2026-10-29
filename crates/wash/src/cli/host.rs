@@ -532,14 +532,17 @@ pub struct HostCommand {
     /// With this on, the host instead works out how many memories' stacks
     /// and tables fit in a quarter of that precommit limit (capped by the
     /// container's limit, or by physical memory where there is none, so swap
-    /// and the page file never raise it) and takes the smallest of that, the
-    /// address-space bound and the mapping bound, never below 1000: the same
-    /// rule every other platform follows. The quarter is fixed, like the
-    /// other derivation shares, because the commit limit is shared with every
-    /// other process and with this host's own heap; a host that wants
-    /// another count sets `--max-memories`. Elsewhere, and whenever
-    /// `--max-memories` or `--core-instances` is set (either one turns the
-    /// derivation off), this changes nothing.
+    /// and the page file never raise it), at the sizes the pool will install:
+    /// `WASMTIME_POOLING_TABLE_ELEMENTS` sizes each table, and a
+    /// `WASMTIME_POOLING_TOTAL_STACKS` or `WASMTIME_POOLING_TOTAL_TABLES`
+    /// total comes off the top rather than growing with the count. It takes
+    /// the smallest of that, the address-space bound and the mapping bound,
+    /// never below 1000: the same rule every other platform follows. The
+    /// quarter is fixed, like the other derivation shares, because the
+    /// commit limit is shared with every other process and with this host's
+    /// own heap; a host that wants another count sets `--max-memories`.
+    /// Elsewhere, and whenever `--max-memories` or `--core-instances` is set
+    /// (either one turns the derivation off), this changes nothing.
     #[arg(
         long = "set-max-memories-from-memory-precommit-limit",
         env = "WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT",
