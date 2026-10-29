@@ -626,16 +626,13 @@ pub(crate) async fn resolve_plugin_secrets(
         if !needed(binding, key, secret) {
             return Ok(None);
         }
+        // Requested above under the same `needed`, and `check_answer`
+        // refused any answer leaving a requested key out.
         let value = values
             .get(&(binding.map(str::to_string), secret.source.to_string()))
             .and_then(|resolved| resolved.get(&secret.key))
             .cloned()
-            .with_context(|| {
-                format!(
-                    "secret `{}` for `{plugin_id}`: plugin `{}` has no key `{}`",
-                    secret.source, secret.plugin, secret.key
-                )
-            })?;
+            .context("a requested plugin secret has no answer")?;
         used.push(value.clone());
         Ok(Some(value))
     })?;
@@ -677,9 +674,10 @@ fn check_answer(
     if !unrequested.is_empty() {
         faults.push(format!("answered unrequested {}", named(unrequested)));
     }
-    match faults.is_empty() {
-        true => Ok(()),
-        false => Err(SecretSourceError::InvalidAnswer(faults.join("; "))),
+    if faults.is_empty() {
+        Ok(())
+    } else {
+        Err(SecretSourceError::InvalidAnswer(faults.join("; ")))
     }
 }
 
