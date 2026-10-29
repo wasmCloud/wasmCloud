@@ -1,6 +1,6 @@
 use clap::Args;
 use tracing::instrument;
-use wash_runtime::component_source::ComponentSource;
+use wash_runtime::{component_source::ComponentSource, oci::OciConfig};
 
 use crate::{
     cli::{CliCommand, CliContext, CommandOutput, oci::RegistryArgs},
@@ -33,9 +33,14 @@ impl CliCommand for InspectCommand {
             "Directory '{component_reference}' specified. Please provide a file path or OCI reference."
         );
 
-        let loaded = ComponentSource::from_reference(component_reference)
-            .load(self.registry.oci_config(ctx)?)
-            .await?;
+        // Building the registry config loads `--ca-path` process-wide, which a
+        // local file never needs and should not fail on.
+        let source = ComponentSource::from_reference(component_reference);
+        let oci_config = match source {
+            ComponentSource::File(_) => OciConfig::default(),
+            ComponentSource::Oci { .. } => self.registry.oci_config(ctx)?,
+        };
+        let loaded = source.load(oci_config).await?;
 
         let component = decode_component(loaded.bytes.as_ref())
             .await
@@ -269,14 +274,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registry_configuration_errors_keep_the_ca_path_context() -> Result<()> {
+    async fn registry_configuration_applies_only_to_oci_references() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let ctx = context(temp.path());
         let path = temp.path().join("component.wasm");
         tokio::fs::write(&path, wat::parse_str(COMPONENT)?).await?;
-        let mut inspect = command(&path);
         let missing = temp.path().join("missing.pem");
+        let mut inspect = command(&path);
         inspect.registry.ca_paths = vec![missing.clone()];
+        assert_output(inspect.handle(&ctx).await?, COMPONENT_WIT)?;
+
+        inspect.component_reference = "registry.example/team/component:tag".into();
         let error = inspect
             .handle(&ctx)
             .await
