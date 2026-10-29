@@ -49,7 +49,7 @@ use opentelemetry::KeyValue;
 use opentelemetry::context::FutureExt;
 use opentelemetry_semantic_conventions::attribute::{
     ERROR_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE,
-    OTEL_STATUS_CODE, RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
+    OTEL_STATUS_CODE, RPC_RESPONSE_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -3562,7 +3562,7 @@ fn outbound_client_span(method: &hyper::Method, uri: &hyper::Uri) -> tracing::Sp
         { SERVER_ADDRESS } = uri.host().unwrap_or_default(),
         { SERVER_PORT } = tracing::field::Empty,
         { HTTP_RESPONSE_STATUS_CODE } = tracing::field::Empty,
-        { RPC_GRPC_STATUS_CODE } = tracing::field::Empty,
+        { RPC_RESPONSE_STATUS_CODE } = tracing::field::Empty,
         { OTEL_STATUS_CODE } = tracing::field::Empty,
         // Set to "local" when the request is served by a co-located workload
         // in-memory instead of egressing (see IngressBuilder::local_routing).
@@ -3591,8 +3591,8 @@ fn record_outbound_error() {
     tracing::Span::current().record(OTEL_STATUS_CODE, "ERROR");
 }
 
-/// Record the gRPC status as `rpc.grpc.status_code` on the current span when the
-/// response carries a `grpc-status` header. gRPC errors are typically
+/// Record the gRPC status as `rpc.response.status_code` on the current span when
+/// the response carries a `grpc-status` header. gRPC errors are typically
 /// trailers-only responses that put the status in headers, so this captures
 /// them; a status delivered in actual trailers (the streaming-success case) is
 /// not read here.
@@ -3602,8 +3602,34 @@ fn record_grpc_status(headers: &hyper::HeaderMap) {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<i64>().ok())
     {
-        tracing::Span::current().record(RPC_GRPC_STATUS_CODE, code);
+        tracing::Span::current().record(RPC_RESPONSE_STATUS_CODE, &*grpc_status_code_name(code));
     }
+}
+
+/// The `rpc.response.status_code` value for a numeric gRPC status: the code's
+/// name, or its decimal string for a code outside the gRPC set.
+fn grpc_status_code_name(code: i64) -> std::borrow::Cow<'static, str> {
+    let name = match code {
+        0 => "OK",
+        1 => "CANCELLED",
+        2 => "UNKNOWN",
+        3 => "INVALID_ARGUMENT",
+        4 => "DEADLINE_EXCEEDED",
+        5 => "NOT_FOUND",
+        6 => "ALREADY_EXISTS",
+        7 => "PERMISSION_DENIED",
+        8 => "RESOURCE_EXHAUSTED",
+        9 => "FAILED_PRECONDITION",
+        10 => "ABORTED",
+        11 => "OUT_OF_RANGE",
+        12 => "UNIMPLEMENTED",
+        13 => "INTERNAL",
+        14 => "UNAVAILABLE",
+        15 => "DATA_LOSS",
+        16 => "UNAUTHENTICATED",
+        _ => return code.to_string().into(),
+    };
+    name.into()
 }
 
 /// Response-body wrapper that tallies streamed bytes and records
@@ -4423,6 +4449,73 @@ mod tests {
         assert_eq!(spans.len(), 1, "exported spans: {spans:#?}");
         assert!(spans.iter().all(|span| span.name == "PATCH"));
         assert_eq!(spans[0].span_kind, SpanKind::Internal);
+    }
+
+    #[test]
+    fn grpc_status_codes_map_to_names() {
+        let names: Vec<_> = (0..=16).map(grpc_status_code_name).collect();
+        assert_eq!(
+            names,
+            [
+                "OK",
+                "CANCELLED",
+                "UNKNOWN",
+                "INVALID_ARGUMENT",
+                "DEADLINE_EXCEEDED",
+                "NOT_FOUND",
+                "ALREADY_EXISTS",
+                "PERMISSION_DENIED",
+                "RESOURCE_EXHAUSTED",
+                "FAILED_PRECONDITION",
+                "ABORTED",
+                "OUT_OF_RANGE",
+                "UNIMPLEMENTED",
+                "INTERNAL",
+                "UNAVAILABLE",
+                "DATA_LOSS",
+                "UNAUTHENTICATED",
+            ]
+        );
+        assert_eq!(grpc_status_code_name(17), "17");
+        assert_eq!(grpc_status_code_name(-1), "-1");
+    }
+
+    #[test]
+    fn outbound_span_records_grpc_status_name() {
+        let exporter = RecordingSpanExporter::default();
+        let spans = exporter.spans.clone();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+        let tracer = provider.tracer("grpc-status-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let uri: hyper::Uri = "http://grpc.test/svc.Echo/Echo".parse().unwrap();
+            let span = outbound_client_span(&hyper::Method::POST, &uri);
+            let mut headers = hyper::HeaderMap::new();
+            headers.insert("grpc-status", hyper::header::HeaderValue::from_static("4"));
+            span.in_scope(|| record_grpc_status(&headers));
+        });
+
+        provider.force_flush().unwrap();
+        let spans = spans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(spans.len(), 1, "exported spans: {spans:#?}");
+        let attribute = |key: &str| {
+            spans[0]
+                .attributes
+                .iter()
+                .find(|kv| kv.key.as_str() == key)
+                .map(|kv| kv.value.clone())
+        };
+        assert_eq!(
+            attribute(RPC_RESPONSE_STATUS_CODE),
+            Some(opentelemetry::Value::from("DEADLINE_EXCEEDED"))
+        );
+        assert_eq!(attribute("rpc.grpc.status_code"), None);
     }
 
     /// `with_quotas` rebuilds an eagerly-configured client cache and must
