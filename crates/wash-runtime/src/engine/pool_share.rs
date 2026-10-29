@@ -354,8 +354,9 @@ impl PoolShare {
     }
 
     /// [`Self::admit_store`] for one component alone, charging no GC heap.
-    #[cfg(test)]
-    pub(crate) fn admit(&self, component: &Component) -> anyhow::Result<PoolCost> {
+    /// It under-reserves a component that allocates GC objects, so a caller
+    /// that cannot rule that out uses [`Self::admit_store`].
+    pub fn admit(&self, component: &Component) -> anyhow::Result<PoolCost> {
         self.admit_store(std::iter::once(component), false)
     }
 

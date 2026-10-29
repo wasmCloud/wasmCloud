@@ -312,7 +312,8 @@ impl PoolCommitShape {
     }
 
     /// The shape the engine will install, read from the same
-    /// `WASMTIME_POOLING_*` overrides it applies.
+    /// `WASMTIME_POOLING_*` overrides it applies. A base `wasmtime::Config`
+    /// can still change the stack size, which this cannot see.
     fn from_env() -> Self {
         Self::new(
             super::pooling_env_quiet("WASMTIME_POOLING_TABLE_ELEMENTS")
