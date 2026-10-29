@@ -13,7 +13,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 
 use super::HostPlugin;
-use super::bindings::{BindingSchema, KeyOwnership, PluginBindingSet};
+use super::bindings::{BindingSchema, KeyOwnership, PluginBindingSet, PluginSecretRef};
 use crate::wit::WitInterface;
 
 /// A string-backed name, typed so one kind of name can't be passed as another.
@@ -383,20 +383,62 @@ pub(crate) struct FilledSecrets {
     /// The named bindings whose layers changed, or `None` when nothing was
     /// filled: what the plugin checks again.
     pub refilled: Option<BTreeSet<String>>,
-    /// Scrubs the filled values out of an error.
-    pub redactor: SecretRedactor,
+    /// Prepares the bind's errors.
+    pub errors: BindErrors,
 }
 
-/// The values a bind filled in, kept only to keep them out of its errors.
+/// What a bind's errors need from its plugin secrets: the values filled in,
+/// kept only to keep them out, and the keys withheld from the workload, so a
+/// failure their absence causes says so.
 #[derive(Debug, Default)]
-pub(crate) struct SecretRedactor(Vec<SecretValue>);
+pub(crate) struct BindErrors {
+    filled: Vec<SecretValue>,
+    withheld: Vec<WithheldKey>,
+}
 
-impl SecretRedactor {
+/// An entry-level key withheld from the workload being bound.
+#[derive(Debug)]
+struct WithheldKey {
+    /// As declared, and by the schema's identity for it.
+    spellings: BTreeSet<String>,
+    /// The entry that supplies it, and its grant: for the host's log only,
+    /// since the workload's deployer may be another tenant.
+    secret: String,
+}
+
+impl BindErrors {
+    /// `e` redacted, and naming each withheld key it quotes. The entry and
+    /// grant that withheld the key go to the host's log, not into `e`.
+    pub fn explain(&self, e: anyhow::Error) -> anyhow::Error {
+        let e = self.redact(e);
+        let msg = format!("{e:#}");
+        let mut keys = BTreeSet::new();
+        for w in &self.withheld {
+            let quoted = w.spellings.iter().find(|k| msg.contains(&format!("`{k}`")));
+            if let Some(key) = quoted {
+                tracing::warn!(
+                    key = %key,
+                    secret = %w.secret,
+                    "a bind failed on a key withheld from the workload, outside its grant"
+                );
+                keys.insert(format!("`{key}`"));
+            }
+        }
+        if keys.is_empty() {
+            return e;
+        }
+        let keys: Vec<String> = keys.into_iter().collect();
+        e.context(format!(
+            "withheld from this workload, outside its secret's grant: {}",
+            keys.join(", ")
+        ))
+    }
+
     /// `e` with every value filled in replaced by `<redacted>`, since a
     /// plugin's parser may quote the value it refuses.
-    pub fn redact(&self, e: anyhow::Error) -> anyhow::Error {
+    fn redact(&self, e: anyhow::Error) -> anyhow::Error {
         let mut secrets: Vec<&str> = self
-            .0
+            .filled
             .iter()
             .filter_map(SecretValue::expose)
             .flat_map(|v| [v, v.trim()])
@@ -415,17 +457,29 @@ impl SecretRedactor {
     }
 }
 
+/// How a bind's errors name the binding a plugin secret is for.
+fn binding_place(plugin_id: &str, binding: Option<&str>) -> String {
+    match binding {
+        Some(name) => format!("binding `{name}` of `{plugin_id}`"),
+        None => format!("`{plugin_id}`"),
+    }
+}
+
 /// `declared` with the plugin secrets of every binding in `interfaces` filled
 /// in. Each source declared on a layer is resolved with one call, keys
 /// deduplicated, however many keys and entries read it; the calls run
 /// concurrently. An entry-level secret every binding in use sets for itself is
-/// not resolved.
+/// not resolved. Where `schema` [has independent
+/// keys](BindingSchema::and_independent_keys), neither is one whose grant
+/// leaves `workload` out: its keys are [withheld](PluginBindingSet::withhold).
 ///
 /// # Errors
 ///
-/// A source that is unavailable, refuses, or leaves a key out. Errors name the
-/// entry, source and key, never a value; a source's own refusal is a
-/// [`SecretSourceError`] in the chain.
+/// A binding in use reading a secret that is neither granted to `workload` nor
+/// withheld from it, named by binding and workload only (the host log has the
+/// entry and grant), or a source that is unavailable, refuses, or leaves a key
+/// out. Errors name the entry, source and key, never a value; a source's own
+/// refusal is a [`SecretSourceError`] in the chain.
 pub(crate) async fn resolve_plugin_secrets(
     plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     workload: &RequestingWorkload,
@@ -437,7 +491,7 @@ pub(crate) async fn resolve_plugin_secrets(
         return Ok(FilledSecrets {
             set: declared,
             refilled: None,
-            redactor: SecretRedactor::default(),
+            errors: BindErrors::default(),
         });
     }
     let plugin_id = declared.plugin_id().to_string();
@@ -450,15 +504,41 @@ pub(crate) async fn resolve_plugin_secrets(
         .iter()
         .flat_map(|name| declared.pending_secret_keys(name, schema))
         .collect();
-    let needed = |binding: Option<&str>, key: &str| match binding {
+    let reads = |binding: Option<&str>, key: &str| match binding {
         Some(name) => in_use.contains(name),
         None => base_read.contains(&schema.canonical(key)),
     };
+    // An entry-level secret is shared by every binding. Where each key stands
+    // alone, one not granted to this workload is withheld rather than failing
+    // a binding that may never read it. Elsewhere a key may decide what the
+    // others mean, as a credential does, so the bind fails. A named binding's
+    // secret is that binding's own.
+    let withholds = |binding: Option<&str>, secret: &PluginSecretRef| {
+        binding.is_none() && schema.has_independent_keys() && !secret.grant.admits(workload)
+    };
+    let needed = |binding: Option<&str>, key: &str, secret: &PluginSecretRef| {
+        reads(binding, key) && !withholds(binding, secret)
+    };
 
+    let mut withheld = Vec::new();
     let mut requests: BTreeMap<LayerSource<'_>, (&PluginId, BTreeSet<&SecretKey>)> =
         BTreeMap::new();
     for (binding, key, secret) in declared.plugin_secrets() {
-        if !needed(binding, key) {
+        if reads(binding, key) && withholds(binding, secret) {
+            tracing::debug!(
+                plugin_id,
+                key,
+                secret = %secret.source,
+                grant = %secret.grant,
+                workload = %format!("{}/{}", workload.namespace, workload.name),
+                "withheld an entry-level secret outside its grant"
+            );
+            withheld.push(WithheldKey {
+                spellings: BTreeSet::from([key.to_string(), schema.canonical(key)]),
+                secret: format!("`{}` (granted to {})", secret.source, secret.grant),
+            });
+        }
+        if !needed(binding, key, secret) {
             continue;
         }
         if !secret.grant.admits(workload) {
@@ -470,12 +550,9 @@ pub(crate) async fn resolve_plugin_secrets(
                 workload = %format!("{}/{}", workload.namespace, workload.name),
                 "refused a bind reading a secret outside its grant"
             );
-            let place = match binding {
-                Some(name) => format!("binding `{name}` of `{plugin_id}`"),
-                None => format!("`{plugin_id}`"),
-            };
             anyhow::bail!(
-                "{place} reads a secret that is not granted to workload `{}/{}`",
+                "{} reads a secret that is not granted to workload `{}/{}`",
+                binding_place(&plugin_id, binding),
                 workload.namespace,
                 workload.name
             );
@@ -492,10 +569,7 @@ pub(crate) async fn resolve_plugin_secrets(
         .map(|((binding, source), (plugin, keys))| {
             let plugin_id = plugin_id.as_str();
             async move {
-                let place = match binding {
-                    Some(name) => format!("binding `{name}` of `{plugin_id}`"),
-                    None => format!("`{plugin_id}`"),
-                };
+                let place = binding_place(plugin_id, binding);
                 let resolver = plugins
                     .get(plugin.as_str())
                     .and_then(|p| p.secret_source())
@@ -535,8 +609,8 @@ pub(crate) async fn resolve_plugin_secrets(
 
     let wanted: BTreeSet<String> = in_use.iter().map(|b| b.to_string()).collect();
     let mut used = Vec::new();
-    let (set, refilled) = declared.fill_plugin_secrets(&wanted, |binding, key, secret| {
-        if !needed(binding, key) {
+    let (mut set, refilled) = declared.fill_plugin_secrets(&wanted, |binding, key, secret| {
+        if !needed(binding, key, secret) {
             return Ok(None);
         }
         let value = values
@@ -552,10 +626,16 @@ pub(crate) async fn resolve_plugin_secrets(
         used.push(value.clone());
         Ok(Some(value))
     })?;
+    for key in withheld.iter().flat_map(|w| &w.spellings) {
+        set.withhold(key, schema);
+    }
     Ok(FilledSecrets {
         set,
         refilled,
-        redactor: SecretRedactor(used),
+        errors: BindErrors {
+            filled: used,
+            withheld,
+        },
     })
 }
 
@@ -595,7 +675,6 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::plugin::bindings::PluginSecretRef;
     use crate::wit::WitWorld;
 
     /// Answers from a fixed map, recording each request.
@@ -910,6 +989,117 @@ mod tests {
         );
     }
 
+    /// Where each key stands alone, an entry-level secret not granted to the
+    /// workload is left out of its layer and never resolved, while one granted
+    /// beside it is filled.
+    #[tokio::test]
+    async fn an_entry_secret_outside_the_grant_is_left_out() {
+        let source = fixed();
+        let mut reports = secret("reports", "pg-url-reports");
+        reports.grant = WorkloadGrant::Only(vec![WorkloadSelector::namespace("reports")]);
+        let set = PluginBindingSet::new("wasmcloud-postgres")
+            .with_binding("app-db", HashMap::new())
+            .with_base_secrets(HashMap::from([
+                ("url".to_string(), secret("app", "pg-url-app")),
+                ("reports-url".to_string(), reports),
+            ]));
+        let FilledSecrets { set, errors, .. } = resolve_plugin_secrets(
+            &plugins(source.clone()),
+            &requesting(),
+            set,
+            &HashSet::from([postgres("app-db")]),
+            &BindingSchema::empty().and_independent_keys(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(set.base()["url"], "postgres://app:pw@db/app");
+        assert!(!set.base().contains_key("reports-url"));
+        let requests = source.1.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].keys, [SecretKey::from("pg-url-app")]);
+
+        // A failure that quotes the missing key says it was withheld, without
+        // naming the entry or its grant; any other failure is left as it is.
+        let err = errors.explain(anyhow::anyhow!("no `reports-url`"));
+        assert_eq!(
+            format!("{err:#}"),
+            "withheld from this workload, outside its secret's grant: `reports-url`: no \
+             `reports-url`"
+        );
+        let err = errors.explain(anyhow::anyhow!("no `url`"));
+        assert_eq!(format!("{err:#}"), "no `url`");
+    }
+
+    /// A withheld anchor counts as set, so the default bundle it would have
+    /// kept out still stays out, at bind and in the plugin's own check.
+    #[tokio::test]
+    async fn a_withheld_anchor_keeps_the_default_bundle_out() {
+        let mut servers = secret("orders-nats", "pg-url-app");
+        servers.grant = WorkloadGrant::Only(vec![WorkloadSelector::namespace("orders")]);
+        let set = PluginBindingSet::new("wasmcloud-postgres")
+            .with_binding("app-db", HashMap::new())
+            .with_base_secrets(HashMap::from([("servers".to_string(), servers)]))
+            .with_default_bundle(
+                "servers",
+                [("servers", "nats://data:4222"), ("tls-key", "/host.key")],
+            );
+        let schema = BindingSchema::empty().and_independent_keys();
+        let FilledSecrets { set, .. } = resolve_plugin_secrets(
+            &plugins(fixed()),
+            &requesting(),
+            set,
+            &HashSet::from([postgres("app-db")]),
+            &schema,
+        )
+        .await
+        .unwrap();
+        let resolved = set
+            .resolve("app-db", &HashMap::new(), &schema, &|_, _, _| true)
+            .unwrap();
+        assert!(resolved.is_empty(), "{resolved:?}");
+        let (_, layer, _) = set.host_layers(&schema).next().unwrap();
+        assert!(layer.is_empty(), "{layer:?}");
+    }
+
+    /// NATS keys depend on one another, so a credential on the entry that is
+    /// not granted to the workload fails the bind rather than leaving the
+    /// rest of the layer to connect anonymously. The error names neither the
+    /// entry nor its grant, and the source is never asked.
+    #[tokio::test]
+    async fn an_ungranted_nats_credential_fails_the_bind() {
+        use crate::plugin::wasmcloud_nats::{PLUGIN_NATS_ID, binding_schema};
+
+        let source = fixed();
+        let mut seed = secret("orders-nats", "pg-url-app");
+        seed.grant = WorkloadGrant::Only(vec![WorkloadSelector::namespace("orders")]);
+        let set = PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_base(HashMap::from([(
+                "servers".to_string(),
+                "nats://orders:4222".to_string(),
+            )]))
+            .with_binding("events", HashMap::new())
+            .with_base_secrets(HashMap::from([("nkey-seed".to_string(), seed)]));
+        let mut events = WitInterface::from("wasmcloud:nats/publisher@0.1.0");
+        events.name = Some("events".to_string());
+        let Err(err) = resolve_plugin_secrets(
+            &plugins(source.clone()),
+            &requesting(),
+            set,
+            &HashSet::from([events]),
+            &binding_schema(),
+        )
+        .await
+        else {
+            panic!("an ungranted NATS credential was withheld");
+        };
+        assert_eq!(
+            format!("{err:#}"),
+            "`wasmcloud-nats` reads a secret that is not granted to workload \
+             `billing/billing-api`"
+        );
+        assert!(source.1.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn host_start_refuses_a_secret_that_could_never_resolve() {
         let plugins = plugins(fixed());
@@ -1071,8 +1261,8 @@ mod tests {
         .await
         .unwrap();
         let err = filled
-            .redactor
-            .redact(anyhow::anyhow!("bad url `postgres://app:pw@db/app`"));
+            .errors
+            .explain(anyhow::anyhow!("bad url `postgres://app:pw@db/app`"));
         assert_eq!(format!("{err:#}"), "bad url `<redacted>`");
     }
 

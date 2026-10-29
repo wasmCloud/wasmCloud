@@ -3560,7 +3560,8 @@ impl UnresolvedWorkload {
                 // so it checks the entry and the named bindings this bind
                 // filled again; the unnamed binding's layer is checked by the
                 // plugin's own bind, as it is without secrets. From here on an
-                // error may quote a value, so each one is redacted.
+                // error may quote a value or follow from a secret withheld from
+                // this workload, so each goes through `explain`.
                 let requesting = crate::plugin::RequestingWorkload {
                     id: self.id().to_string(),
                     name: self.name().to_string(),
@@ -3579,15 +3580,15 @@ impl UnresolvedWorkload {
                         p.validate_bindings(&filled.set.only_bindings(refilled))
                             .map_err(|e| {
                                 filled
-                                    .redactor
-                                    .redact(e)
+                                    .errors
+                                    .explain(e)
                                     .context("invalid `host.plugins` declaration")
                             })?;
                     }
                     Ok(filled)
                 });
-                let (declared, redactor) = match filled {
-                    Ok(filled) => (filled.set, filled.redactor),
+                let (declared, bind_errors) = match filled {
+                    Ok(filled) => (filled.set, filled.errors),
                     Err(e) => {
                         unbind_all(
                             self.id(),
@@ -3606,7 +3607,7 @@ impl UnresolvedWorkload {
                     match declared.resolve_by_name(&requested_interfaces, &schema, &narrows) {
                         Ok(resolved) => resolved,
                         Err(e) => {
-                            let e = redactor.redact(e);
+                            let e = bind_errors.explain(e);
                             unbind_all(
                                 self.id(),
                                 &bound_plugins_with_interfaces,
@@ -3700,7 +3701,7 @@ impl UnresolvedWorkload {
                     .instrument(bind_span)
                     .await
                 {
-                    let e = redactor.redact(e);
+                    let e = bind_errors.explain(e);
                     tracing::error!(
                         plugin_id = plugin_id,
                         err = ?e,
@@ -3787,7 +3788,7 @@ impl UnresolvedWorkload {
                     }
                     .await;
                     if let Err(e) = bound {
-                        let e = redactor.redact(e);
+                        let e = bind_errors.explain(e);
                         tracing::error!(
                             plugin_id = plugin_id,
                             component_id = workload_item.id(),

@@ -186,9 +186,9 @@ pub struct PluginSecretSource {
     pub plugin: crate::plugin::PluginId,
     /// Config key -> the key `plugin` is asked for. Never empty.
     pub keys: BTreeMap<String, crate::plugin::SecretKey>,
-    /// The workloads that may bind a binding reading this entry. Required: a
-    /// binding is visible to every workload on the host, so the entry says
-    /// which of them may have its values.
+    /// The workloads that may have this entry's values. Required: a binding
+    /// is visible to every workload on the host, so the entry says which of
+    /// them may have them.
     pub workloads: crate::plugin::WorkloadGrant,
 }
 
