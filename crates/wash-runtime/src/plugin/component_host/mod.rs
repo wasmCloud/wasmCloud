@@ -1172,7 +1172,7 @@ async fn link_native_imports(
         .take_component(&component_id)
         .context("plugin's own synthetic workload component vanished during binding")?;
     Ok(std::mem::replace(
-        plugin_component.metadata.linker(),
+        plugin_component.metadata.try_linker()?,
         Linker::new(engine.inner()),
     ))
 }
