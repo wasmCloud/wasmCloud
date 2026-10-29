@@ -772,13 +772,16 @@ runtime:
       # `wasmcloud:host/secret-source`, by the name a `plugins` entry's or
       # binding's `secretFrom` uses. `keys` maps each config key to the key
       # the plugin is asked for. `workloads` is required: the namespaces (and
-      # optionally workload names) whose workloads may bind a binding that
-      # reads the entry, or `all`. A binding is visible to every workload on
-      # the host, so a workload outside the grant fails to deploy rather than
-      # receive the values. The host asks again on every workload bind, so a
-      # rotation reaches the next bind; no volume is mounted and no Reloader
-      # annotation is added. Only `plugins` bindings (or a native entry's own
-      # `secretFrom`) can name one.
+      # optionally workload names) whose workloads may have its values, or
+      # `all`. A binding is visible to every workload on the host, so a
+      # workload outside the grant never receives them: its deploy fails.
+      # On `wasmcloud-secrets`, whose keys each stand alone, an entry the
+      # plugin entry's own `secretFrom` names is instead left out of its
+      # config.
+      # The host asks again on every workload bind, so a rotation reaches the
+      # next bind; no volume is mounted and no Reloader annotation is added.
+      # Only `plugins` bindings (or a native entry's own `secretFrom`) can name
+      # one.
       #
       #   pluginSecrets:
       #     billing-db:

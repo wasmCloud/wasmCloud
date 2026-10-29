@@ -21,13 +21,16 @@ use wash_runtime::types::{LocalResources, WorkloadState};
 mod common;
 use common::{
     component_workload_request, kv_plugin_caller_host_interfaces, req,
-    secrets_caller_host_interfaces_with_config, start_host_with_component_plugins,
+    secrets_caller_host_interfaces_with_config, secrets_interface,
+    start_host_with_component_plugins,
 };
 
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("wasm/kv_plugin.wasm");
 const KV_PLUGIN_CALLER_WASM: &[u8] = include_bytes!("wasm/kv_plugin_caller.wasm");
 const SECRET_SOURCE_WASM: &[u8] = include_bytes!("wasm/secret_source_plugin.wasm");
 const SECRETS_CALLER_WASM: &[u8] = include_bytes!("wasm/secrets_caller.wasm");
+/// Imports `wasmcloud:secrets/secret` under the label `db-password`.
+const SECRETS_CONSUMER_WASM: &[u8] = include_bytes!("wasm/secrets_consumer_plugin.wasm");
 /// The native plugin serving `wasmcloud:secrets` to workloads.
 const WORKLOAD_SECRETS_ID: &str = "wasmcloud-secrets";
 const KV_ID: &str = "acme-kv-plugin";
@@ -211,37 +214,72 @@ async fn a_granted_workload_reads_its_own_secret() -> Result<()> {
     Ok(())
 }
 
-/// A workload outside the grant fails to deploy, naming the workload but not
-/// the entry, while a granted one on the same host binds the same entry.
+/// A workload outside the grant of an entry-level secret deploys without its
+/// keys, so `store.get` finds nothing, while a granted one on the same host
+/// reads it.
 #[tokio::test]
 async fn a_workload_outside_the_grant_cannot_read_the_secret() -> Result<()> {
     let (addr, h) = start(workload_secrets(WorkloadGrant::Only(vec![
         WorkloadSelector::workload("test", "billing-api"),
     ])))
     .await?;
-
-    let resp = h.workload_start(secrets_caller("intruder")).await?;
-    assert_eq!(resp.workload_status.workload_state, WorkloadState::Error);
-    let message = &resp.workload_status.message;
-    assert!(
-        message.contains("not granted to workload `test/intruder`"),
-        "{message}"
-    );
-    assert!(
-        !message.contains("billing-pw") && !message.contains("hunter2"),
-        "{message}"
-    );
-
-    let resp = h.workload_start(secrets_caller("billing-api")).await?;
-    assert_eq!(
-        resp.workload_status.workload_state,
-        WorkloadState::Running,
-        "{}",
-        resp.workload_status.message
-    );
     let client = reqwest::Client::new();
-    let (status, body) = req(&client, &addr, "billing-api", "/get?key=db-password").await?;
-    assert_eq!(status.as_u16(), 200);
-    assert_eq!(body, "hunter2");
+    for (name, expect) in [("intruder", None), ("billing-api", Some("hunter2"))] {
+        let resp = h.workload_start(secrets_caller(name)).await?;
+        assert_eq!(
+            resp.workload_status.workload_state,
+            WorkloadState::Running,
+            "{name}: {}",
+            resp.workload_status.message
+        );
+        let (status, body) = req(&client, &addr, name, "/get?key=db-password").await?;
+        match expect {
+            Some(value) => assert_eq!((status.as_u16(), body.as_str()), (200, value)),
+            None => assert_eq!(status.as_u16(), 404, "{name}: {body}"),
+        }
+    }
+    Ok(())
+}
+
+/// A workload whose labeled `db-password` import reads a secret withheld from
+/// it fails to deploy, and the error says the key was withheld without naming
+/// the entry or its grant.
+#[tokio::test]
+async fn a_labeled_import_of_a_withheld_secret_says_it_was_withheld() -> Result<()> {
+    let (_, h) = start(workload_secrets(WorkloadGrant::Only(vec![
+        WorkloadSelector::workload("test", "billing-api"),
+    ])))
+    .await?;
+    for (name, granted) in [("intruder", false), ("billing-api", true)] {
+        let mut labeled = secrets_interface(HashMap::new());
+        labeled.interfaces = ["secret".to_string()].into_iter().collect();
+        labeled.name = Some("db-password".to_string());
+        let request = component_workload_request(
+            "labeled-secret",
+            name,
+            SECRETS_CONSUMER_WASM,
+            LocalResources::default(),
+            vec![secrets_interface(HashMap::new()), labeled],
+        );
+        let resp = h.workload_start(request).await;
+        let msg = match &resp {
+            Ok(resp) => resp.workload_status.message.clone(),
+            Err(e) => format!("{e:#}"),
+        };
+        let running = resp
+            .as_ref()
+            .is_ok_and(|r| r.workload_status.workload_state == WorkloadState::Running);
+        assert_eq!(running, granted, "{name}: {msg}");
+        if !granted {
+            assert!(
+                msg.contains(
+                    "withheld from this workload, outside its secret's grant: `db-password`"
+                ),
+                "{msg}"
+            );
+            assert!(!msg.contains("billing-pw"), "{msg}");
+            assert!(!msg.contains("billing-api"), "{msg}");
+        }
+    }
     Ok(())
 }

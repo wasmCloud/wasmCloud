@@ -231,6 +231,8 @@ pub struct BindingSchema {
     /// See [`BindingSchema::and_required_keys`].
     required: BTreeSet<String>,
     closed: bool,
+    /// See [`BindingSchema::and_independent_keys`].
+    independent_keys: bool,
 }
 
 impl BindingSchema {
@@ -358,6 +360,23 @@ impl BindingSchema {
             self.required.insert(key);
         }
         self
+    }
+
+    /// Each key stands alone: the plugin reads every key by itself, and no key
+    /// changes what another means. Then an entry-level plugin secret not
+    /// granted to a workload is withheld from it rather than failing the bind.
+    /// Never set it for connection config: withholding a credential there
+    /// would leave the connection to whatever the rest of the layer allows,
+    /// such as an anonymous one.
+    #[must_use]
+    pub fn and_independent_keys(mut self) -> Self {
+        self.independent_keys = true;
+        self
+    }
+
+    /// Whether [`BindingSchema::and_independent_keys`] was declared.
+    pub fn has_independent_keys(&self) -> bool {
+        self.independent_keys
     }
 
     /// The keys [`BindingSchema::and_required_keys`] declared, sorted.
@@ -605,7 +624,7 @@ pub struct PluginSecretRef {
     pub plugin: PluginId,
     /// The key that plugin is asked for.
     pub key: SecretKey,
-    /// The workloads that may bind a binding reading it.
+    /// The workloads that may have its value.
     pub grant: WorkloadGrant,
 }
 
@@ -624,6 +643,10 @@ pub struct PluginBindingSet {
     /// secret. Cleared per layer once [`Self::fill_plugin_secrets`] fills it.
     base_secrets: HashMap<String, PluginSecretRef>,
     binding_secrets: BTreeMap<String, HashMap<String, PluginSecretRef>>,
+    /// Entry-level keys withheld from the workload being bound, by the
+    /// schema's identity for each. Each still counts as set, so a default
+    /// bundle never stands in for one.
+    withheld: BTreeSet<String>,
     declared_host_owned: BTreeSet<String>,
     workload_config: WorkloadConfigPolicy,
     default_bundles: Vec<DefaultBundle>,
@@ -1268,7 +1291,8 @@ impl PluginBindingSet {
     }
 
     /// Apply every default bundle whose anchor nobody set. A key in `pending`
-    /// counts as set: a plugin secret supplies it at bind.
+    /// counts as set, since a plugin secret supplies it at bind, and so does a
+    /// key [withheld](Self::withhold) from the workload.
     fn apply_default_bundles(
         &self,
         binding: &str,
@@ -1277,7 +1301,10 @@ impl PluginBindingSet {
         pending: &BTreeSet<String>,
     ) {
         let is_set = |resolved: &HashMap<String, String>, key: &str| {
-            lookup(resolved, key, schema).is_some() || pending.contains(&schema.canonical(key))
+            let canonical = schema.canonical(key);
+            lookup(resolved, key, schema).is_some()
+                || pending.contains(&canonical)
+                || self.withheld.contains(&canonical)
         };
         for bundle in &self.default_bundles {
             if is_set(resolved, &bundle.anchor) {
@@ -1336,6 +1363,13 @@ impl PluginBindingSet {
         })
     }
 
+    /// Withhold entry-level `key` from the workload being bound: its secret
+    /// is not granted to that workload. The key stays out of every layer, yet
+    /// counts as set, so no default bundle stands in for it.
+    pub(crate) fn withhold(&mut self, key: &str, schema: &BindingSchema) {
+        self.withheld.insert(schema.canonical(key));
+    }
+
     /// The keys of binding `name`'s layer that still wait on a plugin secret,
     /// by the schema's identity for them: its own, and the entry's unless the
     /// binding sets that key itself.
@@ -1374,6 +1408,7 @@ impl PluginBindingSet {
                 .map(|(name, config)| (name.clone(), config.clone()))
                 .collect(),
             base_secrets: self.base_secrets.clone(),
+            withheld: self.withheld.clone(),
             binding_secrets: self
                 .binding_secrets
                 .iter()
@@ -1414,7 +1449,8 @@ impl PluginBindingSet {
     /// itself) written into their layers, taking each value from `value`, and
     /// the named bindings whose layers changed, or `None` if nothing was
     /// written. `value` returning `None` drops an entry-level secret that no
-    /// binding in use reads. Layers left out stay pending, and resolving a
+    /// binding in use reads; one withheld from the workload is also marked with
+    /// [`Self::withhold`]. Layers left out stay pending, and resolving a
     /// binding that reads one fails. This is where a [`SecretValue`] becomes
     /// the consuming plugin's config.
     ///
