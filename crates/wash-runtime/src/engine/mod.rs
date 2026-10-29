@@ -2492,6 +2492,7 @@ fn new_pooling_config(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

@@ -307,6 +307,7 @@ impl PluginEgressPolicy {
     /// An enforcing policy permitting exactly `hosts`, for tests of the
     /// plugins that check it.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn allowing(hosts: &[&str]) -> Arc<Self> {
         Arc::new(Self::new(
             hosts.iter().map(|host| host.parse().unwrap()).collect(),
@@ -340,6 +341,7 @@ impl PluginEgressPolicy {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

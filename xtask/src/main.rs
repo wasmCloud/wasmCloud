@@ -1,3 +1,5 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+#![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 //! Workspace task runner (the cargo-xtask pattern).
 //!
 //! Run via the `cargo xtask <task>` alias defined in `/.cargo/config.toml`.

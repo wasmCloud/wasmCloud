@@ -65,6 +65,7 @@ fn warn_clock_ms() -> u64 {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

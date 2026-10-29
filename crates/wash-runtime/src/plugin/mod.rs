@@ -120,6 +120,7 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &[
 ];
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod roster_tests {
     /// Every native plugin's id, from the constant the plugin itself uses. A
     /// plugin added without its roster entry gets a refusal instead of a

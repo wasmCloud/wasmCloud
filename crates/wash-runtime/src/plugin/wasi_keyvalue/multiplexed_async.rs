@@ -508,6 +508,7 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::plugin::wasi_keyvalue::InMemoryProvider;

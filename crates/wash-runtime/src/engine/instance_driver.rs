@@ -626,6 +626,7 @@ impl InstanceDriver {
     /// receiver stands in for the run loop: kept alive so the channel is open,
     /// never drained.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn stub(
         max_concurrency: usize,
         max_invocations: Option<usize>,
@@ -677,6 +678,7 @@ impl InstanceDriver {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

@@ -214,6 +214,7 @@ impl SocketPolicy {
     /// [`Self::decide_for_store`] for a guest that has resolved nothing, so
     /// only literal and `*` entries permit real egress.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn decide(&self, reason: SocketAddrUse, addr: SocketAddr) -> AddrDecision {
         self.decide_inner(reason, addr, None)
     }
@@ -476,6 +477,7 @@ impl SocketPolicy {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::sockets::resolved_names::ResolvedNameLimits;

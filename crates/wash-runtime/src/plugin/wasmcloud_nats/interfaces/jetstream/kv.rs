@@ -1008,6 +1008,7 @@ impl kv::HostBucket for ActiveCtx<'_> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::message_ttl_seconds;
 

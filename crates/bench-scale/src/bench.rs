@@ -633,6 +633,7 @@ async fn measure_flavour(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

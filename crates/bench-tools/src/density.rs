@@ -499,6 +499,7 @@ pub fn print_comparison(reports: &[Report]) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

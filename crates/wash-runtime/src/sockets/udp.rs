@@ -644,6 +644,7 @@ impl UdpSocket {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::sockets::WasiSocketsCtx;

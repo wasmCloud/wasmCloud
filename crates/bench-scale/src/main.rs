@@ -1,3 +1,5 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+#![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 //! How many HTTP workloads one running wasmCloud host holds with the CPU and
 //! memory it has, warm and scaled to zero. See README.md.
 //!

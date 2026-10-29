@@ -265,6 +265,7 @@ impl PushCommand {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::with_registry_ca_hint;
 

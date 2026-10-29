@@ -203,6 +203,7 @@ pub fn workload_owned() -> impl Iterator<Item = &'static str> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

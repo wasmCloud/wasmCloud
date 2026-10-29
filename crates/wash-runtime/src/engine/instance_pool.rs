@@ -785,6 +785,7 @@ fn sort_least_busy(drivers: &mut [Arc<InstanceDriver>]) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};

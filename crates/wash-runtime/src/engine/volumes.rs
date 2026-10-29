@@ -444,6 +444,7 @@ fn resolve_existing(path: &std::path::Path) -> PathBuf {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod reserved_tests {
     use super::*;
 
@@ -679,6 +680,7 @@ mod pinned_tests {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod allowlist_tests {
     use super::*;
     use crate::host::quota::PolicyMeters;

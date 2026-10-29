@@ -392,6 +392,7 @@ pub(crate) async fn handle_component_request_p3(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use bytes::Bytes;

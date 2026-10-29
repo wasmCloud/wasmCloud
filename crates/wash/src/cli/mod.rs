@@ -303,6 +303,7 @@ impl CliContextBuilder {
     /// Leave the process working directory where it is. Tests share one process, so a test that
     /// moved it would move it under every other test running at the same time.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn keep_working_dir(mut self) -> Self {
         self.keep_working_dir = true;
         self
@@ -550,6 +551,7 @@ fn restore_cursor_on_interrupt() {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
