@@ -517,6 +517,7 @@ static START_REFUSAL_WARN: crate::observability::rate_limit::RateLimitedWarn =
     crate::observability::rate_limit::RateLimitedWarn::new(Duration::from_secs(10));
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

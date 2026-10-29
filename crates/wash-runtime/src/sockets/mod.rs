@@ -413,6 +413,7 @@ impl From<SocketAddressFamily> for wasmtime_wasi::p3::bindings::sockets::types::
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests_p3 {
     use super::*;
 

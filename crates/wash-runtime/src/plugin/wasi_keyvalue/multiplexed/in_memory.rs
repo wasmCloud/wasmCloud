@@ -283,6 +283,7 @@ impl BackendProvider<KvId> for InMemoryProvider {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

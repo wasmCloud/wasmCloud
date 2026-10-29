@@ -555,6 +555,7 @@ impl HostPlugin for NatsKeyValue {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     //! Tests for the private `get_or_create_bucket` path that `open` relies
     //! on, and for the `collect_key_page` pagination helper `list_keys`

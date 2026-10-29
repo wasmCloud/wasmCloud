@@ -62,13 +62,12 @@ cargo test --bin wash
 
 ### Rust coverage
 
-Install the pinned coverage tool and the LLVM tools for this repository's Rust
-toolchain:
+Install the pinned coverage tool and the coverage-only nightly toolchain:
 
 ```bash
 source .github/tool-versions.env
 cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
-rustup component add llvm-tools-preview
+cargo xtask coverage setup
 cargo xtask coverage
 ```
 
@@ -76,7 +75,9 @@ cargo xtask coverage
 then runs the native Rust workspace tests with the same optional features as
 `wash.yml`, including the ignored Docker/registry tests. Docker must be running;
 registry access and the usual fixture build prerequisites are required. Coverage
-builds use a separate Cargo target directory, managed by cargo-llvm-cov.
+builds use a separate Cargo target directory, managed by cargo-llvm-cov. Only
+coverage uses the dated nightly pinned in `xtask/coverage-toolchain`; fixture
+builds and ordinary builds/tests continue to use `rust-toolchain.toml`.
 
 Reports are written to `target/coverage/`: `html/index.html`, `coverage.json`,
 `lcov.info`, `summary.txt`, test/threshold logs, and `provenance.txt`. The provenance
@@ -104,8 +105,10 @@ statement coverage.
 The report includes native workspace code and uses cargo-llvm-cov's default
 exclusions for test files, examples, benchmarks, dependencies, and build output.
 Generated protobuf bindings under `washlet/generated/` are also excluded. Inline
-unit-test modules in production source files remain included by the stable
-toolchain. Platform-specific code is measured only where compiled on Linux.
+unit-test modules and test-only helper functions use conditional `coverage(off)`
+attributes so their bodies do not count toward the percentage. These attributes
+are active only during nightly coverage builds. Platform-specific code is measured
+only where compiled on Linux.
 Guest Wasm components, the Go operator/gateway, and Kubernetes E2E execution are
 outside this Rust report's scope. The Rust report alone does not establish
 project-wide compliance; the Go modules need their own statement-coverage

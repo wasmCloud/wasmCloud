@@ -276,6 +276,7 @@ fn report_expiry(identity: &RotatingClientIdentity, source: &ClientIdentity) {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use std::path::Path;

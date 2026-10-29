@@ -1020,6 +1020,7 @@ async fn sync_with_server(client: &async_nats::Client) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     //! Locks in the plugin's state-machine invariants without Docker /
     //! NATS / wasmtime: the seam between the plugin and its tracker, and

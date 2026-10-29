@@ -196,12 +196,14 @@ impl JobRegistry {
 
     /// Number of live jobs. Test-only leak assertion.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn live_jobs(&self) -> usize {
         self.lock().jobs.len()
     }
 
     /// Number of live task bindings. Test-only leak assertion.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub fn live_task_bindings(&self) -> usize {
         self.lock().by_task.len()
     }
@@ -245,6 +247,7 @@ impl Drop for JobGuard {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

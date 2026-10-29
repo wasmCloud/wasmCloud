@@ -958,6 +958,7 @@ pub fn install_memory_limiter(store: &mut wasmtime::Store<crate::engine::ctx::Sh
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::collections::BTreeMap;
 

@@ -258,6 +258,7 @@ fn fmt_delta(v: Option<f64>) -> String {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

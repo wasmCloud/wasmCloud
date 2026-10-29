@@ -887,6 +887,7 @@ pub(super) fn subscription_spec(key: &str, binding: &str, value: String) -> Stri
     }
 }
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

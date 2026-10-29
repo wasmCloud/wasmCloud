@@ -222,6 +222,7 @@ impl std::fmt::Display for ComponentSource {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

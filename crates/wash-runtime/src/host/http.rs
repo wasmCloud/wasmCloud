@@ -717,6 +717,7 @@ impl DynamicRouter {
     /// The buckets registered under `host`, as a snapshot that outlives later
     /// writes.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn host_buckets(&self, host: &str) -> Option<Arc<Vec<PathBucket>>> {
         self.shard(shard_index(host)).load().get(host).cloned()
     }
@@ -4357,6 +4358,7 @@ async fn send_grpc_request(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use opentelemetry::trace::{SpanKind, TracerProvider as _};

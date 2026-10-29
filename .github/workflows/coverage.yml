@@ -52,8 +52,8 @@ jobs:
         with:
           version: ${{ env.WASM_TOOLS_VERSION }}
       - uses: $/.github/actions/setup-rust
-      - name: Install matching LLVM tools
-        run: rustup component add llvm-tools-preview
+      - name: Install pinned coverage nightly and matching LLVM tools
+        run: cargo xtask coverage setup
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         env:

@@ -181,6 +181,7 @@ pub(crate) fn copy_dir_recursive<'a>(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::path::{Path, PathBuf};
 

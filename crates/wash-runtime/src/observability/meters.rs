@@ -391,6 +391,7 @@ fn fuel_histogram_boundaries() -> Vec<f64> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

@@ -830,6 +830,7 @@ impl From<SocketAddressFamily> for IpAddressFamily {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::sockets::policy::{EgressMode, SocketPolicy};

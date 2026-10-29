@@ -450,6 +450,7 @@ pub struct PoolReservation {
 /// The pool, engine and components the share's tests and messaging's share
 /// tests build, once.
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) mod test_support {
     use wasmtime::PoolingAllocationConfig;
     use wasmtime::component::Component;
@@ -518,6 +519,7 @@ pub(crate) mod test_support {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use futures::FutureExt as _;
     use tokio::task::unconstrained;
