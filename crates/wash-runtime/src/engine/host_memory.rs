@@ -107,6 +107,51 @@ const POOL_MAP_COUNT_PERCENT: u64 = 90;
 /// count never trips it, and an operator can still double the count by hand.
 const DERIVED_POOL_ADDRESS_SPACE_PERCENT: u64 = 50;
 
+/// wasmtime's default fiber stack size, restated: what each pooled stack
+/// maps when the engine passes nothing, which this engine does not. The
+/// advisories read the installed size; only the derivation, which runs
+/// before an engine exists, assumes it.
+pub const WASMTIME_DEFAULT_ASYNC_STACK_SIZE: usize = 2 << 20;
+
+/// wasmtime's default `table_elements`, restated for the same reason as
+/// [`WASMTIME_DEFAULT_ASYNC_STACK_SIZE`].
+pub const WASMTIME_DEFAULT_TABLE_ELEMENTS: usize = 20_000;
+
+/// Share of the commit limit the stack and table pools may take when a host
+/// asks for `max_memories` to be derived from it
+/// ([`derive_max_memories_from_memory_precommit_limit`]). A constant, like the address
+/// space and mapping shares, so an operator never has to reason about
+/// `CommitLimit`: the commit limit is shared with every other process on the
+/// machine and with this one's own heap, and the pools' pages are committed
+/// but mostly never touched, so a quarter is the balance struck here. On a
+/// 64 GiB box with Linux's default `CommitLimit` (half of RAM, no swap) that
+/// is 8 GiB, about 3,100 memories; the same box with 64 GiB of swap, about
+/// 7,800. A host that wants another number sets `--max-memories`.
+const DERIVED_STACK_TABLE_COMMIT_PERCENT: u64 = 25;
+
+/// What the derived memory count does about the stack and table pools on a
+/// platform that commits them when the engine is built (see
+/// [`TableMappingCharge`]). The memory pool itself is never the question:
+/// its reservation is address space, committed by nothing. Each memory
+/// brings one 2 MiB stack and four 160 KiB tables, about 2.6 MiB of
+/// committed mapping that no guest need ever touch; 1000 memories commit
+/// 2.6 GiB, the 9,829 a default Linux derives 25 GiB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommitBound {
+    /// The kernel never accounts the pools' mappings (Linux without strict
+    /// overcommit, macOS, the BSDs): no bound from them.
+    Unaccounted,
+    /// The pools are committed at startup and the host did not ask to size
+    /// against that: keep [`WASMTIME_DEFAULT_MAX_MEMORIES`], what every such
+    /// host ran before, rather than commit ten times as much unasked.
+    Floor,
+    /// The pools are committed at startup and may take this many bytes,
+    /// [`DERIVED_STACK_TABLE_COMMIT_PERCENT`] of the commit limit: the count
+    /// that fits is one bound among the others, and the host scales as far
+    /// as its commit allows.
+    Within(u64),
+}
+
 /// Linear memories for a host process that runs one engine, when no one named
 /// a count. Not the engine's own default: an engine is often one of several
 /// in a process, and each one's pool reserves this much address space.
@@ -120,18 +165,56 @@ const DERIVED_POOL_ADDRESS_SPACE_PERCENT: u64 = 50;
 /// 9,829 linear memories; macOS, with no mapping limit, derives 16,256.
 ///
 /// Windows and Linux with strict overcommit accounting keep the floor:
-/// their accessible table and stack mappings are committed at startup.
-/// Linux processes with a finite `RLIMIT_DATA` also keep it, since that
-/// limit applies to those mappings. This preserves the old default rather
-/// than increasing its startup cost; an explicit count can still be needed
-/// under a tighter limit. 32-bit targets keep the floor too.
+/// their stack and table pools are committed at startup, and the memory
+/// pool's reservation is not what costs there. Linux processes with a finite
+/// `RLIMIT_DATA` also keep it, since that limit applies to those mappings.
+/// This preserves the old default rather than increasing its startup cost;
+/// [`derive_max_memories_from_memory_precommit_limit`] is for the host that wants to
+/// scale there anyway. 32-bit targets keep the floor too.
 pub fn derive_max_memories() -> u32 {
+    derive_max_memories_bounded(false)
+}
+
+/// [`derive_max_memories`] for a host that asked to be sized against its
+/// commit limit (`--set-max-memories-from-memory-precommit-limit`) on a platform that
+/// commits the stack and table pools at startup.
+///
+/// Where [`derive_max_memories`] would keep the floor, this adds a third
+/// bound beside address space and mappings: the number of memories whose
+/// stacks and tables fit in [`DERIVED_STACK_TABLE_COMMIT_PERCENT`] of what
+/// this process may commit (the kernel's `CommitLimit` or `RLIMIT_DATA`,
+/// Windows's RAM plus page file, capped by the container's limit), and
+/// takes the smallest of the three, never below the floor. The stack and
+/// table commit advisories warn past the same share, so a count derived
+/// here never trips them. Where the pools are not accounted, this is
+/// [`derive_max_memories`] exactly.
+pub fn derive_max_memories_from_memory_precommit_limit() -> u32 {
+    derive_max_memories_bounded(true)
+}
+
+/// [`derive_max_memories`] or [`derive_max_memories_from_memory_precommit_limit`],
+/// from one reading of the machine.
+fn derive_max_memories_bounded(from_commit_limit: bool) -> u32 {
     let limits = process_limits();
+    let charge = table_mapping_charge();
+    let data_limit = data_segment_limit_within(limits.as_deref());
+    let commit = if charge != TableMappingCharge::Committed && data_limit.is_none() {
+        CommitBound::Unaccounted
+    } else if !from_commit_limit {
+        CommitBound::Floor
+    } else {
+        match pool_commit_ceiling(charge, data_limit, detected_memory_limit()) {
+            Some(ceiling) => {
+                CommitBound::Within(ceiling / 100 * DERIVED_STACK_TABLE_COMMIT_PERCENT)
+            }
+            // No readable ceiling to size against: the floor it is.
+            None => CommitBound::Floor,
+        }
+    };
     derive_max_memories_within(
         usable_address_space_within(limits.as_deref()),
         max_map_count(),
-        table_mapping_charge() == TableMappingCharge::Committed
-            || data_segment_limit_within(limits.as_deref()).is_some(),
+        commit,
     )
 }
 
@@ -139,11 +222,16 @@ pub fn derive_max_memories() -> u32 {
 pub(crate) fn derive_max_memories_within(
     address_space: u64,
     max_map_count: Option<u64>,
-    writable_mappings_limited: bool,
+    commit: CommitBound,
 ) -> u32 {
-    if cfg!(windows) || cfg!(not(target_pointer_width = "64")) || writable_mappings_limited {
+    if cfg!(not(target_pointer_width = "64")) {
         return WASMTIME_DEFAULT_MAX_MEMORIES;
     }
+    let by_commit = match commit {
+        CommitBound::Unaccounted => u64::MAX,
+        CommitBound::Floor => return WASMTIME_DEFAULT_MAX_MEMORIES,
+        CommitBound::Within(bytes) => bytes / committed_bytes_per_memory(),
+    };
     // `x * percent / 100` rather than `x / 100 * percent`: neither input is
     // near overflow, and this keeps the mapping headroom the advisory names.
     let by_address_space = address_space * DERIVED_POOL_ADDRESS_SPACE_PERCENT
@@ -152,9 +240,34 @@ pub(crate) fn derive_max_memories_within(
     let by_map_count = max_map_count.map_or(u64::MAX, |limit| {
         limit * POOL_MAP_COUNT_PERCENT / 100 / MAPPINGS_PER_WARM_COMPONENT
     });
-    u32::try_from(by_address_space.min(by_map_count))
+    u32::try_from(by_address_space.min(by_map_count).min(by_commit))
         .unwrap_or(u32::MAX)
         .max(WASMTIME_DEFAULT_MAX_MEMORIES)
+}
+
+/// Bytes of accessible mapping one linear memory brings with it at wasmtime's
+/// defaults: its pooled stack, and the tables the engine admits per memory
+/// ([`super::TABLES_PER_MEMORY`]). What a memory costs where those mappings
+/// are committed (see [`CommitBound`]); the address space its own
+/// reservation takes is [`pool_slot_bytes`].
+pub fn committed_bytes_per_memory() -> u64 {
+    pool_stack_bytes(1, WASMTIME_DEFAULT_ASYNC_STACK_SIZE)
+        .saturating_add(pool_table_bytes(super::TABLES_PER_MEMORY, WASMTIME_DEFAULT_TABLE_ELEMENTS))
+}
+
+/// What the pools' committed mappings are measured against for the derived
+/// count: the smallest of what [`table_commit_ceiling`] names for the
+/// platform and `RLIMIT_DATA` where one is set, or nothing where neither
+/// applies.
+fn pool_commit_ceiling(
+    charge: TableMappingCharge,
+    data_limit: Option<u64>,
+    memory_limit: Option<u64>,
+) -> Option<u64> {
+    [table_commit_ceiling(charge, memory_limit), data_limit]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 /// wasmtime's default `memory_reservation`: the address space each pooled
@@ -677,16 +790,30 @@ pub(crate) fn pool_advisories(
     max_memory_size: u64,
     table_elements: usize,
     async_stack_size: usize,
+    max_memories_from_memory_precommit_limit: bool,
     memory_limit: Option<u64>,
 ) -> Vec<String> {
     let charge = table_mapping_charge();
     let ceiling = table_commit_ceiling(charge, memory_limit);
+    // A host sized against its commit limit may take the derivation's share:
+    // the very check it was sized for must not warn about it.
+    let commit_percent = if max_memories_from_memory_precommit_limit {
+        DERIVED_STACK_TABLE_COMMIT_PERCENT
+    } else {
+        STACK_TABLE_COMMIT_PERCENT
+    };
     [
         pool_heap_ceiling_advisory(max_memory_size),
         pool_reservation_advisory(totals.memories, max_memory_size, usable_address_space()),
         max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit)),
-        pool_table_commit_advisory(totals.tables, table_elements, ceiling, charge),
-        pool_stack_commit_advisory(totals.stacks, async_stack_size, ceiling, charge),
+        pool_table_commit_advisory(totals.tables, table_elements, ceiling, charge, commit_percent),
+        pool_stack_commit_advisory(
+            totals.stacks,
+            async_stack_size,
+            ceiling,
+            charge,
+            commit_percent,
+        ),
     ]
     .into_iter()
     .flatten()
@@ -780,8 +907,10 @@ fn system_memory_and_swap() -> Option<u64> {
 
 /// Share of the commit limit the table pool, or the stack pool, may take
 /// before it is worth a word: past this, a count chosen for the memories is
-/// costing real memory through a total the operator never set.
-const POOL_COMMIT_PERCENT: u64 = 10;
+/// costing real memory through a total the operator never set. A host sized
+/// against its commit limit on purpose is allowed
+/// [`DERIVED_STACK_TABLE_COMMIT_PERCENT`] instead.
+const STACK_TABLE_COMMIT_PERCENT: u64 = 10;
 
 /// What to say when the table pool's one accessible mapping is large enough
 /// to matter on this platform ([`TableMappingCharge`]), if it is: a
@@ -800,6 +929,7 @@ fn pool_table_commit_advisory(
     table_elements: usize,
     ceiling: Option<u64>,
     charge: TableMappingCharge,
+    commit_percent: u64,
 ) -> Option<String> {
     accessible_pool_commit_advisory(
         &format!("{tables} pooled tables of {table_elements} elements"),
@@ -808,6 +938,7 @@ fn pool_table_commit_advisory(
          WASMTIME_POOLING_TOTAL_TABLES (or WASMTIME_POOLING_TABLE_ELEMENTS) on its own.",
         ceiling,
         charge,
+        commit_percent,
     )
 }
 
@@ -821,6 +952,7 @@ fn pool_stack_commit_advisory(
     async_stack_size: usize,
     ceiling: Option<u64>,
     charge: TableMappingCharge,
+    commit_percent: u64,
 ) -> Option<String> {
     accessible_pool_commit_advisory(
         &format!(
@@ -832,26 +964,29 @@ fn pool_stack_commit_advisory(
          WASMTIME_POOLING_TOTAL_STACKS on its own.",
         ceiling,
         charge,
+        commit_percent,
     )
 }
 
 /// The advisory the table and stack pools share: `what` names the pool and
-/// its count, `mapped` is the size of its one accessible mapping and
-/// `remedy` says which knob moves it. Only where the mapping is committed
-/// (see [`TableMappingCharge`]); elsewhere the kernel never accounts it.
+/// its count, `mapped` is the size of its one accessible mapping, `remedy`
+/// says which knob moves it and `commit_percent` is the share of `ceiling`
+/// past which it is worth a word. Only where the mapping is committed (see
+/// [`TableMappingCharge`]); elsewhere the kernel never accounts it.
 fn accessible_pool_commit_advisory(
     what: &str,
     mapped: u64,
     remedy: &str,
     ceiling: Option<u64>,
     charge: TableMappingCharge,
+    commit_percent: u64,
 ) -> Option<String> {
     let ceiling = ceiling?;
     match charge {
-        TableMappingCharge::Committed if mapped > ceiling / 100 * POOL_COMMIT_PERCENT => {
+        TableMappingCharge::Committed if mapped > ceiling / 100 * commit_percent => {
             Some(format!(
                 "{what} commit {} at startup, since this platform commits every accessible \
-                 mapping, past {POOL_COMMIT_PERCENT}% of the {} this process may commit. The \
+                 mapping, past {commit_percent}% of the {} this process may commit. The \
                  engine may fail to start, or guests may be left little to grow into. {remedy}",
                 render_bytes(mapped),
                 render_bytes(ceiling),
@@ -1292,8 +1427,9 @@ mod tests {
         // 625 MiB: within a tenth of 8 GiB, so nothing is said; a host told
         // --max-memories 10000 commits 6.25 GiB, which an 8 GiB box must
         // hear about.
-        assert!(pool_table_commit_advisory(4000, 20_000, limit, Committed).is_none());
-        let advisory = pool_table_commit_advisory(40_000, 20_000, limit, Committed)
+        let tenth = STACK_TABLE_COMMIT_PERCENT;
+        assert!(pool_table_commit_advisory(4000, 20_000, limit, Committed, tenth).is_none());
+        let advisory = pool_table_commit_advisory(40_000, 20_000, limit, Committed, tenth)
             .expect("6.25 GiB of tables is most of an 8 GiB limit");
         assert!(advisory.contains("40000 pooled tables"), "{advisory}");
         assert!(advisory.contains("max-memories"), "{advisory}");
@@ -1304,9 +1440,13 @@ mod tests {
         // Where the mapping is never accounted (Linux's default heuristic
         // ignores a NORESERVE mapping, however large) there is nothing to
         // say: a 18.75 GiB table pool on an 8 GiB box builds.
-        assert!(pool_table_commit_advisory(120_000, 20_000, limit, Free).is_none());
+        assert!(pool_table_commit_advisory(120_000, 20_000, limit, Free, tenth).is_none());
         // No limit to compare against, nothing to say.
-        assert!(pool_table_commit_advisory(120_000, 20_000, None, Committed).is_none());
+        assert!(pool_table_commit_advisory(120_000, 20_000, None, Committed, tenth).is_none());
+        // The share a host sized against its commit limit is allowed, and
+        // its edge: 6.25 GiB is 78% of 8 GiB, quiet at 80 and not at 75.
+        assert!(pool_table_commit_advisory(40_000, 20_000, limit, Committed, 80).is_none());
+        assert!(pool_table_commit_advisory(40_000, 20_000, limit, Committed, 75).is_some());
     }
 
     #[test]
@@ -1329,7 +1469,8 @@ mod tests {
         let stack = 2 * MIB as usize;
         // 1000 stacks commit about 2 GiB: over a tenth of 8 GiB, and said so;
         // a machine-derived 9,829 commit 19 GiB, which does not fit at all.
-        let advisory = pool_stack_commit_advisory(1000, stack, limit, Committed)
+        let tenth = STACK_TABLE_COMMIT_PERCENT;
+        let advisory = pool_stack_commit_advisory(1000, stack, limit, Committed, tenth)
             .expect("2 GiB of stacks is a quarter of an 8 GiB limit");
         assert!(advisory.contains("1000 pooled stacks of 2MiB"), "{advisory}");
         assert!(advisory.contains("max-memories"), "{advisory}");
@@ -1337,11 +1478,15 @@ mod tests {
             advisory.contains("WASMTIME_POOLING_TOTAL_STACKS"),
             "{advisory}"
         );
-        assert!(pool_stack_commit_advisory(100, stack, limit, Committed).is_none());
+        assert!(pool_stack_commit_advisory(100, stack, limit, Committed, tenth).is_none());
         // Never accounted, nothing to say: the derived 19 GiB of stacks on an
         // 8 GiB default-Linux box is a NORESERVE mapping the kernel ignores.
-        assert!(pool_stack_commit_advisory(9_829, stack, limit, Free).is_none());
-        assert!(pool_stack_commit_advisory(9_829, stack, None, Committed).is_none());
+        assert!(pool_stack_commit_advisory(9_829, stack, limit, Free, tenth).is_none());
+        assert!(pool_stack_commit_advisory(9_829, stack, None, Committed, tenth).is_none());
+        // Within the derivation's quarter, 2 GiB on 8 GiB is quiet: the
+        // share a host sized against its commit limit is allowed.
+        let quarter = DERIVED_STACK_TABLE_COMMIT_PERCENT;
+        assert!(pool_stack_commit_advisory(1000, stack, limit, Committed, quarter).is_none());
     }
 
     #[test]
@@ -1754,7 +1899,11 @@ mod tests {
             (USER_ADDRESS_SPACE, 65_530),
             (USER_ADDRESS_SPACE, 1_048_576),
         ] {
-            let memories = derive_max_memories_within(address_space, Some(mappings), false);
+            let memories = derive_max_memories_within(
+                address_space,
+                Some(mappings),
+                CommitBound::Unaccounted,
+            );
             let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
             assert_eq!(reservation_advisory(&derived, address_space), None);
             assert_eq!(map_count_advisory(&derived, mappings), None);
@@ -1763,7 +1912,11 @@ mod tests {
         // Compatibility preserves 1000 even when a tighter limit means that
         // count needs an advisory. Automatic sizing does not promise silence.
         let small_address_space = 1024 * 1024 * MIB;
-        let memories = derive_max_memories_within(small_address_space, Some(4096), false);
+        let memories = derive_max_memories_within(
+            small_address_space,
+            Some(4096),
+            CommitBound::Unaccounted,
+        );
         assert_eq!(memories, WASMTIME_DEFAULT_MAX_MEMORIES);
         let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
         assert!(reservation_advisory(&derived, small_address_space).is_some());
@@ -1775,7 +1928,7 @@ mod tests {
         // A finite data limit or strict commit accounting must not turn the
         // old 2.6 GiB of writable pools into roughly 25 GiB at startup.
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), true),
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Floor),
             WASMTIME_DEFAULT_MAX_MEMORIES
         );
         let limits = "Max data size             4294967296 8589934592 bytes\n\
@@ -1792,33 +1945,64 @@ mod tests {
         );
     }
 
+    /// Sized against the commit limit, the pools' share of it is a third
+    /// bound, not a floor: the count that fits in it wins where it is the
+    /// smallest, the mapping or address-space bound where it is not, and
+    /// never below the old default.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn sizing_against_the_commit_limit_bounds_the_count_instead_of_flooring_it() {
+        let per_memory = committed_bytes_per_memory();
+        // 2 MiB of stack plus its guard page, and four tables of 160 KiB
+        // rounded up to the host's page: about 2.6 MiB.
+        assert!(per_memory > 2 * MIB + 640 * 1024, "{per_memory}");
+        assert!(per_memory < 2 * MIB + 640 * 1024 + 6 * table_pool_page(), "{per_memory}");
+        let within = |bytes: u64| {
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Within(bytes))
+        };
+        // 4 GiB of commit holds about 1,550 memories, fewer than the mapping
+        // limit's 9,829: the commit bound binds.
+        let four = 4 * 1024 * MIB;
+        assert_eq!(u64::from(within(four)), four / per_memory);
+        assert!(within(four) > WASMTIME_DEFAULT_MAX_MEMORIES);
+        assert!(within(four) < 9_829);
+        // 64 GiB holds some 24,000: the mapping limit binds again.
+        assert_eq!(within(64 * 1024 * MIB), 9_829);
+        // 1 GiB holds under 400: the floor holds, as on any tight machine.
+        assert_eq!(within(1024 * MIB), WASMTIME_DEFAULT_MAX_MEMORIES);
+    }
+
     #[cfg(all(unix, target_pointer_width = "64"))]
     #[test]
     fn the_memory_count_derives_from_address_space_and_mappings() {
         // A default Linux: 47 bits of address space and 65,530 mappings. The
         // mapping limit binds: 65,530 x 90% / 6 per warm component.
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), false),
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Unaccounted),
             9_829
         );
         // No mapping limit (macOS, or a kernel that reports none): half the
         // address space at 4 GiB + 32 MiB a memory.
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, None, false),
+            derive_max_memories_within(USER_ADDRESS_SPACE, None, CommitBound::Unaccounted),
             16_256
         );
         // A raised mapping limit hands the decision back to the address space.
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(1_048_576), false),
+            derive_max_memories_within(
+                USER_ADDRESS_SPACE,
+                Some(1_048_576),
+                CommitBound::Unaccounted
+            ),
             16_256
         );
         // A tight RLIMIT_AS or mapping limit never goes below the old default.
         assert_eq!(
-            derive_max_memories_within(1024 * 1024 * MIB, Some(65_530), false),
+            derive_max_memories_within(1024 * 1024 * MIB, Some(65_530), CommitBound::Unaccounted),
             WASMTIME_DEFAULT_MAX_MEMORIES
         );
         assert_eq!(
-            derive_max_memories_within(USER_ADDRESS_SPACE, Some(4_096), false),
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(4_096), CommitBound::Unaccounted),
             WASMTIME_DEFAULT_MAX_MEMORIES
         );
     }

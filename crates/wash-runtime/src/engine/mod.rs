@@ -1292,6 +1292,7 @@ pub struct EngineBuilder {
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     max_process_memory_bytes: Option<u64>,
+    max_memories_from_memory_precommit_limit: bool,
     max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
@@ -1346,6 +1347,21 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
+        self
+    }
+
+    /// Whether this host sized `max_memories` against its commit limit
+    /// (`host_memory::derive_max_memories_from_memory_precommit_limit`).
+    ///
+    /// The engine derives nothing from it: the count arrives through
+    /// [`Self::with_host_memory`] or [`Self::with_max_memories`]. It tells
+    /// the stack and table commit advisories which share of the commit limit
+    /// the host meant to use, so a count derived within that share is not
+    /// warned about by the check it was sized for. Off, the advisories warn
+    /// past a tenth; on, past the derivation's quarter.
+    #[must_use]
+    pub fn with_max_memories_from_memory_precommit_limit(mut self, enable: bool) -> Self {
+        self.max_memories_from_memory_precommit_limit = enable;
         self
     }
 
@@ -1678,6 +1694,7 @@ impl EngineBuilder {
                 pool.max_memory_size,
                 pool.table_elements,
                 pool.async_stack_size,
+                self.max_memories_from_memory_precommit_limit,
                 memory_limit,
             ) {
                 tracing::warn!("{advisory}");

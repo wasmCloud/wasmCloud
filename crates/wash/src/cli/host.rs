@@ -475,8 +475,11 @@ pub struct HostCommand {
     /// space and at most 90% of `vm.max_map_count`, allowing six mappings per
     /// warm component (two for its stack, four for its memory). The floor is
     /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
-    /// accounting or a finite data-size limit keep. With a 65,530 mapping
-    /// limit and 47-bit address space, Linux derives 9,829 memories.
+    /// accounting or a finite data-size limit keep: there the stack and
+    /// table pools are committed at startup rather than reserved, 2.6 GiB at
+    /// the floor, and `--set-max-memories-from-memory-precommit-limit` is how such a host
+    /// asks to be sized past it. With a 65,530 mapping limit and 47-bit
+    /// address space, Linux derives 9,829 memories.
     /// Multiplied by one
     /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
     /// `--default-heap-memory` is) it is the pool's address-space reservation,
@@ -503,6 +506,39 @@ pub struct HostCommand {
     /// total.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
+
+    /// Set `--max-memories` from the memory precommit limit on a platform
+    /// that precommits the stack and table pools, instead of keeping 1000.
+    ///
+    /// wasmtime's pooling allocator is three pools, all sized by
+    /// `--max-memories`: the linear memories, whose 4 GiB reservations are
+    /// address space and never committed, and the fiber stacks (2 MiB each)
+    /// and tables (four of 160 KiB per memory), which are mapped read-write
+    /// when the engine is built. Most kernels charge nothing for those
+    /// mappings until a page is touched. Windows, Linux with
+    /// `vm.overcommit_memory=2` and a process under a finite `RLIMIT_DATA`
+    /// precommit them: the whole mapping is charged against the limit on
+    /// such memory (`CommitLimit` in `/proc/meminfo`, `RLIMIT_DATA`, or RAM
+    /// plus page file on Windows) the moment it is made, about 2.6 MiB per
+    /// memory, touched or not. So on those platforms an unset
+    /// `--max-memories` stays at 1000 (2.6 GiB) rather than the machine's
+    /// derived count (25 GiB at a default Linux's 9,829).
+    ///
+    /// With this on, the host instead works out how many memories' stacks
+    /// and tables fit in a quarter of that precommit limit (capped by the
+    /// container's limit) and takes the smallest of that, the address-space
+    /// bound and the mapping bound, never below 1000: the same rule every
+    /// other platform follows. The quarter is fixed, like the other
+    /// derivation shares, because the commit limit is shared with every
+    /// other process and with this host's own heap; a host that wants
+    /// another count sets `--max-memories`. Elsewhere, and whenever
+    /// `--max-memories` is set, this changes nothing.
+    #[arg(
+        long = "set-max-memories-from-memory-precommit-limit",
+        env = "WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT",
+        default_value_t = false
+    )]
+    pub max_memories_from_memory_precommit_limit: bool,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
@@ -1140,9 +1176,14 @@ impl CliCommand for HostCommand {
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
             self.max_memories.or_else(|| {
-                self.core_instances
-                    .is_none()
-                    .then(wash_runtime::engine::host_memory::derive_max_memories)
+                self.core_instances.is_none().then(|| {
+                    use wash_runtime::engine::host_memory as hm;
+                    if self.max_memories_from_memory_precommit_limit {
+                        hm::derive_max_memories_from_memory_precommit_limit()
+                    } else {
+                        hm::derive_max_memories()
+                    }
+                })
             }),
             self.core_instances,
         )
@@ -1285,6 +1326,14 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
+        // Only when the count was derived: a count the operator named was
+        // never sized against the precommit limit, so the advisories keep
+        // their usual threshold for it, as the flag's help promises.
+        let from_precommit_limit = self.max_memories_from_memory_precommit_limit
+            && self.max_memories.is_none()
+            && self.core_instances.is_none();
+        engine_builder =
+            engine_builder.with_max_memories_from_memory_precommit_limit(from_precommit_limit);
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
