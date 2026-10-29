@@ -6577,8 +6577,10 @@ mod tests {
         async fn resolve(
             &self,
             request: crate::plugin::SecretRequest,
-        ) -> Result<BTreeMap<String, crate::plugin::SecretValue>, crate::plugin::SecretSourceError>
-        {
+        ) -> Result<
+            BTreeMap<crate::plugin::SecretKey, crate::plugin::SecretValue>,
+            crate::plugin::SecretSourceError,
+        > {
             Ok(request
                 .keys
                 .into_iter()
@@ -6617,9 +6619,9 @@ mod tests {
                     HashMap::from([(
                         "url".to_string(),
                         crate::plugin::PluginSecretRef {
-                            source: "cache-db".to_string(),
-                            plugin: "vault".to_string(),
-                            key: "kv-url".to_string(),
+                            source: "cache-db".into(),
+                            plugin: "vault".into(),
+                            key: "kv-url".into(),
                         },
                     )]),
                 ),

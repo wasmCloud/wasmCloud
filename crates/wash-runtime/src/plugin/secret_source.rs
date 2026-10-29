@@ -16,6 +16,68 @@ use super::HostPlugin;
 use super::bindings::{BindingSchema, KeyOwnership, PluginBindingSet};
 use crate::wit::WitInterface;
 
+/// A string-backed name, typed so one kind of name can't be passed as another.
+macro_rules! name_type {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            pub fn into_string(self) -> String {
+                self.0
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_string())
+            }
+        }
+
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
+
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
+            }
+        }
+    };
+}
+
+name_type!(
+    /// The `id` of a `host.plugins` entry.
+    PluginId
+);
+name_type!(
+    /// The name of a binding under a `host.plugins` entry.
+    BindingName
+);
+name_type!(
+    /// The name of an entry in the top-level `secrets:` catalog.
+    CatalogName
+);
+name_type!(
+    /// A key in a secret source's backend, as written under a catalog entry's
+    /// `keys`.
+    SecretKey
+);
+
 /// What the host asks a [`HostSecretSource`] for, and on whose behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRequest {
@@ -24,17 +86,17 @@ pub struct SecretRequest {
     /// The workload whose bind needs them.
     pub workload: RequestingWorkload,
     /// The keys to resolve, without duplicates.
-    pub keys: Vec<String>,
+    pub keys: Vec<SecretKey>,
 }
 
 /// The binding a [`SecretRequest`]'s values are delivered to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretConsumer {
     /// The plugin the values are for.
-    pub plugin: String,
+    pub plugin: PluginId,
     /// The binding of `plugin` the source is declared on, or `None` for the
     /// entry itself.
-    pub binding: Option<String>,
+    pub binding: Option<BindingName>,
 }
 
 /// The workload whose bind a [`SecretRequest`] is made for, from the host's own
@@ -113,7 +175,7 @@ impl std::fmt::Debug for SecretValue {
 #[derive(Debug)]
 pub enum SecretSourceError {
     /// These requested keys do not exist.
-    NotFound(Vec<String>),
+    NotFound(Vec<SecretKey>),
     /// The source refuses these keys to this consumer.
     AccessDenied(Option<String>),
     /// The backend could not be reached; a later bind may succeed.
@@ -153,7 +215,7 @@ pub trait HostSecretSource: Send + Sync {
     async fn resolve(
         &self,
         request: SecretRequest,
-    ) -> Result<BTreeMap<String, SecretValue>, SecretSourceError>;
+    ) -> Result<BTreeMap<SecretKey, SecretValue>, SecretSourceError>;
 }
 
 /// A source as declared on one layer: the binding (`None` for the entry) and
@@ -176,7 +238,7 @@ pub(crate) fn validate_plugin_secrets(
         };
         let source = &secret.source;
         anyhow::ensure!(
-            secret.plugin != plugin_id,
+            secret.plugin.as_str() != plugin_id,
             "{place}: secret `{source}` names this plugin, which cannot supply its own config"
         );
         anyhow::ensure!(
@@ -276,16 +338,17 @@ pub(crate) async fn resolve_plugin_secrets(
         None => base_read.contains(&schema.canonical(key)),
     };
 
-    let mut requests: BTreeMap<LayerSource<'_>, (&str, BTreeSet<&str>)> = BTreeMap::new();
+    let mut requests: BTreeMap<LayerSource<'_>, (&PluginId, BTreeSet<&SecretKey>)> =
+        BTreeMap::new();
     for (binding, key, secret) in declared.plugin_secrets() {
         if !needed(binding, key) {
             continue;
         }
         requests
             .entry((binding, secret.source.as_str()))
-            .or_insert_with(|| (secret.plugin.as_str(), BTreeSet::new()))
+            .or_insert_with(|| (&secret.plugin, BTreeSet::new()))
             .1
-            .insert(secret.key.as_str());
+            .insert(&secret.key);
     }
 
     let calls = requests
@@ -298,7 +361,7 @@ pub(crate) async fn resolve_plugin_secrets(
                     None => format!("`{plugin_id}`"),
                 };
                 let resolver = plugins
-                    .get(plugin)
+                    .get(plugin.as_str())
                     .and_then(|p| p.secret_source())
                     .with_context(|| {
                         format!(
@@ -309,11 +372,11 @@ pub(crate) async fn resolve_plugin_secrets(
                 let resolved = resolver
                     .resolve(SecretRequest {
                         consumer: SecretConsumer {
-                            plugin: plugin_id.to_string(),
-                            binding: binding.map(str::to_string),
+                            plugin: plugin_id.into(),
+                            binding: binding.map(BindingName::from),
                         },
                         workload: workload.clone(),
-                        keys: keys.iter().map(|k| k.to_string()).collect(),
+                        keys: keys.into_iter().cloned().collect(),
                     })
                     .await
                     .map_err(|e| {
@@ -324,7 +387,7 @@ pub(crate) async fn resolve_plugin_secrets(
                 anyhow::Ok(((binding.map(str::to_string), source.to_string()), resolved))
             }
         });
-    let values: HashMap<(Option<String>, String), BTreeMap<String, SecretValue>> =
+    let values: HashMap<(Option<String>, String), BTreeMap<SecretKey, SecretValue>> =
         futures::future::try_join_all(calls)
             .await?
             .into_iter()
@@ -337,7 +400,7 @@ pub(crate) async fn resolve_plugin_secrets(
             return Ok(None);
         }
         let value = values
-            .get(&(binding.map(str::to_string), secret.source.clone()))
+            .get(&(binding.map(str::to_string), secret.source.to_string()))
             .and_then(|resolved| resolved.get(&secret.key))
             .cloned()
             .with_context(|| {
@@ -376,8 +439,8 @@ mod tests {
         async fn resolve(
             &self,
             request: SecretRequest,
-        ) -> Result<BTreeMap<String, SecretValue>, SecretSourceError> {
-            if request.keys.iter().any(|k| k == "denied") {
+        ) -> Result<BTreeMap<SecretKey, SecretValue>, SecretSourceError> {
+            if request.keys.iter().any(|k| k.as_str() == "denied") {
                 return Err(SecretSourceError::AccessDenied(Some("not for you".into())));
             }
             let found = request
@@ -431,9 +494,9 @@ mod tests {
 
     fn secret(source: &str, key: &str) -> PluginSecretRef {
         PluginSecretRef {
-            source: source.to_string(),
-            plugin: "vault".to_string(),
-            key: key.to_string(),
+            source: source.into(),
+            plugin: "vault".into(),
+            key: key.into(),
         }
     }
 
@@ -506,11 +569,11 @@ mod tests {
             *requests,
             [SecretRequest {
                 consumer: SecretConsumer {
-                    plugin: "wasmcloud-postgres".to_string(),
-                    binding: Some("app-db".to_string()),
+                    plugin: "wasmcloud-postgres".into(),
+                    binding: Some("app-db".into()),
                 },
                 workload: requesting(),
-                keys: vec!["pg-url-app".to_string()],
+                keys: vec!["pg-url-app".into()],
             }]
         );
         let schema = BindingSchema::empty();
@@ -581,7 +644,13 @@ mod tests {
             .filter(|r| r.consumer.binding.is_none())
             .collect();
         assert_eq!(shared.len(), 1);
-        assert_eq!(shared[0].keys, ["pg-url-app", "pg-url-reports"]);
+        assert_eq!(
+            shared[0].keys,
+            [
+                SecretKey::from("pg-url-app"),
+                SecretKey::from("pg-url-reports")
+            ]
+        );
     }
 
     #[test]
@@ -590,7 +659,7 @@ mod tests {
         let schema = BindingSchema::empty().and_host_ceiling_keys(["database"]);
         let check = |id: &str, key: &str, plugin: &str| {
             let mut r = secret("s", "k");
-            r.plugin = plugin.to_string();
+            r.plugin = plugin.into();
             let set = PluginBindingSet::new(id)
                 .with_binding("app-db", HashMap::new())
                 .with_binding_secrets("app-db", HashMap::from([(key.to_string(), r)]));

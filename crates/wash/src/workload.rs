@@ -216,7 +216,8 @@ mod tests {
             SecretSource::builder()
                 .inline(HashMap::from([("DB_USER".into(), "alice".into())]))
                 .from_env(vec![var.clone()])
-                .build(),
+                .build()
+                .into(),
         )]);
 
         let config = Config {
