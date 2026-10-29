@@ -772,9 +772,10 @@ runtime:
       # `wasmcloud:host/secret-source`, by the name a `plugins` entry's or
       # binding's `secretFrom` uses. `keys` maps each config key to the key
       # the plugin is asked for. `workloads` is required: the namespaces (and
-      # optionally workload names) whose workloads may have its values, or
-      # `all`. A binding is visible to every workload on the host, so a
-      # workload outside the grant never receives them: its deploy fails.
+      # optionally names) whose workloads may have its values, or `all`. A
+      # name matches a WorkloadDeployment's replicas, else a
+      # WorkloadReplicaSet's, else a Workload's own name. A binding is visible to every workload on the host,
+      # so a workload outside the grant never receives them: its deploy fails.
       # On `wasmcloud-secrets`, whose keys each stand alone, an entry the
       # plugin entry's own `secretFrom` names is instead left out of its
       # config.

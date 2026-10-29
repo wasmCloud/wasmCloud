@@ -214,6 +214,36 @@ async fn a_granted_workload_reads_its_own_secret() -> Result<()> {
     Ok(())
 }
 
+/// A replica of a WorkloadDeployment has a generated name, so a grant naming
+/// the deployment matches it through the operator's annotation, and the source
+/// is told the deployment's name.
+#[tokio::test]
+async fn a_grant_by_name_matches_every_replica_of_a_deployment() -> Result<()> {
+    let (addr, h) = start(workload_secrets(WorkloadGrant::Only(vec![
+        WorkloadSelector::workload("test", "billing-api"),
+    ])))
+    .await?;
+    let replica = "billing-api-5d8f9c-x2k4q";
+    let mut request = secrets_caller(replica);
+    request.workload.annotations.insert(
+        wash_runtime::engine::workload::WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
+        "billing-api".to_string(),
+    );
+    let resp = h.workload_start(request).await?;
+    assert_eq!(
+        resp.workload_status.workload_state,
+        WorkloadState::Running,
+        "{}",
+        resp.workload_status.message
+    );
+    let client = reqwest::Client::new();
+    let (_, body) = req(&client, &addr, replica, "/get?key=db-password").await?;
+    assert_eq!(body, "hunter2");
+    let (_, body) = req(&client, &addr, replica, "/get?key=requested-by").await?;
+    assert_eq!(body, "test/billing-api");
+    Ok(())
+}
+
 /// A workload outside the grant of an entry-level secret deploys without its
 /// keys, so `store.get` finds nothing, while a granted one on the same host
 /// reads it.
