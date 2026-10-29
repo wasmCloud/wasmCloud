@@ -931,3 +931,7 @@ mod tests {
         assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
     }
 }
+
+#[cfg(test)]
+#[path = "udp_tests.rs"]
+mod behavior_tests;

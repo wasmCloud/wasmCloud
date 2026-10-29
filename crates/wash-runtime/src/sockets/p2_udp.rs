@@ -117,9 +117,11 @@ impl LoopbackOutgoingDatagramStream {
         if self.permit.is_some() {
             return true;
         };
-        let Ok(p) =
-            Arc::clone(&self.permits).try_acquire_many_owned(self.permits.available_permits() as _)
-        else {
+        let available = self.permits.available_permits();
+        if available == 0 {
+            return false;
+        }
+        let Ok(p) = Arc::clone(&self.permits).try_acquire_many_owned(available as _) else {
             return false;
         };
         self.permit = Some(p);
