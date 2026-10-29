@@ -456,8 +456,13 @@ impl std::fmt::Debug for Engine {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CacheKey(String);
 
+/// One compile, and whether a store of it may need a GC heap: read off the
+/// same source once, so a cached compile never has it read again.
 #[derive(Clone)]
-pub struct CacheValue(Component);
+pub struct CacheValue {
+    component: Component,
+    may_use_gc: bool,
+}
 
 impl std::fmt::Debug for CacheValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -480,8 +485,7 @@ type LiveCompiles =
 /// [`LiveCompiles`] lives exactly as long as some workload holds this.
 pub(crate) struct LiveCompile {
     digest: String,
-    component: Component,
-    may_use_gc: bool,
+    compiled: CacheValue,
     live: std::sync::Weak<LiveCompiles>,
 }
 
@@ -860,7 +864,13 @@ impl Engine {
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadService> {
         // Create a wasmtime component from the bytes
-        let (wasmtime_component, compiled) = self
+        let (
+            CacheValue {
+                component: wasmtime_component,
+                ..
+            },
+            compiled,
+        ) = self
             .load_live_component(service.bytes, service.digest)
             .context("failed to create component from bytes")?;
 
@@ -945,6 +955,17 @@ impl Engine {
         self.pool_totals.is_some() && pool_gc::may_use_gc(bytes)
     }
 
+    /// Compile `bytes` and read its GC use beside the compile.
+    fn compile(&self, bytes: &[u8]) -> anyhow::Result<CacheValue> {
+        let component = Component::new(&self.inner, bytes)
+            .map_err(|e| self.explain_compile_failure(e))
+            .context("failed to compile component from bytes")?;
+        Ok(CacheValue {
+            component,
+            may_use_gc: self.may_use_gc(bytes),
+        })
+    }
+
     /// [`Self::load_component_bytes`] for a workload, which holds the returned
     /// [`LiveCompile`] while it runs: a digest some running workload was
     /// loaded from is served from that workload's compile, whether or not the
@@ -953,38 +974,31 @@ impl Engine {
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
-    ) -> anyhow::Result<(Component, Option<Arc<LiveCompile>>)> {
+    ) -> anyhow::Result<(CacheValue, Option<Arc<LiveCompile>>)> {
         let Some(digest) = digest else {
             return Ok((self.load_component_bytes(bytes, None::<&str>)?, None));
         };
         let digest = digest.as_ref();
         if let Some(live) = self.live_compile(digest) {
-            return Ok((live.component.clone(), Some(live)));
+            return Ok((live.compiled.clone(), Some(live)));
         }
-        let component = self.load_component_bytes(&bytes, Some(digest))?;
-        // Another start may have recorded this digest while this one
-        // compiled; share its compile rather than read the source again.
-        if let Some(existing) = self.live_compile(digest) {
-            return Ok((existing.component.clone(), Some(existing)));
-        }
-        // Outside the lock: it walks every function body.
-        let may_use_gc = self.may_use_gc(bytes.as_ref());
+        let compiled = self.load_component_bytes(&bytes, Some(digest))?;
         let mut live = self
             .live_compiles
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // And once more under the lock, for a start that raced this one.
+        // Another start may have recorded this digest since the check above;
+        // share its compile rather than keep a second.
         if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
-            return Ok((existing.component.clone(), Some(existing)));
+            return Ok((existing.compiled.clone(), Some(existing)));
         }
         let entry = Arc::new(LiveCompile {
             digest: digest.to_string(),
-            component: component.clone(),
-            may_use_gc,
+            compiled: compiled.clone(),
             live: Arc::downgrade(&self.live_compiles),
         });
         live.insert(digest.to_string(), Arc::downgrade(&entry));
-        Ok((component, Some(entry)))
+        Ok((compiled, Some(entry)))
     }
 
     fn live_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
@@ -1001,20 +1015,15 @@ impl Engine {
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
-    ) -> anyhow::Result<Component> {
+    ) -> anyhow::Result<CacheValue> {
         match digest {
             None => {
                 tracing::debug!("no digest provided, compiling component without caching");
-                let compiled = Component::new(&self.inner, bytes.as_ref())
-                    .map_err(|e| self.explain_compile_failure(e))
-                    .context("failed to compile component from bytes")?;
-                Ok(compiled)
+                self.compile(bytes.as_ref())
             }
             Some(digest) => {
                 let key = CacheKey(digest.as_ref().to_string());
-                let inner = &self.inner;
                 let bytes_ref = bytes.as_ref();
-                let heap = self.effective_heap_memory();
 
                 #[cfg(test)]
                 let compiles = Arc::clone(&self.compiles);
@@ -1022,15 +1031,11 @@ impl Engine {
                     .try_get_with(key, || {
                         #[cfg(test)]
                         compiles.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        Component::new(inner, bytes_ref)
-                            .map_err(|e| explain_compile_failure(e, heap))
-                            .context("failed to compile component from bytes")
-                            .map(CacheValue)
+                        self.compile(bytes_ref)
                     })
                     .map_err(|e: Arc<anyhow::Error>| {
                         anyhow::Error::new(SharedError(e)).context("compilation cache error")
                     })
-                    .map(|v| v.0)
             }
         }
     }
@@ -1051,13 +1056,15 @@ impl Engine {
         let instances = InstancePolicy::from_component(&component);
 
         // Create a wasmtime component from the bytes
-        let (wasmtime_component, compiled) = self
+        let (
+            CacheValue {
+                component: wasmtime_component,
+                may_use_gc,
+            },
+            compiled,
+        ) = self
             .load_live_component(&component.bytes, component.digest)
             .context("failed to create component from bytes")?;
-
-        let may_use_gc = compiled
-            .as_ref()
-            .map_or_else(|| self.may_use_gc(&component.bytes), |live| live.may_use_gc);
 
         let linker = self.base_linker(uses_wasi_http(&wasmtime_component))?;
 
@@ -2682,6 +2689,38 @@ mod tests {
                 .with_max_memories(64)
                 .sized_to_commit_limit()
         );
+    }
+
+    /// GC use is read with the compile and cached beside it, so a workload
+    /// served from the cache, after the last one holding the compile let go,
+    /// still has its answer without a second compile.
+    #[test]
+    fn a_cached_compile_carries_its_gc_answer() -> anyhow::Result<()> {
+        use std::sync::atomic::Ordering;
+        const DIGEST: &str = "sha256:numeric";
+
+        let engine = pool_share::test_support::engine(pool_share::test_support::config());
+        if engine.pool_totals().is_none() {
+            return Ok(());
+        }
+        let bytes = wat::parse_str("(component (core module (memory 1)))")?;
+        let (first, live) = engine.load_live_component(&bytes, Some(DIGEST))?;
+        assert!(!first.may_use_gc);
+        drop(live);
+        assert!(engine.live_compiles.lock().unwrap().is_empty());
+
+        let (cached, _) = engine.load_live_component(&bytes, Some(DIGEST))?;
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert!(!cached.may_use_gc);
+
+        let unpooled = Engine::builder().with_pooling_allocator(false).build()?;
+        let gc = wat::parse_str("(component (core module (type (struct))))")?;
+        assert!(pool_gc::may_use_gc(&gc));
+        assert!(
+            !unpooled.may_use_gc(&gc),
+            "an engine with no pool admits nothing"
+        );
+        Ok(())
     }
 
     // Proposal names parse case-insensitively and accept `_`/`-` interchangeably;
