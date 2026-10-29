@@ -12,6 +12,7 @@ appendFileSync(destination, [
   `Commit: ${process.env.GITHUB_SHA}`,
   `Tests: ${process.env.TEST_RESULT}; 80% lines and regions: ${process.env.THRESHOLD_RESULT}`,
   '',
+  'Scope: native Rust workspace, excluding xtask and generated protobuf bindings.',
   'Rust compiler regions and lines are reported separately from statement coverage.',
   'See CONTRIBUTING.md for scope and the OpenSSF evidence requirements.',
   '',
