@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use super::secret_source::{CatalogName, PluginId, SecretKey, SecretValue};
+use super::secret_source::{CatalogName, PluginId, SecretKey, SecretValue, WorkloadGrant};
 use crate::wit::WitInterface;
 
 /// The binding name of a plain, unlabeled import.
@@ -605,6 +605,8 @@ pub struct PluginSecretRef {
     pub plugin: PluginId,
     /// The key that plugin is asked for.
     pub key: SecretKey,
+    /// The workloads that may bind a binding reading it.
+    pub grant: WorkloadGrant,
 }
 
 /// One plugin's operator declaration: a base config, the named bindings it
@@ -2622,6 +2624,7 @@ mod tests {
                         source: "orders-nats".into(),
                         plugin: "vault".into(),
                         key: "nats/servers".into(),
+                        grant: crate::plugin::WorkloadGrant::All,
                     },
                 )]),
             )

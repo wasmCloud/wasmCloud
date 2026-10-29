@@ -3070,6 +3070,9 @@ secrets:
     plugin: vault-secrets
     keys:
       url: apps/billing/pg-url
+    workloads:
+      - namespace: billing
+        name: billing-api
 host:
   plugins:
     - id: wasmcloud-postgres
@@ -3091,6 +3094,12 @@ host:
         assert_eq!((binding, key), (Some("app-db"), "url"));
         assert_eq!(secret.plugin.as_str(), "vault-secrets");
         assert_eq!(secret.key.as_str(), "apps/billing/pg-url");
+        assert_eq!(
+            secret.grant,
+            wash_runtime::plugin::WorkloadGrant::Only(vec![
+                wash_runtime::plugin::WorkloadSelector::workload("billing", "billing-api")
+            ])
+        );
 
         let err = config.host().plugins[1]
             .to_spec(&config, Path::new("."), None)

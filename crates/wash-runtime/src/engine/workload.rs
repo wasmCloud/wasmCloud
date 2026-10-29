@@ -5890,6 +5890,7 @@ mod tests {
                             source: "cache-db".into(),
                             plugin: "vault".into(),
                             key: "kv-url".into(),
+                            grant: crate::plugin::WorkloadGrant::All,
                         },
                     )]),
                 ),

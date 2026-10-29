@@ -771,16 +771,23 @@ runtime:
       # -- Secrets a host component plugin serves through
       # `wasmcloud:host/secret-source`, by the name a `plugins` entry's or
       # binding's `secretFrom` uses. `keys` maps each config key to the key
-      # the plugin is asked for. The host asks again on every workload bind,
-      # so a rotation reaches the next bind; no volume is mounted and no
-      # Reloader annotation is added. Only `plugins` bindings (or a native
-      # entry's own `secretFrom`) can name one.
+      # the plugin is asked for. `workloads` is required: the namespaces (and
+      # optionally workload names) whose workloads may bind a binding that
+      # reads the entry, or `all`. A binding is visible to every workload on
+      # the host, so a workload outside the grant fails to deploy rather than
+      # receive the values. The host asks again on every workload bind, so a
+      # rotation reaches the next bind; no volume is mounted and no Reloader
+      # annotation is added. Only `plugins` bindings (or a native entry's own
+      # `secretFrom`) can name one.
       #
       #   pluginSecrets:
       #     billing-db:
       #       plugin: vault-secrets
       #       keys:
       #         url: apps/billing/pg-url
+      #       workloads:
+      #         - namespace: billing
+      #           name: billing-api
       #   plugins:
       #     - id: wasmcloud-postgres
       #       bindings:

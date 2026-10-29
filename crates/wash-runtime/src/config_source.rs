@@ -186,18 +186,24 @@ pub struct PluginSecretSource {
     pub plugin: crate::plugin::PluginId,
     /// Config key -> the key `plugin` is asked for. Never empty.
     pub keys: BTreeMap<String, crate::plugin::SecretKey>,
+    /// The workloads that may bind a binding reading this entry. Required: a
+    /// binding is visible to every workload on the host, so the entry says
+    /// which of them may have its values.
+    pub workloads: crate::plugin::WorkloadGrant,
 }
 
 impl PluginSecretSource {
-    /// An entry served by `plugin`, mapping each config key to the backend
-    /// key it is asked for.
+    /// An entry served by `plugin` to the workloads `workloads` admits,
+    /// mapping each config key to the backend key it is asked for.
     pub fn new(
         plugin: impl Into<crate::plugin::PluginId>,
         keys: impl IntoIterator<Item = (String, crate::plugin::SecretKey)>,
+        workloads: crate::plugin::WorkloadGrant,
     ) -> Self {
         Self {
             plugin: plugin.into(),
             keys: keys.into_iter().collect(),
+            workloads,
         }
     }
 }
@@ -213,6 +219,8 @@ struct RawSecretEntry {
     plugin: Option<crate::plugin::PluginId>,
     #[serde(default)]
     keys: Option<BTreeMap<String, crate::plugin::SecretKey>>,
+    #[serde(default)]
+    workloads: Option<crate::plugin::WorkloadGrant>,
 }
 
 impl TryFrom<RawSecretEntry> for SecretEntry {
@@ -220,8 +228,10 @@ impl TryFrom<RawSecretEntry> for SecretEntry {
 
     fn try_from(raw: RawSecretEntry) -> std::result::Result<Self, String> {
         match (raw.plugin, raw.keys) {
-            (None, None) => Ok(Self::Static(raw.source)),
-            (None, Some(_)) => Err("`keys` is set without the `plugin` that serves them".into()),
+            (None, None) if raw.workloads.is_none() => Ok(Self::Static(raw.source)),
+            (None, _) => {
+                Err("`keys`/`workloads` are set without the `plugin` that serves them".into())
+            }
             (Some(plugin), keys) => {
                 if raw.source != SecretSource::default() {
                     return Err(format!(
@@ -234,7 +244,18 @@ impl TryFrom<RawSecretEntry> for SecretEntry {
                         "names plugin '{plugin}' but no `keys` to ask it for"
                     ));
                 };
-                Ok(Self::Plugin(PluginSecretSource { plugin, keys }))
+                let Some(workloads) = raw.workloads else {
+                    return Err(format!(
+                        "names plugin '{plugin}' but no `workloads` it is granted to; name the \
+                         namespaces (and optionally workload names) that may use it, or write \
+                         `workloads: all`"
+                    ));
+                };
+                Ok(Self::Plugin(PluginSecretSource {
+                    plugin,
+                    keys,
+                    workloads,
+                }))
             }
         }
     }
@@ -397,6 +418,7 @@ fn apply_secret_refs(
                             source: name.as_str().into(),
                             plugin: source.plugin.clone(),
                             key: backend_key.clone(),
+                            grant: source.workloads.clone(),
                         },
                     );
                 }
@@ -851,6 +873,9 @@ mod tests {
         SecretEntry::Plugin(PluginSecretSource::new(
             plugin,
             keys.iter().map(|(k, v)| (k.to_string(), (*v).into())),
+            crate::plugin::WorkloadGrant::Only(vec![crate::plugin::WorkloadSelector::namespace(
+                "billing",
+            )]),
         ))
     }
 
@@ -924,9 +949,17 @@ mod tests {
         let parse =
             |json: &str| serde_json::from_str::<SecretEntry>(json).map_err(|e| e.to_string());
         assert_eq!(
-            parse(r#"{"plugin": "vault", "keys": {"url": "k"}}"#).unwrap(),
+            parse(r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "billing"}]}"#)
+                .unwrap(),
             plugin_secret("vault", &[("url", "k")])
         );
+        assert!(matches!(
+            parse(r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": "all"}"#).unwrap(),
+            SecretEntry::Plugin(PluginSecretSource {
+                workloads: crate::plugin::WorkloadGrant::All,
+                ..
+            })
+        ));
         assert!(matches!(
             parse(r#"{"inline": {"x": "y"}}"#).unwrap(),
             SecretEntry::Static(_)
@@ -939,6 +972,19 @@ mod tests {
             (r#"{"plugin": "vault", "keys": {}}"#, "no `keys`"),
             (r#"{"plugin": "vault"}"#, "no `keys`"),
             (r#"{"keys": {"url": "k"}}"#, "without the `plugin`"),
+            (r#"{"workloads": "all"}"#, "without the `plugin`"),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}}"#,
+                "no `workloads`",
+            ),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": []}"#,
+                "grants no workload",
+            ),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "a", "nmae": "b"}]}"#,
+                "",
+            ),
         ] {
             let err = parse(json).unwrap_err();
             assert!(err.contains(expect), "{json}: {err}");
