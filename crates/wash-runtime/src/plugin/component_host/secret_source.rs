@@ -21,7 +21,7 @@ use wasmtime::component::{Instance, TypedFunc};
 use crate::engine::abandon::DispatchedCall;
 use crate::engine::ctx::SharedCtx;
 use crate::host::trigger_service::{CapabilityJob, SecretSourceCall, SecretSourceReply};
-use crate::plugin::{HostSecretSource, SecretRequest, SecretSourceError};
+use crate::plugin::{HostSecretSource, SecretKey, SecretRequest, SecretSourceError};
 
 use super::{ComponentHostPluginState, ExportedInterface};
 
@@ -208,7 +208,7 @@ impl HostSecretSource for ComponentSecretSource {
     async fn resolve(
         &self,
         request: SecretRequest,
-    ) -> Result<BTreeMap<String, crate::plugin::SecretValue>, SecretSourceError> {
+    ) -> Result<BTreeMap<SecretKey, crate::plugin::SecretValue>, SecretSourceError> {
         let state = &self.state;
         let failed = |msg: String| SecretSourceError::Call(anyhow::anyhow!(msg));
         let sender = state.sender().ok_or_else(|| {
@@ -222,15 +222,15 @@ impl HostSecretSource for ComponentSecretSource {
         let job = CapabilityJob::SecretSource(SecretSourceCall {
             request: SecretSourceRequest {
                 consumer: Consumer {
-                    plugin: request.consumer.plugin,
-                    binding: request.consumer.binding,
+                    plugin: request.consumer.plugin.into_string(),
+                    binding: request.consumer.binding.map(|b| b.into_string()),
                 },
                 workload: Workload {
                     id: request.workload.id,
                     name: request.workload.name,
                     namespace: request.workload.namespace,
                 },
-                keys: request.keys,
+                keys: request.keys.into_iter().map(|k| k.into_string()).collect(),
             },
             reply,
             abandoned: call.flag(),
@@ -265,8 +265,13 @@ impl HostSecretSource for ComponentSecretSource {
             }
         };
         match reply {
-            Ok(pairs) => Ok(pairs.into_iter().collect()),
-            Err(SourceError::NotFound(keys)) => Err(SecretSourceError::NotFound(keys)),
+            Ok(pairs) => Ok(pairs
+                .into_iter()
+                .map(|(key, value)| (SecretKey::from(key), value))
+                .collect()),
+            Err(SourceError::NotFound(keys)) => Err(SecretSourceError::NotFound(
+                keys.into_iter().map(SecretKey::from).collect(),
+            )),
             Err(SourceError::AccessDenied(detail)) => Err(SecretSourceError::AccessDenied(detail)),
             Err(SourceError::Unavailable(detail)) => Err(SecretSourceError::Unavailable(detail)),
             Err(SourceError::Other(detail)) => Err(SecretSourceError::Other(detail)),

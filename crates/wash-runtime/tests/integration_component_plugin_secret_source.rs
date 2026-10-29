@@ -35,9 +35,9 @@ fn kv_reading_secrets(keys: &[(&str, &str)]) -> PluginBindings {
             (
                 config_key.to_string(),
                 PluginSecretRef {
-                    source: "kv-secrets".to_string(),
-                    plugin: SECRETS_ID.to_string(),
-                    key: key.to_string(),
+                    source: "kv-secrets".into(),
+                    plugin: SECRETS_ID.into(),
+                    key: (*key).into(),
                 },
             )
         })
@@ -125,9 +125,9 @@ async fn a_secret_that_could_never_resolve_fails_host_start() -> Result<()> {
             PluginBindingSet::new(KV_ID).with_base_secrets(HashMap::from([(
                 "tier".to_string(),
                 PluginSecretRef {
-                    source: "kv-secrets".to_string(),
-                    plugin: plugin.to_string(),
-                    key: "tier".to_string(),
+                    source: "kv-secrets".into(),
+                    plugin: plugin.into(),
+                    key: "tier".into(),
                 },
             )])),
         );

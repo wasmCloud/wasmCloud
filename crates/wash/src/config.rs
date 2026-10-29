@@ -78,7 +78,7 @@ pub struct Config {
         rename = "secrets",
         skip_serializing_if = "BTreeMap::is_empty"
     )]
-    pub secret_sources: BTreeMap<String, SecretSource>,
+    pub secret_sources: BTreeMap<String, SecretEntry>,
 
     /// WIT dependency management configuration (default: empty/optional)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,6 +121,7 @@ impl Config {
             .chain(
                 self.secret_sources
                     .values()
+                    .filter_map(SecretEntry::as_static)
                     .flat_map(|source| [&source.file, &source.dir]),
             )
             .flatten()
@@ -306,7 +307,9 @@ pub struct WorkloadConfig {
 // embedder resolves these the same way (see
 // `wash_runtime::config_source`). Re-exported here because this module is
 // the documented home of the config schema.
-pub use wash_runtime::config_source::{ConfigSource, EnvironmentLayer, SecretSource};
+pub use wash_runtime::config_source::{
+    ConfigSource, EnvironmentLayer, PluginSecretSource, SecretEntry, SecretSource,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevVolume {
@@ -3086,8 +3089,8 @@ host:
         assert_eq!(pending.len(), 1);
         let (binding, key, secret) = pending[0];
         assert_eq!((binding, key), (Some("app-db"), "url"));
-        assert_eq!(secret.plugin, "vault-secrets");
-        assert_eq!(secret.key, "apps/billing/pg-url");
+        assert_eq!(secret.plugin.as_str(), "vault-secrets");
+        assert_eq!(secret.key.as_str(), "apps/billing/pg-url");
 
         let err = config.host().plugins[1]
             .to_spec(&config, Path::new("."), None)
@@ -3391,6 +3394,7 @@ secrets:
         let creds = config
             .secret_sources
             .get("creds")
+            .and_then(SecretEntry::as_static)
             .expect("secrets.creds should parse");
         assert_eq!(creds.from_env, vec!["DB_PASSWORD".to_string()]);
         assert_eq!(creds.inline.get("DB_USER").unwrap(), "alice");

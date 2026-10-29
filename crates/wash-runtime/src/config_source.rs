@@ -141,16 +141,111 @@ pub struct SecretSource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[builder(default)]
     pub from_env: Vec<String>,
-    /// A host plugin that serves this entry through
-    /// `wasmcloud:host/secret-source`. Such an entry is resolved each time a
-    /// workload binds, sets only `keys`, and can be named only by a
-    /// `host.plugins` entry or binding.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin: Option<String>,
-    /// For a `plugin` entry: config key -> the key `plugin` is asked for.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    #[builder(default)]
-    pub keys: BTreeMap<String, String>,
+}
+
+/// One entry of the top-level `secrets:` catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum SecretEntry {
+    /// Read when the host starts, from `inline`/`file`/`dir`/`fromEnv`.
+    Static(SecretSource),
+    /// Served by a host plugin each time a workload binds.
+    Plugin(PluginSecretSource),
+}
+
+impl SecretEntry {
+    /// The entry read at host start, if this is one.
+    pub fn as_static(&self) -> Option<&SecretSource> {
+        match self {
+            Self::Static(source) => Some(source),
+            Self::Plugin(_) => None,
+        }
+    }
+}
+
+impl From<SecretSource> for SecretEntry {
+    fn from(source: SecretSource) -> Self {
+        Self::Static(source)
+    }
+}
+
+impl From<PluginSecretSource> for SecretEntry {
+    fn from(source: PluginSecretSource) -> Self {
+        Self::Plugin(source)
+    }
+}
+
+/// A `secrets:` entry a host plugin serves through
+/// `wasmcloud:host/secret-source`. It is resolved each time a workload binds,
+/// and only a `host.plugins` entry or binding can name it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PluginSecretSource {
+    /// The plugin that serves the entry.
+    pub plugin: crate::plugin::PluginId,
+    /// Config key -> the key `plugin` is asked for. Never empty.
+    pub keys: BTreeMap<String, crate::plugin::SecretKey>,
+}
+
+impl PluginSecretSource {
+    /// An entry served by `plugin`, mapping each config key to the backend
+    /// key it is asked for.
+    pub fn new(
+        plugin: impl Into<crate::plugin::PluginId>,
+        keys: impl IntoIterator<Item = (String, crate::plugin::SecretKey)>,
+    ) -> Self {
+        Self {
+            plugin: plugin.into(),
+            keys: keys.into_iter().collect(),
+        }
+    }
+}
+
+/// The wire shape of a [`SecretEntry`]: either kind's fields, so a mix of the
+/// two is refused by name rather than half-ignored.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawSecretEntry {
+    #[serde(flatten)]
+    source: SecretSource,
+    #[serde(default)]
+    plugin: Option<crate::plugin::PluginId>,
+    #[serde(default)]
+    keys: Option<BTreeMap<String, crate::plugin::SecretKey>>,
+}
+
+impl TryFrom<RawSecretEntry> for SecretEntry {
+    type Error = String;
+
+    fn try_from(raw: RawSecretEntry) -> std::result::Result<Self, String> {
+        match (raw.plugin, raw.keys) {
+            (None, None) => Ok(Self::Static(raw.source)),
+            (None, Some(_)) => Err("`keys` is set without the `plugin` that serves them".into()),
+            (Some(plugin), keys) => {
+                if raw.source != SecretSource::default() {
+                    return Err(format!(
+                        "names plugin '{plugin}' and also `inline`/`file`/`dir`/`fromEnv`; a \
+                         plugin entry sets only `keys`"
+                    ));
+                }
+                let Some(keys) = keys.filter(|keys| !keys.is_empty()) else {
+                    return Err(format!(
+                        "names plugin '{plugin}' but no `keys` to ask it for"
+                    ));
+                };
+                Ok(Self::Plugin(PluginSecretSource { plugin, keys }))
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        RawSecretEntry::deserialize(d)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// Builds the flat env-var map for one [`EnvironmentLayer`] by walking
@@ -164,7 +259,7 @@ pub fn resolve_environment_layer(
     env: Option<&EnvironmentLayer>,
     owner: &str,
     configs: &BTreeMap<String, ConfigSource>,
-    secrets: &BTreeMap<String, SecretSource>,
+    secrets: &BTreeMap<String, SecretEntry>,
     project_dir: &Path,
     repo_root: Option<&Path>,
 ) -> Result<HashMap<String, String>> {
@@ -193,7 +288,7 @@ fn resolve_layer(
     env: &EnvironmentLayer,
     owner: &str,
     configs: &BTreeMap<String, ConfigSource>,
-    secrets: &BTreeMap<String, SecretSource>,
+    secrets: &BTreeMap<String, SecretEntry>,
     project_dir: &Path,
     repo_root: Option<&Path>,
     out: &mut HashMap<String, String>,
@@ -247,7 +342,7 @@ pub fn resolve_plugin_environment_layer(
     env: &EnvironmentLayer,
     owner: &str,
     configs: &BTreeMap<String, ConfigSource>,
-    secrets: &BTreeMap<String, SecretSource>,
+    secrets: &BTreeMap<String, SecretEntry>,
     project_dir: &Path,
     repo_root: Option<&Path>,
 ) -> Result<(
@@ -275,11 +370,11 @@ pub fn resolve_plugin_environment_layer(
 ///
 /// With `pending`, a plugin-backed entry's keys go there for the bind to
 /// resolve, and a later entry of either kind replaces an earlier one's key.
-/// Without it, [`SecretSource::resolve`] refuses a plugin-backed entry.
+/// Without it, a plugin-backed entry is refused.
 fn apply_secret_refs(
     refs: &[String],
     owner: &str,
-    catalog: &BTreeMap<String, SecretSource>,
+    catalog: &BTreeMap<String, SecretEntry>,
     project_dir: &Path,
     repo_root: Option<&Path>,
     out: &mut HashMap<String, String>,
@@ -291,22 +386,29 @@ fn apply_secret_refs(
                 "{owner} references secret '{name}' which is not defined in the top-level `secrets:` block",
             );
         };
-        if let Some(pending) = pending.as_deref_mut()
-            && let Some((plugin, keys)) = source.plugin_keys(name)?
-        {
-            for (key, backend_key) in keys {
-                out.remove(key);
-                pending.insert(
-                    key.clone(),
-                    crate::plugin::PluginSecretRef {
-                        source: name.clone(),
-                        plugin: plugin.to_string(),
-                        key: backend_key.clone(),
-                    },
-                );
+        let source = match (source, pending.as_deref_mut()) {
+            (SecretEntry::Static(source), _) => source,
+            (SecretEntry::Plugin(source), Some(pending)) => {
+                for (key, backend_key) in &source.keys {
+                    out.remove(key);
+                    pending.insert(
+                        key.clone(),
+                        crate::plugin::PluginSecretRef {
+                            source: name.as_str().into(),
+                            plugin: source.plugin.clone(),
+                            key: backend_key.clone(),
+                        },
+                    );
+                }
+                continue;
             }
-            continue;
-        }
+            (SecretEntry::Plugin(source), None) => bail!(
+                "secret source '{name}' is served by plugin '{}' when a workload binds, so it can \
+                 feed only a `host.plugins` entry's bindings: not a workload, and not a component \
+                 plugin's own config",
+                source.plugin
+            ),
+        };
         let resolved = source.resolve(name, project_dir, repo_root)?;
         if let Some(pending) = pending.as_deref_mut() {
             for key in resolved.keys() {
@@ -360,36 +462,6 @@ impl ConfigSource {
 }
 
 impl SecretSource {
-    /// `Some((plugin, keys))` for a plugin-backed entry, `None` for one read
-    /// at host start.
-    ///
-    /// # Errors
-    ///
-    /// An entry mixing the two kinds, `keys` without `plugin`, or a plugin
-    /// entry with no keys.
-    pub fn plugin_keys(&self, name: &str) -> Result<Option<(&str, &BTreeMap<String, String>)>> {
-        let Some(plugin) = self.plugin.as_deref() else {
-            if !self.keys.is_empty() {
-                bail!("secret source '{name}' sets `keys` without the `plugin` that serves them");
-            }
-            return Ok(None);
-        };
-        if !self.inline.is_empty()
-            || self.file.is_some()
-            || self.dir.is_some()
-            || !self.from_env.is_empty()
-        {
-            bail!(
-                "secret source '{name}' names plugin '{plugin}' and also `inline`/`file`/`dir`/\
-                 `fromEnv`; a plugin entry sets only `keys`"
-            );
-        }
-        if self.keys.is_empty() {
-            bail!("secret source '{name}' names plugin '{plugin}' but no `keys` to ask it for");
-        }
-        Ok(Some((plugin, &self.keys)))
-    }
-
     /// Resolves this secret source into a flat key-value map under the
     /// stricter secret-handling posture.
     ///
@@ -418,13 +490,6 @@ impl SecretSource {
         project_dir: &Path,
         repo_root: Option<&Path>,
     ) -> Result<HashMap<String, String>> {
-        if let Some((plugin, _)) = self.plugin_keys(name)? {
-            bail!(
-                "secret source '{name}' is served by plugin '{plugin}' when a workload binds, so \
-                 it can feed only a `host.plugins` entry's bindings: not a workload, and not a \
-                 component plugin's own config"
-            );
-        }
         let mut out: HashMap<String, String> = HashMap::new();
         out.extend(self.inline.clone());
 
@@ -782,15 +847,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn plugin_secret(plugin: &str, keys: &[(&str, &str)]) -> SecretSource {
-        SecretSource::builder()
-            .plugin(plugin.to_string())
-            .keys(
-                keys.iter()
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-                    .collect(),
-            )
-            .build()
+    fn plugin_secret(plugin: &str, keys: &[(&str, &str)]) -> SecretEntry {
+        SecretEntry::Plugin(PluginSecretSource::new(
+            plugin,
+            keys.iter().map(|(k, v)| (k.to_string(), (*v).into())),
+        ))
     }
 
     /// A plugin entry's keys come back pending rather than read, and a later
@@ -809,7 +870,8 @@ mod tests {
                 "override".to_string(),
                 SecretSource::builder()
                     .inline(HashMap::from([("password".to_string(), "pw".to_string())]))
-                    .build(),
+                    .build()
+                    .into(),
             ),
         ]);
         let env = EnvironmentLayer::builder()
@@ -830,30 +892,57 @@ mod tests {
             HashMap::from([("password".to_string(), "pw".to_string())])
         );
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending["url"].source, "db");
-        assert_eq!(pending["url"].plugin, "vault");
-        assert_eq!(pending["url"].key, "apps/pg-url");
+        assert_eq!(pending["url"].source.as_str(), "db");
+        assert_eq!(pending["url"].plugin.as_str(), "vault");
+        assert_eq!(pending["url"].key.as_str(), "apps/pg-url");
     }
 
     /// Anything else that reads `secrets:` (a workload's `secretFrom`, a
     /// component plugin's own config) refuses a plugin entry by name.
     #[test]
     fn a_plugin_entry_cannot_be_read_at_start() {
-        let err = plugin_secret("vault", &[("url", "k")])
-            .resolve("db", Path::new("."), None)
-            .unwrap_err();
-        assert!(format!("{err}").contains("host.plugins"), "{err}");
+        let secrets = BTreeMap::from([("db".to_string(), plugin_secret("vault", &[("url", "k")]))]);
+        let env = EnvironmentLayer::builder()
+            .secret_from(vec!["db".to_string()])
+            .build();
+        let err = resolve_environment_layer(
+            Some(&env),
+            "workload",
+            &BTreeMap::new(),
+            &secrets,
+            Path::new("."),
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("host.plugins"), "{err:#}");
     }
 
+    /// A plugin entry is told apart from a static one when it parses, and a
+    /// mix of the two is refused there.
     #[test]
     fn a_plugin_entry_sets_only_keys() {
-        let mut mixed = plugin_secret("vault", &[("url", "k")]);
-        mixed.inline.insert("x".to_string(), "y".to_string());
-        assert!(mixed.plugin_keys("db").is_err());
-        assert!(plugin_secret("vault", &[]).plugin_keys("db").is_err());
-        let mut orphan = SecretSource::default();
-        orphan.keys.insert("url".to_string(), "k".to_string());
-        assert!(orphan.plugin_keys("db").is_err());
+        let parse =
+            |json: &str| serde_json::from_str::<SecretEntry>(json).map_err(|e| e.to_string());
+        assert_eq!(
+            parse(r#"{"plugin": "vault", "keys": {"url": "k"}}"#).unwrap(),
+            plugin_secret("vault", &[("url", "k")])
+        );
+        assert!(matches!(
+            parse(r#"{"inline": {"x": "y"}}"#).unwrap(),
+            SecretEntry::Static(_)
+        ));
+        for (json, expect) in [
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "inline": {"x": "y"}}"#,
+                "only `keys`",
+            ),
+            (r#"{"plugin": "vault", "keys": {}}"#, "no `keys`"),
+            (r#"{"plugin": "vault"}"#, "no `keys`"),
+            (r#"{"keys": {"url": "k"}}"#, "without the `plugin`"),
+        ] {
+            let err = parse(json).unwrap_err();
+            assert!(err.contains(expect), "{json}: {err}");
+        }
     }
 
     #[test]
@@ -1126,13 +1215,13 @@ mod tests {
         )]);
         let secrets = BTreeMap::from([(
             "shared_sec".to_string(),
-            SecretSource {
+            SecretEntry::Static(SecretSource {
                 inline: HashMap::from([
                     ("KEY".into(), "from_secret".into()),
                     ("ONLY_SECRET".into(), "1".into()),
                 ]),
                 ..Default::default()
-            },
+            }),
         )]);
 
         // The secret source has no `file:`, so no perm check fires.

@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use tracing::{debug, warn};
 
-use super::secret_source::SecretValue;
+use super::secret_source::{CatalogName, PluginId, SecretKey, SecretValue};
 use crate::wit::WitInterface;
 
 /// The binding name of a plain, unlabeled import.
@@ -600,11 +600,11 @@ fn within_one_edit(a: &str, b: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PluginSecretRef {
     /// The `secrets:` entry, named in errors.
-    pub source: String,
+    pub source: CatalogName,
     /// The plugin that resolves it, through `wasmcloud:host/secret-source`.
-    pub plugin: String,
+    pub plugin: PluginId,
     /// The key that plugin is asked for.
-    pub key: String,
+    pub key: SecretKey,
 }
 
 /// One plugin's operator declaration: a base config, the named bindings it
@@ -2619,9 +2619,9 @@ mod tests {
                 HashMap::from([(
                     "servers".to_string(),
                     PluginSecretRef {
-                        source: "orders-nats".to_string(),
-                        plugin: "vault".to_string(),
-                        key: "nats/servers".to_string(),
+                        source: "orders-nats".into(),
+                        plugin: "vault".into(),
+                        key: "nats/servers".into(),
                     },
                 )]),
             )
