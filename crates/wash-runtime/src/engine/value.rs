@@ -564,3 +564,7 @@ mod tests {
         assert_eq!(lifted, val);
     }
 }
+
+#[cfg(test)]
+#[path = "value_tests.rs"]
+mod conversion_tests;
