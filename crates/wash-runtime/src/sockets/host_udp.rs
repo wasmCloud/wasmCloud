@@ -1003,6 +1003,51 @@ mod tests {
         assert_eq!(buf[0], 1);
         assert!(peer.recv(&mut buf).is_err(), "only the first datagram left");
     }
+
+    #[tokio::test]
+    async fn p2_udp_receive_preserves_progress_across_empty_polls() -> anyhow::Result<()> {
+        use wasmtime_wasi::p2::bindings::sockets::udp::HostIncomingDatagramStream;
+
+        let socket = Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await?);
+        let local_address = socket.local_addr()?;
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
+        let mut table = ResourceTable::new();
+        let incoming = table.push(IncomingDatagramStream::Network(
+            super::super::p2_udp::NetworkIncomingDatagramStream {
+                inner: Arc::clone(&socket),
+                remote_address: None,
+                egress_peers: None,
+                socket_addr_check: None,
+            },
+        ))?;
+        let mut ctx = WasiSocketsCtx::default();
+        let mut view = WasiSocketsCtxView {
+            ctx: &mut ctx,
+            table: &mut table,
+        };
+        let receive = |view: &mut WasiSocketsCtxView<'_>| {
+            HostIncomingDatagramStream::receive(view, Resource::new_borrow(incoming.rep()), 1)
+        };
+        assert!(
+            receive(&mut view)?.is_empty(),
+            "an empty socket is not a permanent failure"
+        );
+        for byte in 1..=3 {
+            peer.send_to(&[byte], local_address).await?;
+            tokio::time::timeout(Duration::from_secs(1), socket.readable()).await??;
+            let datagrams = receive(&mut view)?;
+            assert_eq!(datagrams.len(), 1);
+            assert_eq!(
+                datagrams.first().map(|d| d.data.as_slice()),
+                Some([byte].as_slice())
+            );
+            assert!(
+                receive(&mut view)?.is_empty(),
+                "draining returns to nonblocking readiness"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

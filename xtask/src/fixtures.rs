@@ -1,6 +1,7 @@
 //! The wash-runtime fixtures `build-fixtures` knows, by directory name.
 
 pub(crate) const P2_FIXTURES: &[&str] = &[
+    "p2-udp-progress",
     "structured-plugin",
     "structured-caller",
     "http-handler-p2",
