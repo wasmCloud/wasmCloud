@@ -1243,8 +1243,9 @@ pub(crate) struct Admission {
     host: Arc<Semaphore>,
     /// Messaging's share of the pool totals, when there is a pool.
     pool: Option<PoolShare>,
-    /// What one instance of the bound component takes from it, once
-    /// [`Admission::with_component`] has read it; nothing is reserved before.
+    /// What one store of the bound component takes from it, linked
+    /// components included, once [`Admission::with_workload`] has read it;
+    /// nothing is reserved before.
     cost: Option<PoolCost>,
     limit: usize,
     wait: Duration,
@@ -1358,12 +1359,26 @@ impl Admission {
         })
     }
 
+    /// Charge the complete store built for this handler, including its linked
+    /// dependencies, before subscribing to messages.
+    pub(crate) async fn with_workload(
+        mut self,
+        workload: &crate::engine::workload::ResolvedWorkload,
+        component_id: &str,
+    ) -> anyhow::Result<Self> {
+        if let Some(pool) = &self.pool {
+            self.cost = Some(workload.admit_store(component_id, pool).await?);
+        }
+        Ok(self)
+    }
+
     /// Read what one instance of the final linked component takes from the
     /// pool, so each delivery that builds a store reserves exactly that.
     /// Message counts stay independent of this cost.
     ///
     /// Fails for a component that messaging's share of some pool total can
     /// never hold one of, naming the knob; see [`PoolShare::admit`].
+    #[cfg(test)]
     pub(crate) fn with_component(
         mut self,
         component: &wasmtime::component::Component,
@@ -1371,7 +1386,7 @@ impl Admission {
         self.cost = self
             .pool
             .as_ref()
-            .map(|pool| pool.admit(component))
+            .map(|pool| pool.admit_store([component], false))
             .transpose()?;
         Ok(self)
     }

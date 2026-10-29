@@ -1,5 +1,5 @@
 //! One kind of work's share of the instance pool's totals: how many of the
-//! pool's memories, tables, core instances, component instances and stacks it
+//! pool's memories, tables, core instances, component instances, stacks and GC heaps it
 //! may hold at once.
 //!
 //! The pooling allocator refuses an instantiation once any of its totals is
@@ -37,13 +37,21 @@ use crate::engine::pool_usage::PoolTotals;
 
 /// What one component instance takes from the pool while it runs: one slot
 /// of each total per thing the component has.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Non-exhaustive since `gc_heaps` was added: that addition, and this
+/// attribute, break a consumer that wrote the struct out field by field,
+/// once; a total added after it will not. Build one with
+/// [`Default::default`] or [`Self::USUAL`] and set the fields.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PoolCost {
     pub memories: u32,
     pub tables: u32,
     pub core_instances: u32,
     pub component_instances: u32,
     pub stacks: u32,
+    /// One GC heap per store, sharing the linear-memory pool for its backing.
+    pub gc_heaps: u32,
 }
 
 impl PoolCost {
@@ -65,9 +73,13 @@ impl PoolCost {
         core_instances: 5,
         component_instances: 1,
         stacks: 1,
+        gc_heaps: 0,
     };
 
-    /// What `component` takes, from what wasmtime can tell of it.
+    /// What `component` takes, from what wasmtime can tell of it. GC heap
+    /// requirements are added separately per store, by
+    /// [`PoolShare::admit_store`] from what the runtime read off the
+    /// component's source.
     ///
     /// wasmtime reports the memories and tables a component instantiates, so
     /// a composition is charged every member's. It does not report core
@@ -92,6 +104,7 @@ impl PoolCost {
             core_instances: units.saturating_mul(Self::USUAL.core_instances),
             component_instances: 1,
             stacks: 1,
+            gc_heaps: 0,
         }
     }
 
@@ -109,6 +122,7 @@ impl PoolCost {
             .min(per(totals.core_instances, self.core_instances))
             .min(per(totals.component_instances, self.component_instances))
             .min(per(totals.stacks, self.stacks))
+            .min(per(totals.gc_heaps, self.gc_heaps))
     }
 }
 
@@ -186,6 +200,14 @@ impl Gate {
     /// for the total and still fail at instantiation, since the pool wants the
     /// whole cost, and would hold every other reservation off while it did.
     fn admit(&self, holder: &str, required: u32) -> anyhow::Result<()> {
+        if required > 0 && self.installed == 0 {
+            anyhow::bail!(
+                "a component of this shape needs {required} {kind} per instance, but the pool \
+                 has none: {knob} is 0. Unset it, or set it to the pool's memory count",
+                kind = self.kind,
+                knob = self.knob,
+            );
+        }
         if required > self.budget {
             anyhow::bail!(
                 "a component of this shape needs {required} {kind} per instance, but {holder} \
@@ -210,7 +232,7 @@ impl Gate {
     }
 }
 
-/// The five totals an instance spends, each behind its own gate.
+/// The six totals a store spends, each behind its own gate.
 #[derive(Debug)]
 struct Gates {
     memories: Gate,
@@ -218,6 +240,7 @@ struct Gates {
     core_instances: Gate,
     component_instances: Gate,
     stacks: Gate,
+    gc_heaps: Gate,
 }
 
 /// One kind of work's share of every installed pool total, cloned to
@@ -270,6 +293,21 @@ impl PoolShare {
                     totals.stacks,
                     usual.stacks,
                 ),
+                // Floored and capped at one per instance, though the usual
+                // shape takes none: a store that may allocate GC objects
+                // takes exactly one, and a per-instance figure of zero would
+                // give this gate no budget at all. Such a store also takes a
+                // second memory for the heap's backing, so a share of GC
+                // stores is bound by the memories gate at half the instances
+                // the other gates allow: that is the pool's real cost, not
+                // an accounting slip, and the reason the GC charge is made
+                // only for components whose source may need it.
+                gc_heaps: gate(
+                    "GC heaps",
+                    "WASMTIME_POOLING_TOTAL_GC_HEAPS",
+                    totals.gc_heaps,
+                    1,
+                ),
             }),
         }
     }
@@ -284,6 +322,7 @@ impl PoolShare {
             core_instances: g.core_instances.budget,
             component_instances: g.component_instances.budget,
             stacks: g.stacks.budget,
+            gc_heaps: g.gc_heaps.budget,
         }
     }
 
@@ -296,12 +335,17 @@ impl PoolShare {
             core_instances: g.core_instances.available(),
             component_instances: g.component_instances.available(),
             stacks: g.stacks.available(),
+            gc_heaps: g.gc_heaps.available(),
         }
     }
 
     /// Check that `component`'s cost ([`PoolCost::of`]) fits the holder's
     /// budget of every pool total at all, once per component rather than per
     /// reservation, and return what each reservation should take.
+    ///
+    /// Charges no GC heap, as before GC heaps were counted: a compiled
+    /// component does not say whether it may allocate GC objects. A caller
+    /// that knows, from the component's source, uses [`Self::admit_store`].
     ///
     /// What is read off the component — its memories, and its tables when
     /// wasmtime reports them — is refused when the budget can never hold it;
@@ -311,16 +355,48 @@ impl PoolShare {
     /// hold, over a number nothing measured, and the pool itself still
     /// refuses one that truly does not fit.
     pub fn admit(&self, component: &Component) -> anyhow::Result<PoolCost> {
+        self.admit_store(std::iter::once(component), false)
+    }
+
+    /// Reserve every component instantiated into one store, including linked
+    /// dependencies. Memories, tables and instances add; the fiber stack is
+    /// shared by the entire store. Clamp estimates only after adding them, so
+    /// several individually admissible components cannot overdraw a gate.
+    ///
+    /// `may_use_gc` charges the store one GC heap and a memory to back it.
+    /// Pass it only for a store some component of which may allocate GC
+    /// objects; the runtime reads that off each component's source.
+    pub fn admit_store<'a>(
+        &self,
+        components: impl IntoIterator<Item = &'a Component>,
+        may_use_gc: bool,
+    ) -> anyhow::Result<PoolCost> {
         let g = &*self.gates;
-        let cost = PoolCost::of(component);
-        let measured = component.resources_required().is_some();
+        let mut cost = PoolCost::default();
+        let mut measured_tables = 0_u32;
+        for component in components {
+            let next = PoolCost::of(component);
+            cost.memories = cost.memories.saturating_add(next.memories);
+            cost.tables = cost.tables.saturating_add(next.tables);
+            cost.core_instances = cost.core_instances.saturating_add(next.core_instances);
+            cost.component_instances = cost
+                .component_instances
+                .saturating_add(next.component_instances);
+            cost.stacks = cost.stacks.max(next.stacks);
+            if component.resources_required().is_some() {
+                measured_tables = measured_tables.saturating_add(next.tables);
+            }
+        }
+        // All linked instances share one GC heap in this store. Its backing
+        // memory comes from the same pool as the declared linear memories.
+        cost.gc_heaps = u32::from(may_use_gc);
+        cost.memories = cost.memories.saturating_add(cost.gc_heaps);
+        g.gc_heaps.admit(self.holder, cost.gc_heaps)?;
         g.memories.admit(self.holder, cost.memories)?;
         g.component_instances
             .admit(self.holder, cost.component_instances)?;
         g.stacks.admit(self.holder, cost.stacks)?;
-        if measured {
-            g.tables.admit(self.holder, cost.tables)?;
-        }
+        g.tables.admit(self.holder, measured_tables)?;
         Ok(PoolCost {
             tables: cost.tables.min(g.tables.budget),
             core_instances: cost.core_instances.min(g.core_instances.budget),
@@ -333,7 +409,7 @@ impl PoolShare {
     /// all held.
     ///
     /// The totals are taken in one order for every caller — memories, tables,
-    /// core instances, component instances, stacks — so two reservations
+    /// core instances, component instances, stacks, GC heaps — so two reservations
     /// cannot wait on each other; each is served in arrival order (see the
     /// module docs). Cancel-safe: dropping the future before it resolves
     /// releases whatever it had already taken. `None` only if a gate was
@@ -346,6 +422,7 @@ impl PoolShare {
             _core_instances: g.core_instances.take(cost.core_instances).await?,
             _component_instances: g.component_instances.take(cost.component_instances).await?,
             _stacks: g.stacks.take(cost.stacks).await?,
+            _gc_heaps: g.gc_heaps.take(cost.gc_heaps).await?,
         })
     }
 }
@@ -359,6 +436,7 @@ pub struct PoolReservation {
     _core_instances: OwnedSemaphorePermit,
     _component_instances: OwnedSemaphorePermit,
     _stacks: OwnedSemaphorePermit,
+    _gc_heaps: OwnedSemaphorePermit,
 }
 
 /// The pool, engine and components the share's tests and messaging's share
@@ -455,7 +533,7 @@ mod tests {
     /// the queued reservation through and its instantiation succeed.
     async fn fill(engine: &Engine, component: &Component) -> usize {
         let pool_share = pool_share(engine);
-        let cost = pool_share.admit(component).unwrap();
+        let cost = pool_share.admit_store([component], false).unwrap();
         let linker = Linker::<()>::new(engine.inner());
         let mut held = Vec::new();
         for _ in 0..=u32::MAX {
@@ -588,6 +666,28 @@ mod tests {
         assert_eq!(PoolCost::of(&component), PoolCost::USUAL);
     }
 
+    /// The public `admit` charges no GC heap, as before heaps were counted;
+    /// a store known to need one is charged a heap and its backing memory,
+    /// and a pool with no GC heaps at all says which knob emptied it.
+    #[test]
+    fn only_a_store_that_may_use_gc_is_charged_a_heap() {
+        let mut config = config();
+        config.total_gc_heaps(0);
+        let engine = engine(config);
+        let pool_share = pool_share(&engine);
+        let component = component(&engine, 1, 1, 2);
+
+        let plain = pool_share.admit(&component).unwrap();
+        assert_eq!(plain.gc_heaps, 0);
+        assert_eq!(plain.memories, 1);
+
+        let error = pool_share
+            .admit_store([&component], true)
+            .expect_err("a pool with no GC heaps cannot hold a GC store");
+        let message = error.to_string();
+        assert!(message.contains("WASMTIME_POOLING_TOTAL_GC_HEAPS is 0"), "{message}");
+    }
+
     #[test]
     fn estimated_costs_are_clamped_to_the_budget_rather_than_refused() {
         // A total nothing measured must not refuse a binding: core instances
@@ -599,7 +699,9 @@ mod tests {
         config.total_tables(1).total_core_instances(4);
         let engine = engine(config);
         let pool_share = pool_share(&engine);
-        let cost = pool_share.admit(&hidden_component(&engine)).unwrap();
+        let cost = pool_share
+            .admit_store([&hidden_component(&engine)], false)
+            .unwrap();
         assert_eq!(cost.memories, 1);
         assert_eq!(cost.tables, 1);
         assert_eq!(cost.core_instances, 4);
@@ -607,13 +709,15 @@ mod tests {
         // hold them, since a reservation capped at the share would hold
         // every table permit and still fail at instantiation.
         let err = pool_share
-            .admit(&component(&engine, 1, 2, 2))
+            .admit_store([&component(&engine, 1, 2, 2)], false)
             .expect_err("two measured tables do not fit a share of one");
         let text = format!("{err:#}");
         assert!(text.contains("2 tables"), "{text}");
         assert!(text.contains("WASMTIME_POOLING_TOTAL_TABLES"), "{text}");
         // And a measured table within the share is charged as measured.
-        let cost = pool_share.admit(&component(&engine, 1, 1, 2)).unwrap();
+        let cost = pool_share
+            .admit_store([&component(&engine, 1, 1, 2)], false)
+            .unwrap();
         assert_eq!(cost.tables, 1);
     }
 
@@ -668,7 +772,7 @@ mod tests {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
         let err = pool_share
-            .admit(&component(&engine, 25, 0, 25))
+            .admit_store([&component(&engine, 25, 0, 25)], false)
             .expect_err("25 memories do not fit a share of 21 memories");
         let text = format!("{err:#}");
         assert!(text.contains("25 memories"), "{text}");
@@ -676,14 +780,18 @@ mod tests {
         assert!(text.contains("--max-memories"), "{text}");
         assert!(text.contains("WASMTIME_POOLING_TOTAL_MEMORIES"), "{text}");
         // Exactly the share of memories fits.
-        pool_share.admit(&component(&engine, 21, 0, 21)).unwrap();
+        pool_share
+            .admit_store([&component(&engine, 21, 0, 21)], false)
+            .unwrap();
     }
 
     #[tokio::test]
     async fn cancelling_a_reservation_returns_every_earlier_permit() {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
-        let cost = pool_share.admit(&component(&engine, 1, 1, 4)).unwrap();
+        let cost = pool_share
+            .admit_store([&component(&engine, 1, 1, 4)], false)
+            .unwrap();
         let g = &*pool_share.gates;
         for blocked in [
             &g.memories,
@@ -716,8 +824,12 @@ mod tests {
         let engine = engine(config());
         let pool_share = pool_share(&engine);
         let other = pool_share.clone();
-        let small = pool_share.admit(&component(&engine, 1, 0, 1)).unwrap();
-        let composed = other.admit(&component(&engine, 2, 0, 2)).unwrap();
+        let small = pool_share
+            .admit_store([&component(&engine, 1, 0, 1)], false)
+            .unwrap();
+        let composed = other
+            .admit_store([&component(&engine, 2, 0, 2)], false)
+            .unwrap();
         let mut held = Vec::new();
         for i in 0..14 {
             let (pool_share, cost) = if i < 7 {

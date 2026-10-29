@@ -145,6 +145,8 @@ pub struct WorkloadMetadata {
     workload_namespace: Arc<str>,
     /// The actual wasmtime [`Component`] that can be instantiated
     component: Component,
+    /// Source inspection rules out GC; opaque compiled components reserve a heap.
+    pub(crate) may_use_gc: bool,
     /// The wasmtime [`Linker`] used to instantiate the component. Shared with
     /// every component that started from the same base until something
     /// writes to it (see [`Self::linker`]).
@@ -488,6 +490,7 @@ impl WorkloadService {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
+                may_use_gc: true,
                 linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
@@ -609,6 +612,7 @@ impl WorkloadComponent {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
+                may_use_gc: true,
                 linker: linker.into(),
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
@@ -1975,6 +1979,29 @@ impl ResolvedWorkload {
     /// the host heartbeat asks every running workload for it.
     pub fn component_count(&self) -> usize {
         self.component_count
+    }
+
+    /// Cost exactly the components `new_store` instantiates, plus the active
+    /// component its caller instantiates afterwards. Resolve this once when a
+    /// trigger binds, under the same metadata lock used to build stores.
+    pub(crate) async fn admit_store(
+        &self,
+        component_id: &str,
+        pool: &super::pool_share::PoolShare,
+    ) -> anyhow::Result<super::pool_share::PoolCost> {
+        let components = self.components.read().await;
+        let component = components.get(component_id).context("component ID not found in workload")?;
+        let mut instantiated = Vec::with_capacity(component.metadata.linked_components.len() + 1);
+        instantiated.push(component.metadata.component());
+        let mut may_use_gc = component.metadata.may_use_gc;
+        for linked_id in &component.metadata.linked_components {
+            let linked = components.get(linked_id).with_context(|| {
+                format!("linked component '{linked_id}' not found in workload")
+            })?;
+            instantiated.push(linked.metadata.component());
+            may_use_gc |= linked.metadata.may_use_gc;
+        }
+        pool.admit_store(instantiated, may_use_gc)
     }
 
     /// Helper to create a new wasmtime Store for multiple components and set active given component in the workload.
