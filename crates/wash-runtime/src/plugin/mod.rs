@@ -479,12 +479,17 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
 
     /// Check the operator's declaration for this plugin at host startup.
     ///
-    /// Called once by [`crate::host::HostBuilder::build`] with whatever
+    /// Called by [`crate::host::HostBuilder::build`] with whatever
     /// `host.plugins` declared for this id. A plugin parses each of
     /// [`PluginBindingSet::host_layers`] with its own reader here, so a
     /// declaration it cannot use fails the host rather than the first workload
     /// that needs it — and so an operator cannot write a value the manifest
     /// parser would have rejected.
+    ///
+    /// A key a plugin secret supplies has no value at startup: `host_layers`
+    /// lists it as pending beside its layer, and the reader must count it as
+    /// set without reading it. Each bind that fills such keys calls this again
+    /// with the values in place.
     ///
     /// The default accepts everything, which is what a plugin with no
     /// [`HostPlugin::binding_schema`] wants.
