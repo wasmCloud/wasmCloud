@@ -39,6 +39,7 @@ pub(crate) fn error_code_from_util(error: super::util::ErrorCode) -> ErrorCode {
 
 pub(crate) fn error_code_from_io(error: std::io::ErrorKind) -> ErrorCode {
     match error {
+        std::io::ErrorKind::WouldBlock => ErrorCode::WouldBlock,
         std::io::ErrorKind::AddrInUse => ErrorCode::AddressInUse,
         std::io::ErrorKind::AddrNotAvailable => ErrorCode::AddressNotBindable,
         std::io::ErrorKind::ConnectionAborted => ErrorCode::ConnectionAborted,
@@ -71,5 +72,18 @@ impl Network {
         reason: SocketAddrUse,
     ) -> Result<super::Allowed, super::util::ErrorCode> {
         self.socket_addr_check.check(addr, reason)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ErrorCode, error_code_from_io};
+
+    #[test]
+    fn nonblocking_would_block_is_preserved() {
+        assert_eq!(
+            error_code_from_io(std::io::ErrorKind::WouldBlock),
+            ErrorCode::WouldBlock,
+        );
     }
 }
