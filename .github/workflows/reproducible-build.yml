@@ -1,0 +1,114 @@
+name: reproducible-build
+
+on:
+  schedule:
+    - cron: '31 5 * * 4'
+  workflow_dispatch:
+    inputs:
+      source-ref:
+        description: Source commit or tag to rebuild (defaults to this workflow's commit)
+        type: string
+        required: false
+  workflow_call:
+    inputs:
+      source-ref:
+        description: Release source commit or ref
+        type: string
+        required: true
+    outputs:
+      sha:
+        description: Source commit that passed the reproducibility check
+        value: ${{ jobs.source.outputs.sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          persist-credentials: false
+      - name: Resolve immutable source commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: source
+    name: rebuild (${{ matrix.environment }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: first
+            checkout: source-a
+          - environment: second
+            checkout: independent/deeper/source-b
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.checkout }}
+    env:
+      CARGO_NET_RETRY: '10'
+    steps:
+      - name: Checkout build tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          path: ${{ matrix.checkout }}
+          persist-credentials: false
+
+      # Use the toolchains at the selected source commit.
+      - uses: ./.github/actions/setup-release-build # zizmor: ignore[self-repository]
+
+      - name: Build release binaries from source
+        env:
+          CARGO_HOME: ${{ runner.temp }}/cargo-${{ matrix.environment }}
+          GOCACHE: ${{ runner.temp }}/go-build-${{ matrix.environment }}
+          GOMODCACHE: ${{ runner.temp }}/go-mod-${{ matrix.environment }}
+        run: node .github/scripts/build-release-binary.mjs all "${RUNNER_TEMP}/binaries"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reproducible-${{ matrix.environment }}
+          path: ${{ runner.temp }}/binaries/
+          if-no-files-found: error
+          retention-days: 14
+
+  compare:
+    name: build_reproducible
+    needs: [source, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: reproducible-*
+          path: rebuilds
+      - name: Compare SHA-256 hashes and diagnose differences
+        run: |
+          node .github/scripts/compare-release-binaries.mjs \
+            rebuilds/reproducible-first rebuilds/reproducible-second reports --install-diffoscope
+      - name: Retain hashes and mismatch reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reproducible-reports
+          path: reports/
+          if-no-files-found: error
+          retention-days: 14

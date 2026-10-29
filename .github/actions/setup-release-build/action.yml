@@ -1,0 +1,34 @@
+name: Setup release binary build
+description: Install the pinned Linux x86_64 release toolchains without build caches.
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/free-disk-space # zizmor: ignore[self-repository]
+
+    - name: Read toolchain pins
+      id: pins
+      shell: bash
+      run: node "${GITHUB_WORKSPACE}/.github/scripts/release-build-pins.mjs"
+
+    - name: Install Rust
+      shell: bash
+      env:
+        RUST_VERSION: ${{ steps.pins.outputs.rust }}
+      run: |
+        rustup toolchain install "${RUST_VERSION}" --profile minimal --component rust-src \
+          --target x86_64-unknown-linux-gnu --no-self-update
+
+    - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      with:
+        version: 0.16.0
+
+    - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        tool: cargo-zigbuild@0.24.0
+
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ steps.pins.outputs.go }}
+        cache: false

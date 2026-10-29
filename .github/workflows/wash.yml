@@ -932,7 +932,7 @@ jobs:
             buildTarget: x86_64-unknown-linux-gnu.2.17
             buildCommand: cargo zigbuild
             artifact: wash-x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             bin: wash
           - target: aarch64-unknown-linux-gnu
             buildTarget: aarch64-unknown-linux-gnu.2.17
@@ -978,6 +978,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust
+        if: matrix.target != 'x86_64-unknown-linux-gnu'
         uses: $/.github/actions/setup-rust
         with:
           rust-toolchain: stable
@@ -985,16 +986,17 @@ jobs:
           install-zigbuild: ${{ matrix.runner == 'ubuntu-latest' }}
           rust-targets: "${{ matrix.target }}"
 
+      - name: Setup reproducible Linux release build
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: $/.github/actions/setup-release-build
+
       - name: Set SOURCE_DATE_EPOCH from commit timestamp
-        # Pin embedded timestamps in the binary to the merge commit's author
-        # date so the same commit produces the same bytes on every rebuild.
-        # cargo and rustc honor SOURCE_DATE_EPOCH for build metadata; this
-        # is a prerequisite for any future move toward bit-reproducible
-        # SLSA L4 builds. See https://reproducible-builds.org/docs/source-date-epoch/
+        # Use the source commit's committer timestamp.
         run: |
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
 
       - name: Build binary (${{ matrix.target }})
+        if: matrix.target != 'x86_64-unknown-linux-gnu'
         env:
           # Retry transient crates.io download failures (e.g. SSL eof) more
           # aggressively than cargo's default of 3.
@@ -1003,8 +1005,14 @@ jobs:
           # Release binaries ship with default features only — no
           # `(implements ..)` multiplexing (it is exercised in the e2e host
           # image, not shipped in a release build).
-          ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }} -p wash
+          ${{ matrix.buildCommand }} --locked --release --target ${{ matrix.buildTarget || matrix.target }} -p wash
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
+
+      - name: Build reproducible Linux release binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          CARGO_NET_RETRY: '10'
+        run: node .github/scripts/build-release-binary.mjs wash .
 
       - name: Create Windows zip archive
         if: runner.os == 'Windows'

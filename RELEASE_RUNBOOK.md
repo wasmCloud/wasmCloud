@@ -222,6 +222,82 @@ Binaries on the GitHub Release have equivalent attestations (verifiable by diges
 gh attestation verify --repo wasmCloud/wasmCloud ./wash
 ```
 
+### Reproducible binary builds
+
+[`reproducible-build.yml`](.github/workflows/reproducible-build.yml) rebuilds Linux x86_64
+`wash` (GNU, glibc 2.17), `runtime-operator`, and `runtime-gateway` twice from one resolved
+source commit. Each build uses a separate Ubuntu 24.04 runner, a different checkout path,
+and fresh Cargo, Go module, and Go compilation directories. Compiled artifacts are never
+restored from a cache. The `build_reproducible` job compares SHA-256 hashes and fails on any
+mismatch or missing binary. On a mismatch it runs diffoscope and uploads text and HTML
+reports alongside the hashes; both sets of binaries and their environment records remain
+available as workflow artifacts for 14 days.
+
+The check runs weekly on Thursday at 05:31 UTC and can be dispatched with a source commit or
+tag. `release-tag.yml` also requires it before promotion, including RCs, using the checked
+commit for the subsequent release. Before publishing, promotion additionally compares the
+actual canary `wash` release artifact against an independent rebuild. Regular PRs do not
+run these duplicate builds.
+
+The build recipe is [build-release-binary.mjs](.github/scripts/build-release-binary.mjs).
+The Linux `wash` canary build uses that same script. It sets `SOURCE_DATE_EPOCH` to the
+source commit's committer timestamp, uses `--locked`, remaps the workspace and `CARGO_HOME`
+to stable paths in `RUSTFLAGS`, disables release debuginfo, and strips symbols.
+Native C/C++ builds also remap source paths through `CFLAGS` and `CXXFLAGS`. The Go
+builds and their Dockerfiles use `-mod=readonly -trimpath -buildvcs=false` and the fixed
+linker flags `-s -w -buildid=`, with CGO disabled and no build-time injection.
+
+For a local rebuild, use Linux x86_64 and the versions in
+[setup-release-build](.github/actions/setup-release-build/action.yml): Rust from
+`rust-toolchain.toml` with `rust-src` and the `x86_64-unknown-linux-gnu` target, Go from the
+two Go Dockerfiles (which must agree), and the exact Zig and cargo-zigbuild versions in the
+action. Install these toolchains before running the recipe; keep Go's pinned installation
+on `PATH`, since the recipe disables automatic Go toolchain switching. Install
+Node.js 22 or later, `diffoscope`, `sha256sum`, and the native build prerequisites available
+on the Ubuntu 24.04 GitHub runner. Different compiler or linker versions can produce
+different bytes.
+
+After verifying the release tag as described below, substitute its full source commit SHA
+and run this from a shell with those toolchains installed:
+
+```bash
+source_commit=FULL_VERIFIED_RELEASE_COMMIT_SHA
+rebuild_dir=$(mktemp -d)
+for build in first second; do
+  git clone https://github.com/wasmCloud/wasmCloud.git "${rebuild_dir}/${build}/source"
+  git -C "${rebuild_dir}/${build}/source" checkout --detach "${source_commit}"
+  (
+    cd "${rebuild_dir}/${build}/source"
+    export CARGO_HOME="${rebuild_dir}/${build}/cargo"
+    export GOCACHE="${rebuild_dir}/${build}/go-build"
+    export GOMODCACHE="${rebuild_dir}/${build}/go-mod"
+    for component in wash runtime-operator runtime-gateway; do
+      node .github/scripts/build-release-binary.mjs "${component}" "${rebuild_dir}/${build}/binaries"
+    done
+  )
+done
+node "${rebuild_dir}/first/source/.github/scripts/compare-release-binaries.mjs" \
+  "${rebuild_dir}/first/binaries" "${rebuild_dir}/second/binaries" "${rebuild_dir}/reports"
+```
+
+To check a downloaded release binary, compare its hash with the rebuilt file:
+
+```bash
+sha256sum /path/to/downloaded/wash-x86_64-unknown-linux-gnu \
+  "${rebuild_dir}/first/binaries/wash-x86_64-unknown-linux-gnu"
+```
+
+Both digests must match. Only releases built with this recipe are covered; older releases
+may embed paths or use different flags. The Go binaries are available in the reproducibility
+workflow artifacts and inside their release images; this check covers the executables,
+not container image reproducibility. Sigstore attestations establish the builder identity
+and claimed source; the byte comparison independently tests the source-to-binary result.
+
+**Best Practices `build_reproducible`: pending CI evidence.** After the first successful
+workflow run, mark the criterion **Met** and cite that run, its source SHA, and this section.
+Record the first passing run URL and release version here. Adding the job alone is not
+evidence that the binaries have reproduced; no passing run has been recorded yet.
+
 ### Verifying release tags
 
 `release-tag.yml` signs new `vX.Y.Z` and `runtime-operator/vX.Y.Z` annotated tags with
@@ -376,6 +452,7 @@ respond by either:
 - [ ] All release workflows completed successfully in GitHub Actions
 - [ ] GitHub Release is visible with correct binaries attached
 - [ ] Both release tags pass the signature and identity checks in [Verifying release tags](#verifying-release-tags)
+- [ ] `build_reproducible` passed on the release source commit, and the canary `wash` matches its independent rebuild
 - [ ] Docker images are available on GHCR
 - [ ] Homebrew tap updated (check [homebrew-wasmcloud](https://github.com/wasmCloud/homebrew-wasmcloud))
 - [ ] Announce the release in [Slack](https://slack.wasmcloud.com) `#announcements`

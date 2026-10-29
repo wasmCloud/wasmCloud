@@ -69,8 +69,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  promote:
+  reproducible:
     needs: gate
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      needs.gate.outputs.run == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    uses: ./.github/workflows/reproducible-build.yml # zizmor: ignore[self-repository]
+    with:
+      source-ref: ${{ inputs.sha || 'main' }}
+
+  promote:
+    needs: [gate, reproducible]
     # Release signatures identify this workflow on main.
     if: >-
       github.ref == 'refs/heads/main' &&
@@ -93,9 +103,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # workflow_run / workflow_dispatch without a sha → main HEAD.
-          # workflow_dispatch with sha → that exact release commit (recovery).
-          ref: ${{ inputs.sha || 'main' }}
+          # Promote the commit that passed independent rebuilds.
+          ref: ${{ needs.reproducible.outputs.sha }}
           # PAT so the tag push triggers the downstream tag-listening workflows.
           token: ${{ secrets.WASMCLOUD_BOT_PAT }}
           persist-credentials: true
@@ -165,6 +174,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Wait for canary builds on the merge commit
+        id: canary
         env:
           GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
@@ -196,6 +206,10 @@ jobs:
               SUCCESS=$(echo "${RUNS}" | jq -r '[.[] | select(.status == "completed" and .conclusion == "success")] | length')
               if [[ "${SUCCESS}" -gt 0 ]]; then
                 echo "${WF}: success"
+                if [[ "${WF}" == wash ]]; then
+                  RUN_ID=$(echo "${RUNS}" | jq -r '[.[] | select(.status == "completed" and .conclusion == "success")][0].databaseId')
+                  echo "wash-run-id=${RUN_ID}" >> "${GITHUB_OUTPUT}"
+                fi
                 break
               fi
               # All runs completed and none succeeded → failed.
@@ -214,6 +228,32 @@ jobs:
             fi
           done
           echo "all canary builds green on ${MERGE_SHA} — safe to promote"
+
+      - name: Download independent rebuild
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: reproducible-first
+          path: reproducible/first
+
+      - name: Verify canary wash matches the independent rebuild
+        id: reproducible-canary
+        env:
+          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          WASH_RUN_ID: ${{ steps.canary.outputs.wash-run-id }}
+        run: |
+          set -euo pipefail
+          echo "STAGE=verify-reproducible" >> "${GITHUB_ENV}"
+          gh run download "${WASH_RUN_ID}" --name wash-x86_64-unknown-linux-gnu --dir reproducible/canary
+          node .github/scripts/compare-release-binaries.mjs \
+            reproducible/first reproducible/canary reproducible/reports wash-x86_64-unknown-linux-gnu --install-diffoscope
+
+      - name: Retain canary comparison reports
+        if: ${{ !cancelled() && steps.reproducible-canary.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reproducible-canary-reports
+          path: reproducible/reports/
+          if-no-files-found: error
 
       - name: Login to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -311,23 +351,14 @@ jobs:
         id: bins
         env:
           GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
-          MERGE_SHA: ${{ steps.ver.outputs.sha }}
           GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.canary.outputs.wash-run-id }}
         run: |
           set -euo pipefail
           echo "STAGE=download-binaries" >> "${GITHUB_ENV}"
-          # The wash.yml canary-binaries matrix produced one artifact per
-          # target on the merge commit's run. Pick the newest *successful*
-          # completed run — re-runs or stuck runs would otherwise let us
-          # download from the wrong workflow run.
-          RUN_ID=$(gh run list \
-            --workflow wash.yml \
-            --commit "${MERGE_SHA}" \
-            --limit 20 \
-            --json databaseId,status,conclusion \
-            --jq 'map(select(.status == "completed" and .conclusion == "success")) | .[0].databaseId // empty')
+          # Publish artifacts from the run whose wash bytes passed comparison.
           if [[ -z "${RUN_ID}" ]]; then
-            echo "no successful wash.yml run found for ${MERGE_SHA}" >&2
+            echo "no validated wash.yml run found" >&2
             exit 1
           fi
           # Require every canary-binaries matrix entry to be success.
