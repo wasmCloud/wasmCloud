@@ -276,6 +276,9 @@ struct InstalledPool {
     max_memory_size: u64,
     /// Elements each pooled table has room for, which sizes the table pool.
     table_elements: usize,
+    /// Bytes each pooled fiber stack has, which with a guard page sizes the
+    /// stack pool.
+    async_stack_size: usize,
     totals: pool_usage::PoolTotals,
 }
 
@@ -1657,6 +1660,7 @@ impl EngineBuilder {
             installed_pool = Some(InstalledPool {
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
                 table_elements: pooling.get_table_elements(),
+                async_stack_size: config.get_async_stack_size(),
                 totals: pool_usage::PoolTotals::of(&pooling),
             });
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
@@ -1673,6 +1677,7 @@ impl EngineBuilder {
                 &pool.totals,
                 pool.max_memory_size,
                 pool.table_elements,
+                pool.async_stack_size,
                 memory_limit,
             ) {
                 tracing::warn!("{advisory}");
