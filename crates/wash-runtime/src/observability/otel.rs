@@ -54,7 +54,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use opentelemetry::{Key, KeyValue, trace::TracerProvider as _};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{WithHttpConfig as _, WithTonicConfig as _};
+use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _, WithTonicConfig as _};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
@@ -1029,6 +1029,7 @@ pub(crate) fn build_log_exporter() -> anyhow::Result<opentelemetry_otlp::LogExpo
             .build()?,
         Protocol::HttpBinary => builder
             .with_http()
+            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
             .with_http_client(http_client(resolve_timeout(
                 opentelemetry_otlp::OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
             ))?)
@@ -1046,6 +1047,7 @@ pub(crate) fn build_span_exporter() -> anyhow::Result<opentelemetry_otlp::SpanEx
                 .build()?,
             Protocol::HttpBinary => builder
                 .with_http()
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
                 .with_http_client(http_client(resolve_timeout(
                     opentelemetry_otlp::OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
                 ))?)
@@ -1064,6 +1066,7 @@ pub(crate) fn build_metric_exporter() -> anyhow::Result<opentelemetry_otlp::Metr
                 .build()?,
             Protocol::HttpBinary => builder
                 .with_http()
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
                 .with_http_client(http_client(resolve_timeout(
                     opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
                 ))?)
@@ -1418,6 +1421,36 @@ mod tests {
                 build_metric_exporter().expect("metric exporter over http");
             },
         );
+    }
+
+    /// The SDK must use our normalized selection instead of rereading the raw
+    /// environment and falling back to the shared gRPC protocol.
+    #[tokio::test]
+    async fn http_exporters_honor_trimmed_signal_protocols() -> anyhow::Result<()> {
+        crate::env_guard::with_vars(
+            [
+                ("OTEL_EXPORTER_OTLP_PROTOCOL", Some("grpc")),
+                (
+                    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+                    Some(" http/protobuf "),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+                    Some("\thttp/protobuf\t"),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+                    Some("http/protobuf\n"),
+                ),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://localhost:4318")),
+            ],
+            || {
+                build_span_exporter().context("span exporter over http")?;
+                build_log_exporter().context("log exporter over http")?;
+                build_metric_exporter().context("metric exporter over http")?;
+                Ok(())
+            },
+        )
     }
 
     /// An `http/protobuf` export reaches a collector.
