@@ -1872,31 +1872,16 @@ impl EngineBuilder {
                 )),
             Some(pool) => e.context(format!(
                 "building the engine failed with a pooling allocator reserving {} of address \
-                 space ({} memories of {} each) out of the {} this process can map, and \
-                 mapping {} for {} pooled stacks{} and {} for {} pooled tables, which a Linux \
-                 kernel with vm.overcommit_memory=2 or a finite RLIMIT_DATA charges up front \
-                 (Windows charges the tables); if the pool is the cause, lower max-memories or \
-                 WASMTIME_POOLING_TOTAL_MEMORIES (WASMTIME_POOLING_TOTAL_STACKS and \
-                 WASMTIME_POOLING_TOTAL_TABLES for the stacks and tables)",
+                 space ({} memories of {} each) out of the {} this process can map, and {}",
                 host_memory::render_bytes(pool.reservation()),
                 pool.totals.memories,
                 host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
                 host_memory::render_bytes(host_memory::usable_address_space()),
-                host_memory::render_bytes(host_memory::pool_stack_bytes(
-                    pool.totals.stacks,
-                    assumed_stack_size.unwrap_or(host_memory::WASMTIME_DEFAULT_ASYNC_STACK_SIZE),
-                )),
-                pool.totals.stacks,
-                if assumed_stack_size.is_some() {
-                    ""
-                } else {
-                    " (assuming wasmtime's default stack size, which the base config may change)"
-                },
-                host_memory::render_bytes(host_memory::pool_table_bytes(
-                    pool.totals.tables,
-                    pool.table_elements
-                )),
-                pool.totals.tables,
+                host_memory::pool_startup_commit(
+                    &pool.totals,
+                    pool.table_elements,
+                    assumed_stack_size,
+                ),
             )),
             None => e,
         })?;

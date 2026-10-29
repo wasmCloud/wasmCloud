@@ -926,6 +926,47 @@ pub(crate) fn pool_stack_advisory(
     pool_stack_commit_advisory(stacks, async_stack_size, &commit)
 }
 
+/// What the pool maps accessible when the engine is built, and where that
+/// is charged up front, for an engine that failed to build: the table pool
+/// everywhere, and the stack pool where it is mapped at startup
+/// ([`STACK_POOL_MAPPED_AT_STARTUP`]). `async_stack_size` is `None` when a
+/// base config may have changed wasmtime's default.
+pub(crate) fn pool_startup_commit(
+    totals: &PoolTotals,
+    table_elements: usize,
+    async_stack_size: Option<usize>,
+) -> String {
+    let tables = format!(
+        "{} for {} pooled tables",
+        render_bytes(pool_table_bytes(totals.tables, table_elements)),
+        totals.tables,
+    );
+    if !STACK_POOL_MAPPED_AT_STARTUP {
+        return format!(
+            "mapping {tables}, which Windows commits up front; if the pool is the cause, \
+             lower max-memories or WASMTIME_POOLING_TOTAL_MEMORIES (WASMTIME_POOLING_TOTAL_TABLES \
+             for the tables)"
+        );
+    }
+    format!(
+        "mapping {} for {} pooled stacks{} and {tables}, which a Linux kernel with \
+         vm.overcommit_memory=2 or a finite RLIMIT_DATA charges up front; if the pool is the \
+         cause, lower max-memories or WASMTIME_POOLING_TOTAL_MEMORIES \
+         (WASMTIME_POOLING_TOTAL_STACKS and WASMTIME_POOLING_TOTAL_TABLES for the stacks and \
+         tables)",
+        render_bytes(pool_stack_bytes(
+            totals.stacks,
+            async_stack_size.unwrap_or(WASMTIME_DEFAULT_ASYNC_STACK_SIZE),
+        )),
+        totals.stacks,
+        if async_stack_size.is_some() {
+            ""
+        } else {
+            " (assuming wasmtime's default stack size, which the base config may change)"
+        },
+    )
+}
+
 /// What the stack and table pools' accessible mappings are charged against
 /// at startup, read the same way for the derived count and every advisory
 /// about them, so the two agree.
@@ -1656,6 +1697,30 @@ mod tests {
             // Windows maps each stack when a store first needs it.
             assert_eq!(PoolCommitShape::defaults().per_memory, tables);
             assert!(advisory.is_none(), "{advisory:?}");
+        }
+    }
+
+    /// A failed build names the stack pool only where it was mapped, so a
+    /// Windows operator is not sent to a stack knob that cannot help.
+    #[test]
+    fn a_build_failure_names_only_the_pools_mapped_at_startup() {
+        let totals = crate::engine::derived_pool_totals(1000);
+        let said = pool_startup_commit(&totals, WASMTIME_DEFAULT_TABLE_ELEMENTS, None);
+        assert!(said.contains("4000 pooled tables"), "{said}");
+        assert!(said.contains("WASMTIME_POOLING_TOTAL_TABLES"), "{said}");
+        if cfg!(unix) {
+            assert!(said.contains("1000 pooled stacks"), "{said}");
+            assert!(said.contains("assuming wasmtime's default"), "{said}");
+            assert!(said.contains("WASMTIME_POOLING_TOTAL_STACKS"), "{said}");
+            let known = pool_startup_commit(
+                &totals,
+                WASMTIME_DEFAULT_TABLE_ELEMENTS,
+                Some(WASMTIME_DEFAULT_ASYNC_STACK_SIZE),
+            );
+            assert!(!known.contains("assuming"), "{known}");
+        } else {
+            assert!(!said.contains("stacks"), "{said}");
+            assert!(said.contains("Windows commits"), "{said}");
         }
     }
 
