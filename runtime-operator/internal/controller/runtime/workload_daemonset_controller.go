@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,7 +35,7 @@ const (
 	// stable across Hosts and rollouts.
 	workloadDaemonSetNameAnnotation = "runtime.wasmcloud.dev/workload-daemonset"
 	// workloadDaemonSetNameLabel is stamped onto the Workloads a DaemonSet
-	// owns and exposed via its /scale subresource's selector.
+	// owns, with ownerLabelValue(name) as its value.
 	workloadDaemonSetNameLabel = "runtime.wasmcloud.dev/workload-daemonset"
 )
 
@@ -60,6 +62,9 @@ func (r *WorkloadDaemonSetReconciler) reconcileArtifacts(ctx context.Context, da
 type daemonSetHost struct {
 	current  []*runtimev1alpha1.Workload
 	outdated []*runtimev1alpha1.Workload
+	// readySince is the Host's last Ready transition. Failure grace periods
+	// start no earlier, so a host blip doesn't count against its instances.
+	readySince time.Time
 }
 
 func (h *daemonSetHost) readyCurrent() int32 {
@@ -86,10 +91,11 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	}
 	templateHash := template.Hash()
 
-	desired, retained, err := r.matchingHosts(ctx, daemonSet.Namespace, &template.Spec)
+	readySince, retained, err := r.matchingHosts(ctx, daemonSet.Namespace, &template.Spec)
 	if err != nil {
 		return err
 	}
+	desired := slices.Sorted(maps.Keys(readySince))
 
 	workloads := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, workloads,
@@ -100,11 +106,14 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	}
 
 	hosts := make(map[string]*daemonSetHost, len(desired))
-	for _, hostID := range desired {
-		hosts[hostID] = &daemonSetHost{}
+	for hostID, since := range readySince {
+		hosts[hostID] = &daemonSetHost{readySince: since}
 	}
+	// Names still in use, including by Workloads being deleted.
+	taken := make(map[string]bool, len(workloads.Items))
 	for i := range workloads.Items {
 		workload := &workloads.Items[i]
+		taken[workload.Name] = true
 		if workload.DeletionTimestamp != nil {
 			continue
 		}
@@ -137,7 +146,8 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	}
 	recreate := daemonSet.Spec.DeployPolicy == runtimev1alpha1.WorkloadDeployPolicyRecreate
 
-	r.setScheduleStatus(ctx, daemonSet, desired, hosts, perHost)
+	// Report what this pass leaves behind, not what it started from.
+	defer r.setScheduleStatus(ctx, daemonSet, desired, hosts, perHost)
 
 	// A host is mid-update while it runs both templates and the new
 	// instances are not all up yet; one finishing this pass frees its slot.
@@ -167,7 +177,7 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 			}
 		}
 
-		if err := r.syncHost(ctx, daemonSet, template, templateHash, hostID, host, perHost); err != nil {
+		if err := r.syncHost(ctx, daemonSet, template, templateHash, hostID, host, perHost, taken); err != nil {
 			return err
 		}
 	}
@@ -185,11 +195,21 @@ func (r *WorkloadDaemonSetReconciler) syncHost(
 	hostID string,
 	host *daemonSetHost,
 	perHost int32,
+	taken map[string]bool,
 ) error {
-	for i := int32(len(host.current)); i < perHost; i++ {
-		if err := r.createWorkload(ctx, daemonSet, template, templateHash, hostID); err != nil {
+	// Fill the lowest free slots. A create the cache hasn't seen yet comes
+	// back AlreadyExists instead of starting a second copy.
+	for slot := 0; len(host.current) < int(perHost); slot++ {
+		name := daemonSetWorkloadName(daemonSet.Name, hostID, templateHash, slot)
+		if taken[name] {
+			continue
+		}
+		workload, err := r.createWorkload(ctx, daemonSet, template, templateHash, hostID, name)
+		if err != nil {
 			return err
 		}
+		taken[name] = true
+		host.current = append(host.current, workload)
 	}
 
 	if excess := len(host.current) - int(perHost); excess > 0 {
@@ -215,25 +235,41 @@ func (r *WorkloadDaemonSetReconciler) syncHost(
 		if err := r.deleteAll(ctx, host.outdated); err != nil {
 			return err
 		}
+		host.outdated = nil
 	}
 
 	// A failed instance is replaced on its own host on the next pass.
+	running := host.current[:0]
 	for _, workload := range host.current {
-		if !isFailedPastGracePeriod(workload) {
+		if !isFailedPastGracePeriod(workload, host.readySince) {
+			running = append(running, workload)
 			continue
 		}
 		if err := r.Delete(ctx, workload); client.IgnoreNotFound(err) != nil {
 			return err
 		}
 	}
+	host.current = running
 
 	return nil
 }
 
-// matchingHosts returns the sorted HostIDs of the schedulable Hosts that
-// spec selects, and the matching Hosts that are not schedulable right now
-// but still exist. Instances on a retained Host are left alone.
-func (r *WorkloadDaemonSetReconciler) matchingHosts(ctx context.Context, namespace string, spec *runtimev1alpha1.WorkloadSpec) ([]string, map[string]bool, error) {
+// daemonSetWorkloadName names the Workload in one slot on one Host, so a
+// retried create collides with the first instead of adding another.
+func daemonSetWorkloadName(daemonSetName, hostID, templateHash string, slot int) string {
+	suffix := fmt.Sprintf("-%s-%s-%d", shortHash(hostID), templateHash, slot)
+	const maxNameLength = 253
+	if len(daemonSetName)+len(suffix) > maxNameLength {
+		daemonSetName = strings.TrimRight(daemonSetName[:maxNameLength-len(suffix)], ".-")
+	}
+	return daemonSetName + suffix
+}
+
+// matchingHosts returns the schedulable Hosts that spec selects, keyed by
+// HostID with their last Ready transition, and the matching Hosts that are
+// not schedulable right now but still exist. Instances on a retained Host
+// are left alone.
+func (r *WorkloadDaemonSetReconciler) matchingHosts(ctx context.Context, namespace string, spec *runtimev1alpha1.WorkloadSpec) (map[string]time.Time, map[string]bool, error) {
 	environmentFilter, err := hostEnvironmentFilter(r.AllowSharedHosts, namespace, spec)
 	if err != nil {
 		return nil, nil, err
@@ -252,19 +288,18 @@ func (r *WorkloadDaemonSetReconciler) matchingHosts(ctx context.Context, namespa
 		return nil, nil, err
 	}
 
-	var desired []string
+	desired := make(map[string]time.Time)
 	retained := make(map[string]bool)
 	for i := range hostList.Items {
 		host := &hostList.Items[i]
 		switch {
 		case host.HostID == "":
 		case isSchedulable(host):
-			desired = append(desired, host.HostID)
+			desired[host.HostID] = host.Status.GetCondition(condition.TypeReady).LastTransitionTime.Time
 		case host.DeletionTimestamp.IsZero():
 			retained[host.HostID] = true
 		}
 	}
-	slices.Sort(desired)
 	return desired, retained, nil
 }
 
@@ -305,12 +340,6 @@ func (r *WorkloadDaemonSetReconciler) setScheduleStatus(
 		replicas.Unavailable += hostStatus.Current - hostStatus.Ready
 	}
 	status.Replicas = replicas
-
-	status.CurrentReplicas = 0
-	if status.DesiredHosts > 0 {
-		status.CurrentReplicas = replicas.Current / status.DesiredHosts
-	}
-	status.Selector = labels.Set{workloadDaemonSetNameLabel: daemonSet.Name}.String()
 }
 
 func (r *WorkloadDaemonSetReconciler) createWorkload(
@@ -319,22 +348,34 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 	template *runtimev1alpha1.WorkloadReplicaTemplate,
 	templateHash string,
 	hostID string,
-) error {
+	name string,
+) (*runtimev1alpha1.Workload, error) {
 	annotations := make(map[string]string, len(template.Annotations)+2)
-	maps.Copy(annotations, template.Annotations)
+	for k, v := range template.Annotations {
+		// The host names its workload from these, so a copied one would
+		// report this DaemonSet's metrics under another owner.
+		if k == workloadReplicaSetGenerationAnnotation ||
+			k == workloadReplicaSetNameAnnotation ||
+			k == workloadDeploymentNameAnnotation ||
+			k == workloadDaemonSetGenerationAnnotation ||
+			k == workloadDaemonSetNameAnnotation {
+			continue
+		}
+		annotations[k] = v
+	}
 	annotations[workloadDaemonSetGenerationAnnotation] = templateHash
 	annotations[workloadDaemonSetNameAnnotation] = daemonSet.Name
 
 	workloadLabels := make(map[string]string, len(template.Labels)+1)
 	maps.Copy(workloadLabels, template.Labels)
-	workloadLabels[workloadDaemonSetNameLabel] = daemonSet.Name
+	workloadLabels[workloadDaemonSetNameLabel] = ownerLabelValue(daemonSet.Name)
 
 	spec := template.Spec.DeepCopy()
 	spec.HostID = hostID
 
 	workload := &runtimev1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        fmt.Sprintf("%s-%s", daemonSet.Name, randHash()),
+			Name:        name,
 			Namespace:   daemonSet.Namespace,
 			Labels:      workloadLabels,
 			Annotations: annotations,
@@ -342,9 +383,12 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 		Spec: *spec,
 	}
 	if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
-		return err
+		return nil, err
 	}
-	return r.Create(ctx, workload)
+	if err := r.Create(ctx, workload); err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, err
+	}
+	return workload, nil
 }
 
 func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads []*runtimev1alpha1.Workload) error {
@@ -371,16 +415,29 @@ func (r *WorkloadDaemonSetReconciler) reconcileReady(_ context.Context, daemonSe
 	return nil
 }
 
-// daemonSetsForHost enqueues every DaemonSet, since a Host's labels may
-// have just stopped matching a selector.
-func (r *WorkloadDaemonSetReconciler) daemonSetsForHost(ctx context.Context, _ client.Object) []reconcile.Request {
+// daemonSetsForHost enqueues the DaemonSets that select host. It runs on
+// both the old and new Host of an update, which covers a Host that stops
+// matching as well as one that starts.
+func (r *WorkloadDaemonSetReconciler) daemonSetsForHost(ctx context.Context, obj client.Object) []reconcile.Request {
+	host, ok := obj.(*runtimev1alpha1.Host)
+	if !ok {
+		return nil
+	}
 	daemonSets := &runtimev1alpha1.WorkloadDaemonSetList{}
 	if err := r.List(ctx, daemonSets); err != nil {
 		ctrl.LoggerFrom(ctx).Error(err, "listing WorkloadDaemonSets for Host event")
 		return nil
 	}
-	requests := make([]reconcile.Request, 0, len(daemonSets.Items))
+	var requests []reconcile.Request
 	for _, ds := range daemonSets.Items {
+		spec := &ds.Spec.Template.Spec
+		if !labels.SelectorFromSet(spec.HostSelector).Matches(labels.Set(host.Labels)) {
+			continue
+		}
+		filter, err := hostEnvironmentFilter(r.AllowSharedHosts, ds.Namespace, spec)
+		if err != nil || (filter != "" && filter != host.Environment) {
+			continue
+		}
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Namespace: ds.Namespace, Name: ds.Name},
 		})

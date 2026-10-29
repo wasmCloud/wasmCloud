@@ -38,6 +38,24 @@ func randHash() string {
 	return rand.SafeEncodeString(fmt.Sprint(h.Sum32()))
 }
 
+// shortHash is an 8-10 character, name-safe hash of s.
+func shortHash(s string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	return rand.SafeEncodeString(fmt.Sprint(h.Sum32()))
+}
+
+// ownerLabelValue fits an object name into a label value. Names over 63
+// characters keep a prefix plus a hash of the full name.
+func ownerLabelValue(name string) string {
+	const maxLabelValue = 63
+	if len(name) <= maxLabelValue {
+		return name
+	}
+	hash := shortHash(name)
+	return name[:maxLabelValue-len(hash)-1] + "-" + hash
+}
+
 func isOwnedByController(rawObj client.Object, gvk schema.GroupVersionKind) (string, bool) {
 	for _, ref := range rawObj.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller {

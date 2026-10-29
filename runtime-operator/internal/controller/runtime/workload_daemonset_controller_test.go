@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -165,8 +167,111 @@ func TestDaemonSetSchedule_RunsReplicasOnEveryMatchingHost(t *testing.T) {
 	if ds.Status.DesiredHosts != 2 {
 		t.Fatalf("expected DesiredHosts=2, got %d", ds.Status.DesiredHosts)
 	}
-	if want := workloadDaemonSetNameLabel + "=" + testDaemonSetName; ds.Status.Selector != want {
-		t.Fatalf("expected Selector=%q, got %q", want, ds.Status.Selector)
+	// Status reflects this pass's creates.
+	if ds.Status.Replicas.Current != 4 {
+		t.Fatalf("expected Replicas.Current=4 after the first pass, got %d", ds.Status.Replicas.Current)
+	}
+}
+
+// A reconcile that runs before the cache holds the last pass's creates
+// collides with them by name instead of starting a second set.
+func TestDaemonSetSchedule_StaleCacheDoesNotDuplicate(t *testing.T) {
+	ds := testDaemonSet(2)
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA))
+	schedule(t, r, ds)
+
+	template := ds.Spec.Template.DeepCopy()
+	host := &daemonSetHost{}
+	if err := r.syncHost(context.Background(), ds, template, template.Hash(), dsHostA, host, 2, map[string]bool{}); err != nil {
+		t.Fatalf("syncHost with a stale view: %v", err)
+	}
+
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 2})
+}
+
+// The ReplicaSet and Deployment annotations name the workload on the host,
+// so a template copied from another manifest must not carry them through.
+func TestDaemonSetSchedule_StripsReservedAnnotations(t *testing.T) {
+	ds := testDaemonSet(1)
+	ds.Spec.Template.Annotations = map[string]string{
+		workloadDeploymentNameAnnotation: "someone-else",
+		workloadReplicaSetNameAnnotation: "someone-else-abc",
+		"example.com/keep":               "yes",
+	}
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA))
+	schedule(t, r, ds)
+
+	annotations := workloadsByHost(t, r)[dsHostA][0].Annotations
+	if _, ok := annotations[workloadDeploymentNameAnnotation]; ok {
+		t.Fatalf("workload-deployment annotation leaked onto the instance: %v", annotations)
+	}
+	if _, ok := annotations[workloadReplicaSetNameAnnotation]; ok {
+		t.Fatalf("workload-replicaset-name annotation leaked onto the instance: %v", annotations)
+	}
+	if annotations["example.com/keep"] != "yes" || annotations[workloadDaemonSetNameAnnotation] != testDaemonSetName {
+		t.Fatalf("expected user and daemonset annotations kept, got %v", annotations)
+	}
+}
+
+// An instance whose Sync went False while its host was down is not failed
+// until it stays down for the grace period after the host is Ready again.
+func TestDaemonSetSchedule_HostBlipKeepsInstances(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		hostReadyAt time.Time
+		wantKept    bool
+	}{
+		{name: "host just came back", hostReadyAt: time.Now(), wantKept: true},
+		{name: "host back past the grace period", hostReadyAt: time.Now().Add(-10 * time.Minute), wantKept: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := testDaemonSet(1)
+			hostA := defaultGroupHost(dsHostA)
+			hostA.Status.Conditions[0].LastTransitionTime = metav1.NewTime(tc.hostReadyAt)
+			r := newDaemonSetReconciler(t, ds, hostA)
+			schedule(t, r, ds)
+
+			w := workloadsByHost(t, r)[dsHostA][0]
+			sync := condition.ErrorCondition(runtimev1alpha1.WorkloadConditionSync, "Reconcile", errors.New("host unreachable"))
+			sync.LastTransitionTime = metav1.NewTime(time.Now().Add(-5 * time.Minute))
+			w.Status.Conditions = []condition.Condition{sync}
+			if err := r.Update(context.Background(), &w); err != nil {
+				t.Fatalf("update workload status: %v", err)
+			}
+
+			schedule(t, r, ds)
+
+			kept := false
+			for _, got := range workloadsByHost(t, r)[dsHostA] {
+				if got.Name == w.Name {
+					kept = true
+				}
+			}
+			if kept != tc.wantKept {
+				t.Fatalf("expected kept=%v for %s", tc.wantKept, w.Name)
+			}
+		})
+	}
+}
+
+func TestDaemonSetsForHost_OnlyMatchingDaemonSets(t *testing.T) {
+	matching := testDaemonSet(1)
+	other := testDaemonSet(1)
+	other.Name = "elsewhere"
+	other.UID = "other-uid"
+	other.Spec.Template.Spec.HostSelector = map[string]string{testHostGroupLabel: dsOtherGroup}
+	isolated := testDaemonSet(1)
+	isolated.Name = "isolated"
+	isolated.UID = "isolated-uid"
+	isolated.Spec.Template.Spec.Environment = testDaemonSetNamespace
+	r := newDaemonSetReconciler(t, matching, other, isolated)
+
+	host := defaultGroupHost(dsHostA)
+	host.Environment = "tenant-b"
+	requests := r.daemonSetsForHost(context.Background(), host)
+
+	if len(requests) != 1 || requests[0].Name != testDaemonSetName {
+		t.Fatalf("expected only %s enqueued, got %v", testDaemonSetName, requests)
 	}
 }
 
@@ -291,6 +396,10 @@ func TestDaemonSetSchedule_RollingUpdateOneHostAtATime(t *testing.T) {
 	if countNew(byHost[dsHostA]) != 1 || countNew(byHost[dsHostB]) != 1 {
 		t.Fatalf("expected ds-host-a updated and ds-host-b updating, got %v", byHost)
 	}
+	// The pass that retired ds-host-a's old instance already reports it gone.
+	if ds.Status.Hosts[0].HostID != dsHostA || ds.Status.Hosts[0].Outdated != 0 {
+		t.Fatalf("expected ds-host-a outdated=0 in the same pass, got %+v", ds.Status.Hosts)
+	}
 
 	markAllAvailable(t, r)
 	schedule(t, r, ds)
@@ -340,9 +449,6 @@ func TestDaemonSetReady_WaitsForEveryHost(t *testing.T) {
 	schedule(t, r, ds)
 	if err := r.reconcileReady(context.Background(), ds); err != nil {
 		t.Fatalf("expected Ready, got %v", err)
-	}
-	if ds.Status.CurrentReplicas != 2 {
-		t.Fatalf("expected per-host CurrentReplicas=2, got %d", ds.Status.CurrentReplicas)
 	}
 	if ds.Status.Replicas.Ready != 4 {
 		t.Fatalf("expected Replicas.Ready=4, got %d", ds.Status.Replicas.Ready)

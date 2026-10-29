@@ -83,21 +83,10 @@ type WorkloadDaemonSetStatus struct {
 	// Hosts reports the instances on each Host, sorted by HostID.
 	// +kubebuilder:validation:Optional
 	Hosts []WorkloadDaemonSetHostStatus `json:"hosts,omitempty"`
-
-	// CurrentReplicas is the average number of current-template instances
-	// per desired Host, rounded down. It is the /scale statusReplicasPath, so
-	// it counts per Host like spec.replicas does; replicas.current is the total.
-	// +kubebuilder:validation:Optional
-	CurrentReplicas int32 `json:"currentReplicas,omitempty"`
-
-	// Selector is the serialized label selector exposed by the /scale subresource.
-	// +kubebuilder:validation:Optional
-	Selector string `json:"selector,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.currentReplicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="REPLICAS",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="DESIRED",type=integer,JSONPath=`.status.desiredHosts`
 // +kubebuilder:printcolumn:name="UP-TO-DATE",type=integer,JSONPath=`.status.updatedHosts`

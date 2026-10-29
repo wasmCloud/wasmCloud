@@ -2,9 +2,12 @@ package runtime
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -15,6 +18,17 @@ import (
 // The /scale subresource needs a flat current count and a selector that
 // matches the Workloads the ReplicaSet creates.
 func TestReplicaSet_ScaleSubresourceStatus(t *testing.T) {
+	// A 63-character WorkloadDeployment name is valid, but the RS made from
+	// it is longer than a label value may be.
+	longRS := strings.Repeat("d", 63) + "-" + randHash()
+	for _, name := range []string{testReplicaSetName, longRS} {
+		t.Run(fmt.Sprintf("name length %d", len(name)), func(t *testing.T) {
+			testReplicaSetScaleStatus(t, name)
+		})
+	}
+}
+
+func testReplicaSetScaleStatus(t *testing.T, replicaSetName string) {
 	s := newScaleTestScheme(t)
 	replicaSetGvk, err := gvkForType(&runtimev1alpha1.WorkloadReplicaSet{}, s)
 	if err != nil {
@@ -23,7 +37,7 @@ func TestReplicaSet_ScaleSubresourceStatus(t *testing.T) {
 
 	replicas := int32(2)
 	rs := &runtimev1alpha1.WorkloadReplicaSet{
-		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testReplicaSetName, UID: "rs-uid"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: replicaSetName, UID: "rs-uid"},
 		Spec: runtimev1alpha1.WorkloadReplicaSetSpec{
 			Replicas: &replicas,
 			Template: runtimev1alpha1.WorkloadReplicaTemplate{
@@ -61,13 +75,14 @@ func TestReplicaSet_ScaleSubresourceStatus(t *testing.T) {
 	if rs.Status.CurrentReplicas != replicas {
 		t.Fatalf("expected CurrentReplicas=%d, got %d", replicas, rs.Status.CurrentReplicas)
 	}
-	wantSelector := workloadReplicaSetNameLabel + "=" + testReplicaSetName
-	if rs.Status.Selector != wantSelector {
-		t.Fatalf("expected Selector=%q, got %q", wantSelector, rs.Status.Selector)
+	// labels.Parse rejects values the API server would.
+	selector, err := labels.Parse(rs.Status.Selector)
+	if err != nil {
+		t.Fatalf("invalid Selector %q: %v", rs.Status.Selector, err)
 	}
 
 	workloads := &runtimev1alpha1.WorkloadList{}
-	if err := c.List(ctx, workloads, client.MatchingLabels{workloadReplicaSetNameLabel: testReplicaSetName}); err != nil {
+	if err := c.List(ctx, workloads, client.MatchingLabelsSelector{Selector: selector}); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(workloads.Items) != int(replicas) {

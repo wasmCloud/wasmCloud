@@ -8,8 +8,11 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	runtime_controllers "go.wasmcloud.dev/runtime-operator/v2/internal/controller/runtime"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -151,13 +154,25 @@ func NewEmbeddedOperator(
 		return nil, err
 	}
 
-	if err = (&runtime_controllers.WorkloadDaemonSetReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		OperatorNamespace: cfg.Namespace,
-		AllowSharedHosts:  cfg.AllowSharedHosts,
-	}).SetupWithManager(mgr); err != nil {
+	// An upgrade that skipped the chart's crds/ has no WorkloadDaemonSet CRD.
+	// Its informer would never sync and take every other controller down.
+	daemonSetGK := schema.GroupKind{Group: runtimev1alpha1.GroupVersion.Group, Kind: "WorkloadDaemonSet"}
+	_, err = mgr.GetRESTMapper().RESTMapping(daemonSetGK, runtimev1alpha1.GroupVersion.Version)
+	switch {
+	case meta.IsNoMatchError(err):
+		mgr.GetLogger().Info("WorkloadDaemonSet CRD is not installed, skipping its controller",
+			"fix", "apply the chart's CRDs and restart the operator")
+	case err != nil:
 		return nil, err
+	default:
+		if err = (&runtime_controllers.WorkloadDaemonSetReconciler{
+			Client:            mgr.GetClient(),
+			Scheme:            mgr.GetScheme(),
+			OperatorNamespace: cfg.Namespace,
+			AllowSharedHosts:  cfg.AllowSharedHosts,
+		}).SetupWithManager(mgr); err != nil {
+			return nil, err
+		}
 	}
 
 	if err = (&runtime_controllers.WorkloadRouteReconciler{
