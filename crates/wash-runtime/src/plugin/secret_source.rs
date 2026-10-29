@@ -88,7 +88,10 @@ pub enum WorkloadGrant {
     Only(Vec<WorkloadSelector>),
 }
 
-/// Workloads in `namespace`, or only the one called `name` there.
+/// Workloads in `namespace`, or only the one called `name` there: the name a
+/// workload keeps across replicas, that of the WorkloadDeployment (else
+/// WorkloadReplicaSet) owning it under the operator, else its own. Both come
+/// from the start request, so a grant is as strong as whoever may send one.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -229,7 +232,9 @@ pub struct SecretConsumer {
 /// records of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestingWorkload {
+    /// This replica.
     pub id: String,
+    /// The name it keeps across replicas.
     pub name: String,
     pub namespace: String,
 }
