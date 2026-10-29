@@ -33,7 +33,8 @@ pub(super) struct Settings {
     /// Unset, as many as the host has cores.
     pub(super) start_concurrency: Option<usize>,
     pub(super) sample: usize,
-    pub(super) core_instances: u32,
+    /// Linear memories the pool holds; the count that sizes the pool.
+    pub(super) max_memories: u32,
     pub(super) fixture: &'static str,
     /// One run per entry; `None` is no limit.
     pub(super) cpus: Vec<Option<usize>>,
@@ -69,9 +70,14 @@ impl Settings {
                 .map_err(|e| anyhow::anyhow!("WASH_SCALE_GUEST_MEMORY={v}: {e}"))?,
             None => effective_memory()?,
         };
-        let core_instances = match number("WASH_SCALE_CORE_INSTANCES")? {
-            Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-            None => host_memory::derive_max_memories(),
+        // `WASH_SCALE_CORE_INSTANCES` named this count before the pool's
+        // totals were derived from its memory count; still read.
+        let max_memories = match number("WASH_SCALE_MAX_MEMORIES")? {
+            Some(n) => u32::try_from(n).context("WASH_SCALE_MAX_MEMORIES")?,
+            None => match number("WASH_SCALE_CORE_INSTANCES")? {
+                Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
+                None => host_memory::derive_max_memories(),
+            },
         };
         let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
             None | Some("p3") => "http_handler_p3",
@@ -93,7 +99,7 @@ impl Settings {
             sample: bench_tools::density::sample_size(number("WASH_SCALE_SAMPLE")?.unwrap_or(200))
                 .map_err(anyhow::Error::msg)
                 .context("WASH_SCALE_SAMPLE")?,
-            core_instances,
+            max_memories,
             fixture,
             cpus: match var("WASH_SCALE_CPUS") {
                 None => vec![None],

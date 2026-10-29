@@ -80,8 +80,11 @@ footprint there.
   the same size; its four core instances and two tables draw on totals sized
   as multiples of that count, so they do not bind first. Windows, 32-bit
   targets, and Linux with strict overcommit accounting or a finite
-  `RLIMIT_DATA` retain the previous 1,000-memory default, since the writable
-  table and stack mappings can otherwise prevent engine startup.
+  `RLIMIT_DATA` keep the host's old default of 1,000 memories, since the
+  writable table and stack mappings can otherwise prevent engine startup.
+  (The bench's own earlier derivation, a fifth of the mapping limit, gave
+  13,106 on a default Linux; it is gone, so runs there are not comparable
+  across the change.)
 
 ## The memory guard
 
