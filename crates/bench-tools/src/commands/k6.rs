@@ -485,3 +485,7 @@ mod tests {
         assert_eq!(noise.mark, "≈ noise");
     }
 }
+
+#[cfg(test)]
+#[path = "k6_tests.rs"]
+mod report_tests;
