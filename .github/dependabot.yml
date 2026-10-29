@@ -66,8 +66,11 @@ updates:
       - "/.github/actions/helm-publish"
       - "/.github/actions/lint-go"
       - "/.github/actions/no-diff"
+      - "/.github/actions/release-binary-sbom"
+      - "/.github/actions/release-image-sbom"
       - "/.github/actions/setup-go"
       - "/.github/actions/setup-rust"
+      - "/.github/actions/setup-syft"
     schedule:
       interval: "weekly"
     target-branch: "main"

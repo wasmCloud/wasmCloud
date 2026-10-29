@@ -59,7 +59,6 @@ jobs:
               - '.github/tool-versions.env'
               - '.github/scripts/wasmtime-features.mjs'
               - '.github/actions/setup-syft/**'
-              - '.github/scripts/setup-syft.mjs'
               - '.github/scripts/release-sboms.mjs'
               - '.cargo/**'
               - 'xtask/**'
@@ -81,7 +80,6 @@ jobs:
               - '.github/workflows/wash.yml'
               # canary-binaries runs the binary inventory check with these.
               - '.github/actions/setup-syft/**'
-              - '.github/scripts/setup-syft.mjs'
               - '.github/scripts/release-sboms.mjs'
 
   check:

@@ -219,9 +219,10 @@ verification. Keep consumer commands there.
 
 Before promoting anything, `release-tag.yml` scans the downloaded canary binaries and the
 `linux/amd64` and `linux/arm64` manifests of each image it is about to release, using
-checksum-pinned Syft (`.github/scripts/release-sboms.mjs`). The binary builds use
-`cargo-auditable`, and `canary-binaries` checks each binary's embedded inventory at build
-time; the Chainguard Rust builder embeds the same dependency metadata in wash images. No
+version-pinned Syft (`.github/scripts/release-sboms.mjs`). The shared `setup-syft` action
+uses Anchore's SHA-pinned `download-syft` action to install Syft in the Actions tool cache.
+The binary builds use `cargo-auditable`, and `canary-binaries` checks each binary's embedded
+inventory at build time; the Chainguard Rust builder embeds the same metadata in wash images. No
 binaries or images are rebuilt during promotion.
 
 Each wash target gets an SPDX inventory. The Windows executable and ZIP share an inventory.
