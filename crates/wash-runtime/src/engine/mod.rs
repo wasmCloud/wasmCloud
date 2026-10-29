@@ -457,11 +457,12 @@ impl std::fmt::Debug for Engine {
 pub struct CacheKey(String);
 
 /// One compile, and whether a store of it may need a GC heap: read off the
-/// same source once, so a cached compile never has it read again.
+/// source the first time a workload asks, and kept with the compile so it is
+/// never read again. Services never ask.
 #[derive(Clone)]
 pub struct CacheValue {
     component: Component,
-    may_use_gc: bool,
+    may_use_gc: Arc<std::sync::OnceLock<bool>>,
 }
 
 impl std::fmt::Debug for CacheValue {
@@ -596,8 +597,8 @@ impl Engine {
 
     /// host_memory has the memory budgets this engine was built with including max host
     /// memory available, default component heap limit, and number of core instances available.
-    /// Read back rather than recomputed, so what a caller reports is what the engine actually
-    /// installed — including an embedder's `max_memories` winning over the flag-driven count.
+    /// With a pool, `max_memories` and `core_instances` are the installed totals, so what a
+    /// caller reports is what the engine runs with, however the count was set or derived.
     pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
     }
@@ -955,15 +956,20 @@ impl Engine {
         self.pool_totals.is_some() && pool_gc::may_use_gc(bytes)
     }
 
-    /// Compile `bytes` and read its GC use beside the compile.
     fn compile(&self, bytes: &[u8]) -> anyhow::Result<CacheValue> {
         let component = Component::new(&self.inner, bytes)
             .map_err(|e| self.explain_compile_failure(e))
             .context("failed to compile component from bytes")?;
         Ok(CacheValue {
             component,
-            may_use_gc: self.may_use_gc(bytes),
+            may_use_gc: Arc::default(),
         })
+    }
+
+    /// [`Self::may_use_gc`] for `compiled`, read off `bytes`, its source,
+    /// only the first time any workload of that compile asks.
+    fn compiled_may_use_gc(&self, compiled: &CacheValue, bytes: &[u8]) -> bool {
+        *compiled.may_use_gc.get_or_init(|| self.may_use_gc(bytes))
     }
 
     /// [`Self::load_component_bytes`] for a workload, which holds the returned
@@ -1056,15 +1062,11 @@ impl Engine {
         let instances = InstancePolicy::from_component(&component);
 
         // Create a wasmtime component from the bytes
-        let (
-            CacheValue {
-                component: wasmtime_component,
-                may_use_gc,
-            },
-            compiled,
-        ) = self
+        let (cached, compiled) = self
             .load_live_component(&component.bytes, component.digest)
             .context("failed to create component from bytes")?;
+        let may_use_gc = self.compiled_may_use_gc(&cached, &component.bytes);
+        let wasmtime_component = cached.component;
 
         let linker = self.base_linker(uses_wasi_http(&wasmtime_component))?;
 
@@ -1483,7 +1485,8 @@ impl EngineBuilder {
     /// wins.
     ///
     /// For a host process that runs one engine: each engine in a process
-    /// reserves address space for its whole pool.
+    /// reserves address space for its whole pool. Stacks are costed at
+    /// wasmtime's default size, which a base [`Self::with_config`] can raise.
     pub fn with_derived_max_memories(
         mut self,
         derivation: host_memory::MaxMemoriesDerivation,
@@ -1755,6 +1758,16 @@ impl EngineBuilder {
         }
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
         let pool_totals = installed_pool.map(|pool| pool.totals);
+        // The counts the pool installed, which the builder's own knobs, the
+        // environment or a caller's pooling config may have moved.
+        let host_memory = match pool_totals {
+            Some(totals) => host_memory::HostMemoryBudgets {
+                max_memories: totals.memories,
+                core_instances: totals.core_instances,
+                ..host_memory
+            },
+            None => host_memory,
+        };
         // Before the engine is built, so a pool that makes the build fail is
         // explained on the very start that fails. Against the pool that was
         // installed, not the knobs: the environment or a caller's own pooling
@@ -2691,31 +2704,73 @@ mod tests {
         );
     }
 
-    /// GC use is read with the compile and cached beside it, so a workload
-    /// served from the cache, after the last one holding the compile let go,
-    /// still has its answer without a second compile.
+    /// The budgets an engine reports carry the counts its pool installed,
+    /// not the ones its budgets asked for.
+    #[test]
+    fn host_memory_reports_the_installed_pool_counts() -> anyhow::Result<()> {
+        let engine = Engine::builder()
+            .with_host_memory(
+                host_memory::HostMemoryBudgets::resolve(None, None, None, None)
+                    .map_err(anyhow::Error::msg)?,
+            )
+            .with_max_memories(64)
+            .build()?;
+        let Some(totals) = engine.pool_totals() else {
+            return Ok(());
+        };
+        let reported = engine.host_memory();
+        assert_eq!(reported.max_memories, totals.memories);
+        assert_eq!(reported.core_instances, totals.core_instances);
+        Ok(())
+    }
+
+    /// GC use is read the first time a workload asks and kept with the
+    /// compile, so a workload served from the cache, after the last one
+    /// holding the compile let go, still has its answer without a second
+    /// compile or a second read of the source.
     #[test]
     fn a_cached_compile_carries_its_gc_answer() -> anyhow::Result<()> {
         use std::sync::atomic::Ordering;
-        const DIGEST: &str = "sha256:numeric";
 
         let engine = pool_share::test_support::engine(pool_share::test_support::config());
         if engine.pool_totals().is_none() {
             return Ok(());
         }
-        let bytes = wat::parse_str("(component (core module (memory 1)))")?;
-        let (first, live) = engine.load_live_component(&bytes, Some(DIGEST))?;
-        assert!(!first.may_use_gc);
-        drop(live);
-        assert!(engine.live_compiles.lock().unwrap().is_empty());
+        let cases = [
+            (
+                "sha256:numeric",
+                "(component (core module (memory 1)))",
+                false,
+            ),
+            (
+                "sha256:gc",
+                "(component (core module (type (struct))))",
+                true,
+            ),
+        ];
+        for (compiles, (digest, wat, uses_gc)) in (1..).zip(cases) {
+            let bytes = wat::parse_str(wat)?;
+            let (first, live) = engine.load_live_component(&bytes, Some(digest))?;
+            assert_eq!(
+                first.may_use_gc.get(),
+                None,
+                "{digest}: read only on asking"
+            );
+            assert_eq!(
+                engine.compiled_may_use_gc(&first, &bytes),
+                uses_gc,
+                "{digest}"
+            );
+            drop((first, live));
+            assert!(engine.live_compiles.lock().unwrap().is_empty());
 
-        let (cached, _) = engine.load_live_component(&bytes, Some(DIGEST))?;
-        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
-        assert!(!cached.may_use_gc);
+            let (cached, _) = engine.load_live_component(&bytes, Some(digest))?;
+            assert_eq!(engine.compiles.load(Ordering::SeqCst), compiles);
+            assert_eq!(cached.may_use_gc.get(), Some(&uses_gc), "{digest}");
+        }
 
         let unpooled = Engine::builder().with_pooling_allocator(false).build()?;
         let gc = wat::parse_str("(component (core module (type (struct))))")?;
-        assert!(pool_gc::may_use_gc(&gc));
         assert!(
             !unpooled.may_use_gc(&gc),
             "an engine with no pool admits nothing"
