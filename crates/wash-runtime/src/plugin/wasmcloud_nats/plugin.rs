@@ -1263,6 +1263,7 @@ mod tests {
                 source: "nats-creds".into(),
                 plugin: "vault".into(),
                 key: format!("nats/{key}").into(),
+                grant: crate::plugin::WorkloadGrant::All,
             },
         )])
     }

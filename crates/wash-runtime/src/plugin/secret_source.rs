@@ -78,6 +78,119 @@ name_type!(
     SecretKey
 );
 
+/// The workloads a plugin-backed `secrets:` entry is granted to. Every entry
+/// states one, so none reaches a workload the operator did not name.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "RawWorkloadGrant", into = "RawWorkloadGrant")]
+pub enum WorkloadGrant {
+    /// Every workload on the host: `workloads: all`.
+    All,
+    /// Workloads matching one of these, never empty.
+    Only(Vec<WorkloadSelector>),
+}
+
+/// Workloads in `namespace`, or only the one called `name` there.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkloadSelector {
+    pub namespace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl WorkloadSelector {
+    /// Every workload in `namespace`.
+    pub fn namespace(namespace: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+            name: None,
+        }
+    }
+
+    /// The workload called `name` in `namespace`.
+    pub fn workload(namespace: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            namespace: namespace.into(),
+            name: Some(name.into()),
+        }
+    }
+
+    fn admits(&self, workload: &RequestingWorkload) -> bool {
+        self.namespace == workload.namespace
+            && self.name.as_ref().is_none_or(|name| *name == workload.name)
+    }
+}
+
+impl WorkloadGrant {
+    /// Whether `workload` may bind a binding that reads the entry.
+    pub fn admits(&self, workload: &RequestingWorkload) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(selectors) => selectors.iter().any(|s| s.admits(workload)),
+        }
+    }
+}
+
+impl std::fmt::Display for WorkloadGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::All => f.write_str("every workload"),
+            Self::Only(selectors) => {
+                let names: Vec<String> = selectors
+                    .iter()
+                    .map(|s| match &s.name {
+                        Some(name) => format!("`{}/{name}`", s.namespace),
+                        None => format!("namespace `{}`", s.namespace),
+                    })
+                    .collect();
+                f.write_str(&names.join(", "))
+            }
+        }
+    }
+}
+
+/// The YAML spelling of [`WorkloadGrant`]: the keyword `all`, or a list of
+/// selectors.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum RawWorkloadGrant {
+    All(AllWorkloads),
+    Only(Vec<WorkloadSelector>),
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+enum AllWorkloads {
+    #[serde(rename = "all")]
+    All,
+}
+
+impl TryFrom<RawWorkloadGrant> for WorkloadGrant {
+    type Error = &'static str;
+
+    fn try_from(raw: RawWorkloadGrant) -> Result<Self, Self::Error> {
+        match raw {
+            RawWorkloadGrant::All(AllWorkloads::All) => Ok(Self::All),
+            RawWorkloadGrant::Only(selectors) if selectors.is_empty() => {
+                Err("`workloads` grants no workload; name at least one namespace, or write `all`")
+            }
+            RawWorkloadGrant::Only(selectors) => Ok(Self::Only(selectors)),
+        }
+    }
+}
+
+impl From<WorkloadGrant> for RawWorkloadGrant {
+    fn from(grant: WorkloadGrant) -> Self {
+        match grant {
+            WorkloadGrant::All => Self::All(AllWorkloads::All),
+            WorkloadGrant::Only(selectors) => Self::Only(selectors),
+        }
+    }
+}
+
 /// What the host asks a [`HostSecretSource`] for, and on whose behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRequest {
@@ -344,6 +457,25 @@ pub(crate) async fn resolve_plugin_secrets(
         if !needed(binding, key) {
             continue;
         }
+        if !secret.grant.admits(workload) {
+            tracing::warn!(
+                plugin_id,
+                binding,
+                secret = %secret.source,
+                grant = %secret.grant,
+                workload = %format!("{}/{}", workload.namespace, workload.name),
+                "refused a bind reading a secret outside its grant"
+            );
+            let place = match binding {
+                Some(name) => format!("binding `{name}` of `{plugin_id}`"),
+                None => format!("`{plugin_id}`"),
+            };
+            anyhow::bail!(
+                "{place} reads a secret that is not granted to workload `{}/{}`",
+                workload.namespace,
+                workload.name
+            );
+        }
         requests
             .entry((binding, secret.source.as_str()))
             .or_insert_with(|| (&secret.plugin, BTreeSet::new()))
@@ -497,6 +629,7 @@ mod tests {
             source: source.into(),
             plugin: "vault".into(),
             key: key.into(),
+            grant: WorkloadGrant::Only(vec![WorkloadSelector::namespace("billing")]),
         }
     }
 
@@ -586,6 +719,48 @@ mod tests {
             .resolve("reports-db", &HashMap::new(), &schema, &|_, _, _| false)
             .unwrap_err();
         assert!(format!("{err}").contains("not resolved"), "{err}");
+    }
+
+    /// A workload outside an entry's grant fails the bind naming the binding
+    /// and the workload, never the entry or its grant, and the source is never
+    /// asked.
+    #[tokio::test]
+    async fn a_workload_outside_the_grant_is_refused_before_the_source_is_asked() {
+        let only = |selector: WorkloadSelector| {
+            let mut r = secret("app", "pg-url-app");
+            r.grant = WorkloadGrant::Only(vec![selector]);
+            PluginBindingSet::new("wasmcloud-postgres")
+                .with_binding("app-db", HashMap::new())
+                .with_binding_secrets("app-db", HashMap::from([("url".to_string(), r)]))
+        };
+        for (selector, admitted) in [
+            (WorkloadSelector::namespace("billing"), true),
+            (WorkloadSelector::workload("billing", "billing-api"), true),
+            (WorkloadSelector::workload("billing", "reports"), false),
+            (WorkloadSelector::namespace("other"), false),
+        ] {
+            let source = fixed();
+            let result = resolve_plugin_secrets(
+                &plugins(source.clone()),
+                &requesting(),
+                only(selector.clone()),
+                &HashSet::from([postgres("app-db")]),
+                &BindingSchema::empty(),
+            )
+            .await;
+            assert_eq!(result.is_ok(), admitted, "{selector:?}");
+            let asked = source.1.lock().unwrap().len();
+            assert_eq!(asked, usize::from(admitted), "{selector:?}");
+            if let Err(err) = result {
+                let msg = format!("{err:#}");
+                assert!(
+                    msg.contains("binding `app-db`") && msg.contains("`billing/billing-api`"),
+                    "{msg}"
+                );
+                let grant = WorkloadGrant::Only(vec![selector.clone()]).to_string();
+                assert!(!msg.contains("`app`") && !msg.contains(&grant), "{msg}");
+            }
+        }
     }
 
     /// A key the source leaves out fails the bind, naming the source and key.

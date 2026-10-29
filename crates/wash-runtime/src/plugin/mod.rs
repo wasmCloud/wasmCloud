@@ -199,7 +199,7 @@ pub use bindings::{
 mod secret_source;
 pub use secret_source::{
     BindingName, CatalogName, HostSecretSource, PluginId, RequestingWorkload, SecretConsumer,
-    SecretKey, SecretRequest, SecretSourceError, SecretValue,
+    SecretKey, SecretRequest, SecretSourceError, SecretValue, WorkloadGrant, WorkloadSelector,
 };
 pub(crate) use secret_source::{resolve_plugin_secrets, validate_plugin_secrets};
 
