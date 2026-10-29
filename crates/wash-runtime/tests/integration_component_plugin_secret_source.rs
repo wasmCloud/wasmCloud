@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use wash_runtime::host::HostApi;
-use wash_runtime::plugin::{PluginBindingSet, PluginBindings, PluginSecretRef};
+use wash_runtime::plugin::{
+    PluginBindingSet, PluginBindings, PluginSecretRef, WorkloadGrant, WorkloadSelector,
+};
 use wash_runtime::types::{LocalResources, WorkloadState};
 
 mod common;
@@ -26,6 +28,11 @@ const SECRET_SOURCE_WASM: &[u8] = include_bytes!("wasm/secret_source_plugin.wasm
 const KV_ID: &str = "acme-kv-plugin";
 const SECRETS_ID: &str = "acme-secrets";
 
+/// The namespace every test workload deploys into.
+fn test_namespace() -> WorkloadGrant {
+    WorkloadGrant::Only(vec![WorkloadSelector::namespace("test")])
+}
+
 /// `acme-kv-plugin`'s entry reading `keys` (config key -> backend key) from
 /// the `acme-secrets` plugin.
 fn kv_reading_secrets(keys: &[(&str, &str)]) -> PluginBindings {
@@ -38,6 +45,7 @@ fn kv_reading_secrets(keys: &[(&str, &str)]) -> PluginBindings {
                     source: "kv-secrets".into(),
                     plugin: SECRETS_ID.into(),
                     key: (*key).into(),
+                    grant: test_namespace(),
                 },
             )
         })
@@ -128,6 +136,7 @@ async fn a_secret_that_could_never_resolve_fails_host_start() -> Result<()> {
                     source: "kv-secrets".into(),
                     plugin: plugin.into(),
                     key: "tier".into(),
+                    grant: test_namespace(),
                 },
             )])),
         );

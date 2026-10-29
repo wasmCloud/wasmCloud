@@ -310,6 +310,8 @@ secrets:
     plugin: {{ required (printf "pluginSecrets.%s needs a `plugin`" $name) $source.plugin }}
     keys:
       {{- required (printf "pluginSecrets.%s needs `keys`" $name) $source.keys | toYaml | nindent 6 }}
+    workloads:
+      {{- required (printf "pluginSecrets.%s needs `workloads`: the namespaces (and optionally workload names) that may use it, or `all`" $name) $source.workloads | toYaml | nindent 6 }}
   {{- end }}
 {{- end }}
 host:
