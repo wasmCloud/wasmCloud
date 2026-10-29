@@ -247,6 +247,7 @@ pub mod stream_payload;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
+mod pool_gc;
 pub mod pool_share;
 pub mod pool_usage;
 pub mod process_memory;
@@ -483,6 +484,7 @@ type LiveCompiles =
 pub(crate) struct LiveCompile {
     digest: String,
     component: Component,
+    may_use_gc: bool,
     live: std::sync::Weak<LiveCompiles>,
 }
 
@@ -938,6 +940,14 @@ impl Engine {
             .unwrap_or(self.host_memory.default_heap_memory)
     }
 
+    /// Whether a store of the component in `bytes` may need a GC heap, read
+    /// off its source ([`pool_gc::may_use_gc`]). Only pool admission asks,
+    /// so an engine with no pool skips the walk over every function body and
+    /// answers `false`, which nothing reads.
+    fn may_use_gc(&self, bytes: &[u8]) -> bool {
+        self.pool_totals.is_some() && pool_gc::may_use_gc(bytes)
+    }
+
     /// [`Self::load_component_bytes`] for a workload, which holds the returned
     /// [`LiveCompile`] while it runs: a digest some running workload was
     /// loaded from is served from that workload's compile, whether or not the
@@ -954,19 +964,26 @@ impl Engine {
         if let Some(live) = self.live_compile(digest) {
             return Ok((live.component.clone(), Some(live)));
         }
-        let component = self.load_component_bytes(bytes, Some(digest))?;
+        let component = self.load_component_bytes(&bytes, Some(digest))?;
+        // Another start may have recorded this digest while this one
+        // compiled; share its compile rather than read the source again.
+        if let Some(existing) = self.live_compile(digest) {
+            return Ok((existing.component.clone(), Some(existing)));
+        }
+        // Outside the lock: it walks every function body.
+        let may_use_gc = self.may_use_gc(bytes.as_ref());
         let mut live = self
             .live_compiles
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Another start may have recorded this digest since the check above;
-        // share its compile rather than keep a second.
+        // And once more under the lock, for a start that raced this one.
         if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
             return Ok((existing.component.clone(), Some(existing)));
         }
         let entry = Arc::new(LiveCompile {
             digest: digest.to_string(),
             component: component.clone(),
+            may_use_gc,
             live: Arc::downgrade(&self.live_compiles),
         });
         live.insert(digest.to_string(), Arc::downgrade(&entry));
@@ -1038,8 +1055,13 @@ impl Engine {
 
         // Create a wasmtime component from the bytes
         let (wasmtime_component, compiled) = self
-            .load_live_component(component.bytes, component.digest)
+            .load_live_component(&component.bytes, component.digest)
             .context("failed to create component from bytes")?;
+
+        let may_use_gc = compiled.as_ref().map_or_else(
+            || self.may_use_gc(&component.bytes),
+            |live| live.may_use_gc,
+        );
 
         let linker = self.base_linker(uses_wasi_http(&wasmtime_component))?;
 
@@ -1076,6 +1098,10 @@ impl Engine {
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
         workload_component.metadata.compiled = compiled;
+        // From the source alone. A component wasmtime cannot cost
+        // (`resources_required` is `None`) imports a core module, which no
+        // linker here provides, so it never instantiates to need a heap.
+        workload_component.metadata.may_use_gc = may_use_gc;
         Ok(workload_component)
     }
 

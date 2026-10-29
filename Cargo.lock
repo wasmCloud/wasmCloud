@@ -6339,6 +6339,7 @@ dependencies = [
  "url",
  "uuid",
  "wasi-webgpu-wasmtime",
+ "wasmparser 0.254.2",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
