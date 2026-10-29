@@ -6,6 +6,9 @@
 //! `named_imports::*` so a component can import the interfaces multiple times via
 //! `(implements ..)`, each routed to its own credentialed connection pool.
 
+#[cfg(test)]
+mod tests;
+
 #[cfg(not(feature = "wasm_component_model_implements"))]
 crate::wasmtime::component::bindgen!({
     world: "async-postgres",
