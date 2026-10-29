@@ -2169,3 +2169,7 @@ mod tests {
         assert!(config.overrides.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "wit_tests.rs"]
+mod source_tests;
