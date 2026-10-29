@@ -429,7 +429,19 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         container: Resource<ContainerData>,
     ) -> wasmtime::Result<Result<(), ContainerError>> {
         let container_data = self.table.get(&container)?;
-        match tokio::fs::remove_dir_all(&container_data.root).await {
+        let cleared = async {
+            let mut entries = tokio::fs::read_dir(&container_data.root).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                if entry.file_type().await?.is_dir() {
+                    tokio::fs::remove_dir_all(entry.path()).await?;
+                } else {
+                    tokio::fs::remove_file(entry.path()).await?;
+                }
+            }
+            Ok::<_, std::io::Error>(())
+        }
+        .await;
+        match cleared {
             Ok(_) => Ok(Ok(())),
             Err(e) => Ok(Err(format!(
                 "failed to clear container '{}': {e}",
@@ -830,3 +842,8 @@ fn created_at_secs(metadata: &std::fs::Metadata) -> u64 {
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "filesystem_contract_tests.rs"]
+mod contract_tests;
