@@ -923,6 +923,28 @@ impl ConnectingTcpSocket {
     }
 }
 
+/// Reserve the virtual half of a bind, releasing the reservation if it fails.
+///
+/// An `unspecified` bind takes the port the OS assigned to `socket`.
+fn bind_loopback_half(
+    socket: &NetworkTcpSocket,
+    mut addr: SocketAddr,
+    unspecified: bool,
+    loopback: &mut super::loopback::Network,
+) -> Result<super::loopback::TcpSocket, ErrorCode> {
+    if unspecified {
+        let TcpState::BindStarted(sock) = &socket.tcp_state else {
+            unreachable!();
+        };
+        addr.set_port(sock.local_addr()?.port());
+    }
+    let addr = loopback.bind_tcp(addr)?;
+    super::loopback::TcpSocket::new(socket, super::loopback::TcpState::BindStarted(addr))
+        .inspect_err(|_| {
+            loopback.unbind_tcp(addr);
+        })
+}
+
 impl TcpSocket {
     pub(crate) fn new(
         ctx: &WasiSocketsCtx,
@@ -967,18 +989,18 @@ impl TcpSocket {
             if !ip.is_unspecified() {
                 return Ok(());
             }
-            let TcpState::BindStarted(sock) = &socket.tcp_state else {
-                unreachable!();
-            };
-            addr = sock.local_addr()?;
-            match &mut addr {
-                SocketAddr::V4(addr) => addr.set_ip(Ipv4Addr::LOCALHOST),
-                SocketAddr::V6(addr) => addr.set_ip(Ipv6Addr::LOCALHOST),
-            }
         }
-        let addr = loopback.bind_tcp(addr)?;
-        let lo =
-            super::loopback::TcpSocket::new(socket, super::loopback::TcpState::BindStarted(addr))?;
+        let lo = match bind_loopback_half(socket, addr, ip.is_unspecified(), loopback) {
+            Ok(lo) => lo,
+            Err(err) => {
+                if ip.is_unspecified() {
+                    // The OS socket is already bound and cannot be unbound;
+                    // close it so the failed bind holds no port.
+                    socket.tcp_state = TcpState::Closed;
+                }
+                return Err(err);
+            }
+        };
         if ip.is_unspecified() {
             *self = Self::Unspecified {
                 net: NetworkTcpSocket {
@@ -1121,9 +1143,7 @@ impl TcpSocket {
                         Ok(ConnectingTcpSocket::Loopback(tx))
                     }
                     Err(err) => {
-                        if let Some(port) = core::num::NonZeroU16::new(local_address.port()) {
-                            loopback.get_tcp_net_mut(local_address.ip()).remove(&port);
-                        }
+                        loopback.unbind_tcp(local_address);
                         *self = Self::Network(socket);
                         Err(err)
                     }
@@ -1743,6 +1763,30 @@ mod tests {
         let mut socket = make_ipv4_socket();
         let result = socket.set_listen_backlog_size(64);
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn failed_unspecified_bind_releases_both_halves() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut loopback = crate::sockets::loopback::Network::default();
+        loopback
+            .bind_tcp(SocketAddr::from(([127, 0, 0, 1], port)))
+            .unwrap();
+        let mut socket = TcpSocket::Network(make_ipv4_socket());
+        assert!(matches!(
+            socket.start_bind(SocketAddr::from(([0, 0, 0, 0], port)), &mut loopback),
+            Err(ErrorCode::AddressInUse)
+        ));
+        assert!(matches!(
+            socket.finish_bind(),
+            Err(ErrorCode::NotInProgress)
+        ));
+        assert_eq!(loopback.tcp_ipv4.len(), 1);
+        std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
     }
 
     #[tokio::test]

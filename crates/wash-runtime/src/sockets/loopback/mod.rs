@@ -75,6 +75,12 @@ impl Network {
         Ok(addr)
     }
 
+    /// Release the TCP endpoint bound at `addr`, returning it if one was bound.
+    pub fn unbind_tcp(&mut self, addr: SocketAddr) -> Option<TcpEndpoint> {
+        let port = NonZeroU16::new(addr.port())?;
+        self.get_tcp_net_mut(addr.ip()).remove(&port)
+    }
+
     pub fn bind_udp(
         &mut self,
         mut addr: SocketAddr,

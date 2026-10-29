@@ -803,7 +803,10 @@ mod tests {
             h.table.get_mut(&input).unwrap().read(1),
             Err(wasmtime_wasi_io::streams::StreamError::Closed)
         ));
-        h.close(client, input, output);
+        h.table.delete(input).unwrap();
+        h.table.delete(output).unwrap();
+        assert_eq!(quota.outbound_sockets_available(), 0);
+        tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(client)).unwrap();
         assert_eq!(quota.outbound_sockets_available(), 1);
     }
 
@@ -822,6 +825,14 @@ mod tests {
                 .unwrap();
         }
         tcp::HostTcpSocket::finish_bind(&mut h.view(), Resource::new_borrow(listener)).unwrap();
+        assert_code(
+            tcp::HostTcpSocket::set_listen_backlog_size(
+                &mut h.view(),
+                Resource::new_borrow(listener),
+                0,
+            ),
+            ErrorCode::InvalidArgument,
+        );
         tcp::HostTcpSocket::set_listen_backlog_size(
             &mut h.view(),
             Resource::new_borrow(listener),
@@ -1114,6 +1125,14 @@ mod tests {
             );
             assert_code(
                 tcp::HostTcpSocket::set_keep_alive_count(
+                    &mut h.view(),
+                    Resource::new_borrow(rep),
+                    0,
+                ),
+                ErrorCode::InvalidArgument,
+            );
+            assert_code(
+                tcp::HostTcpSocket::set_listen_backlog_size(
                     &mut h.view(),
                     Resource::new_borrow(rep),
                     0,

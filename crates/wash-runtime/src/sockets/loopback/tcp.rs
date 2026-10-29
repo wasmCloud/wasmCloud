@@ -243,11 +243,7 @@ impl TcpSocket {
             }
             Err(err) => {
                 self.state = TcpState::Closed;
-                let net = loopback.get_tcp_net_mut(local_address.ip());
-                let Some(port) = NonZeroU16::new(local_address.port()) else {
-                    return Err(ErrorCode::InvalidState);
-                };
-                let Some(TcpEndpoint::Bound) = net.remove(&port) else {
+                let Some(TcpEndpoint::Bound) = loopback.unbind_tcp(local_address) else {
                     return Err(ErrorCode::InvalidState);
                 };
                 Err(ErrorCode::from(err))
