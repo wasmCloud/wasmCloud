@@ -1,6 +1,7 @@
 //! Detect whether a store may need a Wasm GC heap before reserving pool slots.
 //! Wasmtime's component resource counts omit GC heaps. Inspect the source once
-//! at workload initialization; opaque or unrecognized input is conservative.
+//! per compile, beside which the answer is cached; opaque or unrecognized
+//! input is conservative.
 
 use wasmparser::{
     AbstractHeapType, CompositeInnerType, HeapType, Operator, Parser, Payload, TypeRef, ValType,
