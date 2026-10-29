@@ -8,6 +8,8 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -33,6 +35,9 @@ const (
 	// heartbeat (typically a namespace); the Host object itself always
 	// lives in the operator's namespace.
 	hostEnvironmentIndex = "spec.environment"
+	// workloadReplicaSetLegacyAnnotation is an older spelling of
+	// workloadReplicaSetNameAnnotation that the host still reads.
+	workloadReplicaSetLegacyAnnotation = "runtime.wasmcloud.dev/workload-replicaset"
 )
 
 // WorkloadReconciler reconciles a Workload object
@@ -410,12 +415,17 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		}
 	}
 
+	annotations, err := r.replicaAnnotations(ctx, workload)
+	if err != nil {
+		return err
+	}
+
 	req := &runtimev2.WorkloadStartRequest{
 		WorkloadId: string(workload.GetUID()),
 		Workload: &runtimev2.Workload{
 			Namespace:   workload.Namespace,
 			Name:        workload.Name,
-			Annotations: workload.GetAnnotations(),
+			Annotations: annotations,
 			WitWorld:    witWorld,
 			Volumes:     volumes,
 			Service:     service,
@@ -435,6 +445,43 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	workload.Status.WorkloadID = resp.WorkloadStatus.WorkloadId
 	condition.ForceStatusUpdate(ctx)
 	return condition.ErrSkipReconciliation()
+}
+
+// replicaAnnotations is workload's annotations for the host, with the names of
+// its WorkloadReplicaSet and WorkloadDeployment taken from its controlling
+// owners rather than from anything written on it. The host groups replicas,
+// and matches plugin secret grants, by those names.
+func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *runtimev1alpha1.Workload) (map[string]string, error) {
+	annotations := make(map[string]string, len(workload.Annotations)+2)
+	for k, v := range workload.Annotations {
+		switch k {
+		case workloadDeploymentNameAnnotation, workloadReplicaSetNameAnnotation, workloadReplicaSetLegacyAnnotation:
+			continue
+		}
+		annotations[k] = v
+	}
+
+	owner := metav1.GetControllerOf(workload)
+	if owner == nil || owner.APIVersion != runtimev1alpha1.GroupVersion.String() || owner.Kind != "WorkloadReplicaSet" {
+		return annotations, nil
+	}
+	var replicaSet runtimev1alpha1.WorkloadReplicaSet
+	err := r.Get(ctx, client.ObjectKey{Namespace: workload.Namespace, Name: owner.Name}, &replicaSet)
+	switch {
+	case apierrors.IsNotFound(err):
+		return annotations, nil
+	case err != nil:
+		return nil, fmt.Errorf("reading WorkloadReplicaSet %s, which owns this Workload: %w", owner.Name, err)
+	case replicaSet.UID != owner.UID:
+		return annotations, nil
+	}
+	annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
+
+	deployment := metav1.GetControllerOf(&replicaSet)
+	if deployment != nil && deployment.APIVersion == runtimev1alpha1.GroupVersion.String() && deployment.Kind == "WorkloadDeployment" {
+		annotations[workloadDeploymentNameAnnotation] = deployment.Name
+	}
+	return annotations, nil
 }
 
 func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtimev1alpha1.Workload) error {
