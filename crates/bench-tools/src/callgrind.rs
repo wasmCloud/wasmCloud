@@ -178,3 +178,145 @@ pub fn dir_from_target(target_dir: &Path) -> PathBuf {
 pub fn is_instruction_bench(bench: &str) -> bool {
     bench.starts_with("gungraun")
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn instruction_column_follows_events_and_uses_the_last_summary() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("callgrind.out");
+        fs::write(
+            &path,
+            "version: 1\nevents: Dr Ir Dw\nsummary: 9 123 8\nsummary: 10 456 20\n",
+        )?;
+        assert_eq!(read_ir(&path)?, Some(456));
+        fs::write(&path, "events: Ir\nsummary: 0\n")?;
+        assert_eq!(read_ir(&path)?, Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_or_unrelated_event_sets_have_no_instruction_count() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("callgrind.out");
+        for data in [
+            "",
+            "events: Ir\n",
+            "summary: 7\n",
+            "events: Dr Dw\nsummary: 1 2\n",
+            "events: Dr Ir\nsummary: 1\n",
+        ] {
+            fs::write(&path, data)?;
+            assert_eq!(read_ir(&path)?, None, "input: {data:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_and_missing_files_fail_with_path_context() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("callgrind.out");
+        assert!(
+            read_ir(&path)
+                .expect_err("missing output must fail")
+                .to_string()
+                .contains("callgrind.out")
+        );
+        for count in ["invalid", "-1", "18446744073709551616"] {
+            fs::write(&path, format!("events: Dr Ir\nsummary: 1 {count}\n"))?;
+            let error = read_ir(&path).expect_err("invalid instruction count must fail");
+            assert!(error.to_string().contains("summary[1]"));
+            assert!(error.to_string().contains("callgrind.out"));
+        }
+        fs::write(&path, [0xff])?;
+        assert!(
+            read_ir(&path)
+                .expect_err("invalid UTF-8 must fail")
+                .to_string()
+                .contains("read ")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn walker_sums_threads_and_parts_and_ignores_unrelated_files() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        for (relative, text) in [
+            (
+                "pkg/target/beta/p2/callgrind.p2.t1.p1.out",
+                "events: Ir\nsummary: 20\n",
+            ),
+            (
+                "pkg/target/beta/p2/callgrind.p2.t2.p1.out",
+                "events: Ir\nsummary: 0\n",
+            ),
+            (
+                "pkg/target/beta/p2/callgrind.p2.t1.p2.out",
+                "events: Ir\nsummary: 30\n",
+            ),
+            (
+                "pkg/target/alpha/p3/callgrind.out",
+                "events: Dr Ir\nsummary: 1 7\n",
+            ),
+            ("pkg/target/alpha/p3/callgrind.p3.log", "not an output file"),
+            (
+                "pkg/target/alpha/p3/callgrind.incomplete.out",
+                "events: Dr\nsummary: 4\n",
+            ),
+            ("callgrind.out", "events: Ir\nsummary: 900\n"),
+            ("shallow/callgrind.out", "events: Ir\nsummary: 800\n"),
+        ] {
+            let path = root.path().join(relative);
+            fs::create_dir_all(
+                path.parent()
+                    .ok_or_else(|| anyhow::anyhow!("missing parent"))?,
+            )?;
+            fs::write(path, text)?;
+        }
+        let rows = walk(root.path())?;
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.group.as_str(), r.param.as_str(), r.ir))
+                .collect::<Vec<_>>(),
+            [("alpha", "p3", 7), ("beta", "p2", 50)]
+        );
+        assert!(walk(&root.path().join("missing"))?.is_empty());
+        assert_eq!(dir_from_target(root.path()), root.path().join("gungraun"));
+        Ok(())
+    }
+
+    #[test]
+    fn names_and_layouts_classify_only_instruction_benchmarks() {
+        for name in ["callgrind.out", "callgrind.id.t1.p2.out"] {
+            assert!(is_callgrind_out(name.as_ref()));
+        }
+        for name in [
+            "callgrind",
+            "other.out",
+            "callgrind.out.old",
+            "callgrind.log",
+        ] {
+            assert!(!is_callgrind_out(name.as_ref()));
+        }
+        assert!(is_instruction_bench("gungraun"));
+        assert!(is_instruction_bench("gungraun_plugin"));
+        assert!(!is_instruction_bench("http_invoke"));
+        assert_eq!(
+            group_param_from_dir(Path::new("root"), Path::new("root/pkg/bench/group/param")),
+            Some(("group".into(), "param".into()))
+        );
+        assert_eq!(
+            group_param_from_dir(Path::new("root"), Path::new("outside/group/param")),
+            None
+        );
+        assert_eq!(
+            group_param_from_dir(Path::new("root"), Path::new("root/group")),
+            None
+        );
+    }
+}
