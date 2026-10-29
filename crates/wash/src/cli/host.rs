@@ -1637,6 +1637,109 @@ impl CliCommand for HostCommand {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used)]
+mod tls_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn host() -> HostCommand {
+        TestCli::parse_from(["wash-host"]).host
+    }
+
+    #[test]
+    fn outbound_identity_requires_both_files_for_public_callers() {
+        for (cert, key, expected) in [
+            (
+                Some("client.pem"),
+                None,
+                "--http-client-cert-path needs --http-client-key-path",
+            ),
+            (
+                None,
+                Some("client.key"),
+                "--http-client-key-path needs --http-client-cert-path",
+            ),
+        ] {
+            let mut host = host();
+            host.http_client_cert_path = cert.map(PathBuf::from);
+            host.http_client_key_path = key.map(PathBuf::from);
+            assert_eq!(host.client_tls_options().unwrap_err().to_string(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn outbound_tls_loads_static_and_rotating_identities() -> anyhow::Result<()> {
+        wash_runtime::init_crypto();
+        let dir = tempfile::tempdir()?;
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert_path = dir.path().join("client.pem");
+        let key_path = dir.path().join("client.key");
+        std::fs::write(&cert_path, cert.pem())?;
+        std::fs::write(&key_path, signing_key.serialize_pem())?;
+        let mut host = host();
+        host.egress_handler()?;
+        host.http_client_cert_path = Some(cert_path.clone());
+        host.http_client_key_path = Some(key_path.clone());
+        host.http_client_ca_paths = vec![cert_path];
+        let options = host.client_tls_options()?;
+        assert_eq!(options.extra_ca_paths, host.http_client_ca_paths);
+        assert!(options.client_identity.is_some());
+        host.egress_handler()?;
+        host.http_client_identity_refresh = Some(std::time::Duration::from_secs(60));
+        host.egress_handler()?;
+        host.http_client_identity_refresh = Some(std::time::Duration::ZERO);
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid --http-client-identity-refresh"),
+            "{error:#}"
+        );
+        std::fs::write(key_path, "not a private key")?;
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load the outbound client identity"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_tls_reports_missing_identity_and_ca_files() -> anyhow::Result<()> {
+        wash_runtime::init_crypto();
+        let dir = tempfile::tempdir()?;
+        let mut host = host();
+        host.http_client_identity_refresh = Some(std::time::Duration::from_secs(1));
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error.to_string().contains("needs --http-client-cert-path"),
+            "{error:#}"
+        );
+        host.http_client_identity_refresh = None;
+        host.http_client_ca_paths = vec![dir.path().join("missing.pem")];
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load --http-client-ca-path CA certificates"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod nats_tests {
     use clap::Parser;
 
@@ -1949,6 +2052,7 @@ host:
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod shutdown_tests {
     use std::path::PathBuf;
     use std::time::Duration;
@@ -2015,6 +2119,7 @@ mod shutdown_tests {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod policy_mode_tests {
     use clap::Parser;
 
@@ -2069,6 +2174,7 @@ mod policy_mode_tests {
 }
 
 #[cfg(all(test, feature = "host-component-plugins"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::host_plugin_registry_credentials;
 
@@ -2142,6 +2248,7 @@ impl ProcessMemoryPolicy {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod process_memory_policy_tests {
     use super::*;
     #[test]
