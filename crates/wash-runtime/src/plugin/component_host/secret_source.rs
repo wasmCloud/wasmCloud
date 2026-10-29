@@ -9,7 +9,7 @@
 //!
 //! [`CallerIdentity::Host`]: crate::engine::ctx::CallerIdentity::Host
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -265,10 +265,23 @@ impl HostSecretSource for ComponentSecretSource {
             }
         };
         match reply {
-            Ok(pairs) => Ok(pairs
-                .into_iter()
-                .map(|(key, value)| (SecretKey::from(key), value))
-                .collect()),
+            Ok(pairs) => {
+                let mut answer = BTreeMap::new();
+                for (key, value) in pairs {
+                    match answer.entry(SecretKey::from(key)) {
+                        btree_map::Entry::Vacant(slot) => {
+                            slot.insert(value);
+                        }
+                        btree_map::Entry::Occupied(slot) => {
+                            return Err(SecretSourceError::InvalidAnswer(format!(
+                                "answered `{}` more than once",
+                                slot.key()
+                            )));
+                        }
+                    }
+                }
+                Ok(answer)
+            }
             Err(SourceError::NotFound(keys)) => Err(SecretSourceError::NotFound(
                 keys.into_iter().map(SecretKey::from).collect(),
             )),

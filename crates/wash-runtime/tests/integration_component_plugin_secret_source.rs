@@ -108,14 +108,15 @@ async fn a_plugin_secret_reaches_the_consuming_plugin() -> Result<()> {
 }
 
 /// A refusal fails the deploy with the source's case and message, a key the
-/// source does not have fails it naming the key, and so does a binary value,
-/// since plugin config holds text.
+/// source does not have fails it naming the key, and so do a binary value,
+/// since plugin config holds text, and a key answered twice.
 #[tokio::test]
 async fn a_refused_or_missing_secret_fails_the_deploy() -> Result<()> {
     for (key, expect) in [
         ("denied", "access denied"),
         ("absent", "no key `absent`"),
         ("binary", "not UTF-8"),
+        ("twice", "answered `twice` more than once"),
     ] {
         let (_, h) = start(kv_reading_secrets(&[("tier", key)])).await?;
         let resp = h.workload_start(caller("secret-source-refused")).await?;
