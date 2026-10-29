@@ -277,9 +277,6 @@ struct InstalledPool {
     max_memory_size: u64,
     /// Elements each pooled table has room for, which sizes the table pool.
     table_elements: usize,
-    /// Bytes each pooled fiber stack has, which with a guard page sizes the
-    /// stack pool.
-    async_stack_size: usize,
     totals: pool_usage::PoolTotals,
 }
 
@@ -1384,7 +1381,9 @@ impl EngineBuilder {
     /// the stack and table commit advisories which share of the commit limit
     /// the host meant to use, so a count derived within that share is not
     /// warned about by the check it was sized for. Off, the advisories warn
-    /// past a tenth; on, past the derivation's quarter.
+    /// past a tenth; on, past the derivation's quarter. Turn it on only for
+    /// a count that was derived that way: a count the operator named should
+    /// keep the usual threshold.
     #[must_use]
     pub fn with_max_memories_from_memory_precommit_limit(mut self, enable: bool) -> Self {
         self.max_memories_from_memory_precommit_limit = enable;
@@ -1623,6 +1622,10 @@ impl EngineBuilder {
         // Start from the caller-supplied base config (or wasmtime's default) and
         // layer the builder-managed settings on top of it.
         let has_custom_config = self.config.is_some();
+        // A caller's base config may set what the builder otherwise leaves at
+        // wasmtime's defaults (the fiber stack size among them); the pool
+        // advisories can only assume the defaults when there is none.
+        let base_config_given = self.config.is_some();
         let mut config = self.config.take().unwrap_or_default();
 
         // Default the pooling allocator on only when starting from wasmtime's
@@ -1702,7 +1705,6 @@ impl EngineBuilder {
             installed_pool = Some(InstalledPool {
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
                 table_elements: pooling.get_table_elements(),
-                async_stack_size: config.get_async_stack_size(),
                 totals: pool_usage::PoolTotals::of(&pooling),
             });
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
@@ -1711,22 +1713,27 @@ impl EngineBuilder {
         }
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
         let pool_totals = installed_pool.map(|pool| pool.totals);
-        // Against the pool that was installed, not the knobs: the environment
-        // or a caller's own pooling config can move its memory count and slot
-        // size, and with no pool there is no reservation to warn about.
+        // Before the engine is built, so a pool that makes the build fail is
+        // explained on the very start that fails. Against the pool that was
+        // installed, not the knobs: the environment or a caller's own pooling
+        // config can move its memory count and slot size, and with no pool
+        // there is no reservation to warn about. The builder never sets the
+        // fiber stack size, so it is wasmtime's default unless a base config
+        // was given; that one case is checked once the engine can say.
+        let assumed_stack_size =
+            (!base_config_given).then_some(host_memory::WASMTIME_DEFAULT_ASYNC_STACK_SIZE);
         if let Some(pool) = installed_pool {
             for advisory in host_memory::pool_advisories(
                 &pool.totals,
                 pool.max_memory_size,
                 pool.table_elements,
-                pool.async_stack_size,
+                assumed_stack_size,
                 self.max_memories_from_memory_precommit_limit,
                 memory_limit,
             ) {
                 tracing::warn!("{advisory}");
             }
         }
-
         // Reported here so every embedder says what it built. The reservation
         // is `total_memories x slot_size`, not the instance count, and the slot
         // does not shrink with the heap ceiling.
@@ -1831,14 +1838,20 @@ impl EngineBuilder {
             Some(pool) => e.context(format!(
                 "building the engine failed with a pooling allocator reserving {} of address \
                  space ({} memories of {} each) out of the {} this process can map, and \
-                 mapping {} for {} pooled tables, which Windows and a Linux kernel with \
-                 vm.overcommit_memory=2 commit up front; if the pool is the cause, lower \
-                 max-memories or WASMTIME_POOLING_TOTAL_MEMORIES (WASMTIME_POOLING_TOTAL_TABLES \
-                 for the tables)",
+                 mapping {} for {} pooled stacks and {} for {} pooled tables, which Windows, a \
+                 Linux kernel with vm.overcommit_memory=2 and a finite RLIMIT_DATA charge up \
+                 front; if the pool is the cause, lower max-memories or \
+                 WASMTIME_POOLING_TOTAL_MEMORIES (WASMTIME_POOLING_TOTAL_STACKS and \
+                 WASMTIME_POOLING_TOTAL_TABLES for the stacks and tables)",
                 host_memory::render_bytes(pool.reservation()),
                 pool.totals.memories,
                 host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
                 host_memory::render_bytes(host_memory::usable_address_space()),
+                host_memory::render_bytes(host_memory::pool_stack_bytes(
+                    pool.totals.stacks,
+                    assumed_stack_size.unwrap_or(host_memory::WASMTIME_DEFAULT_ASYNC_STACK_SIZE),
+                )),
+                pool.totals.stacks,
                 host_memory::render_bytes(host_memory::pool_table_bytes(
                     pool.totals.tables,
                     pool.table_elements
@@ -1847,6 +1860,20 @@ impl EngineBuilder {
             )),
             None => e,
         })?;
+        // The stack advisory deferred above: with a base config only the
+        // engine knows its stack size.
+        if let Some(pool) = installed_pool
+            && assumed_stack_size.is_none()
+            && let Some(advisory) = host_memory::pool_stack_advisory(
+                pool.totals.stacks,
+                inner.get_async_stack_size(),
+                self.max_memories_from_memory_precommit_limit,
+                memory_limit,
+            )
+        {
+            tracing::warn!("{advisory}");
+        }
+
         spawn_epoch_ticker(&inner)?;
         let process_memory = match max_process_memory_bytes {
             Some(limit) => {
