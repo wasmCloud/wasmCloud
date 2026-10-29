@@ -48,8 +48,9 @@ use hyper_util::{
 use opentelemetry::KeyValue;
 use opentelemetry::context::FutureExt;
 use opentelemetry_semantic_conventions::attribute::{
-    ERROR_TYPE, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE, HTTP_RESPONSE_STATUS_CODE,
-    OTEL_STATUS_CODE, RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT, URL_FULL, URL_PATH,
+    ERROR_TYPE, FAAS_NAME, FAAS_TRIGGER, HTTP_REQUEST_METHOD, HTTP_RESPONSE_BODY_SIZE,
+    HTTP_RESPONSE_STATUS_CODE, OTEL_STATUS_CODE, RPC_GRPC_STATUS_CODE, SERVER_ADDRESS, SERVER_PORT,
+    URL_FULL, URL_PATH,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -2521,12 +2522,10 @@ async fn dispatch_local(
         }
         LocalTarget::Component(handle) => handle,
     };
-    let req_span = tracing::span!(
-        tracing::Level::INFO,
-        "invoke_component_handler",
-        workload.name = handle.workload.name(),
-        workload.namespace = handle.workload.namespace(),
-        workload.id = handle.workload.id(),
+    let req_span = component_handler_span(
+        handle.workload.name(),
+        handle.workload.namespace(),
+        handle.workload.id(),
     );
     invoke_component_handler(&handle, request, guest_meter)
         .instrument(req_span)
@@ -3474,7 +3473,6 @@ async fn handle_http_request<T: Router>(
     let response = match workload_handle {
         Some(handle) => {
             let req_span = component_handler_span(
-                &method,
                 handle.workload.name(),
                 handle.workload.namespace(),
                 handle.workload.id(),
@@ -3517,18 +3515,22 @@ async fn handle_http_request<T: Router>(
     Ok(response)
 }
 
+/// The internal span around one component invocation. It keeps its tracing
+/// name as the exported name so it can be queried apart from the server and
+/// client spans, which semconv names by HTTP method. One host serves many
+/// workloads, so `faas.name` is a span attribute rather than a resource one.
 fn component_handler_span(
-    method: &hyper::Method,
     workload_name: &str,
     workload_namespace: &str,
     workload_id: &str,
 ) -> tracing::Span {
     tracing::info_span!(
         "invoke_component_handler",
-        otel.name = %method,
         workload.name = workload_name,
         workload.namespace = workload_namespace,
         workload.id = workload_id,
+        { FAAS_NAME } = workload_name,
+        { FAAS_TRIGGER } = "http",
     )
 }
 
@@ -4396,7 +4398,7 @@ mod tests {
     }
 
     #[test]
-    fn component_handler_span_exports_method_name() {
+    fn component_handler_span_exports_a_stable_name() {
         let exporter = RecordingSpanExporter::default();
         let spans = exporter.spans.clone();
         let provider = SdkTracerProvider::builder()
@@ -4407,22 +4409,39 @@ mod tests {
             tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
 
         tracing::subscriber::with_default(subscriber, || {
-            let invocation =
-                component_handler_span(&hyper::Method::PATCH, "workload", "namespace", "id");
-            assert_eq!(
-                invocation.metadata().unwrap().name(),
-                "invoke_component_handler"
-            );
-            drop(invocation);
+            // A parallel test may have reached these callsites first with no
+            // subscriber, caching them as disabled.
+            tracing::callsite::rebuild_interest_cache();
+            drop(component_handler_span("workload", "namespace", "id"));
+            let uri = hyper::Uri::from_static("http://example.test/path");
+            drop(outbound_client_span(&hyper::Method::PATCH, &uri));
         });
 
         provider.force_flush().unwrap();
         let spans = spans
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(spans.len(), 1, "exported spans: {spans:#?}");
-        assert!(spans.iter().all(|span| span.name == "PATCH"));
-        assert_eq!(spans[0].span_kind, SpanKind::Internal);
+        let exported: Vec<_> = spans
+            .iter()
+            .map(|span| (span.name.as_ref(), span.span_kind.clone()))
+            .collect();
+        assert_eq!(
+            exported,
+            [
+                ("invoke_component_handler", SpanKind::Internal),
+                ("PATCH", SpanKind::Client),
+            ]
+        );
+        let attribute = |key: &str| {
+            spans[0]
+                .attributes
+                .iter()
+                .find(|kv| kv.key.as_str() == key)
+                .map(|kv| kv.value.to_string())
+        };
+        assert_eq!(attribute("workload.name").as_deref(), Some("workload"));
+        assert_eq!(attribute(FAAS_NAME).as_deref(), Some("workload"));
+        assert_eq!(attribute(FAAS_TRIGGER).as_deref(), Some("http"));
     }
 
     /// `with_quotas` rebuilds an eagerly-configured client cache and must
