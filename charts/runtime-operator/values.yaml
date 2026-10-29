@@ -773,30 +773,41 @@ runtime:
       # binding's `secretFrom` uses. `keys` maps each config key to the key
       # the plugin is asked for. `workloads` is required: the namespaces (and
       # optionally names) whose workloads may have its values, or `all`. A
-      # name matches a WorkloadDeployment's replicas, else a
-      # WorkloadReplicaSet's, else a Workload's own name. A binding is visible to every workload on the host,
-      # so a workload outside the grant never receives them: its deploy fails.
-      # On `wasmcloud-secrets`, whose keys each stand alone, an entry the
-      # plugin entry's own `secretFrom` names is instead left out of its
-      # config.
-      # The host asks again on every workload bind, so a rotation reaches the
-      # next bind; no volume is mounted and no Reloader annotation is added.
-      # Only `plugins` bindings (or a native entry's own `secretFrom`) can name
-      # one.
+      # name is a WorkloadDeployment's, else a WorkloadReplicaSet's, else the
+      # Workload's own; it narrows a grant within a namespace, which is the
+      # boundary. The host asks the plugin on every workload bind, naming the
+      # workload, so one entry serves each workload its own value when the
+      # plugin scopes its answer by that name; a rotation reaches the next
+      # bind, and no volume or Reloader annotation is involved.
+      # A workload outside the grant fails to deploy. On `wasmcloud-secrets`,
+      # whose keys each stand alone, an entry its own `secretFrom` names is
+      # instead left out of that workload's config.
+      # Only `plugins` entries and bindings can name one, and while an entry's
+      # own `secretFrom` names one, no other plugin may serve the same
+      # interface, or a workload's plain import would bypass the grant.
       #
       #   pluginSecrets:
-      #     billing-db:
+      #     # Each workload's own secrets, under the key names it imports.
+      #     workload-secrets:
       #       plugin: vault-secrets
       #       keys:
-      #         url: apps/billing/pg-url
+      #         db-password: db-password
+      #       workloads: all
+      #     # One postgres role every replica of `billing/reports` shares.
+      #     reports-db:
+      #       plugin: vault-secrets
+      #       keys:
+      #         url: platform/postgres/reports-url
       #       workloads:
       #         - namespace: billing
-      #           name: billing-api
+      #           name: reports
       #   plugins:
+      #     - id: wasmcloud-secrets
+      #       secretFrom: [workload-secrets]
       #     - id: wasmcloud-postgres
       #       bindings:
-      #         app-db:
-      #           secretFrom: [billing-db]
+      #         reports-db:
+      #           secretFrom: [reports-db]
       pluginSecrets: {}
       # -- Deprecated alias for `plugins`, from when only component plugins
       # could be declared. Entries here must name an `image` or `file`; a
