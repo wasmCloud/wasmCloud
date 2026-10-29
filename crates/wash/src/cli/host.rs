@@ -1177,19 +1177,11 @@ impl CliCommand for HostCommand {
         // in a flag, and reporting it after a NATS dial has already failed
         // buries the actionable error under an unrelated one. The resolved
         // numbers are reported later, by the engine that installs them.
-        // A host runs one engine, so a pool count nobody named is sized to the
-        // machine here rather than left at the engine's library default.
         use wash_runtime::engine::host_memory as hm;
-        let derive = self.max_memories.is_none() && self.core_instances.is_none();
-        let derived_max_memories = derive.then(|| {
-            let derivation = hm::MaxMemoriesDerivation::default()
-                .with_memory_precommit_limit(self.max_memories_from_memory_precommit_limit);
-            hm::derive_max_memories_with(derivation)
-        });
         let host_memory = hm::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
-            self.max_memories.or(derived_max_memories),
+            self.max_memories,
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
@@ -1331,12 +1323,14 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
-        // Only when the count was derived: a count the operator named was
-        // never sized against the precommit limit, so the advisories keep
-        // their usual threshold for it, as the flag's help promises.
-        engine_builder = engine_builder.with_max_memories_from_memory_precommit_limit(
-            self.max_memories_from_memory_precommit_limit && derived_max_memories.is_some(),
-        );
+        // A host runs one engine, so a pool count nobody named is sized to the
+        // machine rather than left at the engine's library default.
+        if self.max_memories.is_none() && self.core_instances.is_none() {
+            engine_builder = engine_builder.with_derived_max_memories(
+                hm::MaxMemoriesDerivation::default()
+                    .with_memory_precommit_limit(self.max_memories_from_memory_precommit_limit),
+            );
+        }
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {

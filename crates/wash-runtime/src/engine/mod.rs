@@ -1299,7 +1299,7 @@ impl FromStr for WasmProposal {
 pub struct EngineBuilder {
     config: Option<wasmtime::Config>,
     use_pooling_allocator: Option<bool>,
-    max_memories: Option<u32>,
+    max_memories: Option<MaxMemories>,
     max_core_instances: Option<u32>,
     pooling_config: Option<PoolingAllocationConfig>,
     proposals: std::collections::BTreeSet<WasmProposal>,
@@ -1314,12 +1314,31 @@ pub struct EngineBuilder {
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
     max_process_memory_bytes: Option<u64>,
-    max_memories_from_memory_precommit_limit: bool,
     max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
+}
+
+/// The memory count [`EngineBuilder`] was given, and how.
+#[derive(Debug, Clone, Copy)]
+enum MaxMemories {
+    /// [`EngineBuilder::with_max_memories`].
+    Named(u32),
+    /// [`EngineBuilder::with_derived_max_memories`].
+    Derived {
+        count: u32,
+        sized_to_commit_limit: bool,
+    },
+}
+
+impl MaxMemories {
+    fn count(self) -> u32 {
+        match self {
+            Self::Named(count) | Self::Derived { count, .. } => count,
+        }
+    }
 }
 
 impl EngineBuilder {
@@ -1369,23 +1388,6 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_socket_policy(mut self, policy: Arc<crate::sockets::policy::SocketPolicy>) -> Self {
         self.socket_policy = Some(policy);
-        self
-    }
-
-    /// Whether this host sized `max_memories` against its commit limit
-    /// (`host_memory::MaxMemoriesDerivation::from_memory_precommit_limit`).
-    ///
-    /// The engine derives nothing from it: the count arrives through
-    /// [`Self::with_host_memory`] or [`Self::with_max_memories`]. It tells
-    /// the stack and table commit advisories which share of the commit limit
-    /// the host meant to use, so a count derived within that share is not
-    /// warned about by the check it was sized for. Off, the advisories warn
-    /// past a tenth; on, past the derivation's quarter. Turn it on only for
-    /// a count that was derived that way: a count the operator named should
-    /// keep the usual threshold.
-    #[must_use]
-    pub fn with_max_memories_from_memory_precommit_limit(mut self, enable: bool) -> Self {
-        self.max_memories_from_memory_precommit_limit = enable;
         self
     }
 
@@ -1462,7 +1464,27 @@ impl EngineBuilder {
     /// full [`PoolingAllocationConfig`] is supplied via
     /// [`with_pooling_config`](Self::with_pooling_config).
     pub fn with_max_memories(mut self, memories: u32) -> Self {
-        self.max_memories = Some(memories);
+        self.max_memories = Some(MaxMemories::Named(memories));
+        self
+    }
+
+    /// [`with_max_memories`](Self::with_max_memories) at the count
+    /// [`host_memory::derive_max_memories_with`] sizes to this machine now.
+    /// A count derived against the commit limit lets the stack and table
+    /// advisories allow that limit's share, unless a full
+    /// [`PoolingAllocationConfig`] replaces it. The later of the two calls
+    /// wins.
+    ///
+    /// For a host process that runs one engine: each engine in a process
+    /// reserves address space for its whole pool.
+    pub fn with_derived_max_memories(
+        mut self,
+        derivation: host_memory::MaxMemoriesDerivation,
+    ) -> Self {
+        self.max_memories = Some(MaxMemories::Derived {
+            count: host_memory::derive_max_memories_with(derivation),
+            sized_to_commit_limit: derivation.from_memory_precommit_limit,
+        });
         self
     }
 
@@ -1498,6 +1520,19 @@ impl EngineBuilder {
         self.pooling_config = Some(config);
         self.use_pooling_allocator = Some(true);
         self
+    }
+
+    /// Whether the pool keeps a count derived against the commit limit: a
+    /// caller's own pooling config replaces it.
+    fn sized_to_commit_limit(&self) -> bool {
+        let derived = match self.max_memories {
+            Some(MaxMemories::Derived {
+                sized_to_commit_limit,
+                ..
+            }) => sized_to_commit_limit,
+            Some(MaxMemories::Named(_)) | None => false,
+        };
+        derived && self.pooling_config.is_none()
     }
 
     /// Enables an additional WebAssembly proposal on the engine.
@@ -1677,6 +1712,7 @@ impl EngineBuilder {
         // Read back from the installed pool: the environment and a
         // caller-supplied config both override what was asked for.
         let mut installed_pool: Option<InstalledPool> = None;
+        let sized_to_commit_limit = self.sized_to_commit_limit();
         if use_pooling_allocator
             && let Ok(true) = on_signal_quiet_thread(is_pooling_allocator_supported)
         {
@@ -1685,9 +1721,10 @@ impl EngineBuilder {
                 // The builder's own knobs win over the budgets'. A memory
                 // count set here re-derives the core total, since the
                 // budgets' was derived beside a different memory count.
-                let memories = self.max_memories.unwrap_or(host_memory.max_memories);
+                let builder_memories = self.max_memories.map(MaxMemories::count);
+                let memories = builder_memories.unwrap_or(host_memory.max_memories);
                 let core_instances = self.max_core_instances.unwrap_or_else(|| {
-                    if self.max_memories.is_some() {
+                    if builder_memories.is_some() {
                         derived_pool_totals(memories).core_instances
                     } else {
                         host_memory.core_instances
@@ -1726,7 +1763,7 @@ impl EngineBuilder {
                 pool.max_memory_size,
                 pool.table_elements,
                 assumed_stack_size,
-                self.max_memories_from_memory_precommit_limit,
+                sized_to_commit_limit,
                 memory_limit,
             ) {
                 tracing::warn!("{advisory}");
@@ -1870,7 +1907,7 @@ impl EngineBuilder {
             && let Some(advisory) = host_memory::pool_stack_advisory(
                 pool.totals.stacks,
                 inner.get_async_stack_size(),
-                self.max_memories_from_memory_precommit_limit,
+                sized_to_commit_limit,
                 memory_limit,
             )
         {
@@ -2621,6 +2658,32 @@ mod tests {
             .with_pooling_config(pool)
             .build()
             .expect("external pooling config should build");
+    }
+
+    /// Only a count derived against the commit limit is allowed that limit's
+    /// share; a later named count or a caller's pooling config replaces it.
+    #[test]
+    fn only_a_count_derived_to_the_commit_limit_takes_its_share() {
+        let precommit =
+            host_memory::MaxMemoriesDerivation::default().with_memory_precommit_limit(true);
+        let derived = || Engine::builder().with_derived_max_memories(precommit);
+        assert!(derived().sized_to_commit_limit());
+        assert!(
+            !Engine::builder()
+                .with_derived_max_memories(host_memory::MaxMemoriesDerivation::default())
+                .sized_to_commit_limit()
+        );
+        assert!(!derived().with_max_memories(64).sized_to_commit_limit());
+        assert!(
+            !derived()
+                .with_pooling_config(PoolingAllocationConfig::default())
+                .sized_to_commit_limit()
+        );
+        assert!(
+            !Engine::builder()
+                .with_max_memories(64)
+                .sized_to_commit_limit()
+        );
     }
 
     // Proposal names parse case-insensitively and accept `_`/`-` interchangeably;
