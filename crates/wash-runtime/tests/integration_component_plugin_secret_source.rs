@@ -64,16 +64,16 @@ fn caller(host: &str) -> wash_runtime::types::WorkloadStartRequest {
     )
 }
 
-/// The secret reaches the consuming plugin's bind as config, the source was
-/// told which plugin and binding it was resolving for, and
-/// `identity.get-caller` read `host` inside the call.
+/// The secret reaches the consuming plugin's bind as config, and the source
+/// was told which plugin and binding it was resolving for and which workload's
+/// bind needed it.
 #[tokio::test]
 async fn a_plugin_secret_reaches_the_consuming_plugin() -> Result<()> {
     let host = "secret-source-ok";
     let (addr, h) = start(kv_reading_secrets(&[
         ("tier", "tier"),
         ("who", "who"),
-        ("caller", "caller"),
+        ("workload", "workload"),
     ]))
     .await?;
     let resp = h.workload_start(caller(host)).await?;
@@ -89,16 +89,21 @@ async fn a_plugin_secret_reaches_the_consuming_plugin() -> Result<()> {
     assert_eq!(body, "platinum");
     let (_, body) = req(&client, &addr, host, "/bound-config?key=who").await?;
     assert_eq!(body, format!("{KV_ID}/-"));
-    let (_, body) = req(&client, &addr, host, "/bound-config?key=caller").await?;
-    assert_eq!(body, "host");
+    let (_, body) = req(&client, &addr, host, "/bound-config?key=workload").await?;
+    assert_eq!(body, format!("test/{host}"));
     Ok(())
 }
 
-/// A refusal fails the deploy with the source's case and message, and a key
-/// the source does not have fails it naming the key.
+/// A refusal fails the deploy with the source's case and message, a key the
+/// source does not have fails it naming the key, and so does a binary value,
+/// since plugin config holds text.
 #[tokio::test]
 async fn a_refused_or_missing_secret_fails_the_deploy() -> Result<()> {
-    for (key, expect) in [("denied", "access denied"), ("absent", "`absent`")] {
+    for (key, expect) in [
+        ("denied", "access denied"),
+        ("absent", "no key `absent`"),
+        ("binary", "not UTF-8"),
+    ] {
         let (_, h) = start(kv_reading_secrets(&[("tier", key)])).await?;
         let resp = h.workload_start(caller("secret-source-refused")).await?;
         assert_eq!(resp.workload_status.workload_state, WorkloadState::Error);

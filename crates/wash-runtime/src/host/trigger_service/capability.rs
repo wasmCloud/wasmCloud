@@ -18,7 +18,9 @@ use crate::engine::ctx::{CallerIdentity, SharedCtx, WorkloadCaller};
 use crate::engine::store::relocate::{self, Relocated};
 use crate::host::job_registry::{JobGuard, JobRegistry};
 use crate::plugin::SecretValue;
-use crate::plugin::component_host::{SecretSourceRequest, SecretSourceResolve, SourceError};
+use crate::plugin::component_host::{
+    SecretSourceRequest, SecretSourceResolve, SourceError, secret_value,
+};
 
 /// One exported capability function the TriggerService should be ready to serve,
 /// identified by its interface and function name (e.g. `acme:kv/store@0.1.0` /
@@ -290,7 +292,7 @@ impl AccessorTask<SharedCtx> for SecretSourceTask {
                 return Ok(());
             }
         };
-        // Bound as the host, so `identity.get-caller` reads `host` inside.
+        // Bound as the host, so no call it makes is attributed to a workload.
         job_guard.set_task(call.task(), CallerIdentity::Host);
         let result = crate::engine::abandon::watch_until_abandoned(
             &calls,
@@ -302,7 +304,7 @@ impl AccessorTask<SharedCtx> for SecretSourceTask {
             Ok((answer,)) => Ok(answer.map(|pairs| {
                 pairs
                     .into_iter()
-                    .map(|(key, value)| (key, SecretValue::new(value)))
+                    .map(|(key, value)| (key, secret_value(value)))
                     .collect()
             })),
             Err(e) => Err(e.context("secret-source resolve trapped")),

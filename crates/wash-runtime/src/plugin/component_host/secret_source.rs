@@ -5,11 +5,11 @@
 //! The host calls it, never a workload, so it is reserved like the lifecycle
 //! export and kept apart from any workload-facing secrets interface the plugin
 //! serves. The call runs as [`CallerIdentity::Host`], and the `request` record
-//! names the consuming plugin and binding.
+//! names the consuming binding and the workload whose bind needs the values.
 //!
 //! [`CallerIdentity::Host`]: crate::engine::ctx::CallerIdentity::Host
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -21,7 +21,7 @@ use wasmtime::component::{Instance, TypedFunc};
 use crate::engine::abandon::DispatchedCall;
 use crate::engine::ctx::SharedCtx;
 use crate::host::trigger_service::{CapabilityJob, SecretSourceCall, SecretSourceReply};
-use crate::plugin::{HostSecretSource, SecretRequest, SecretSourceError, SecretValue};
+use crate::plugin::{HostSecretSource, SecretRequest, SecretSourceError};
 
 use super::{ComponentHostPluginState, ExportedInterface};
 
@@ -32,13 +32,22 @@ mod bindings {
     });
 }
 
+use bindings::exports::wasmcloud::host::secret_source::{Consumer, Workload};
 pub(crate) use bindings::exports::wasmcloud::host::secret_source::{
-    Request as SecretSourceRequest, SourceError,
+    Request as SecretSourceRequest, SecretValue as WitSecretValue, SourceError,
 };
 
 /// `resolve`, typed against the published `secret-source-provider` world.
 pub(crate) type SecretSourceResolve =
-    TypedFunc<(SecretSourceRequest,), (Result<Vec<(String, String)>, SourceError>,)>;
+    TypedFunc<(SecretSourceRequest,), (Result<Vec<(String, WitSecretValue)>, SourceError>,)>;
+
+/// A `secret-value` answered by the plugin, as the host keeps it.
+pub(crate) fn secret_value(value: WitSecretValue) -> crate::plugin::SecretValue {
+    match value {
+        WitSecretValue::String(text) => crate::plugin::SecretValue::new(text),
+        WitSecretValue::Bytes(bytes) => crate::plugin::SecretValue::from_bytes(bytes),
+    }
+}
 
 /// Interface name of the export, matched by name for the same reason as
 /// [`super::HOST_LIFECYCLE_EXPORT`].
@@ -65,13 +74,13 @@ pub(super) fn check_secret_source_export(
             && matches!(resolve.param_tys.as_ref(), [request] if is_request(request))
             && matches!(resolve.result_tys.as_ref(), [result] if is_resolve_result(result)),
         "host component plugin '{id}' {RESOLVE} does not match wasmcloud:host/secret-source: \
-         expected `async func(request: request) -> result<list<tuple<secret-key, string>>, \
-         source-error>`"
+         expected `async func(request: request) -> result<list<tuple<secret-key, \
+         secret-value>>, source-error>`"
     );
     Ok(())
 }
 
-/// `record request { consumer: string, binding: option<string>, keys: list<string> }`
+/// `record request { consumer: consumer, workload: workload, keys: list<string> }`
 fn is_request(ty: &Type) -> bool {
     let Type::Record(record) = ty else {
         return false;
@@ -79,12 +88,54 @@ fn is_request(ty: &Type) -> bool {
     let fields: Vec<_> = record.fields().map(|f| (f.name, f.ty)).collect();
     matches!(
         fields.as_slice(),
-        [("consumer", Type::String), ("binding", Type::Option(binding)), ("keys", Type::List(keys))]
-            if matches!(binding.ty(), Type::String) && matches!(keys.ty(), Type::String)
+        [("consumer", consumer), ("workload", workload), ("keys", Type::List(keys))]
+            if is_consumer(consumer) && is_workload(workload) && matches!(keys.ty(), Type::String)
     )
 }
 
-/// `result<list<tuple<string, string>>, source-error>`
+/// `record consumer { plugin: string, binding: option<string> }`
+fn is_consumer(ty: &Type) -> bool {
+    let Type::Record(record) = ty else {
+        return false;
+    };
+    let fields: Vec<_> = record.fields().map(|f| (f.name, f.ty)).collect();
+    matches!(
+        fields.as_slice(),
+        [("plugin", Type::String), ("binding", Type::Option(binding))]
+            if matches!(binding.ty(), Type::String)
+    )
+}
+
+/// `record workload { id: string, name: string, namespace: string }`
+fn is_workload(ty: &Type) -> bool {
+    let Type::Record(record) = ty else {
+        return false;
+    };
+    let fields: Vec<_> = record.fields().map(|f| (f.name, f.ty)).collect();
+    matches!(
+        fields.as_slice(),
+        [
+            ("id", Type::String),
+            ("name", Type::String),
+            ("namespace", Type::String)
+        ]
+    )
+}
+
+/// `variant secret-value { string(string), bytes(list<u8>) }`
+fn is_secret_value(ty: &Type) -> bool {
+    let Type::Variant(variant) = ty else {
+        return false;
+    };
+    let cases: Vec<_> = variant.cases().map(|c| (c.name, c.ty)).collect();
+    matches!(
+        cases.as_slice(),
+        [("string", Some(Type::String)), ("bytes", Some(Type::List(bytes)))]
+            if matches!(bytes.ty(), Type::U8)
+    )
+}
+
+/// `result<list<tuple<string, secret-value>>, source-error>`
 fn is_resolve_result(ty: &Type) -> bool {
     let Type::Result(result) = ty else {
         return false;
@@ -93,7 +144,7 @@ fn is_resolve_result(ty: &Type) -> bool {
         Some(Type::List(list)) => match list.ty() {
             Type::Tuple(pair) => {
                 let types: Vec<_> = pair.types().collect();
-                matches!(types.as_slice(), [Type::String, Type::String])
+                matches!(types.as_slice(), [Type::String, value] if is_secret_value(value))
             }
             _ => false,
         },
@@ -102,14 +153,21 @@ fn is_resolve_result(ty: &Type) -> bool {
     let err = match result.err() {
         Some(Type::Variant(variant)) => {
             let cases: Vec<_> = variant.cases().map(|c| (c.name, c.ty)).collect();
-            cases.len() == 3
-                && cases
-                    .iter()
-                    .zip(["access-denied", "unavailable", "other"])
-                    .all(|((name, ty), expected)| {
-                        *name == expected
-                            && matches!(ty, Some(Type::Option(o)) if matches!(o.ty(), Type::String))
-                    })
+            let optional_text = |ty: &Option<Type>| matches!(ty, Some(Type::Option(o)) if matches!(o.ty(), Type::String));
+            match cases.as_slice() {
+                [
+                    ("not-found", Some(Type::List(keys))),
+                    ("access-denied", denied),
+                    ("unavailable", unavailable),
+                    ("other", other),
+                ] => {
+                    matches!(keys.ty(), Type::String)
+                        && optional_text(denied)
+                        && optional_text(unavailable)
+                        && optional_text(other)
+                }
+                _ => false,
+            }
         }
         _ => false,
     };
@@ -150,7 +208,7 @@ impl HostSecretSource for ComponentSecretSource {
     async fn resolve(
         &self,
         request: SecretRequest,
-    ) -> Result<HashMap<String, SecretValue>, SecretSourceError> {
+    ) -> Result<BTreeMap<String, crate::plugin::SecretValue>, SecretSourceError> {
         let state = &self.state;
         let failed = |msg: String| SecretSourceError::Call(anyhow::anyhow!(msg));
         let sender = state.sender().ok_or_else(|| {
@@ -163,8 +221,15 @@ impl HostSecretSource for ComponentSecretSource {
         let call = DispatchedCall::new("secret-source (plugin)", state.lifecycle_timeout());
         let job = CapabilityJob::SecretSource(SecretSourceCall {
             request: SecretSourceRequest {
-                consumer: request.consumer,
-                binding: request.binding,
+                consumer: Consumer {
+                    plugin: request.consumer.plugin,
+                    binding: request.consumer.binding,
+                },
+                workload: Workload {
+                    id: request.workload.id,
+                    name: request.workload.name,
+                    namespace: request.workload.namespace,
+                },
                 keys: request.keys,
             },
             reply,
@@ -201,6 +266,7 @@ impl HostSecretSource for ComponentSecretSource {
         };
         match reply {
             Ok(pairs) => Ok(pairs.into_iter().collect()),
+            Err(SourceError::NotFound(keys)) => Err(SecretSourceError::NotFound(keys)),
             Err(SourceError::AccessDenied(detail)) => Err(SecretSourceError::AccessDenied(detail)),
             Err(SourceError::Unavailable(detail)) => Err(SecretSourceError::Unavailable(detail)),
             Err(SourceError::Other(detail)) => Err(SecretSourceError::Other(detail)),

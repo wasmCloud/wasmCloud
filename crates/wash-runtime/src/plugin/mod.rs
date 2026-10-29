@@ -196,7 +196,10 @@ pub use bindings::{
 
 /// Plugin-backed `secrets:` entries, resolved through another plugin at bind.
 mod secret_source;
-pub use secret_source::{HostSecretSource, SecretRequest, SecretSourceError, SecretValue};
+pub use secret_source::{
+    HostSecretSource, RequestingWorkload, SecretConsumer, SecretRequest, SecretSourceError,
+    SecretValue,
+};
 pub(crate) use secret_source::{resolve_plugin_secrets, validate_plugin_secrets};
 
 /// Shared `(implements ..)` multiplexing core
