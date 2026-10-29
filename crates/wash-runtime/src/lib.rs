@@ -1,3 +1,4 @@
+#![cfg_attr(coverage_nightly, recursion_limit = "256")]
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 #![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 #![doc = include_str!("../README.md")]
