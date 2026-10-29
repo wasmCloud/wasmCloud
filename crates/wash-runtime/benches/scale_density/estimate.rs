@@ -3,15 +3,16 @@ use std::collections::BTreeMap;
 
 use super::{Settings, Step};
 use bench_tools::density::memory_estimate;
-use wash_runtime::engine::pool_usage::PoolUsage;
+use wash_runtime::engine::{guest_memory::GuestMemoryMode, pool_usage::PoolUsage};
 
 /// What each measured constraint predicts, from the clean steps so far.
 /// `None` means too little evidence for an estimate, not unlimited.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Estimate {
     /// Workloads each constraint fits: max-process-memory at the marginal
-    /// cost per workload, max-guest-memory at the guest charge, and the
-    /// pool's core instances and linear memories.
+    /// cost per workload, max-guest-memory at the guest charge,
+    /// max-initial-guest-memory (growth mode) at the uncharged initial
+    /// memory, and the pool's core instances and linear memories.
     pub(super) limits: BTreeMap<String, Option<u64>>,
     pub(super) marginal_bytes_per_workload: Option<u64>,
     /// What the CPU limit allows: starts a second, and requests a second
@@ -51,22 +52,36 @@ impl Estimate {
         let rate = |cpu: fn(&Step) -> Option<f64>, count: fn(&Step) -> usize| {
             measured_rate(cores, served.iter().map(|s| (cpu(s), count(s))))
         };
+        let mut limits = BTreeMap::from([
+            ("max-process-memory".into(), memory.flatten()),
+            (
+                "pool core instances".into(),
+                core_per.map(|per| reading(last.core_instances_total) / per),
+            ),
+            (
+                "pool memories".into(),
+                memories_per.map(|per| reading(last.memories_total) / per),
+            ),
+        ]);
+        // Count mode observes this budget but never refuses on its account.
+        // Including it would report a capacity below what the run served.
+        if settings.guest_mode.enforces() {
+            limits.insert(
+                "max-guest-memory".into(),
+                guest_per.map(|per| settings.guest_memory / per),
+            );
+        }
+        // Growth mode bounds the initial memory it leaves uncharged with a
+        // cap of its own.
+        if settings.guest_mode == GuestMemoryMode::Growth {
+            let initial_per = per(reading(last.initial_memory_bytes) / workloads);
+            limits.insert(
+                "max-initial-guest-memory".into(),
+                initial_per.map(|per| settings.initial_cap() / per),
+            );
+        }
         Self {
-            limits: BTreeMap::from([
-                ("max-process-memory".into(), memory.flatten()),
-                (
-                    "max-guest-memory".into(),
-                    guest_per.map(|per| settings.guest_memory / per),
-                ),
-                (
-                    "pool core instances".into(),
-                    core_per.map(|per| reading(last.core_instances_total) / per),
-                ),
-                (
-                    "pool memories".into(),
-                    memories_per.map(|per| reading(last.memories_total) / per),
-                ),
-            ]),
+            limits,
             marginal_bytes_per_workload: marginal,
             max_starts_per_sec: rate(|s| s.start_cpu_secs, |s| s.started),
             max_requests_per_sec: rate(|s| s.sample_cpu_secs, |s| s.requests_ok),
