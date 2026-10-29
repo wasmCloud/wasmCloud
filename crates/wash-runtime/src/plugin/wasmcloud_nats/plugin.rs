@@ -678,9 +678,9 @@ impl HostPlugin for WasmcloudNats {
         // A key a plugin secret supplies has no value until bind, so it reads
         // as set and its value is checked when a workload binds the layer.
         for (name, layer, pending) in declared.host_layers(&super::binding_schema()) {
-            let config = NatsConfig::from_layer(&layer, &pending)
+            let servers = NatsConfig::check_layer(&layer, &pending)
                 .map_err(|e| anyhow::anyhow!("binding `{name}`: {e:#}"))?;
-            self.check_egress(&config.servers)
+            self.check_egress(&servers)
                 .with_context(|| format!("binding `{name}`"))?;
         }
         Ok(())
