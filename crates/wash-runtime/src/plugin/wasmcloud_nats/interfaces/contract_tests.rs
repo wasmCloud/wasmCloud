@@ -387,12 +387,21 @@ async fn named_resources_keep_their_connection_and_settlement_contract() {
                     .unwrap()
                     .unwrap(),
                 }
+                if i <= 2 {
+                    assert!(matches!(
+                        <SharedCtx as Settle<_>>::ack(accessor, other.clone(), borrow(&handle))
+                            .await
+                            .unwrap(),
+                        Err(types::NatsError::AlreadySettled)
+                    ));
+                }
                 store_accessor.with(|mut access| {
                     let mut active = extract_active_ctx(access.get());
                     futures::executor::block_on(Message::drop(&mut active, other.clone(), handle))
                         .unwrap();
                 });
             }
+            assert_eq!(conn.fetch_budget.outstanding(), 0);
             let batch = <SharedCtx as Pull<_>>::fetch_with_limits(
                 accessor,
                 other.clone(),

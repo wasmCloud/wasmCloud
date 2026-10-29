@@ -435,7 +435,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
                 if entry.file_type().await?.is_dir() {
                     tokio::fs::remove_dir_all(entry.path()).await?;
                 } else {
-                    tokio::fs::remove_file(entry.path()).await?;
+                    remove_file_or_directory_link(entry.path()).await?;
                 }
             }
             Ok::<_, std::io::Error>(())
@@ -841,6 +841,25 @@ fn created_at_secs(metadata: &std::fs::Metadata) -> u64 {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(not(windows))]
+use tokio::fs::remove_file as remove_file_or_directory_link;
+
+#[cfg(windows)]
+async fn remove_file_or_directory_link(path: impl AsRef<Path>) -> std::io::Result<()> {
+    use std::os::windows::fs::FileTypeExt as _;
+
+    let path = path.as_ref();
+    if tokio::fs::symlink_metadata(path)
+        .await?
+        .file_type()
+        .is_symlink_dir()
+    {
+        tokio::fs::remove_dir(path).await
+    } else {
+        tokio::fs::remove_file(path).await
+    }
 }
 
 #[cfg(test)]
