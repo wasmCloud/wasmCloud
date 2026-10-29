@@ -353,33 +353,32 @@ impl PoolShare {
         }
     }
 
-    /// Check that `component`'s cost ([`PoolCost::of`]) fits the holder's
-    /// budget of every pool total at all, once per component rather than per
-    /// reservation, and return what each reservation should take.
-    ///
-    /// Charges no GC heap, as before GC heaps were counted: a compiled
-    /// component does not say whether it may allocate GC objects. A caller
-    /// that knows, from the component's source, uses [`Self::admit_store`].
-    ///
-    /// What is read off the component — its memories, and its tables when
-    /// wasmtime reports them — is refused when the budget can never hold it;
-    /// see [`Gate::admit`]. What is estimated — core instances always, tables
-    /// for a component that hides its requirements — is clamped to the budget
-    /// instead: a refusal there would turn away a component the pool may well
-    /// hold, over a number nothing measured, and the pool itself still
-    /// refuses one that truly does not fit.
-    pub fn admit(&self, component: &Component) -> anyhow::Result<PoolCost> {
+    /// [`Self::admit_store`] for one component alone, charging no GC heap.
+    #[cfg(test)]
+    pub(crate) fn admit(&self, component: &Component) -> anyhow::Result<PoolCost> {
         self.admit_store(std::iter::once(component), false)
     }
 
-    /// Reserve every component instantiated into one store, including linked
-    /// dependencies. Memories, tables and instances add; the fiber stack is
-    /// shared by the entire store. Clamp estimates only after adding them, so
-    /// several individually admissible components cannot overdraw a gate.
+    /// Check that the cost of one store ([`PoolCost::of`] each component
+    /// instantiated into it, linked dependencies included) fits the holder's
+    /// budget of every pool total at all, once per binding rather than per
+    /// reservation, and return what each reservation should take. Memories,
+    /// tables and instances add; the fiber stack is shared by the entire
+    /// store. Estimates are clamped only after adding them, so several
+    /// individually admissible components cannot overdraw a gate.
     ///
     /// `may_use_gc` charges the store one GC heap and a memory to back it.
     /// Pass it only for a store some component of which may allocate GC
-    /// objects; the runtime reads that off each component's source.
+    /// objects; the runtime reads that off each component's source, since a
+    /// compiled component does not say.
+    ///
+    /// What is read off the components — their memories, and their tables
+    /// when wasmtime reports them — is refused when the budget can never hold
+    /// it; see [`Gate::admit`]. What is estimated — core instances always,
+    /// tables for a component that hides its requirements — is clamped to the
+    /// budget instead: a refusal there would turn away a component the pool
+    /// may well hold, over a number nothing measured, and the pool itself
+    /// still refuses one that truly does not fit.
     pub fn admit_store<'a>(
         &self,
         components: impl IntoIterator<Item = &'a Component>,
@@ -674,7 +673,7 @@ mod tests {
         assert_eq!(PoolCost::of(&component), PoolCost::USUAL);
     }
 
-    /// The public `admit` charges no GC heap, as before heaps were counted;
+    /// A store not known to use GC is charged no heap;
     /// a store known to need one is charged a heap and its backing memory,
     /// and a pool with no GC heaps at all says which knob emptied it.
     #[test]

@@ -1377,7 +1377,7 @@ impl Admission {
     /// Message counts stay independent of this cost.
     ///
     /// Fails for a component that messaging's share of some pool total can
-    /// never hold one of, naming the knob; see [`PoolShare::admit`].
+    /// never hold one of, naming the knob; see [`PoolShare::admit_store`].
     #[cfg(test)]
     pub(crate) fn with_component(
         mut self,
