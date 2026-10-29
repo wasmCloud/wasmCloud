@@ -39,9 +39,11 @@
 //!
 //! Under a declared egress policy (`allowedHosts`), each bind checks the
 //! endpoint the client dials: `endpoint` when set, otherwise
-//! `https://s3.{region}.amazonaws.com`. Virtual-hosted requests without an
-//! `endpoint` are refused there, since their host carries the bucket a guest
-//! names later. Not checked: the credential endpoints `use_host_identity`
+//! `https://s3.{region}.amazonaws.com`. Virtual-hosted requests are refused
+//! there, since their host carries the bucket a guest names later. Combining
+//! virtual-hosted requests with an explicit endpoint is unsupported: the client
+//! would ignore the guest's bucket and route every container to that endpoint.
+//! Not checked: the credential endpoints `use_host_identity`
 //! reaches (instance metadata, STS), which come from the host's environment,
 //! and redirects the HTTP client follows.
 //!
@@ -58,6 +60,9 @@
 //!   missing; only writes and deletes can tell the two apart.
 //! - `copy_object` and `move_object` across buckets go through host memory;
 //!   `object_store` only copies within one bucket.
+//! - Object names must be nonempty paths without leading/trailing slashes,
+//!   empty segments, dot segments or control characters. Unsupported names
+//!   are rejected rather than silently rewritten to a different S3 key.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -81,7 +86,7 @@ use super::{
 mod config;
 
 pub(crate) use config::host_owned_spellings;
-use config::{builder_from_config, lookup, normalize_key};
+use config::{builder_from_config, lookup, normalize_key, virtual_hosted};
 
 /// Ceiling on bucket clients kept per backend, and how long an unused one
 /// stays. Each client owns an HTTP connection pool, and a guest can name as
@@ -110,6 +115,18 @@ impl S3BlobBackend {
     /// The bucket-scoped client for `container`, built on first use. Does not
     /// check that the bucket exists; a missing one is a 404 on first use.
     fn store(&self, container: &str) -> BlobResult<Arc<AmazonS3>> {
+        // The client interpolates this into a URL without escaping it. Reject
+        // URL syntax and dot path segments before even consulting the cache.
+        // Leave stricter naming rules to S3-compatible servers (some accept
+        // uppercase letters and underscores).
+        if container.is_empty()
+            || matches!(container, "." | "..")
+            || !container
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+        {
+            return Err(BlobBackendError::other("invalid s3 container name"));
+        }
         self.stores
             .try_get_with_by_ref(container, || {
                 self.base
@@ -129,8 +146,16 @@ impl S3BlobBackend {
     /// `Path::parse` refuses `..`, empty segments and control characters instead
     /// of silently rewriting them like `Path::from` would.
     fn object_path(object: &str) -> BlobResult<Path> {
-        Path::parse(object)
-            .map_err(|e| BlobBackendError::other(format!("invalid object name '{object}': {e}")))
+        let path = Path::parse(object)
+            .map_err(|e| BlobBackendError::other(format!("invalid object name '{object}': {e}")))?;
+        // Path::parse strips a leading/trailing slash. S3 treats those as
+        // distinct keys, so accepting the normalized path risks overwrites.
+        if object.is_empty() || path.as_ref() != object {
+            return Err(BlobBackendError::other(format!(
+                "invalid object name '{object}': expected a nonempty path without leading or trailing slashes"
+            )));
+        }
+        Ok(path)
     }
 
     /// Errors from an operation addressed at an object: a 404 is the object.
@@ -399,23 +424,19 @@ impl BackendProvider<BlobId> for S3BlobProvider {
         let Ok(builder) = builder_from_config(config) else {
             return Ok(());
         };
+        if virtual_hosted(&builder)? {
+            anyhow::bail!(
+                "s3 blobstore virtual-hosted requests dial a host per bucket, which allowedHosts \
+                 cannot check; use path-style requests"
+            );
+        }
         let get = |key| builder.get_config_value(&key);
-        let endpoint =
-            get(AmazonS3ConfigKey::S3Endpoint).or_else(|| get(AmazonS3ConfigKey::Endpoint));
-        let virtual_hosted =
-            get(AmazonS3ConfigKey::VirtualHostedStyleRequest).as_deref() == Some("true");
-        let url = match (endpoint, virtual_hosted) {
-            (Some(endpoint), _) => endpoint,
-            (None, false) => {
+        let url = get(AmazonS3ConfigKey::S3Endpoint)
+            .or_else(|| get(AmazonS3ConfigKey::Endpoint))
+            .unwrap_or_else(|| {
                 let region = get(AmazonS3ConfigKey::Region).unwrap_or_else(|| "us-east-1".into());
                 format!("https://s3.{region}.amazonaws.com")
-            }
-            (None, true) => anyhow::bail!(
-                "s3 blobstore virtual-hosted requests without an 'endpoint' dial a host per \
-                 bucket, which allowedHosts cannot check; name an 'endpoint' or use path-style \
-                 requests"
-            ),
-        };
+            });
         policy.check_url(&url, Protocol::Tcp, 443)
     }
 }
@@ -498,10 +519,72 @@ mod tests {
         assert!(Arc::ptr_eq(&a, &b));
     }
 
+    #[test]
+    fn bucket_names_cannot_change_the_request_url() {
+        // In virtual-hosted mode, a slash would turn everything after the
+        // container into a path and send signed requests to a guest's host.
+        for virtual_hosted in ["false", "true"] {
+            let base =
+                builder_from_config(&keyed(&[("virtual_hosted_style_request", virtual_hosted)]))
+                    .unwrap();
+            let backend = S3BlobBackend::new(base, 2);
+            for invalid in [
+                "",
+                ".",
+                "..",
+                "attacker.example/",
+                "bucket/../other",
+                "bucket?query",
+                "bucket#fragment",
+                "bucket@attacker.example",
+                "bucket:443",
+                "bucket\\other",
+                "bucket%2fother",
+                "bucket\n",
+            ] {
+                assert!(backend.store(invalid).is_err(), "accepted {invalid:?}");
+            }
+            assert_eq!(backend.stores.entry_count(), 0);
+            for valid in ["assets", "assets.example", "legacy_Bucket-1"] {
+                assert!(backend.store(valid).is_ok(), "rejected {valid:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn object_names_are_never_silently_rewritten() {
+        for invalid in ["", "/", "/key", "key/", "/key/", "a//b", "../x", "a/./b"] {
+            assert!(
+                S3BlobBackend::object_path(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+        for valid in ["key", "a/b.txt", "a b", "a%2Fb", "写真.png"] {
+            assert_eq!(S3BlobBackend::object_path(valid).unwrap().as_ref(), valid);
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_virtual_hosted_endpoints_fail_the_bind() {
+        // A client with this combination ignores with_bucket_name(container),
+        // making assets/key and archive/key overwrite or delete one another.
+        for value in ["true", "TRUE", "yes", "1", "on", "y"] {
+            for endpoint_key in ["endpoint", "AWS_ENDPOINT_URL"] {
+                let config = keyed(&[
+                    ("virtual_hosted_style_request", value),
+                    (endpoint_key, "https://assets.s3.eu-central-1.amazonaws.com"),
+                ]);
+                let Err(err) = S3BlobProvider.instantiate(&config, None).await else {
+                    panic!("fixed virtual-hosted endpoint must fail the bind");
+                };
+                assert!(err.to_string().contains("use path-style requests"), "{err}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn instantiate_fails_bind_on_bad_config() {
-        // `allow_http` is parsed leniently at `with_config`; a deferred bool is
-        // what the probe-build catches.
+        // A malformed boolean must fail before a guest can name a bucket.
         let Err(err) = S3BlobProvider
             .instantiate(&keyed(&[("virtual_hosted_style_request", "maybe")]), None)
             .await
@@ -555,27 +638,30 @@ mod tests {
         // The host would be `{bucket}.s3.…`, and the guest names the bucket
         // after the bind.
         let policy = PluginEgressPolicy::allowing(&["https://s3.eu-central-1.amazonaws.com"]);
-        let err = egress(
-            &keyed(&[
+        for value in ["true", "TRUE", "yes", "1", "on", "y"] {
+            let config = keyed(&[
                 ("region", "eu-central-1"),
-                ("virtual_hosted_style_request", "true"),
-            ]),
-            &policy,
-        )
-        .unwrap_err();
-        assert!(format!("{err:#}").contains("'endpoint'"), "{err:#}");
-
-        // An endpoint for virtual-hosted requests already names the bucket.
-        let policy =
-            PluginEgressPolicy::allowing(&["https://assets.s3.eu-central-1.amazonaws.com"]);
-        egress(
-            &keyed(&[
-                ("virtual_hosted_style_request", "true"),
-                ("endpoint", "https://assets.s3.eu-central-1.amazonaws.com"),
-            ]),
-            &policy,
-        )
-        .unwrap();
+                ("virtual_hosted_style_request", value),
+            ]);
+            let builder = builder_from_config(&config).unwrap();
+            // These spellings must also be accepted by the pinned client.
+            builder.with_bucket_name("assets").build().unwrap();
+            let err = egress(&config, &policy).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("use path-style requests"),
+                "{err:#}"
+            );
+        }
+        for value in ["false", "FALSE", "no", "0", "off", "n"] {
+            egress(
+                &keyed(&[
+                    ("region", "eu-central-1"),
+                    ("virtual_hosted_style_request", value),
+                ]),
+                &policy,
+            )
+            .unwrap();
+        }
     }
 
     #[tokio::test]
