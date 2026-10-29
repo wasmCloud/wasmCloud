@@ -111,7 +111,10 @@ interface workload-lifecycle {
     record workload-info {
         /// Unique id of the workload instance.
         id: workload-id,
-        /// Human-readable workload name.
+        /// Human-readable name of this replica. Under the operator, a
+        /// WorkloadDeployment's replicas have generated names; the name a
+        /// workload keeps across replicas is what `secret-source` reports in
+        /// its `request`, and this record does not carry it.
         name: string,
         /// Namespace the workload was deployed under.
         namespace: string,
