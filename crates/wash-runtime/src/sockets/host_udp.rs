@@ -486,11 +486,17 @@ impl Pollable for IncomingDatagramStream {
         let stream = match self {
             IncomingDatagramStream::Network(stream) => stream,
             IncomingDatagramStream::Loopback(stream) => {
+                if stream.received.is_some() {
+                    return;
+                }
                 let mut rx = stream.rx.lock().await;
                 stream.received = rx.recv().await;
                 return;
             }
             IncomingDatagramStream::Unspecified { net, lo } => {
+                if lo.received.is_some() {
+                    return;
+                }
                 let mut lo_rx = lo.rx.lock().await;
                 let mut net_ready = core::pin::pin!(async {
                     // FIXME: Add `Interest::ERROR` when we update to tokio 1.32.
@@ -540,11 +546,8 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                 0
             };
 
+        let count = if is_unspecified { count.min(1) } else { count };
         stream.check_send_permit_count = count as usize;
-
-        if count > 1 && is_unspecified {
-            return Ok(1);
-        }
         Ok(count)
     }
 
@@ -1007,3 +1010,7 @@ mod tests {
         assert!(peer.recv(&mut buf).is_err(), "only the first datagram left");
     }
 }
+
+#[cfg(test)]
+#[path = "host_udp_tests.rs"]
+mod behavior_tests;

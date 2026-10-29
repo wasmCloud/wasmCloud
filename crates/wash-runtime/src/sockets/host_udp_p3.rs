@@ -88,6 +88,15 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
             let allowed = check(addr, SocketAddrUse::UdpOutgoingDatagram)
                 .into_allowed()
                 .map_err(se)?;
+            store.with(|mut store| {
+                let family = get_socket(store.get().table, &socket)?.address_family();
+                if !super::util::is_valid_address_family(allowed.addr.ip(), family)
+                    || !super::util::is_valid_remote_address(allowed.addr)
+                {
+                    return Err(se(super::util::ErrorCode::InvalidArgument));
+                }
+                SocketResult::Ok(())
+            })?;
             remote_address = Some(allowed.addr);
             plane = Some(allowed.plane);
 
@@ -136,6 +145,7 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                 local_address: SocketAddr,
                 addr: SocketAddr,
                 loopback: Arc<std::sync::Mutex<super::loopback::Network>>,
+                permits: Arc<tokio::sync::Semaphore>,
             },
         }
 
@@ -154,16 +164,21 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                     (None, true) => lo.remote_address().map_err(se)?,
                     (None, false) => return Err(se(super::util::ErrorCode::InvalidArgument)),
                 };
-                SocketResult::Ok((local_address, addr))
+                let permits = match &lo.state {
+                    super::loopback::UdpState::Bound { permits, .. }
+                    | super::loopback::UdpState::Connected { permits, .. } => Arc::clone(permits),
+                    _ => return Err(se(super::util::ErrorCode::InvalidState)),
+                };
+                SocketResult::Ok((local_address, addr, permits))
             };
             match socket {
-                UdpSocket::Unspecified { net, lo } if virtual_plane => {
-                    let _ = net;
-                    let (local_address, addr) = loopback_half(lo)?;
+                UdpSocket::Unspecified { lo, .. } if virtual_plane => {
+                    let (local_address, addr, permits) = loopback_half(lo)?;
                     SocketResult::Ok(SendTarget::Loopback {
                         local_address,
                         addr,
                         loopback: Arc::clone(&view.ctx.loopback),
+                        permits,
                     })
                 }
                 UdpSocket::Network(net) | UdpSocket::Unspecified { net, .. } => {
@@ -185,11 +200,12 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                     Err(se(super::util::ErrorCode::InvalidArgument))
                 }
                 UdpSocket::Loopback(lo) => {
-                    let (local_address, addr) = loopback_half(lo)?;
+                    let (local_address, addr, permits) = loopback_half(lo)?;
                     SocketResult::Ok(SendTarget::Loopback {
                         local_address,
                         addr,
                         loopback: Arc::clone(&view.ctx.loopback),
+                        permits,
                     })
                 }
             }
@@ -224,22 +240,16 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                 local_address,
                 addr,
                 loopback,
+                permits,
             } => {
-                // Shared semaphore for UDP loopback permit requirements.
-                // UDP doesn't need real flow control here — the permit is only
-                // to satisfy the channel's type signature.
-                static UDP_PERMITS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
-                    std::sync::LazyLock::new(|| {
-                        Arc::new(tokio::sync::Semaphore::new(u16::MAX as usize))
-                    });
+                let required = data.len().max(1) as u32;
 
                 let mut lo = loopback
                     .lock()
                     .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
                 if let Some(tx) = lo.connect_udp(&local_address, &addr).map_err(se)? {
-                    let permit = UDP_PERMITS
-                        .clone()
-                        .try_acquire_many_owned(data.len().max(1) as u32)
+                    let permit = permits
+                        .try_acquire_many_owned(required)
                         .map_err(|_| se(super::util::ErrorCode::OutOfMemory))?;
                     _ = tx.send((
                         super::loopback::UdpDatagram {
@@ -258,100 +268,118 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
         store: &Accessor<T, Self>,
         socket: Resource<UpstreamUdpSocket>,
     ) -> SocketResult<(Vec<u8>, IpSocketAddress)> {
+        type LoopbackRx = Arc<
+            tokio::sync::Mutex<
+                tokio::sync::mpsc::UnboundedReceiver<(
+                    super::loopback::UdpDatagram,
+                    tokio::sync::OwnedSemaphorePermit,
+                )>,
+            >,
+        >;
         enum RecvSource {
             Network {
                 socket: Arc<tokio::net::UdpSocket>,
-                connected_addr: Option<SocketAddr>,
                 egress_peers: Option<Arc<std::sync::Mutex<std::collections::BTreeSet<SocketAddr>>>>,
+                loopback_rx: Option<LoopbackRx>,
             },
-            Loopback {
-                rx: Arc<
-                    tokio::sync::Mutex<
-                        tokio::sync::mpsc::UnboundedReceiver<(
-                            super::loopback::UdpDatagram,
-                            tokio::sync::OwnedSemaphorePermit,
-                        )>,
-                    >,
-                >,
-            },
+            Loopback(LoopbackRx),
+        }
+
+        fn loopback_rx(lo: &super::loopback::UdpSocket) -> SocketResult<LoopbackRx> {
+            match &lo.state {
+                super::loopback::UdpState::Bound { rx, .. }
+                | super::loopback::UdpState::Connected { rx, .. } => Ok(Arc::clone(rx)),
+                _ => Err(se(super::util::ErrorCode::InvalidState)),
+            }
+        }
+
+        async fn recv_loopback(rx: &LoopbackRx) -> SocketResult<(Vec<u8>, SocketAddr)> {
+            match rx.lock().await.recv().await {
+                Some((datagram, _permit)) => Ok((datagram.data, datagram.source_address)),
+                None => Err(se(super::util::ErrorCode::ConnectionReset)),
+            }
         }
 
         let permissions = store.with(|mut store| store.get().ctx.socket_addr_check.clone());
-        let source = store.with(|mut store| {
+        let (source, connected_addr) = store.with(|mut store| {
             let socket = get_socket(store.get().table, &socket)?;
-            match socket {
-                UdpSocket::Network(net) | UdpSocket::Unspecified { net, .. } => {
-                    let sock = net.socket().clone();
-                    let addr = if net.is_connected() {
-                        Some(net.remote_address().map_err(se)?)
-                    } else {
-                        None
-                    };
-                    SocketResult::Ok(RecvSource::Network {
-                        socket: sock,
-                        connected_addr: addr,
-                        egress_peers: net.egress_peers(),
-                    })
-                }
-                UdpSocket::Loopback(lo) => match &lo.state {
-                    super::loopback::UdpState::Bound { rx, .. }
-                    | super::loopback::UdpState::Connected { rx, .. } => {
-                        SocketResult::Ok(RecvSource::Loopback { rx: Arc::clone(rx) })
-                    }
-                    _ => Err(se(super::util::ErrorCode::InvalidState)),
+            let connected_addr = if socket.is_connected() {
+                Some(socket.remote_address().map_err(se)?)
+            } else {
+                None
+            };
+            let source = match socket {
+                UdpSocket::Network(net) => RecvSource::Network {
+                    socket: net.socket().clone(),
+                    egress_peers: net.egress_peers(),
+                    loopback_rx: None,
                 },
-            }
+                UdpSocket::Unspecified { lo, .. }
+                    if connected_addr.is_some()
+                        && matches!(
+                            socket.connected_plane(),
+                            Some(crate::sockets::Plane::Virtual)
+                        ) =>
+                {
+                    RecvSource::Loopback(loopback_rx(lo)?)
+                }
+                UdpSocket::Unspecified { net, lo } => RecvSource::Network {
+                    socket: net.socket().clone(),
+                    egress_peers: net.egress_peers(),
+                    loopback_rx: if connected_addr.is_some() {
+                        None
+                    } else {
+                        Some(loopback_rx(lo)?)
+                    },
+                },
+                UdpSocket::Loopback(lo) => RecvSource::Loopback(loopback_rx(lo)?),
+            };
+            SocketResult::Ok((source, connected_addr))
         })?;
 
-        // Reused across refusals: a fresh 64 KiB zeroed allocation per refused
-        // datagram would make refusing more expensive than delivering.
         let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
         let mut refused = 0;
         loop {
             let (data, addr) = match &source {
                 RecvSource::Network {
-                    socket: udp_socket,
-                    connected_addr,
+                    socket,
                     egress_peers,
+                    loopback_rx,
                 } => {
-                    let buf = &mut buf;
-                    match *connected_addr {
-                        Some(addr) => {
-                            let n = udp_socket.recv(buf).await.map_err(|e| se(e.into()))?;
-                            (buf.get(..n).unwrap_or_default().to_vec(), addr)
-                        }
-                        None => loop {
+                    let recv_network = async {
+                        loop {
                             let (n, addr) =
-                                udp_socket.recv_from(buf).await.map_err(|e| se(e.into()))?;
-                            // An unspecified-bound socket hears from anyone, so
-                            // deliver only what answers something the guest sent.
-                            // Anything else would make it an unsolicited server on
-                            // a real interface; keep waiting for a real reply
-                            // rather than surfacing a stranger's datagram.
-                            if let Some(peers) = egress_peers.as_ref()
+                                socket.recv_from(&mut buf).await.map_err(|e| se(e.into()))?;
+                            if connected_addr.is_none()
+                                && let Some(peers) = egress_peers.as_ref()
                                 && !peers.lock().is_ok_and(|peers| peers.contains(&addr))
                             {
                                 continue;
                             }
-                            break (buf.get(..n).unwrap_or_default().to_vec(), addr);
-                        },
+                            break SocketResult::Ok((
+                                buf.get(..n).unwrap_or_default().to_vec(),
+                                addr,
+                            ));
+                        }
+                    };
+                    if let Some(rx) = loopback_rx {
+                        tokio::select! {
+                            result = recv_network => result?,
+                            result = recv_loopback(rx) => result?,
+                        }
+                    } else {
+                        recv_network.await?
                     }
                 }
-                RecvSource::Loopback { rx } => {
-                    let mut guard = rx.lock().await;
-                    match guard.recv().await {
-                        Some((datagram, _permit)) => (datagram.data, datagram.source_address),
-                        None => return Err(se(super::util::ErrorCode::ConnectionReset)),
-                    }
-                }
+                RecvSource::Loopback(rx) => recv_loopback(rx).await?,
             };
+            if connected_addr.is_some_and(|peer| peer != addr) {
+                continue;
+            }
             if permissions.check(addr, SocketAddrUse::UdpReceive).is_ok() {
                 return Ok((data, addr.into()));
             }
             refused += 1;
-            // Waiting forever for a datagram the policy will accept leaves the
-            // guest's `receive` with no answer and no error. Tell it instead,
-            // and let it decide whether to ask again.
             if refused >= MAX_REFUSED_DATAGRAMS_PER_RECEIVE {
                 tracing::warn!(
                     refused,
@@ -682,3 +710,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "host_udp_p3_tests.rs"]
+mod behavior_tests;
