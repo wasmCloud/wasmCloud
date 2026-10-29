@@ -547,6 +547,47 @@ fn restore_cursor_on_interrupt() {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(crate) mod test_support {
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestDirectories(PathBuf);
+
+    impl DirectoryStrategy for TestDirectories {
+        fn home_dir(&self) -> &Path {
+            &self.0
+        }
+        fn config_dir(&self) -> PathBuf {
+            self.0.join("config")
+        }
+        fn data_dir(&self) -> PathBuf {
+            self.0.join("data")
+        }
+        fn cache_dir(&self) -> PathBuf {
+            self.0.join("cache")
+        }
+        fn state_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn runtime_dir(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    pub(crate) fn context(root: &Path) -> CliContext {
+        CliContext {
+            app_strategy: Arc::new(TestDirectories(root.into())),
+            non_interactive: true,
+            config: None,
+            project_dir: root.into(),
+            original_working_dir: root.into(),
+            meters: Default::default(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
