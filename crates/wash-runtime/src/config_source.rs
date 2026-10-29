@@ -357,8 +357,9 @@ fn apply_config_refs(
 
 /// [`resolve_environment_layer`] for a `host.plugins` entry or binding, which
 /// may also name plugin-backed `secrets:` entries. Their keys come back
-/// separately, to be resolved at bind; a later `secretFrom` entry still wins
-/// over an earlier one, whichever kind each is.
+/// separately, to be resolved at bind. A key a plugin secret supplies is set
+/// nowhere else in the layer: not in `config`, `configFrom` or another
+/// `secretFrom` entry.
 pub fn resolve_plugin_environment_layer(
     env: &EnvironmentLayer,
     owner: &str,
@@ -390,8 +391,9 @@ pub fn resolve_plugin_environment_layer(
 /// a hard error so typos in `secretFrom` fail loudly.
 ///
 /// With `pending`, a plugin-backed entry's keys go there for the bind to
-/// resolve, and a later entry of either kind replaces an earlier one's key.
-/// Without it, a plugin-backed entry is refused.
+/// resolve, and one also set anywhere else in the layer is refused: a literal
+/// beside a secret for the same key is a leftover, not an override. Without
+/// it, a plugin-backed entry is refused.
 fn apply_secret_refs(
     refs: &[String],
     owner: &str,
@@ -411,7 +413,21 @@ fn apply_secret_refs(
             (SecretEntry::Static(source), _) => source,
             (SecretEntry::Plugin(source), Some(pending)) => {
                 for (key, backend_key) in &source.keys {
-                    out.remove(key);
+                    if let Some(earlier) = pending.get(key) {
+                        bail!(
+                            "{owner} reads `{key}` from both secret '{}' and secret '{name}'; set \
+                             it in one place",
+                            earlier.source
+                        );
+                    }
+                    if out.contains_key(key) {
+                        bail!(
+                            "{owner} sets `{key}` in its `config`, `configFrom` or an earlier \
+                             `secretFrom` entry, and secret '{name}' serves it from plugin '{}'; \
+                             set it in one place",
+                            source.plugin
+                        );
+                    }
                     pending.insert(
                         key.clone(),
                         crate::plugin::PluginSecretRef {
@@ -432,10 +448,18 @@ fn apply_secret_refs(
             ),
         };
         let resolved = source.resolve(name, project_dir, repo_root)?;
-        if let Some(pending) = pending.as_deref_mut() {
-            for key in resolved.keys() {
-                pending.remove(key);
-            }
+        if let Some(pending) = pending.as_deref()
+            && let Some((key, secret)) = resolved
+                .keys()
+                .filter_map(|key| Some((key, pending.get(key)?)))
+                .min_by_key(|(key, _)| *key)
+        {
+            bail!(
+                "{owner} reads `{key}` from secret '{name}' and from secret '{}', which plugin \
+                 '{}' serves; set it in one place",
+                secret.source,
+                secret.plugin
+            );
         }
         out.extend(resolved);
     }
@@ -879,20 +903,17 @@ mod tests {
         ))
     }
 
-    /// A plugin entry's keys come back pending rather than read, and a later
-    /// `secretFrom` entry of either kind wins over an earlier one.
+    /// A plugin entry's keys come back pending rather than read, beside the
+    /// static keys of the same layer.
     #[test]
-    fn a_plugin_layer_keeps_plugin_keys_pending_in_secret_from_order() {
+    fn a_plugin_layer_keeps_plugin_keys_pending() {
         let secrets = BTreeMap::from([
             (
                 "db".to_string(),
-                plugin_secret(
-                    "vault",
-                    &[("url", "apps/pg-url"), ("password", "apps/pg-pw")],
-                ),
+                plugin_secret("vault", &[("url", "apps/pg-url")]),
             ),
             (
-                "override".to_string(),
+                "static".to_string(),
                 SecretSource::builder()
                     .inline(HashMap::from([("password".to_string(), "pw".to_string())]))
                     .build()
@@ -900,8 +921,8 @@ mod tests {
             ),
         ]);
         let env = EnvironmentLayer::builder()
-            .config(HashMap::from([("url".to_string(), "inline".to_string())]))
-            .secret_from(vec!["db".to_string(), "override".to_string()])
+            .config(HashMap::from([("user".to_string(), "svc".to_string())]))
+            .secret_from(vec!["db".to_string(), "static".to_string()])
             .build();
         let (values, pending) = resolve_plugin_environment_layer(
             &env,
@@ -914,12 +935,87 @@ mod tests {
         .unwrap();
         assert_eq!(
             values,
-            HashMap::from([("password".to_string(), "pw".to_string())])
+            HashMap::from([
+                ("user".to_string(), "svc".to_string()),
+                ("password".to_string(), "pw".to_string())
+            ])
         );
         assert_eq!(pending.len(), 1);
         assert_eq!(pending["url"].source.as_str(), "db");
         assert_eq!(pending["url"].plugin.as_str(), "vault");
         assert_eq!(pending["url"].key.as_str(), "apps/pg-url");
+    }
+
+    /// A key a plugin secret supplies, set anywhere else in its layer, is
+    /// refused whichever comes first.
+    #[test]
+    fn a_plugin_secret_key_set_elsewhere_in_the_layer_is_refused() {
+        let secrets = BTreeMap::from([
+            (
+                "db".to_string(),
+                plugin_secret("vault", &[("url", "apps/pg-url")]),
+            ),
+            (
+                "db2".to_string(),
+                plugin_secret("vault", &[("url", "apps/other")]),
+            ),
+            (
+                "static".to_string(),
+                SecretSource::builder()
+                    .inline(HashMap::from([(
+                        "url".to_string(),
+                        "postgres://x".to_string(),
+                    )]))
+                    .build()
+                    .into(),
+            ),
+        ]);
+        let layer = |config: &[(&str, &str)], secret_from: &[&str]| {
+            let env = EnvironmentLayer::builder()
+                .config(
+                    config
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                )
+                .secret_from(secret_from.iter().map(|s| s.to_string()).collect())
+                .build();
+            resolve_plugin_environment_layer(
+                &env,
+                "binding 'app-db'",
+                &BTreeMap::new(),
+                &secrets,
+                Path::new("."),
+                None,
+            )
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+        };
+        for (config, secret_from, expect) in [
+            (
+                &[("url", "postgres://inline")][..],
+                &["db"][..],
+                "in its `config`",
+            ),
+            (&[][..], &["static", "db"][..], "in its `config`"),
+            (
+                &[][..],
+                &["db", "static"][..],
+                "from secret 'static' and from secret 'db'",
+            ),
+            (
+                &[][..],
+                &["db", "db2"][..],
+                "both secret 'db' and secret 'db2'",
+            ),
+        ] {
+            let err = layer(config, secret_from).unwrap_err();
+            assert!(
+                err.contains(expect) && err.contains("`url`"),
+                "{secret_from:?}: {err}"
+            );
+            assert!(!err.contains("postgres://"), "{err}");
+        }
     }
 
     /// Anything else that reads `secrets:` (a workload's `secretFrom`, a
