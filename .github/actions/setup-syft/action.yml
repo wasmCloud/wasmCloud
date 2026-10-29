@@ -1,8 +1,9 @@
 name: Setup Syft
-description: Install the checksum-pinned Syft CLI for the runner's platform
+description: Install version-pinned Syft in the Actions tool cache
 runs:
   using: composite
   steps:
     - name: Install Syft
-      shell: bash
-      run: node "${GITHUB_ACTION_PATH}/../../scripts/setup-syft.mjs"
+      uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      with:
+        syft-version: v1.55.0
