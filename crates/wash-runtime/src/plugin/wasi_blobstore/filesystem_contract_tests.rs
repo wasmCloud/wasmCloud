@@ -458,8 +458,9 @@ async fn filesystem_reports_io_failures_and_consumes_failed_handles() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[tokio::test]
+#[cfg_attr(windows, ignore = "requires directory symlink privileges")]
 async fn clearing_a_container_removes_links_without_following_them() {
     let dir = tempfile::tempdir().unwrap();
     let outside = dir.path().join("outside");
@@ -471,7 +472,10 @@ async fn clearing_a_container_removes_links_without_following_them() {
         .await
         .unwrap()
         .unwrap();
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&outside, dir.path().join("source/link")).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&outside, dir.path().join("source/link")).unwrap();
     Container::clear(&mut ctx, borrow(&container))
         .await
         .unwrap()
