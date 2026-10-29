@@ -9,15 +9,15 @@ use reqwest::{
 use semver::Version;
 use serde::Deserialize;
 use serde_json::json;
-use std::ops::Deref;
-use tracing::{debug, error, instrument, trace, warn};
+use std::{ops::Deref, path::Path};
+use tracing::{debug, instrument, trace, warn};
 
 #[cfg(unix)]
 use std::fs::Permissions;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use tokio::{fs, io::AsyncWriteExt};
+use tokio::fs;
 
 use crate::cli::{CliCommand, CliContext, CommandOutput};
 
@@ -118,8 +118,8 @@ impl UpdateCommand {
 
         debug!("Current wash version: {}", current_version);
 
-        let release = self
-            .fetch_latest_release(config)
+        let release = config
+            .fetch_latest_release()
             .await
             .context("failed to fetch latest release")?;
         let asset = find_asset(&release.assets, os, arch).ok_or_else(|| {
@@ -178,7 +178,7 @@ impl UpdateCommand {
             ));
         }
 
-        let binary_bytes = self.download_asset(asset.id, config).await?;
+        let binary_bytes = config.download_asset(asset.id).await?;
 
         let current_wash = current_exe();
         let cache_dir = ctx.deref().in_cache_dir("update");
@@ -192,41 +192,12 @@ impl UpdateCommand {
                 "backing up current wash binary"
             );
 
-            // On unix, need to write to a temp file and then atomically replace
-            let tmp_path = current_wash.with_extension("tmp_upgrade");
-            {
-                let mut f = fs::File::create(&tmp_path).await?;
-                f.write_all(&binary_bytes).await?;
-                debug!(
-                    path = ?tmp_path.display(),
-                    "wrote new wash binary to temporary file",
-                );
-            }
-            #[cfg(unix)]
-            {
-                tokio::fs::set_permissions(&tmp_path, Permissions::from_mode(0o755)).await?;
-                trace!(
-                    ?tmp_path,
-                    "set permissions for new wash binary to 755 (rwxr-xr-x)"
-                );
-            }
-
-            match tokio::fs::copy(&tmp_path, &current_wash).await {
-                Ok(_) => {
-                    debug!(
-                        ?current_wash,
-                        "successfully replaced current wash binary with new version"
-                    );
-                    current_wash
-                }
-                Err(e) => {
-                    error!(
-                        ?e,
-                        "failed to replace current wash binary, referencing temporary file instead"
-                    );
-                    tmp_path
-                }
-            }
+            replace_executable(&current_wash, &binary_bytes).await?;
+            debug!(
+                ?current_wash,
+                "successfully replaced current wash binary with new version"
+            );
+            current_wash
         } else {
             warn!(
                 "Cannot find installed wash binary, assuming installation in a non-standard location."
@@ -258,43 +229,53 @@ impl UpdateCommand {
         let version = env!("CARGO_PKG_VERSION");
         parse_version(version)
     }
-
-    /// Fetch the latest release from the configured repository with authentication
-    async fn fetch_latest_release(&self, config: &UpdateConfig) -> anyhow::Result<Release> {
-        let url = format!(
-            "{}/repos/{}/releases/latest",
-            config.api_base_url, config.repo
-        );
-        let client = config.create_client()?;
-
-        debug!(repo = %config.repo, "Fetching latest release");
-        let resp = client.get(url).send().await?.error_for_status()?;
-        Ok(resp.json().await?)
-    }
-
-    /// Download an asset with authentication if configured
-    async fn download_asset(&self, id: usize, config: &UpdateConfig) -> anyhow::Result<Vec<u8>> {
-        let client = config.create_client()?;
-        let url = format!(
-            "{}/repos/{}/releases/assets/{}",
-            config.api_base_url, config.repo, id
-        );
-        debug!(url = %url, "Downloading asset");
-        let resp = client
-            .get(url)
-            .header("Accept", "application/octet-stream")
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(resp.bytes().await?.to_vec())
-    }
 }
 
 /// Simple version check function for internal use (public repository only)
 pub async fn fetch_latest_release_public() -> anyhow::Result<Release> {
-    UpdateCommand::default()
-        .fetch_latest_release(&UpdateConfig::new(REPO.into(), None))
+    UpdateConfig::new(REPO.into(), None)
+        .fetch_latest_release()
         .await
+}
+
+/// Installs `bytes` at `executable` by renaming a sibling temporary file over
+/// it. A rename swaps the directory entry instead of writing into the running
+/// image, which Linux refuses with `ETXTBSY`, and resolving the path first
+/// replaces a symlinked install at its target instead of the link itself.
+async fn replace_executable(executable: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let target = fs::canonicalize(executable).await?;
+    let tmp_path = target.with_extension("tmp_upgrade");
+    let replaced = async {
+        fs::write(&tmp_path, bytes).await?;
+        #[cfg(unix)]
+        fs::set_permissions(&tmp_path, Permissions::from_mode(0o755)).await?;
+        trace!(?tmp_path, "wrote new wash binary to temporary file");
+        swap_executable(&tmp_path, &target).await
+    }
+    .await;
+    if replaced.is_err() {
+        let _ = fs::remove_file(&tmp_path).await;
+    }
+    replaced.with_context(|| format!("failed to replace {}", executable.display()))
+}
+
+#[cfg(not(windows))]
+async fn swap_executable(tmp_path: &Path, target: &Path) -> std::io::Result<()> {
+    fs::rename(tmp_path, target).await
+}
+
+/// Windows renames a running executable but will not replace one, so the
+/// current image moves aside first; the next update removes it.
+#[cfg(windows)]
+async fn swap_executable(tmp_path: &Path, target: &Path) -> std::io::Result<()> {
+    let previous = target.with_extension("old");
+    let _ = fs::remove_file(&previous).await;
+    fs::rename(target, &previous).await?;
+    let swapped = fs::rename(tmp_path, target).await;
+    if swapped.is_err() {
+        let _ = fs::rename(&previous, target).await;
+    }
+    swapped
 }
 
 fn get_os_arch() -> (&'static str, &'static str) {
@@ -378,17 +359,44 @@ impl UpdateConfig {
             .build()
             .context("failed to create HTTP client")
     }
+
+    /// Fetch the latest release from the configured repository with authentication
+    async fn fetch_latest_release(&self) -> anyhow::Result<Release> {
+        let url = format!("{}/repos/{}/releases/latest", self.api_base_url, self.repo);
+        let client = self.create_client()?;
+
+        debug!(repo = %self.repo, "Fetching latest release");
+        let resp = client.get(url).send().await?.error_for_status()?;
+        Ok(resp.json().await?)
+    }
+
+    /// Download an asset with authentication if configured
+    async fn download_asset(&self, id: usize) -> anyhow::Result<Vec<u8>> {
+        let client = self.create_client()?;
+        let url = format!(
+            "{}/repos/{}/releases/assets/{}",
+            self.api_base_url, self.repo, id
+        );
+        debug!(url = %url, "Downloading asset");
+        let resp = client
+            .get(url)
+            .header("Accept", "application/octet-stream")
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(resp.bytes().await?.to_vec())
+    }
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::cli::test_support::context;
-    use anyhow::{Result, ensure};
+    use crate::cli::test_support::{HttpFixture, Response, context};
+    use anyhow::Result;
     use clap::Parser;
     use std::{io, path::PathBuf, time::Duration};
-    use tokio::{io::AsyncReadExt as _, net::TcpListener, task::JoinHandle, time::timeout};
+    use tokio::time::timeout;
 
     const WAIT: Duration = Duration::from_secs(10);
     const NEW_BINARY: &[u8] = b"\0wash\xff\r\nnew binary";
@@ -399,79 +407,31 @@ mod tests {
         command: UpdateCommand,
     }
 
-    struct Request {
-        target: String,
-        headers: HeaderMap,
-    }
-
     struct Server {
         config: UpdateConfig,
-        task: Option<JoinHandle<Result<Vec<Request>>>>,
+        fixture: HttpFixture,
     }
 
     impl Server {
         async fn start(responses: Vec<(u16, Vec<u8>)>, token: Option<&str>) -> Result<Self> {
             let responses = responses
                 .into_iter()
-                .map(|(status, body)| {
-                    let length = body.len();
-                    (status, body, length)
-                })
+                .map(|(status, body)| Response::new(status, body))
                 .collect();
-            Self::start_with_lengths(responses, token).await
+            Self::start_with(responses, token).await
         }
 
-        async fn start_with_lengths(
-            responses: Vec<(u16, Vec<u8>, usize)>,
-            token: Option<&str>,
-        ) -> Result<Self> {
+        async fn start_with(responses: Vec<Response>, token: Option<&str>) -> Result<Self> {
             wash_runtime::init_crypto();
-            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let fixture = HttpFixture::start(responses).await?;
             let mut config =
                 UpdateConfig::new("example/private-wash".into(), token.map(str::to_owned));
-            config.api_base_url = format!("http://{}", listener.local_addr()?);
-            let task = tokio::spawn(async move {
-                let mut requests = Vec::new();
-                for (status, body, length) in responses {
-                    let (mut socket, _) = timeout(WAIT, listener.accept()).await??;
-                    let mut request = Vec::new();
-                    while !request.ends_with(b"\r\n\r\n") {
-                        ensure!(request.len() < 64 * 1024, "request headers too large");
-                        request.push(timeout(WAIT, socket.read_u8()).await??);
-                    }
-                    let request = String::from_utf8(request)?;
-                    let mut lines = request.lines();
-                    let target = lines.next().context("missing request line")?.to_owned();
-                    let mut headers = HeaderMap::new();
-                    for line in lines.filter(|line| !line.is_empty()) {
-                        let (name, value) = line.split_once(':').context("invalid header")?;
-                        headers.insert(
-                            reqwest::header::HeaderName::from_bytes(name.as_bytes())?,
-                            HeaderValue::from_str(value.trim())?,
-                        );
-                    }
-                    requests.push(Request { target, headers });
-                    socket
-                        .write_all(
-                            format!(
-                                "HTTP/1.1 {status} Test\r\nContent-Length: {length}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
-                            )
-                            .as_bytes(),
-                        )
-                        .await?;
-                    socket.write_all(&body).await?;
-                }
-                Ok(requests)
-            });
-            Ok(Self {
-                config,
-                task: Some(task),
-            })
+            config.api_base_url = format!("http://{}", fixture.address);
+            Ok(Self { config, fixture })
         }
 
         async fn finish(&mut self, expected_paths: &[&str], token: Option<&str>) -> Result<()> {
-            let requests =
-                timeout(WAIT, self.task.take().context("server already joined")?).await???;
+            let requests = self.fixture.finish().await?;
             assert_eq!(requests.len(), expected_paths.len());
             for (request, path) in requests.iter().zip(expected_paths) {
                 assert_eq!(
@@ -497,14 +457,6 @@ mod tests {
                 }
             }
             Ok(())
-        }
-    }
-
-    impl Drop for Server {
-        fn drop(&mut self) {
-            if let Some(task) = &self.task {
-                task.abort();
-            }
         }
     }
 
@@ -800,18 +752,16 @@ mod tests {
                 fs::read(ctx.in_cache_dir("update/wash_backup")).await?,
                 b"old binary"
             );
-            assert_eq!(
-                fs::read(executable.with_extension("tmp_upgrade")).await?,
-                NEW_BINARY
-            );
+            assert!(!executable.with_extension("tmp_upgrade").exists());
             #[cfg(unix)]
             assert_eq!(
-                fs::metadata(executable.with_extension("tmp_upgrade"))
-                    .await?
-                    .permissions()
-                    .mode()
-                    & 0o777,
+                fs::metadata(&executable).await?.permissions().mode() & 0o777,
                 0o755
+            );
+            #[cfg(windows)]
+            assert_eq!(
+                fs::read(executable.with_extension("old")).await?,
+                b"old binary"
             );
             server
                 .finish(
@@ -854,12 +804,13 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn replacement_failure_reports_the_usable_temporary_binary() -> Result<()> {
+    async fn symlinked_installs_are_replaced_at_their_target() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let ctx = context(temp.path());
-        let executable = temp.path().join("wash");
-        fs::write(&executable, b"original").await?;
-        fs::set_permissions(&executable, Permissions::from_mode(0o444)).await?;
+        let target = temp.path().join("wash-real");
+        fs::write(&target, b"original").await?;
+        let link = temp.path().join("wash");
+        std::os::unix::fs::symlink(&target, &link)?;
         let mut server = Server::start(
             vec![(200, release(&newer_tag()?)), (200, NEW_BINARY.to_vec())],
             None,
@@ -867,16 +818,56 @@ mod tests {
         .await?;
         let output = timeout(
             WAIT,
-            UpdateCommand::default().handle_with(&ctx, &server.config, || Ok(executable.clone())),
+            UpdateCommand::default().handle_with(&ctx, &server.config, || Ok(link.clone())),
         )
         .await??;
-        let temporary = executable.with_extension("tmp_upgrade");
+        assert!(output.is_success());
+        assert!(fs::symlink_metadata(&link).await?.is_symlink());
+        assert_eq!(fs::read(&target).await?, NEW_BINARY);
+        assert!(!target.with_extension("tmp_upgrade").exists());
+        server
+            .finish(&["/releases/latest", "/releases/assets/42"], None)
+            .await?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unwritable_install_directory_fails_and_keeps_the_original() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let ctx = context(temp.path());
+        let bin = temp.path().join("bin");
+        fs::create_dir(&bin).await?;
+        let executable = bin.join("wash");
+        fs::write(&executable, b"original").await?;
+        fs::set_permissions(&bin, Permissions::from_mode(0o555)).await?;
+        // Root ignores directory permissions, so there is no failure to observe.
+        if fs::write(bin.join("probe"), b"").await.is_ok() {
+            fs::set_permissions(&bin, Permissions::from_mode(0o755)).await?;
+            return Ok(());
+        }
+        let mut server = Server::start(
+            vec![(200, release(&newer_tag()?)), (200, NEW_BINARY.to_vec())],
+            None,
+        )
+        .await?;
+        let result = timeout(
+            WAIT,
+            UpdateCommand::default().handle_with(&ctx, &server.config, || Ok(executable.clone())),
+        )
+        .await?;
+        fs::set_permissions(&bin, Permissions::from_mode(0o755)).await?;
+        let error = result.err().context("expected replacement error")?;
         assert_eq!(
-            output.json().and_then(|value| value.get("install_path")),
-            Some(&json!(temporary.display().to_string()))
+            error.to_string(),
+            format!("failed to replace {}", executable.display())
         );
-        assert_eq!(fs::read(&temporary).await?, NEW_BINARY);
+        assert_eq!(
+            error.downcast_ref::<io::Error>().map(io::Error::kind),
+            Some(io::ErrorKind::PermissionDenied)
+        );
         assert_eq!(fs::read(&executable).await?, b"original");
+        assert!(!executable.with_extension("tmp_upgrade").exists());
         assert_eq!(
             fs::read(ctx.in_cache_dir("update/wash_backup")).await?,
             b"original"
@@ -999,11 +990,22 @@ mod tests {
             let metadata = release(&newer_tag()?);
             let length = metadata.len();
             let responses = if truncate_release {
-                vec![(200, metadata, length + 100)]
+                vec![Response {
+                    status: 200,
+                    body: metadata,
+                    content_length: length + 100,
+                }]
             } else {
-                vec![(200, metadata, length), (200, b"partial".to_vec(), 100)]
+                vec![
+                    Response::new(200, metadata),
+                    Response {
+                        status: 200,
+                        body: b"partial".to_vec(),
+                        content_length: 100,
+                    },
+                ]
             };
-            let mut server = Server::start_with_lengths(responses, None).await?;
+            let mut server = Server::start_with(responses, None).await?;
             let error = timeout(
                 WAIT,
                 UpdateCommand::default().handle_with(&ctx, &server.config, || {
