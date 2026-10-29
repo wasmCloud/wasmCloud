@@ -3,6 +3,7 @@ name = "nats-jetstream-replay"
 version = "0.1.0"
 authors = ["wasmCloud Team"]
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
