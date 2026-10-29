@@ -34,27 +34,19 @@ fn gc_value(ty: ValType) -> bool {
         .is_some_and(|ty| gc_heap(ty.heap_type()))
 }
 
+/// Whether an operator from `$proposal` may allocate in, or reference, a GC
+/// heap. Every operator of these proposals counts; the few whose answer
+/// depends on an operand type are decided in `gc_operator` first.
 macro_rules! gc_proposal {
-    (gc) => {
-        true
-    };
-    (shared_everything_threads) => {
-        true
-    };
-    (exceptions) => {
-        true
-    };
-    (legacy_exceptions) => {
-        true
-    };
-    (custom_descriptors) => {
-        true
-    };
-    (stack_switching) => {
-        true
-    };
-    ($other:ident) => {
-        false
+    ($proposal:ident) => {
+        matches!(
+            stringify!($proposal),
+            "gc" | "shared_everything_threads"
+                | "exceptions"
+                | "legacy_exceptions"
+                | "custom_descriptors"
+                | "stack_switching"
+        )
     };
 }
 
@@ -88,6 +80,11 @@ fn gc_expression(mut reader: wasmparser::OperatorsReader<'_>) -> wasmparser::Res
         }
     }
     Ok(false)
+}
+
+/// [`gc_expression`] for a constant expression: an initializer or offset.
+fn gc_const_expr(expr: &wasmparser::ConstExpr<'_>) -> wasmparser::Result<bool> {
+    gc_expression(expr.get_operators_reader())
 }
 
 fn inspect(bytes: &[u8]) -> wasmparser::Result<bool> {
@@ -132,7 +129,7 @@ fn inspect(bytes: &[u8]) -> wasmparser::Result<bool> {
                         return Ok(true);
                     }
                     if let wasmparser::TableInit::Expr(expr) = table.init
-                        && gc_expression(expr.get_operators_reader())?
+                        && gc_const_expr(&expr)?
                     {
                         return Ok(true);
                     }
@@ -141,9 +138,7 @@ fn inspect(bytes: &[u8]) -> wasmparser::Result<bool> {
             Payload::GlobalSection(globals) => {
                 for global in globals {
                     let global = global?;
-                    if gc_value(global.ty.content_type)
-                        || gc_expression(global.init_expr.get_operators_reader())?
-                    {
+                    if gc_value(global.ty.content_type) || gc_const_expr(&global.init_expr)? {
                         return Ok(true);
                     }
                 }
@@ -152,7 +147,7 @@ fn inspect(bytes: &[u8]) -> wasmparser::Result<bool> {
                 for element in elements {
                     let element = element?;
                     if let wasmparser::ElementKind::Active { offset_expr, .. } = element.kind
-                        && gc_expression(offset_expr.get_operators_reader())?
+                        && gc_const_expr(&offset_expr)?
                     {
                         return Ok(true);
                     }
@@ -161,7 +156,7 @@ fn inspect(bytes: &[u8]) -> wasmparser::Result<bool> {
                             return Ok(true);
                         }
                         for expr in expressions {
-                            if gc_expression(expr?.get_operators_reader())? {
+                            if gc_const_expr(&expr?)? {
                                 return Ok(true);
                             }
                         }
@@ -171,7 +166,7 @@ fn inspect(bytes: &[u8]) -> wasmparser::Result<bool> {
             Payload::DataSection(data) => {
                 for data in data {
                     if let wasmparser::DataKind::Active { offset_expr, .. } = data?.kind
-                        && gc_expression(offset_expr.get_operators_reader())?
+                        && gc_const_expr(&offset_expr)?
                     {
                         return Ok(true);
                     }
@@ -227,7 +222,10 @@ mod tests {
                 false,
             ),
             // A struct type anywhere in the module still marks it as GC.
-            ("(type $f (func)) (type (struct)) (func (param (ref null $f)))", true),
+            (
+                "(type $f (func)) (type (struct)) (func (param (ref null $f)))",
+                true,
+            ),
         ] {
             let bytes = wat::parse_str(format!("(component (core module {module}))")).unwrap();
             assert_eq!(may_use_gc(&bytes), expected, "{module}");

@@ -145,7 +145,8 @@ pub struct WorkloadMetadata {
     workload_namespace: Arc<str>,
     /// The actual wasmtime [`Component`] that can be instantiated
     component: Component,
-    /// Source inspection rules out GC; opaque compiled components reserve a heap.
+    /// Whether a store of this component may need a GC heap, as the engine
+    /// read off its source; `true`, the safe answer, until the engine says.
     pub(crate) may_use_gc: bool,
     /// The wasmtime [`Linker`] used to instantiate the component. Shared with
     /// every component that started from the same base until something
@@ -1990,14 +1991,16 @@ impl ResolvedWorkload {
         pool: &super::pool_share::PoolShare,
     ) -> anyhow::Result<super::pool_share::PoolCost> {
         let components = self.components.read().await;
-        let component = components.get(component_id).context("component ID not found in workload")?;
+        let component = components
+            .get(component_id)
+            .context("component ID not found in workload")?;
         let mut instantiated = Vec::with_capacity(component.metadata.linked_components.len() + 1);
         instantiated.push(component.metadata.component());
         let mut may_use_gc = component.metadata.may_use_gc;
         for linked_id in &component.metadata.linked_components {
-            let linked = components.get(linked_id).with_context(|| {
-                format!("linked component '{linked_id}' not found in workload")
-            })?;
+            let linked = components
+                .get(linked_id)
+                .with_context(|| format!("linked component '{linked_id}' not found in workload"))?;
             instantiated.push(linked.metadata.component());
             may_use_gc |= linked.metadata.may_use_gc;
         }

@@ -81,17 +81,18 @@ pub const WASMTIME_DEFAULT_MAX_CORE_INSTANCES: u32 =
 /// Memory mappings a pooled linear memory splits off once it is live: the
 /// copy-on-write image, the rest of its accessible pages (measured as two
 /// mappings), and the inaccessible remainder of the reservation.
-pub const MAPPINGS_PER_LIVE_MEMORY: u64 = 4;
+pub(crate) const MAPPINGS_PER_LIVE_MEMORY: u64 = 4;
 
 /// Memory mappings a pooled fiber stack's guard page splits off, when the
 /// engine is built, whether or not the stack is ever used.
-pub const MAPPINGS_PER_POOLED_STACK: u64 = 2;
+pub(crate) const MAPPINGS_PER_POOLED_STACK: u64 = 2;
 
 /// Memory mappings a warm component instance costs once it holds them: its
 /// stack's two and its memory's four. The core instance, component instance
 /// and table totals cost none: the first two are counters, and the table pool
 /// is one mapping that stays whole.
-pub const MAPPINGS_PER_WARM_COMPONENT: u64 = MAPPINGS_PER_LIVE_MEMORY + MAPPINGS_PER_POOLED_STACK;
+pub(crate) const MAPPINGS_PER_WARM_COMPONENT: u64 =
+    MAPPINGS_PER_LIVE_MEMORY + MAPPINGS_PER_POOLED_STACK;
 
 /// Share of `vm.max_map_count` the pool may plan to use once every memory is
 /// live. The rest is for libraries, thread stacks and compiled code: each
@@ -111,27 +112,28 @@ const DERIVED_POOL_ADDRESS_SPACE_PERCENT: u64 = 50;
 /// maps when the engine passes nothing, which this engine does not. The
 /// advisories read the installed size; only the derivation, which runs
 /// before an engine exists, assumes it.
-pub const WASMTIME_DEFAULT_ASYNC_STACK_SIZE: usize = 2 << 20;
+pub(crate) const WASMTIME_DEFAULT_ASYNC_STACK_SIZE: usize = 2 << 20;
 
 /// wasmtime's default `table_elements`, restated for the same reason as
 /// [`WASMTIME_DEFAULT_ASYNC_STACK_SIZE`].
-pub const WASMTIME_DEFAULT_TABLE_ELEMENTS: usize = 20_000;
+const WASMTIME_DEFAULT_TABLE_ELEMENTS: usize = 20_000;
 
 /// Share of the commit limit the stack and table pools may take when a host
 /// asks for `max_memories` to be derived from it
-/// ([`derive_max_memories_from_memory_precommit_limit`]). A constant, like the address
-/// space and mapping shares, so an operator never has to reason about
-/// `CommitLimit`: the commit limit is shared with every other process on the
-/// machine and with this one's own heap, and the pools' pages are committed
-/// but mostly never touched, so a quarter is the balance struck here. On a
-/// 64 GiB box with Linux's default `CommitLimit` (half of RAM, no swap) that
-/// is 8 GiB, about 3,100 memories; the same box with 64 GiB of swap, about
-/// 7,800. A host that wants another number sets `--max-memories`.
+/// ([`MaxMemoriesDerivation::from_memory_precommit_limit`]). A constant, like
+/// the address space and mapping shares, so an operator never has to reason
+/// about `CommitLimit`: the commit limit is shared with every other process
+/// on the machine and with this one's own heap, and the pools' pages are
+/// committed but mostly never touched, so a quarter is the balance struck
+/// here. On a 64 GiB box with Linux's default `CommitLimit` (half of RAM, no
+/// swap) that is 8 GiB, about 3,100 memories; the same box with 64 GiB of
+/// swap, about 7,800. A host that wants another number sets
+/// `--max-memories`.
 const DERIVED_STACK_TABLE_COMMIT_PERCENT: u64 = 25;
 
 /// What the derived memory count does about the stack and table pools on a
 /// platform that commits them when the engine is built (see
-/// [`TableMappingCharge`]). The memory pool itself is never the question:
+/// [`PoolMappingCharge`]). The memory pool itself is never the question:
 /// its reservation is address space, committed by nothing. Each memory
 /// brings one 2 MiB stack and four 160 KiB tables, about 2.6 MiB of
 /// committed mapping that no guest need ever touch; 1000 memories commit
@@ -169,30 +171,10 @@ pub(crate) enum CommitBound {
 /// pool's reservation is not what costs there. Linux processes with a finite
 /// `RLIMIT_DATA` also keep it, since that limit applies to those mappings.
 /// This preserves the old default rather than increasing its startup cost;
-/// [`derive_max_memories_from_memory_precommit_limit`] is for the host that wants to
-/// scale there anyway. 32-bit targets keep the floor too.
+/// [`MaxMemoriesDerivation::from_memory_precommit_limit`] is for the host
+/// that wants to scale there anyway. 32-bit targets keep the floor too.
 pub fn derive_max_memories() -> u32 {
     derive_max_memories_with(MaxMemoriesDerivation::default())
-}
-
-/// [`derive_max_memories`] for a host that asked to be sized against its
-/// commit limit (`--set-max-memories-from-memory-precommit-limit`) on a platform that
-/// commits the stack and table pools at startup.
-///
-/// Where [`derive_max_memories`] would keep the floor, this adds a third
-/// bound beside address space and mappings: the number of memories whose
-/// stacks and tables fit in [`DERIVED_STACK_TABLE_COMMIT_PERCENT`] of what
-/// this process may commit (the kernel's `CommitLimit` or `RLIMIT_DATA`,
-/// Windows's RAM plus page file, capped by the container's limit), and
-/// takes the smallest of the three, never below the floor. The stack and
-/// table commit advisories warn past the same share, so a count derived
-/// here never trips them. Where the pools are not accounted, this is
-/// [`derive_max_memories`] exactly.
-pub fn derive_max_memories_from_memory_precommit_limit() -> u32 {
-    derive_max_memories_with(MaxMemoriesDerivation {
-        from_memory_precommit_limit: true,
-        ..MaxMemoriesDerivation::default()
-    })
 }
 
 /// What a host tells the memory-count derivation about the engine it is
@@ -204,41 +186,59 @@ pub fn derive_max_memories_from_memory_precommit_limit() -> u32 {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MaxMemoriesDerivation {
-    /// Size against the memory precommit limit where the stack and table
-    /// pools are precommitted; see
-    /// [`derive_max_memories_from_memory_precommit_limit`].
+    /// Size against the commit limit where the stack and table pools are
+    /// precommitted (`--set-max-memories-from-memory-precommit-limit`).
+    ///
+    /// Where [`derive_max_memories`] would keep the floor, this adds a third
+    /// bound beside address space and mappings: the number of memories whose
+    /// stacks and tables fit in [`DERIVED_STACK_TABLE_COMMIT_PERCENT`] of what
+    /// this process may commit (the kernel's `CommitLimit` or `RLIMIT_DATA`,
+    /// Windows's RAM plus page file, capped by the container's limit), and
+    /// takes the smallest of the three, never below the floor. The stack and
+    /// table commit advisories warn past the same share, so a count derived
+    /// here never trips them. Where the pools are not accounted, it changes
+    /// nothing.
     pub from_memory_precommit_limit: bool,
+}
+
+impl MaxMemoriesDerivation {
+    /// Set [`Self::from_memory_precommit_limit`].
+    #[must_use]
+    pub fn with_memory_precommit_limit(mut self, enable: bool) -> Self {
+        self.from_memory_precommit_limit = enable;
+        self
+    }
 }
 
 /// [`derive_max_memories`] with every input named; see
 /// [`MaxMemoriesDerivation`].
 pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
-    derive_max_memories_bounded(options.from_memory_precommit_limit)
-}
-
-/// [`derive_max_memories_with`], from one reading of the machine.
-fn derive_max_memories_bounded(from_commit_limit: bool) -> u32 {
     let limits = process_limits();
-    let charge = table_mapping_charge();
-    let data_limit = data_segment_limit_within(limits.as_deref());
-    let commit = if charge != TableMappingCharge::Committed && data_limit.is_none() {
-        CommitBound::Unaccounted
-    } else if !from_commit_limit {
-        CommitBound::Floor
-    } else {
-        match pool_commit_ceiling(charge, data_limit, detected_memory_limit()) {
-            Some(ceiling) => {
-                CommitBound::Within(ceiling / 100 * DERIVED_STACK_TABLE_COMMIT_PERCENT)
-            }
-            // No readable ceiling to size against: the floor it is.
-            None => CommitBound::Floor,
+    let commit = PoolCommit::read_within(
+        limits.as_deref(),
+        options.from_memory_precommit_limit,
+        detected_memory_limit(),
+    );
+    let bound = match (commit.charge, commit.ceiling) {
+        (PoolMappingCharge::Free, _) => CommitBound::Unaccounted,
+        (PoolMappingCharge::Committed, Some(ceiling)) if options.from_memory_precommit_limit => {
+            CommitBound::Within(share_of(ceiling, DERIVED_STACK_TABLE_COMMIT_PERCENT))
         }
+        // Not asked to size against the commit limit, or no readable limit
+        // to size against: the floor it is.
+        (PoolMappingCharge::Committed, _) => CommitBound::Floor,
     };
     derive_max_memories_within(
         usable_address_space_within(limits.as_deref()),
         max_map_count(),
-        commit,
+        bound,
     )
+}
+
+/// `percent` of `x`, rounded down: how the derived count and the advisories
+/// that check it take their shares, so the two agree.
+fn share_of(x: u64, percent: u64) -> u64 {
+    x.saturating_mul(percent) / 100
 }
 
 /// [`derive_max_memories`] from inputs the caller already read.
@@ -255,13 +255,10 @@ pub(crate) fn derive_max_memories_within(
         CommitBound::Floor => return WASMTIME_DEFAULT_MAX_MEMORIES,
         CommitBound::Within(bytes) => bytes / committed_bytes_per_memory(),
     };
-    // `x * percent / 100` rather than `x / 100 * percent`: neither input is
-    // near overflow, and this keeps the mapping headroom the advisory names.
-    let by_address_space = address_space * DERIVED_POOL_ADDRESS_SPACE_PERCENT
-        / 100
+    let by_address_space = share_of(address_space, DERIVED_POOL_ADDRESS_SPACE_PERCENT)
         / pool_slot_bytes(WASMTIME_DEFAULT_HEAP_MEMORY);
     let by_map_count = max_map_count.map_or(u64::MAX, |limit| {
-        limit * POOL_MAP_COUNT_PERCENT / 100 / MAPPINGS_PER_WARM_COMPONENT
+        share_of(limit, POOL_MAP_COUNT_PERCENT) / MAPPINGS_PER_WARM_COMPONENT
     });
     u32::try_from(by_address_space.min(by_map_count).min(by_commit))
         .unwrap_or(u32::MAX)
@@ -273,21 +270,23 @@ pub(crate) fn derive_max_memories_within(
 /// ([`super::TABLES_PER_MEMORY`]). What a memory costs where those mappings
 /// are committed (see [`CommitBound`]); the address space its own
 /// reservation takes is [`pool_slot_bytes`].
-pub fn committed_bytes_per_memory() -> u64 {
-    pool_stack_bytes(1, WASMTIME_DEFAULT_ASYNC_STACK_SIZE)
-        .saturating_add(pool_table_bytes(super::TABLES_PER_MEMORY, WASMTIME_DEFAULT_TABLE_ELEMENTS))
+fn committed_bytes_per_memory() -> u64 {
+    pool_stack_bytes(1, WASMTIME_DEFAULT_ASYNC_STACK_SIZE).saturating_add(pool_table_bytes(
+        super::TABLES_PER_MEMORY,
+        WASMTIME_DEFAULT_TABLE_ELEMENTS,
+    ))
 }
 
 /// What the pools' committed mappings are measured against for the derived
-/// count: the smallest of what [`table_commit_ceiling`] names for the
+/// count: the smallest of what [`kernel_commit_ceiling`] names for the
 /// platform and `RLIMIT_DATA` where one is set, or nothing where neither
 /// applies.
 fn pool_commit_ceiling(
-    charge: TableMappingCharge,
+    charge: PoolMappingCharge,
     data_limit: Option<u64>,
     memory_limit: Option<u64>,
 ) -> Option<u64> {
-    [table_commit_ceiling(charge, memory_limit), data_limit]
+    [kernel_commit_ceiling(charge, memory_limit), data_limit]
         .into_iter()
         .flatten()
         .min()
@@ -341,12 +340,12 @@ pub fn pool_slab_bytes(max_memory_size: u64, slots: u32) -> u64 {
         .saturating_add(WASMTIME_MEMORY_GUARD)
 }
 
-/// The page the table pool rounds each table up to: the host's, as wasmtime
-/// reads it. 4 KiB on x86-64 and on Windows, 16 KiB on Apple silicon, where a
+/// The page the table and stack pools round each table and stack up to: the
+/// host's, as wasmtime reads it. 4 KiB on x86-64 and on Windows, 16 KiB on Apple silicon, where a
 /// one-element table costs four times what the Linux default would suggest
 /// and a 20,000-element one rounds to the same ten 16 KiB pages as forty 4 KiB
 /// ones. Only the estimate's input: wasmtime maps the real pool.
-fn table_pool_page() -> u64 {
+fn pool_page() -> u64 {
     #[cfg(unix)]
     {
         u64::try_from(rustix::param::page_size()).unwrap_or(4096)
@@ -362,9 +361,9 @@ fn table_pool_page() -> u64 {
 ///
 /// Unlike the memory slab this is mapped accessible in one piece when the
 /// engine is built. What that costs depends on the platform: see
-/// [`TableMappingCharge`].
+/// [`PoolMappingCharge`].
 pub fn pool_table_bytes(tables: u32, table_elements: usize) -> u64 {
-    let page = table_pool_page();
+    let page = pool_page();
     let pointer = u64::try_from(size_of::<usize>()).unwrap_or(8);
     let table = u64::try_from(table_elements)
         .unwrap_or(u64::MAX)
@@ -379,9 +378,9 @@ pub fn pool_table_bytes(tables: u32, table_elements: usize) -> u64 {
 ///
 /// Like the table pool this is mapped accessible in one piece when the
 /// engine is built, and the guard pages are then protected one by one. What
-/// that costs depends on the platform: see [`TableMappingCharge`].
+/// that costs depends on the platform: see [`PoolMappingCharge`].
 pub fn pool_stack_bytes(stacks: u32, async_stack_size: usize) -> u64 {
-    let page = table_pool_page();
+    let page = pool_page();
     let stack = u64::try_from(async_stack_size)
         .unwrap_or(u64::MAX)
         .div_ceil(page)
@@ -825,22 +824,8 @@ pub(crate) fn pool_advisories(
         pool_heap_ceiling_advisory(max_memory_size),
         pool_reservation_advisory(totals.memories, max_memory_size, usable_address_space()),
         max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit)),
-        pool_table_commit_advisory(
-            totals.tables,
-            table_elements,
-            commit.ceiling,
-            commit.charge,
-            commit.percent,
-        ),
-        async_stack_size.and_then(|size| {
-            pool_stack_commit_advisory(
-                totals.stacks,
-                size,
-                commit.ceiling,
-                commit.charge,
-                commit.percent,
-            )
-        }),
+        pool_table_commit_advisory(totals.tables, table_elements, &commit),
+        async_stack_size.and_then(|size| pool_stack_commit_advisory(totals.stacks, size, &commit)),
     ]
     .into_iter()
     .flatten()
@@ -856,21 +841,16 @@ pub(crate) fn pool_stack_advisory(
     memory_limit: Option<u64>,
 ) -> Option<String> {
     let commit = PoolCommit::read(max_memories_from_memory_precommit_limit, memory_limit);
-    pool_stack_commit_advisory(
-        stacks,
-        async_stack_size,
-        commit.ceiling,
-        commit.charge,
-        commit.percent,
-    )
+    pool_stack_commit_advisory(stacks, async_stack_size, &commit)
 }
 
 /// What the stack and table pools' accessible mappings are charged against
-/// at startup, read once for every advisory about them.
+/// at startup, read once for the derived count and every advisory about them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PoolCommit {
-    /// [`TableMappingCharge::Committed`] where the platform commits the
+    /// [`PoolMappingCharge::Committed`] where the platform commits the
     /// mappings, or where a finite `RLIMIT_DATA` charges them all the same.
-    charge: TableMappingCharge,
+    charge: PoolMappingCharge,
     /// The smallest limit they are charged against; see
     /// [`pool_commit_ceiling`].
     ceiling: Option<u64>,
@@ -880,11 +860,24 @@ struct PoolCommit {
 
 impl PoolCommit {
     fn read(max_memories_from_memory_precommit_limit: bool, memory_limit: Option<u64>) -> Self {
-        let platform = table_mapping_charge();
-        let data_limit = data_segment_limit_within(process_limits().as_deref());
+        Self::read_within(
+            process_limits().as_deref(),
+            max_memories_from_memory_precommit_limit,
+            memory_limit,
+        )
+    }
+
+    /// [`Self::read`] from a `/proc/self/limits` already read.
+    fn read_within(
+        limits: Option<&str>,
+        max_memories_from_memory_precommit_limit: bool,
+        memory_limit: Option<u64>,
+    ) -> Self {
+        let platform = pool_mapping_charge();
+        let data_limit = data_segment_limit_within(limits);
         Self {
             charge: if data_limit.is_some() {
-                TableMappingCharge::Committed
+                PoolMappingCharge::Committed
             } else {
                 platform
             },
@@ -901,9 +894,9 @@ impl PoolCommit {
     }
 }
 
-/// What mapping the table pool accessible costs on this platform, which
-/// decides whether its size is worth a word at startup. The stack pool is
-/// mapped the same way, in one accessible piece, and costs the same.
+/// What mapping the table and stack pools accessible costs on this platform,
+/// which decides whether their size is worth a word at startup. Each pool is
+/// mapped in one accessible piece.
 ///
 /// wasmtime maps both with `MAP_NORESERVE` on Linux, and the kernel accounts
 /// such a mapping only under strict overcommit (`vm.overcommit_memory=2`):
@@ -912,10 +905,10 @@ impl PoolCommit {
 /// say there at startup. What its pages cost once touched is the process
 /// guard's business.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TableMappingCharge {
+enum PoolMappingCharge {
     /// Every accessible page is committed when mapped: Windows, and Linux
-    /// with `vm.overcommit_memory=2`. The whole table pool counts against the
-    /// commit limit from startup.
+    /// with `vm.overcommit_memory=2`. The whole of each pool counts against
+    /// the commit limit from startup.
     Committed,
     /// Nothing until written, whatever the size: Linux with
     /// `vm.overcommit_memory` at `0` or `1`, macOS and the BSDs.
@@ -925,22 +918,22 @@ pub(crate) enum TableMappingCharge {
 /// Linux defaults to the heuristic, so a sysctl this process cannot read
 /// (a `/proc` mounted without `sys`, or a sandbox that denies it) reads as
 /// free, the way the kernel is configured out of the box.
-pub(crate) fn table_mapping_charge() -> TableMappingCharge {
+fn pool_mapping_charge() -> PoolMappingCharge {
     if cfg!(windows) {
-        return TableMappingCharge::Committed;
+        return PoolMappingCharge::Committed;
     }
     match std::fs::read_to_string("/proc/sys/vm/overcommit_memory")
         .as_deref()
         .map(str::trim)
     {
-        Ok("2") => TableMappingCharge::Committed,
-        _ => TableMappingCharge::Free,
+        Ok("2") => PoolMappingCharge::Committed,
+        _ => PoolMappingCharge::Free,
     }
 }
 
-/// What the table pool's mapping is measured against on this platform: the
-/// smaller of what the kernel accounts the mapping against and what this
-/// process may use, or nothing where mapping is free.
+/// What the table and stack pools' mappings are measured against on this
+/// platform: the smaller of what the kernel accounts a mapping against and
+/// what this process may use, or nothing where mapping is free.
 ///
 /// The kernel's figure is host-wide — the commit limit, or memory and swap
 /// together where it cannot be read — and it alone decides whether the
@@ -950,10 +943,10 @@ pub(crate) fn table_mapping_charge() -> TableMappingCharge {
 /// about, so `memory_limit` (the cgroup limit the builder detected, or
 /// physical memory where there is none) caps the ceiling rather than being
 /// ignored.
-fn table_commit_ceiling(charge: TableMappingCharge, memory_limit: Option<u64>) -> Option<u64> {
+fn kernel_commit_ceiling(charge: PoolMappingCharge, memory_limit: Option<u64>) -> Option<u64> {
     let kernel = match charge {
-        TableMappingCharge::Committed => commit_limit().or_else(system_memory_and_swap),
-        TableMappingCharge::Free => return None,
+        PoolMappingCharge::Committed => commit_limit().or_else(system_memory_and_swap),
+        PoolMappingCharge::Free => return None,
     };
     kernel.into_iter().chain(memory_limit).min()
 }
@@ -994,9 +987,9 @@ fn system_memory_and_swap() -> Option<u64> {
 const STACK_TABLE_COMMIT_PERCENT: u64 = 10;
 
 /// What to say when the table pool's one accessible mapping is large enough
-/// to matter on this platform ([`TableMappingCharge`]), if it is: a
-/// noticeable share of `ceiling` where the mapping is committed. See
-/// [`pool_table_bytes`]; `ceiling` is [`table_commit_ceiling`]'s.
+/// to matter on this platform ([`PoolMappingCharge`]), if it is: a
+/// noticeable share of the commit ceiling where the mapping is committed.
+/// See [`pool_table_bytes`] and [`PoolCommit`].
 ///
 /// The table total is a multiple of the memory count (see
 /// [`crate::engine`]), so it grows with `--max-memories` though that flag
@@ -1008,18 +1001,14 @@ const STACK_TABLE_COMMIT_PERCENT: u64 = 10;
 fn pool_table_commit_advisory(
     tables: u32,
     table_elements: usize,
-    ceiling: Option<u64>,
-    charge: TableMappingCharge,
-    commit_percent: u64,
+    commit: &PoolCommit,
 ) -> Option<String> {
     accessible_pool_commit_advisory(
         &format!("{tables} pooled tables of {table_elements} elements"),
         pool_table_bytes(tables, table_elements),
         "Lower max-memories, which sizes the table total from the memory count, or set \
          WASMTIME_POOLING_TOTAL_TABLES (or WASMTIME_POOLING_TABLE_ELEMENTS) on its own.",
-        ceiling,
-        charge,
-        commit_percent,
+        commit,
     )
 }
 
@@ -1031,9 +1020,7 @@ fn pool_table_commit_advisory(
 fn pool_stack_commit_advisory(
     stacks: u32,
     async_stack_size: usize,
-    ceiling: Option<u64>,
-    charge: TableMappingCharge,
-    commit_percent: u64,
+    commit: &PoolCommit,
 ) -> Option<String> {
     accessible_pool_commit_advisory(
         &format!(
@@ -1043,39 +1030,35 @@ fn pool_stack_commit_advisory(
         pool_stack_bytes(stacks, async_stack_size),
         "Lower max-memories, which sizes the stack total from the memory count, or set \
          WASMTIME_POOLING_TOTAL_STACKS on its own.",
-        ceiling,
-        charge,
-        commit_percent,
+        commit,
     )
 }
 
 /// The advisory the table and stack pools share: `what` names the pool and
-/// its count, `mapped` is the size of its one accessible mapping, `remedy`
-/// says which knob moves it and `commit_percent` is the share of `ceiling`
-/// past which it is worth a word. Only where the mapping is committed (see
-/// [`TableMappingCharge`]); elsewhere the kernel never accounts it.
+/// its count, `mapped` is the size of its one accessible mapping and `remedy`
+/// says which knob moves it. Said past `commit.percent` of the commit
+/// ceiling, and only where the mapping is committed (see
+/// [`PoolMappingCharge`]); elsewhere the kernel never accounts it.
 fn accessible_pool_commit_advisory(
     what: &str,
     mapped: u64,
     remedy: &str,
-    ceiling: Option<u64>,
-    charge: TableMappingCharge,
-    commit_percent: u64,
+    commit: &PoolCommit,
 ) -> Option<String> {
-    let ceiling = ceiling?;
-    match charge {
-        TableMappingCharge::Committed if mapped > ceiling / 100 * commit_percent => {
-            Some(format!(
+    let ceiling = commit.ceiling?;
+    let percent = commit.percent;
+    (commit.charge == PoolMappingCharge::Committed && mapped > share_of(ceiling, percent)).then(
+        || {
+            format!(
                 "{what} commit {} at startup, since this process is charged for every \
                  accessible mapping when it is made (Windows, vm.overcommit_memory=2, or a \
-                 finite RLIMIT_DATA), past {commit_percent}% of the {} it may commit. The \
-                 engine may fail to start, or guests may be left little to grow into. {remedy}",
+                 finite RLIMIT_DATA), past {percent}% of the {} it may commit. The engine may \
+                 fail to start, or guests may be left little to grow into. {remedy}",
                 render_bytes(mapped),
                 render_bytes(ceiling),
-            ))
-        }
-        TableMappingCharge::Committed | TableMappingCharge::Free => None,
-    }
+            )
+        },
+    )
 }
 
 /// What to say when the heap ceiling is past wasmtime's memory reservation,
@@ -1121,7 +1104,7 @@ fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<St
              and WASMTIME_POOLING_TOTAL_STACKS overrides, or lower max-memories when no \
              overrides are set. Aim for fewer than {} pool mappings to leave room for \
              libraries, thread stacks and compiled code.",
-            max_map_count * POOL_MAP_COUNT_PERCENT / 100,
+            share_of(max_map_count, POOL_MAP_COUNT_PERCENT),
         )
     })
 }
@@ -1214,7 +1197,7 @@ pub fn usable_address_space() -> u64 {
 /// [`usable_address_space`] from a `/proc/self/limits` already read.
 fn usable_address_space_within(limits: Option<&str>) -> u64 {
     limits
-        .and_then(soft_address_space_limit)
+        .and_then(|limits| soft_limit(limits, "Max address space"))
         .map_or(USER_ADDRESS_SPACE, |limit| limit.min(USER_ADDRESS_SPACE))
 }
 
@@ -1236,12 +1219,8 @@ fn process_limits() -> Option<String> {
     None
 }
 
-/// The soft `Max address space` out of `/proc/self/limits`, `None` when it is
-/// `unlimited`.
-fn soft_address_space_limit(limits: &str) -> Option<u64> {
-    soft_limit(limits, "Max address space")
-}
-
+/// The soft limit `name` (`Max address space`, `Max data size`) out of
+/// `/proc/self/limits`, `None` when it is `unlimited`.
 fn soft_limit(limits: &str, name: &str) -> Option<u64> {
     limits
         .lines()
@@ -1488,7 +1467,7 @@ mod tests {
         // wasmtime's default of 20,000 elements is 160,000 bytes of pointers
         // on a 64-bit host, which the pool rounds up to the next host page:
         // 163,840 on 4 KiB and 16 KiB pages alike.
-        let page = table_pool_page();
+        let page = pool_page();
         assert!(page >= 4096 && page.is_power_of_two(), "{page}");
         let one = pool_table_bytes(1, 20_000);
         assert!(one >= 160_000 && one < 160_000 + page, "{one}");
@@ -1500,18 +1479,27 @@ mod tests {
         assert_eq!(pool_table_bytes(u32::MAX, usize::MAX), u64::MAX);
     }
 
+    /// A [`PoolCommit`] read off nothing but its arguments.
+    fn commit(charge: PoolMappingCharge, ceiling: Option<u64>, percent: u64) -> PoolCommit {
+        PoolCommit {
+            charge,
+            ceiling,
+            percent,
+        }
+    }
+
     #[test]
     fn the_table_commit_advisory_names_the_count_that_grew_it() {
-        use TableMappingCharge::{Committed, Free};
+        use PoolMappingCharge::{Committed, Free};
         // The smaller of the kernel's figure and the process's limit.
         let limit = Some(8 * 1024 * MIB);
         // Where mappings are committed, the stock host's 4000 tables commit
         // 625 MiB: within a tenth of 8 GiB, so nothing is said; a host told
         // --max-memories 10000 commits 6.25 GiB, which an 8 GiB box must
         // hear about.
-        let tenth = STACK_TABLE_COMMIT_PERCENT;
-        assert!(pool_table_commit_advisory(4000, 20_000, limit, Committed, tenth).is_none());
-        let advisory = pool_table_commit_advisory(40_000, 20_000, limit, Committed, tenth)
+        let committed = commit(Committed, limit, STACK_TABLE_COMMIT_PERCENT);
+        assert!(pool_table_commit_advisory(4000, 20_000, &committed).is_none());
+        let advisory = pool_table_commit_advisory(40_000, 20_000, &committed)
             .expect("6.25 GiB of tables is most of an 8 GiB limit");
         assert!(advisory.contains("40000 pooled tables"), "{advisory}");
         assert!(advisory.contains("max-memories"), "{advisory}");
@@ -1522,18 +1510,22 @@ mod tests {
         // Where the mapping is never accounted (Linux's default heuristic
         // ignores a NORESERVE mapping, however large) there is nothing to
         // say: a 18.75 GiB table pool on an 8 GiB box builds.
-        assert!(pool_table_commit_advisory(120_000, 20_000, limit, Free, tenth).is_none());
+        let free = commit(Free, limit, STACK_TABLE_COMMIT_PERCENT);
+        assert!(pool_table_commit_advisory(120_000, 20_000, &free).is_none());
         // No limit to compare against, nothing to say.
-        assert!(pool_table_commit_advisory(120_000, 20_000, None, Committed, tenth).is_none());
+        let unread = commit(Committed, None, STACK_TABLE_COMMIT_PERCENT);
+        assert!(pool_table_commit_advisory(120_000, 20_000, &unread).is_none());
         // The share a host sized against its commit limit is allowed, and
         // its edge: 6.25 GiB is 78% of 8 GiB, quiet at 80 and not at 75.
-        assert!(pool_table_commit_advisory(40_000, 20_000, limit, Committed, 80).is_none());
-        assert!(pool_table_commit_advisory(40_000, 20_000, limit, Committed, 75).is_some());
+        let eighty = commit(Committed, limit, 80);
+        assert!(pool_table_commit_advisory(40_000, 20_000, &eighty).is_none());
+        let seventy_five = commit(Committed, limit, 75);
+        assert!(pool_table_commit_advisory(40_000, 20_000, &seventy_five).is_some());
     }
 
     #[test]
     fn the_stack_pool_is_sized_by_the_stack_plus_its_guard_page() {
-        let page = table_pool_page();
+        let page = pool_page();
         // wasmtime's default of 2 MiB a stack, plus one guard page each.
         let one = pool_stack_bytes(1, 2 * MIB as usize);
         assert_eq!(one, 2 * MIB + page);
@@ -1546,29 +1538,34 @@ mod tests {
 
     #[test]
     fn the_stack_commit_advisory_names_the_count_that_grew_it() {
-        use TableMappingCharge::{Committed, Free};
+        use PoolMappingCharge::{Committed, Free};
         let limit = Some(8 * 1024 * MIB);
         let stack = 2 * MIB as usize;
         // 1000 stacks commit about 2 GiB: over a tenth of 8 GiB, and said so;
         // a machine-derived 9,829 commit 19 GiB, which does not fit at all.
-        let tenth = STACK_TABLE_COMMIT_PERCENT;
-        let advisory = pool_stack_commit_advisory(1000, stack, limit, Committed, tenth)
+        let committed = commit(Committed, limit, STACK_TABLE_COMMIT_PERCENT);
+        let advisory = pool_stack_commit_advisory(1000, stack, &committed)
             .expect("2 GiB of stacks is a quarter of an 8 GiB limit");
-        assert!(advisory.contains("1000 pooled stacks of 2MiB"), "{advisory}");
+        assert!(
+            advisory.contains("1000 pooled stacks of 2MiB"),
+            "{advisory}"
+        );
         assert!(advisory.contains("max-memories"), "{advisory}");
         assert!(
             advisory.contains("WASMTIME_POOLING_TOTAL_STACKS"),
             "{advisory}"
         );
-        assert!(pool_stack_commit_advisory(100, stack, limit, Committed, tenth).is_none());
+        assert!(pool_stack_commit_advisory(100, stack, &committed).is_none());
         // Never accounted, nothing to say: the derived 19 GiB of stacks on an
         // 8 GiB default-Linux box is a NORESERVE mapping the kernel ignores.
-        assert!(pool_stack_commit_advisory(9_829, stack, limit, Free, tenth).is_none());
-        assert!(pool_stack_commit_advisory(9_829, stack, None, Committed, tenth).is_none());
+        let free = commit(Free, limit, STACK_TABLE_COMMIT_PERCENT);
+        assert!(pool_stack_commit_advisory(9_829, stack, &free).is_none());
+        let unread = commit(Committed, None, STACK_TABLE_COMMIT_PERCENT);
+        assert!(pool_stack_commit_advisory(9_829, stack, &unread).is_none());
         // Within the derivation's quarter, 2 GiB on 8 GiB is quiet: the
         // share a host sized against its commit limit is allowed.
-        let quarter = DERIVED_STACK_TABLE_COMMIT_PERCENT;
-        assert!(pool_stack_commit_advisory(1000, stack, limit, Committed, quarter).is_none());
+        let quarter = commit(Committed, limit, DERIVED_STACK_TABLE_COMMIT_PERCENT);
+        assert!(pool_stack_commit_advisory(1000, stack, &quarter).is_none());
     }
 
     #[test]
@@ -1981,11 +1978,8 @@ mod tests {
             (USER_ADDRESS_SPACE, 65_530),
             (USER_ADDRESS_SPACE, 1_048_576),
         ] {
-            let memories = derive_max_memories_within(
-                address_space,
-                Some(mappings),
-                CommitBound::Unaccounted,
-            );
+            let memories =
+                derive_max_memories_within(address_space, Some(mappings), CommitBound::Unaccounted);
             let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
             assert_eq!(reservation_advisory(&derived, address_space), None);
             assert_eq!(map_count_advisory(&derived, mappings), None);
@@ -1994,11 +1988,8 @@ mod tests {
         // Compatibility preserves 1000 even when a tighter limit means that
         // count needs an advisory. Automatic sizing does not promise silence.
         let small_address_space = 1024 * 1024 * MIB;
-        let memories = derive_max_memories_within(
-            small_address_space,
-            Some(4096),
-            CommitBound::Unaccounted,
-        );
+        let memories =
+            derive_max_memories_within(small_address_space, Some(4096), CommitBound::Unaccounted);
         assert_eq!(memories, WASMTIME_DEFAULT_MAX_MEMORIES);
         let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
         assert!(reservation_advisory(&derived, small_address_space).is_some());
@@ -2016,7 +2007,7 @@ mod tests {
         let limits = "Max data size             4294967296 8589934592 bytes\n\
                       Max address space         unlimited unlimited bytes\n";
         assert_eq!(soft_limit(limits, "Max data size"), Some(4 * 1024 * MIB));
-        assert_eq!(soft_address_space_limit(limits), None);
+        assert_eq!(soft_limit(limits, "Max address space"), None);
         assert_eq!(
             soft_limit("Max data size 0 0 bytes", "Max data size"),
             Some(0)
@@ -2038,7 +2029,10 @@ mod tests {
         // 2 MiB of stack plus its guard page, and four tables of 160 KiB
         // rounded up to the host's page: about 2.6 MiB.
         assert!(per_memory > 2 * MIB + 640 * 1024, "{per_memory}");
-        assert!(per_memory < 2 * MIB + 640 * 1024 + 6 * table_pool_page(), "{per_memory}");
+        assert!(
+            per_memory < 2 * MIB + 640 * 1024 + 6 * pool_page(),
+            "{per_memory}"
+        );
         let within = |bytes: u64| {
             derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), CommitBound::Within(bytes))
         };
@@ -2154,9 +2148,12 @@ mod tests {
     fn the_address_space_limit_is_read_from_proc_limits() {
         let unlimited = "Limit                     Soft Limit           Hard Limit           Units\n\
                          Max address space         unlimited            unlimited            bytes\n";
-        assert_eq!(soft_address_space_limit(unlimited), None);
+        assert_eq!(soft_limit(unlimited, "Max address space"), None);
         let limited = "Max address space         8589934592           unlimited            bytes\n";
-        assert_eq!(soft_address_space_limit(limited), Some(8 * 1024 * MIB));
+        assert_eq!(
+            soft_limit(limited, "Max address space"),
+            Some(8 * 1024 * MIB)
+        );
         assert!(usable_address_space() <= USER_ADDRESS_SPACE);
     }
 

@@ -1055,10 +1055,9 @@ impl Engine {
             .load_live_component(&component.bytes, component.digest)
             .context("failed to create component from bytes")?;
 
-        let may_use_gc = compiled.as_ref().map_or_else(
-            || self.may_use_gc(&component.bytes),
-            |live| live.may_use_gc,
-        );
+        let may_use_gc = compiled
+            .as_ref()
+            .map_or_else(|| self.may_use_gc(&component.bytes), |live| live.may_use_gc);
 
         let linker = self.base_linker(uses_wasi_http(&wasmtime_component))?;
 
@@ -1374,7 +1373,7 @@ impl EngineBuilder {
     }
 
     /// Whether this host sized `max_memories` against its commit limit
-    /// (`host_memory::derive_max_memories_from_memory_precommit_limit`).
+    /// (`host_memory::MaxMemoriesDerivation::from_memory_precommit_limit`).
     ///
     /// The engine derives nothing from it: the count arrives through
     /// [`Self::with_host_memory`] or [`Self::with_max_memories`]. It tells
@@ -1621,11 +1620,10 @@ impl EngineBuilder {
 
         // Start from the caller-supplied base config (or wasmtime's default) and
         // layer the builder-managed settings on top of it.
+        // A caller's base config may also set what the builder otherwise
+        // leaves at wasmtime's defaults (the fiber stack size among them); the
+        // pool advisories can only assume the defaults when there is none.
         let has_custom_config = self.config.is_some();
-        // A caller's base config may set what the builder otherwise leaves at
-        // wasmtime's defaults (the fiber stack size among them); the pool
-        // advisories can only assume the defaults when there is none.
-        let base_config_given = self.config.is_some();
         let mut config = self.config.take().unwrap_or_default();
 
         // Default the pooling allocator on only when starting from wasmtime's
@@ -1721,7 +1719,7 @@ impl EngineBuilder {
         // fiber stack size, so it is wasmtime's default unless a base config
         // was given; that one case is checked once the engine can say.
         let assumed_stack_size =
-            (!base_config_given).then_some(host_memory::WASMTIME_DEFAULT_ASYNC_STACK_SIZE);
+            (!has_custom_config).then_some(host_memory::WASMTIME_DEFAULT_ASYNC_STACK_SIZE);
         if let Some(pool) = installed_pool {
             for advisory in host_memory::pool_advisories(
                 &pool.totals,
