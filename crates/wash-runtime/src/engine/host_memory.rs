@@ -8,11 +8,14 @@
 //! | --- | --- | --- |
 //! | [`HostMemoryBudgets::max_guest_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
 //! | [`HostMemoryBudgets::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
-//! | [`HostMemoryBudgets::max_memories`] | Linear memories the pooling allocator keeps room for, and with them the fiber stacks and component instances it admits | wasmtime's own default (1000) |
+//! | [`HostMemoryBudgets::max_memories`] | Linear memories the pooling allocator keeps room for, and with them the fiber stacks and component instances it admits | Library default 1000; a host process uses [`derive_max_memories`] |
 //! | [`HostMemoryBudgets::core_instances`] | Core instances (live core modules) the pool admits, a counter that reserves nothing | [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory |
 //!
 //! Both pool knobs fall through to exactly the values wasmtime has always
-//! used when unset. The budget is derived when unset, never absent, and
+//! used when unset: an engine may be one of many in a process (every test
+//! builds one), and each reserves address space for its whole pool, so only
+//! a host that knows it runs one engine asks for the derived count. The
+//! budget is derived when unset, never absent, and
 //! [`crate::engine::guest_memory`] enforces it by default: a host that names
 //! nothing still refuses guest growth past three quarters of its real limit.
 //!
@@ -22,11 +25,11 @@
 //! whether or not anything grows into it: wasmtime's 4 GiB
 //! `memory_reservation`, plus a guard region (see [`pool_slot_bytes`]). A
 //! `default_heap_memory` past the reservation does not make the slot larger;
-//! wasmtime refuses to build that pool at all. Today a host claims 1000 such slots, 3.9 TiB of
-//! address space, and nobody is told; the 128 TiB a 64-bit process can map
-//! holds about 30,000 of them, so `core_instances` has a ceiling. Naming the
-//! budget lets the host say, at startup, whether the pool it is about to build
-//! is one the machine could actually back.
+//! wasmtime refuses to build that pool at all. A pool of 1000 such memories claims 3.9 TiB of
+//! address space; the 128 TiB a 64-bit process can map holds about 30,000 of
+//! them, so `max_memories` has a ceiling, and the derived default stops
+//! well short of it. Naming the budget lets the host say, at startup, whether
+//! the pool it is about to build is one the machine could actually back.
 //!
 //! # The reservation is not a knob
 //!
@@ -63,10 +66,9 @@ pub const WASMTIME_DEFAULT_HEAP_MEMORY: u64 = 4 * 1024 * MIB;
 /// derived from the memory count, this one number sized every total.
 pub const WASMTIME_DEFAULT_CORE_INSTANCES: u32 = 1000;
 
-/// wasmtime's default for the pooling allocator's memory count, and what the
-/// host keeps room for when `--max-memories` is unset: the count that sizes
-/// the pool, and what [`crate::engine::EngineBuilder`] has always passed as
-/// its instance count when nothing set one.
+/// wasmtime's default for the pooling allocator's memory count, retained by
+/// [`crate::engine::EngineBuilder`] when no count is set. A standalone host
+/// uses [`derive_max_memories`], with this default as its floor.
 pub const WASMTIME_DEFAULT_MAX_MEMORIES: u32 = 1000;
 
 /// Core instances the host admits when `--core-instances` is unset:
@@ -75,6 +77,78 @@ pub const WASMTIME_DEFAULT_MAX_MEMORIES: u32 = 1000;
 /// are what a full pool runs out of.
 pub const WASMTIME_DEFAULT_MAX_CORE_INSTANCES: u32 =
     super::CORE_INSTANCES_PER_MEMORY * WASMTIME_DEFAULT_MAX_MEMORIES;
+
+/// Memory mappings a pooled linear memory splits off once it is live: the
+/// copy-on-write image, the rest of its accessible pages (measured as two
+/// mappings), and the inaccessible remainder of the reservation.
+pub const MAPPINGS_PER_LIVE_MEMORY: u64 = 4;
+
+/// Memory mappings a pooled fiber stack's guard page splits off, when the
+/// engine is built, whether or not the stack is ever used.
+pub const MAPPINGS_PER_POOLED_STACK: u64 = 2;
+
+/// Memory mappings a warm component instance costs once it holds them: its
+/// stack's two and its memory's four. The core instance, component instance
+/// and table totals cost none: the first two are counters, and the table pool
+/// is one mapping that stays whole.
+pub const MAPPINGS_PER_WARM_COMPONENT: u64 = MAPPINGS_PER_LIVE_MEMORY + MAPPINGS_PER_POOLED_STACK;
+
+/// Share of `vm.max_map_count` the pool may plan to use once every memory is
+/// live. The rest is for libraries, thread stacks and compiled code.
+const POOL_MAP_COUNT_PERCENT: u64 = 90;
+
+/// Share of the usable address space the derived linear-memory count reserves. The
+/// reservation advisory fires at [`POOL_ADDRESS_SPACE_PERCENT`], so a derived
+/// count never trips it, and an operator can still double the count by hand.
+const DERIVED_POOL_ADDRESS_SPACE_PERCENT: u64 = 50;
+
+/// Linear memories for a host process that runs one engine, when no one named
+/// a count. Not the engine's own default: an engine is often one of several
+/// in a process, and each one's pool reserves this much address space.
+///
+/// Half the address space this process can map, at one memory's reservation each (see
+/// [`pool_slot_bytes`]), and no more than nine tenths of the kernel's
+/// `vm.max_map_count` holds at [`MAPPINGS_PER_WARM_COMPONENT`] each, since a
+/// warm pool makes every memory live. Never below
+/// [`WASMTIME_DEFAULT_MAX_MEMORIES`], so no host gets fewer memories than it
+/// had. On a default Linux (47-bit address space, 65,530 mappings) that is
+/// 9,829 linear memories; macOS, with no mapping limit, derives 16,256.
+///
+/// Windows and Linux with strict overcommit accounting keep the floor:
+/// their accessible table and stack mappings are committed at startup.
+/// Linux processes with a finite `RLIMIT_DATA` also keep it, since that
+/// limit applies to those mappings. This preserves the old default rather
+/// than increasing its startup cost; an explicit count can still be needed
+/// under a tighter limit. 32-bit targets keep the floor too.
+pub fn derive_max_memories() -> u32 {
+    derive_max_memories_within(
+        usable_address_space(),
+        max_map_count(),
+        table_mapping_charge() == TableMappingCharge::Committed || data_segment_limit().is_some(),
+    )
+}
+
+/// [`derive_max_memories`] from inputs the caller already read.
+pub(crate) fn derive_max_memories_within(
+    address_space: u64,
+    max_map_count: Option<u64>,
+    writable_mappings_limited: bool,
+) -> u32 {
+    if cfg!(windows) || cfg!(not(target_pointer_width = "64")) || writable_mappings_limited {
+        return WASMTIME_DEFAULT_MAX_MEMORIES;
+    }
+    // `x * percent / 100` rather than `x / 100 * percent`: neither input is
+    // near overflow, and this keeps the mapping headroom the advisory names.
+    let by_address_space = address_space * DERIVED_POOL_ADDRESS_SPACE_PERCENT
+        / 100
+        / pool_slot_bytes(WASMTIME_DEFAULT_HEAP_MEMORY);
+    let by_map_count = max_map_count.map_or(u64::MAX, |limit| {
+        limit * POOL_MAP_COUNT_PERCENT / 100 / MAPPINGS_PER_WARM_COMPONENT
+    });
+    u32::try_from(by_address_space.min(by_map_count))
+        .unwrap_or(u32::MAX)
+        .max(WASMTIME_DEFAULT_MAX_MEMORIES)
+}
 
 /// wasmtime's default `memory_reservation`: the address space each pooled
 /// linear memory slot reserves, however low its heap ceiling.
@@ -410,7 +484,8 @@ impl HostMemoryBudgets {
 
 impl HostMemoryBudgets {
     /// Resolve the four knobs, falling back to the derived budget and to
-    /// wasmtime's own defaults.
+    /// wasmtime's own defaults. A host running one engine passes
+    /// [`derive_max_memories`] when neither pool count was explicitly set.
     ///
     /// `max_memories` alone derives `core_instances` at
     /// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory.
@@ -756,19 +831,17 @@ fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
 /// What to say when the pool would use up the kernel's per-process limit
 /// on memory mappings, if anything.
 ///
-/// Each pooled stack's guard page splits the stack pool into two mappings when
-/// the engine is built. Each live linear memory splits its reservation into
-/// about four: the copy-on-write image, the rest of its accessible pages
-/// (measured as two mappings), and the inaccessible remainder. The core
-/// instance, component instance and table totals cost none: the first two are
-/// counters, and the table pool is one mapping that stays whole. Memories and
-/// stacks are independent pool totals, so the estimate reads each installed
-/// count rather than the knob they were derived from.
+/// Counts [`MAPPINGS_PER_POOLED_STACK`] for every pooled stack, split when
+/// the engine is built, and [`MAPPINGS_PER_LIVE_MEMORY`] for every linear
+/// memory, split once it is live. Memories and stacks are independent pool
+/// totals, so the estimate reads each installed count rather than the knob
+/// they were derived from.
 fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<String> {
     let PoolTotals {
         memories, stacks, ..
     } = *totals;
-    let needed = u64::from(memories) * 4 + u64::from(stacks) * 2;
+    let needed = u64::from(memories) * MAPPINGS_PER_LIVE_MEMORY
+        + u64::from(stacks) * MAPPINGS_PER_POOLED_STACK;
     (needed > max_map_count).then(|| {
         format!(
             "a pool of {memories} memories and {stacks} stacks needs about {needed} memory \
@@ -778,7 +851,7 @@ fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<St
              and WASMTIME_POOLING_TOTAL_STACKS overrides, or lower max-memories when no \
              overrides are set. Aim for fewer than {} pool mappings to leave room for \
              libraries, thread stacks and compiled code.",
-            max_map_count / 10 * 9,
+            max_map_count * POOL_MAP_COUNT_PERCENT / 100,
         )
     })
 }
@@ -874,6 +947,19 @@ fn address_space_limit() -> Option<u64> {
     soft_address_space_limit(&limits)
 }
 
+/// Linux applies `RLIMIT_DATA` to anonymous writable mappings, including
+/// the table and stack pools. It is independent of `RLIMIT_AS`.
+#[cfg(target_os = "linux")]
+fn data_segment_limit() -> Option<u64> {
+    let limits = std::fs::read_to_string("/proc/self/limits").ok()?;
+    soft_limit(&limits, "Max data size")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn data_segment_limit() -> Option<u64> {
+    None
+}
+
 #[cfg(not(target_os = "linux"))]
 fn address_space_limit() -> Option<u64> {
     None
@@ -883,9 +969,14 @@ fn address_space_limit() -> Option<u64> {
 /// `unlimited`.
 #[cfg(any(target_os = "linux", test))]
 fn soft_address_space_limit(limits: &str) -> Option<u64> {
+    soft_limit(limits, "Max address space")
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn soft_limit(limits: &str, name: &str) -> Option<u64> {
     limits
         .lines()
-        .find_map(|line| line.strip_prefix("Max address space"))?
+        .find_map(|line| line.strip_prefix(name))?
         .split_whitespace()
         .next()?
         .parse()
@@ -1564,7 +1655,83 @@ mod tests {
         assert_eq!(
             reservation_advisory(&stock, USER_ADDRESS_SPACE),
             None,
-            "the stock configuration must not warn — it is what every host runs today"
+            "1000 linear memories must not warn — it is what every host ran for years"
+        );
+    }
+
+    #[cfg(all(unix, target_pointer_width = "64"))]
+    #[test]
+    fn derived_counts_leave_headroom_except_at_the_compatibility_floor() {
+        for (address_space, mappings) in [
+            (USER_ADDRESS_SPACE, 65_530),
+            (USER_ADDRESS_SPACE, 1_048_576),
+        ] {
+            let memories = derive_max_memories_within(address_space, Some(mappings), false);
+            let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
+            assert_eq!(reservation_advisory(&derived, address_space), None);
+            assert_eq!(map_count_advisory(&derived, mappings), None);
+        }
+
+        // Compatibility preserves 1000 even when a tighter limit means that
+        // count needs an advisory. Automatic sizing does not promise silence.
+        let small_address_space = 1024 * 1024 * MIB;
+        let memories = derive_max_memories_within(small_address_space, Some(4096), false);
+        assert_eq!(memories, WASMTIME_DEFAULT_MAX_MEMORIES);
+        let derived = HostMemoryBudgets::resolve(None, None, Some(memories), None).unwrap();
+        assert!(reservation_advisory(&derived, small_address_space).is_some());
+        assert!(map_count_advisory(&derived, 4096).is_some());
+    }
+
+    #[test]
+    fn limited_writable_mappings_keep_the_previous_pool_size() {
+        // A finite data limit or strict commit accounting must not turn the
+        // old 2.6 GiB of writable pools into roughly 25 GiB at startup.
+        assert_eq!(
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), true),
+            WASMTIME_DEFAULT_MAX_MEMORIES
+        );
+        let limits = "Max data size             4294967296 8589934592 bytes\n\
+                      Max address space         unlimited unlimited bytes\n";
+        assert_eq!(soft_limit(limits, "Max data size"), Some(4 * 1024 * MIB));
+        assert_eq!(soft_address_space_limit(limits), None);
+        assert_eq!(
+            soft_limit("Max data size 0 0 bytes", "Max data size"),
+            Some(0)
+        );
+        assert_eq!(
+            soft_limit("Max data size unlimited unlimited bytes", "Max data size"),
+            None
+        );
+    }
+
+    #[cfg(all(unix, target_pointer_width = "64"))]
+    #[test]
+    fn the_memory_count_derives_from_address_space_and_mappings() {
+        // A default Linux: 47 bits of address space and 65,530 mappings. The
+        // mapping limit binds: 65,530 x 90% / 6 per warm component.
+        assert_eq!(
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(65_530), false),
+            9_829
+        );
+        // No mapping limit (macOS, or a kernel that reports none): half the
+        // address space at 4 GiB + 32 MiB a memory.
+        assert_eq!(
+            derive_max_memories_within(USER_ADDRESS_SPACE, None, false),
+            16_256
+        );
+        // A raised mapping limit hands the decision back to the address space.
+        assert_eq!(
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(1_048_576), false),
+            16_256
+        );
+        // A tight RLIMIT_AS or mapping limit never goes below the old default.
+        assert_eq!(
+            derive_max_memories_within(1024 * 1024 * MIB, Some(65_530), false),
+            WASMTIME_DEFAULT_MAX_MEMORIES
+        );
+        assert_eq!(
+            derive_max_memories_within(USER_ADDRESS_SPACE, Some(4_096), false),
+            WASMTIME_DEFAULT_MAX_MEMORIES
         );
     }
 

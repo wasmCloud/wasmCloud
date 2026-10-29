@@ -329,7 +329,7 @@ pub struct HostCommand {
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
     /// this equally bounds instances. Unset, it is derived from the host's
-    /// installed instance and memory limits. The stock pool derives 666,
+    /// installed instance and memory limits. A pool of 1000 memories derives 666,
     /// leaving capacity for HTTP-triggered work, warm pools, and long-lived
     /// services; independent pool overrides can lower that default.
     /// Components also acquire pool resources according to their memory and
@@ -362,7 +362,7 @@ pub struct HostCommand {
     ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
-    /// 666 of a stock host gives 166, and the pinned 128 of a host with pooling
+    /// 666 of a pool of 1000 linear memories gives 166, and the pinned 128 of a host with pooling
     /// disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
@@ -470,8 +470,14 @@ pub struct HostCommand {
     /// GC heaps it admits, one count for all: a component instance of the
     /// usual shape takes one of each.
     ///
-    /// Unset, this is wasmtime's default of 1000, or the `--core-instances`
-    /// count when only that is given. Multiplied by one
+    /// Unset, this uses the `--core-instances` count when that is given.
+    /// Otherwise it is derived from the machine: half the usable address
+    /// space and at most 90% of `vm.max_map_count`, allowing six mappings per
+    /// warm component (two for its stack, four for its memory). The floor is
+    /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
+    /// accounting or a finite data-size limit keep. With a 65,530 mapping
+    /// limit and 47-bit address space, Linux derives 9,829 memories.
+    /// Multiplied by one
     /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
     /// `--default-heap-memory` is) it is the pool's address-space reservation,
     /// so it is the knob that sizes the pool. The core-instance and table
@@ -1128,10 +1134,16 @@ impl CliCommand for HostCommand {
         // in a flag, and reporting it after a NATS dial has already failed
         // buries the actionable error under an unrelated one. The resolved
         // numbers are reported later, by the engine that installs them.
+        // A host runs one engine, so an unset linear-memory count is sized to the
+        // machine here rather than left at the engine's library default.
         let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
-            self.max_memories,
+            self.max_memories.or_else(|| {
+                self.core_instances
+                    .is_none()
+                    .then(wash_runtime::engine::host_memory::derive_max_memories)
+            }),
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;

@@ -653,7 +653,7 @@ pub(crate) use messaging_handler_dispatch;
 ///
 /// On a pooled host this constant does not apply: `per_component_ceiling`
 /// divides whatever host total is in force, so the number moves with the pool
-/// and with `--wasmcloud-messaging-max-in-flight`. The stock pool derives 166.
+/// and with `--wasmcloud-messaging-max-in-flight`. A pool of 1000 linear memories derives 166.
 /// See [`DEFAULT_MAX_IN_FLIGHT_HOST`] for the arithmetic.
 pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 
@@ -666,8 +666,9 @@ pub const DEFAULT_MAX_IN_FLIGHT_PER_COMPONENT: usize = 32;
 /// ([`crate::engine`] sizes the pool from `max_memories`, default 1000).
 ///
 /// With a pool to divide, `derive_host_ceiling` takes [`MESSAGING_SHARE`] of
-/// the instances of the usual shape the pool holds: the stock pool of 1000
-/// derives 666 host-wide and 166 per component. What those messages may hold
+/// the instances of the usual shape the pool holds: a pool of 1000 memories
+/// derives 666 host-wide and 166 per component; machine-derived pools can
+/// reach the 4096 host-wide cap. What those messages may hold
 /// of the pool is the same share of each total, charged per component
 /// ([`PoolShare`]), so a composed component spending several memories is
 /// bounded by the share before the message count. This constant is the
@@ -811,7 +812,7 @@ pub struct MessagingLimits {
 /// deployment is a separate workload with its own `uuid::Uuid::now_v7()`
 /// component id, so keying by that gives each replica its own full ceiling:
 /// four replicas of a component at `max_in_flight: 32` could hold 128 messages
-/// on one host, against a stock host-wide total of 666. The per-component
+/// on one host, against the 666 a pool of 1000 linear memories derives. The per-component
 /// ceiling exists to stop one workload taking the host, and per-replica gates
 /// let it do the opposite. Keyed by identity, `max_in_flight` means what a
 /// manifest author reads it to mean: a total for that component, however many

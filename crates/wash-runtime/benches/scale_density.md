@@ -71,10 +71,17 @@ footprint there.
 
   Both are summed over the clean steps. On Linux the load generator's own
   CPU is left out.
-- **Pool totals** default to half the usable address space at one 4 GiB +
-  32 MiB slot each, capped at `vm.max_map_count / 5`. That is 13,106 slots
-  on a default Linux. A warm workload holds four core instances, so the pool
-  fits about 3,276 of them.
+- **Pool linear memories** default to what the runtime derives
+  (`derive_max_memories`): half the usable address space at one 4 GiB +
+  32 MiB reservation each, and no more than nine tenths of `vm.max_map_count`
+  holds at six mappings per warm component (two for its pooled stack, four for
+  its memory). That is 9,829 on a default Linux. A warm workload holds one
+  linear memory, one fiber stack and one component instance, from totals of
+  the same size; its four core instances and two tables draw on totals sized
+  as multiples of that count, so they do not bind first. Windows, 32-bit
+  targets, and Linux with strict overcommit accounting or a finite
+  `RLIMIT_DATA` retain the previous 1,000-memory default, since the writable
+  table and stack mappings can otherwise prevent engine startup.
 
 ## The memory guard
 
