@@ -172,7 +172,7 @@ pub(crate) enum CommitBound {
 /// [`derive_max_memories_from_memory_precommit_limit`] is for the host that wants to
 /// scale there anyway. 32-bit targets keep the floor too.
 pub fn derive_max_memories() -> u32 {
-    derive_max_memories_bounded(false)
+    derive_max_memories_with(MaxMemoriesDerivation::default())
 }
 
 /// [`derive_max_memories`] for a host that asked to be sized against its
@@ -189,11 +189,34 @@ pub fn derive_max_memories() -> u32 {
 /// here never trips them. Where the pools are not accounted, this is
 /// [`derive_max_memories`] exactly.
 pub fn derive_max_memories_from_memory_precommit_limit() -> u32 {
-    derive_max_memories_bounded(true)
+    derive_max_memories_with(MaxMemoriesDerivation {
+        from_memory_precommit_limit: true,
+        ..MaxMemoriesDerivation::default()
+    })
 }
 
-/// [`derive_max_memories`] or [`derive_max_memories_from_memory_precommit_limit`],
-/// from one reading of the machine.
+/// What a host tells the memory-count derivation about the engine it is
+/// about to build, beyond what it reads off the machine. Every field's
+/// default is what [`derive_max_memories`] assumes.
+///
+/// Non-exhaustive, so an input added later is not a breaking change: build
+/// it with [`Default::default`] and set the fields.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MaxMemoriesDerivation {
+    /// Size against the memory precommit limit where the stack and table
+    /// pools are precommitted; see
+    /// [`derive_max_memories_from_memory_precommit_limit`].
+    pub from_memory_precommit_limit: bool,
+}
+
+/// [`derive_max_memories`] with every input named; see
+/// [`MaxMemoriesDerivation`].
+pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
+    derive_max_memories_bounded(options.from_memory_precommit_limit)
+}
+
+/// [`derive_max_memories_with`], from one reading of the machine.
 fn derive_max_memories_bounded(from_commit_limit: bool) -> u32 {
     let limits = process_limits();
     let charge = table_mapping_charge();
@@ -785,39 +808,97 @@ impl HostMemoryBudgets {
 /// enforces it: it is a product of two knobs an operator sets independently,
 /// and the failure it causes — the engine or instantiation refusing, with
 /// neither number in the message — is unpleasant to diagnose.
+///
+/// `async_stack_size` is `None` when the engine's stack size is not known
+/// before it is built (a caller-supplied base config may set it); the stack
+/// advisory is then left to [`pool_stack_advisory`] once the engine exists.
 pub(crate) fn pool_advisories(
     totals: &PoolTotals,
     max_memory_size: u64,
     table_elements: usize,
-    async_stack_size: usize,
+    async_stack_size: Option<usize>,
     max_memories_from_memory_precommit_limit: bool,
     memory_limit: Option<u64>,
 ) -> Vec<String> {
-    let charge = table_mapping_charge();
-    let ceiling = table_commit_ceiling(charge, memory_limit);
-    // A host sized against its commit limit may take the derivation's share:
-    // the very check it was sized for must not warn about it.
-    let commit_percent = if max_memories_from_memory_precommit_limit {
-        DERIVED_STACK_TABLE_COMMIT_PERCENT
-    } else {
-        STACK_TABLE_COMMIT_PERCENT
-    };
+    let commit = PoolCommit::read(max_memories_from_memory_precommit_limit, memory_limit);
     [
         pool_heap_ceiling_advisory(max_memory_size),
         pool_reservation_advisory(totals.memories, max_memory_size, usable_address_space()),
         max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit)),
-        pool_table_commit_advisory(totals.tables, table_elements, ceiling, charge, commit_percent),
-        pool_stack_commit_advisory(
-            totals.stacks,
-            async_stack_size,
-            ceiling,
-            charge,
-            commit_percent,
+        pool_table_commit_advisory(
+            totals.tables,
+            table_elements,
+            commit.ceiling,
+            commit.charge,
+            commit.percent,
         ),
+        async_stack_size.and_then(|size| {
+            pool_stack_commit_advisory(
+                totals.stacks,
+                size,
+                commit.ceiling,
+                commit.charge,
+                commit.percent,
+            )
+        }),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// The stack pool's advisory alone, for an engine whose stack size was only
+/// known once it was built; see [`pool_advisories`].
+pub(crate) fn pool_stack_advisory(
+    stacks: u32,
+    async_stack_size: usize,
+    max_memories_from_memory_precommit_limit: bool,
+    memory_limit: Option<u64>,
+) -> Option<String> {
+    let commit = PoolCommit::read(max_memories_from_memory_precommit_limit, memory_limit);
+    pool_stack_commit_advisory(
+        stacks,
+        async_stack_size,
+        commit.ceiling,
+        commit.charge,
+        commit.percent,
+    )
+}
+
+/// What the stack and table pools' accessible mappings are charged against
+/// at startup, read once for every advisory about them.
+struct PoolCommit {
+    /// [`TableMappingCharge::Committed`] where the platform commits the
+    /// mappings, or where a finite `RLIMIT_DATA` charges them all the same.
+    charge: TableMappingCharge,
+    /// The smallest limit they are charged against; see
+    /// [`pool_commit_ceiling`].
+    ceiling: Option<u64>,
+    /// The share of `ceiling` past which they are worth a word.
+    percent: u64,
+}
+
+impl PoolCommit {
+    fn read(max_memories_from_memory_precommit_limit: bool, memory_limit: Option<u64>) -> Self {
+        let platform = table_mapping_charge();
+        let data_limit = data_segment_limit_within(process_limits().as_deref());
+        Self {
+            charge: if data_limit.is_some() {
+                TableMappingCharge::Committed
+            } else {
+                platform
+            },
+            ceiling: pool_commit_ceiling(platform, data_limit, memory_limit),
+            // A host sized against its precommit limit may take the
+            // derivation's share: the very check it was sized for must not
+            // warn about it.
+            percent: if max_memories_from_memory_precommit_limit {
+                DERIVED_STACK_TABLE_COMMIT_PERCENT
+            } else {
+                STACK_TABLE_COMMIT_PERCENT
+            },
+        }
+    }
 }
 
 /// What mapping the table pool accessible costs on this platform, which
@@ -985,8 +1066,9 @@ fn accessible_pool_commit_advisory(
     match charge {
         TableMappingCharge::Committed if mapped > ceiling / 100 * commit_percent => {
             Some(format!(
-                "{what} commit {} at startup, since this platform commits every accessible \
-                 mapping, past {commit_percent}% of the {} this process may commit. The \
+                "{what} commit {} at startup, since this process is charged for every \
+                 accessible mapping when it is made (Windows, vm.overcommit_memory=2, or a \
+                 finite RLIMIT_DATA), past {commit_percent}% of the {} it may commit. The \
                  engine may fail to start, or guests may be left little to grow into. {remedy}",
                 render_bytes(mapped),
                 render_bytes(ceiling),
