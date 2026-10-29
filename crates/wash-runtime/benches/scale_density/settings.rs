@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 use wash_runtime::{
-    engine::host_memory::{self, parse_bytes, pool_slot_bytes},
+    engine::host_memory::{self, parse_bytes},
     wit::WitInterface,
 };
 
@@ -71,7 +71,7 @@ impl Settings {
         };
         let core_instances = match number("WASH_SCALE_CORE_INSTANCES")? {
             Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-            None => derived_core_instances(),
+            None => host_memory::derive_max_memories(),
         };
         let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
             None | Some("p3") => "http_handler_p3",
@@ -115,20 +115,6 @@ pub(super) fn effective_memory() -> Result<u64> {
     host_memory::detected_memory_limit().context(
         "cannot detect a memory budget; set WASH_SCALE_MEMORY_LIMIT and WASH_SCALE_GUEST_MEMORY",
     )
-}
-
-/// Pool slots sized the way a large host would size them: half the address
-/// space at wasmtime's fixed 4 GiB-plus-guard slot, and no more than the
-/// kernel's mapping limit allows (about five mappings per slot).
-pub(super) fn derived_core_instances() -> u32 {
-    let by_address_space = host_memory::usable_address_space()
-        / 2
-        / pool_slot_bytes(host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
-    let by_map_count = std::fs::read_to_string("/proc/sys/vm/max_map_count")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .map_or(u64::MAX, |limit| limit / 5);
-    u32::try_from(by_address_space.min(by_map_count).max(1)).unwrap_or(u32::MAX)
 }
 
 pub(super) fn fixture_bytes(name: &str) -> Result<bytes::Bytes> {
