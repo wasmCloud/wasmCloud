@@ -235,7 +235,7 @@ pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
     };
     derive_max_memories_within(
         usable_address_space_within(limits.as_deref()),
-        max_map_count(),
+        max_map_count().map(MapCountLimit::limit),
         bound,
         PoolCommitShape::from_env(),
     )
@@ -1209,17 +1209,25 @@ fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
 /// memory, split once it is live. Memories and stacks are independent pool
 /// totals, so the estimate reads each installed count rather than the knob
 /// they were derived from.
-fn pool_map_count_advisory(totals: &PoolTotals, max_map_count: u64) -> Option<String> {
+fn pool_map_count_advisory(totals: &PoolTotals, limit: MapCountLimit) -> Option<String> {
     let PoolTotals {
         memories, stacks, ..
     } = *totals;
+    let max_map_count = limit.limit();
     let needed = u64::from(memories) * MAPPINGS_PER_LIVE_MEMORY
         + u64::from(stacks) * MAPPINGS_PER_POOLED_STACK;
+    let whose = match limit {
+        MapCountLimit::Read(_) => "this kernel's vm.max_map_count of",
+        MapCountLimit::Assumed(_) => {
+            "the vm.max_map_count this host assumes, since /proc/sys/vm/max_map_count could \
+             not be read: Linux's default of"
+        }
+    };
     (needed > max_map_count).then(|| {
         format!(
             "a pool of {memories} memories and {stacks} stacks needs about {needed} memory \
-             mappings once every memory is live, past this kernel's vm.max_map_count of \
-             {max_map_count}. Engine startup or later instantiation may fail. Raise \
+             mappings once every memory is live, past {whose} {max_map_count}. Engine \
+             startup or later instantiation may fail. Raise \
              vm.max_map_count (sysctl), reduce the installed WASMTIME_POOLING_TOTAL_MEMORIES \
              and WASMTIME_POOLING_TOTAL_STACKS overrides, or lower max-memories when no \
              overrides are set. Aim for fewer than {} pool mappings to leave room for \
@@ -1355,22 +1363,44 @@ fn soft_limit(limits: &str, name: &str) -> Option<u64> {
 /// read: a `/proc` mounted without `sys`, or a sandbox that denies it. The
 /// kernel still enforces its limit there, so a host that cannot read it must
 /// not plan as if there were none.
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const LINUX_DEFAULT_MAX_MAP_COUNT: u64 = 65_530;
+
+/// The kernel's per-process limit on memory mappings, and whether it was
+/// read or assumed. Only Linux has one to read.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MapCountLimit {
+    /// Read from `/proc/sys/vm/max_map_count`.
+    Read(u64),
+    /// [`LINUX_DEFAULT_MAX_MAP_COUNT`], since the sysctl could not be read.
+    Assumed(u64),
+}
+
+impl MapCountLimit {
+    fn limit(self) -> u64 {
+        match self {
+            Self::Read(limit) | Self::Assumed(limit) => limit,
+        }
+    }
+}
 
 /// The kernel's per-process limit on memory mappings, where there is one.
 #[cfg(target_os = "linux")]
-fn max_map_count() -> Option<u64> {
+fn max_map_count() -> Option<MapCountLimit> {
     Some(
-        std::fs::read_to_string("/proc/sys/vm/max_map_count")
+        match std::fs::read_to_string("/proc/sys/vm/max_map_count")
             .ok()
             .and_then(|raw| raw.trim().parse().ok())
-            .unwrap_or(LINUX_DEFAULT_MAX_MAP_COUNT),
+        {
+            Some(limit) => MapCountLimit::Read(limit),
+            None => MapCountLimit::Assumed(LINUX_DEFAULT_MAX_MAP_COUNT),
+        },
     )
 }
 
 #[cfg(not(target_os = "linux"))]
-fn max_map_count() -> Option<u64> {
+fn max_map_count() -> Option<MapCountLimit> {
     None
 }
 
@@ -1601,7 +1631,7 @@ mod tests {
         config.total_memories(budgets.max_memories);
         config.total_stacks(budgets.max_memories);
         config.total_tables(budgets.max_memories);
-        pool_map_count_advisory(&PoolTotals::of(&config), max_map_count)
+        pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(max_map_count))
     }
 
     #[test]
@@ -2359,14 +2389,34 @@ mod tests {
         assert_eq!(map_count_advisory(&stock, 65_530), None);
     }
 
+    /// A limit the host could not read is said to be assumed, not quoted
+    /// as the kernel's.
+    #[test]
+    fn an_assumed_map_count_is_named_as_assumed() {
+        let totals = crate::engine::derived_pool_totals(12_000);
+        let read = pool_map_count_advisory(&totals, MapCountLimit::Read(65_530))
+            .expect("72,000 mappings are past 65,530");
+        assert!(
+            read.contains("this kernel's vm.max_map_count of 65530"),
+            "{read}"
+        );
+        let assumed =
+            pool_map_count_advisory(&totals, MapCountLimit::Assumed(LINUX_DEFAULT_MAX_MAP_COUNT))
+                .expect("the assumed limit is held to the same arithmetic");
+        assert!(!assumed.contains("this kernel's"), "{assumed}");
+        assert!(assumed.contains("could not be read"), "{assumed}");
+        assert!(assumed.contains("65530"), "{assumed}");
+    }
+
     #[test]
     fn mapping_advisories_use_independent_installed_pool_totals() {
         let mut config = wasmtime::PoolingAllocationConfig::default();
         config.total_memories(1000);
         config.total_stacks(40_000);
         config.total_tables(1000);
-        let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
-            .expect("stack guard mappings alone exceed the kernel limit");
+        let advisory =
+            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
+                .expect("stack guard mappings alone exceed the kernel limit");
         assert!(advisory.contains("84000 memory mappings"), "{advisory}");
         assert!(advisory.contains("40000 stacks"), "{advisory}");
         assert!(advisory.contains("Engine startup"), "{advisory}");
@@ -2376,13 +2426,20 @@ mod tests {
         );
 
         config.total_stacks(1000);
-        assert!(pool_map_count_advisory(&PoolTotals::of(&config), 65_530).is_none());
+        assert!(
+            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
+                .is_none()
+        );
         // Tables are one mapping however many there are.
         config.total_tables(70_000);
-        assert!(pool_map_count_advisory(&PoolTotals::of(&config), 65_530).is_none());
+        assert!(
+            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
+                .is_none()
+        );
         config.total_memories(20_000);
-        let advisory = pool_map_count_advisory(&PoolTotals::of(&config), 65_530)
-            .expect("the memory count uses its own installed total");
+        let advisory =
+            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
+                .expect("the memory count uses its own installed total");
         assert!(advisory.contains("82000 memory mappings"), "{advisory}");
         assert!(
             advisory.contains("WASMTIME_POOLING_TOTAL_MEMORIES"),
