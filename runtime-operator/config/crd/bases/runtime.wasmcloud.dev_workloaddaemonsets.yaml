@@ -846,13 +846,6 @@ spec:
                   - type
                   type: object
                 type: array
-              currentReplicas:
-                description: |-
-                  CurrentReplicas is the average number of current-template instances
-                  per desired Host, rounded down. It is the /scale statusReplicasPath, so
-                  it counts per Host like spec.replicas does; replicas.current is the total.
-                format: int32
-                type: integer
               desiredHosts:
                 description: DesiredHosts is the number of schedulable Hosts that
                   match the selector.
@@ -908,10 +901,6 @@ spec:
                     format: int32
                     type: integer
                 type: object
-              selector:
-                description: Selector is the serialized label selector exposed by
-                  the /scale subresource.
-                type: string
               updatedHosts:
                 description: |-
                   UpdatedHosts is the number of desired Hosts with no instance of a
@@ -923,8 +912,4 @@ spec:
     served: true
     storage: true
     subresources:
-      scale:
-        labelSelectorPath: .status.selector
-        specReplicasPath: .spec.replicas
-        statusReplicasPath: .status.currentReplicas
       status: {}

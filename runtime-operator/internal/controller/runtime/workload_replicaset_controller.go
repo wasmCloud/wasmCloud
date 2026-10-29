@@ -27,7 +27,8 @@ const (
 	workloadReplicaSetNameAnnotation       = "runtime.wasmcloud.dev/workload-replicaset-name"
 	workloadDeploymentNameAnnotation       = "runtime.wasmcloud.dev/workload-deployment"
 	// workloadReplicaSetNameLabel is stamped onto the Workloads a ReplicaSet
-	// owns and exposed via its /scale subresource's selector.
+	// owns and exposed via its /scale subresource's selector. Its value is
+	// ownerLabelValue(name), since an RS name can exceed 63 characters.
 	workloadReplicaSetNameLabel = "runtime.wasmcloud.dev/workload-replicaset"
 )
 
@@ -82,7 +83,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		for k, v := range replicaSet.Spec.Template.Labels {
 			workloadLabels[k] = v
 		}
-		workloadLabels[workloadReplicaSetNameLabel] = replicaSet.Name
+		workloadLabels[workloadReplicaSetNameLabel] = ownerLabelValue(replicaSet.Name)
 
 		workload := &runtimev1alpha1.Workload{
 			ObjectMeta: metav1.ObjectMeta{
@@ -179,7 +180,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 
 	replicaSet.Status.Replicas = replicaStatus
 	replicaSet.Status.CurrentReplicas = currentReplicas
-	replicaSet.Status.Selector = labels.Set{workloadReplicaSetNameLabel: replicaSet.Name}.String()
+	replicaSet.Status.Selector = labels.Set{workloadReplicaSetNameLabel: ownerLabelValue(replicaSet.Name)}.String()
 
 	if unavailableCount > 0 {
 		return fmt.Errorf("%d workloads are not available", unavailableCount)
@@ -255,7 +256,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 	}
 
 	for _, workload := range workloads.Items {
-		if !isFailedPastGracePeriod(&workload) {
+		if !isFailedPastGracePeriod(&workload, time.Time{}) {
 			continue
 		}
 		// Delete the workload, which will be replaced by the scale-up logic
@@ -268,7 +269,8 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 
 // isFailedPastGracePeriod reports whether workload is not ready, has failed,
 // and has not recovered within the grace period, so it should be replaced.
-func isFailedPastGracePeriod(workload *runtimev1alpha1.Workload) bool {
+// The grace period starts at the Sync transition or notBefore, whichever is later.
+func isFailedPastGracePeriod(workload *runtimev1alpha1.Workload, notBefore time.Time) bool {
 	// catches workloads already being deleted
 	if workload.DeletionTimestamp != nil {
 		return false
@@ -292,7 +294,11 @@ func isFailedPastGracePeriod(workload *runtimev1alpha1.Workload) bool {
 	}
 
 	// If the workload has failed recently, give it some time to recover
-	return !syncStatus.LastTransitionTime.Time.Add(workloadReplicaSetReplicaGracePeriod).After(time.Now())
+	failedAt := syncStatus.LastTransitionTime.Time
+	if notBefore.After(failedAt) {
+		failedAt = notBefore
+	}
+	return !failedAt.Add(workloadReplicaSetReplicaGracePeriod).After(time.Now())
 }
 
 // SetupWithManager sets up the controller with the Manager.
