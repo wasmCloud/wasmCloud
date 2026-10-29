@@ -18,6 +18,7 @@ version = "2.11.0"
 rust-version = "1.95.0"
 
 [workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 warnings = 'deny' # Treat all warnings as errors
 unsafe_code = 'deny'
 # Inherited from Wasmtime
