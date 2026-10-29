@@ -436,8 +436,8 @@ runtime:
     defaultHeapMemory: ""
     # -- Linear memories the pooling allocator keeps room for, the count that
     # sizes the pool: each reserves 4 GiB of address space plus a guard, and
-    # the fiber-stack, component-instance, core-instance and table totals
-    # follow from it. Empty lets the host derive it from the node: half its
+    # the fiber-stack, component-instance, core-instance, table and GC heap
+    # totals follow from it. Empty lets the host derive it from the node: half its
     # address space and 90% of `vm.max_map_count` at six mappings per warm
     # component, 9,829 on a default Linux node, never below 1000. Set it to
     # plan a node's `vm.max_map_count` around a known pool.

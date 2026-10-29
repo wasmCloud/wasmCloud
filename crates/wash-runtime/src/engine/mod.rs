@@ -1836,9 +1836,9 @@ impl EngineBuilder {
             Some(pool) => e.context(format!(
                 "building the engine failed with a pooling allocator reserving {} of address \
                  space ({} memories of {} each) out of the {} this process can map, and \
-                 mapping {} for {} pooled stacks and {} for {} pooled tables, which Windows, a \
-                 Linux kernel with vm.overcommit_memory=2 and a finite RLIMIT_DATA charge up \
-                 front; if the pool is the cause, lower max-memories or \
+                 mapping {} for {} pooled stacks{} and {} for {} pooled tables, which a Linux \
+                 kernel with vm.overcommit_memory=2 or a finite RLIMIT_DATA charges up front \
+                 (Windows charges the tables); if the pool is the cause, lower max-memories or \
                  WASMTIME_POOLING_TOTAL_MEMORIES (WASMTIME_POOLING_TOTAL_STACKS and \
                  WASMTIME_POOLING_TOTAL_TABLES for the stacks and tables)",
                 host_memory::render_bytes(pool.reservation()),
@@ -1850,6 +1850,11 @@ impl EngineBuilder {
                     assumed_stack_size.unwrap_or(host_memory::WASMTIME_DEFAULT_ASYNC_STACK_SIZE),
                 )),
                 pool.totals.stacks,
+                if assumed_stack_size.is_some() {
+                    ""
+                } else {
+                    " (assuming wasmtime's default stack size, which the base config may change)"
+                },
                 host_memory::render_bytes(host_memory::pool_table_bytes(
                     pool.totals.tables,
                     pool.table_elements
@@ -2095,8 +2100,9 @@ pub(crate) const CORE_INSTANCES_PER_MEMORY: u32 = 16;
 ///
 /// Each pooled table is `table_elements` pointers of address space (160 KiB at
 /// the default 20,000) in one mapping that is never split, so this costs no
-/// `vm.max_map_count` and, on Unix, no committed memory; Windows commits the
-/// mapping, so there the table pool's commit charge grows with it.
+/// `vm.max_map_count`. Where the mapping is committed at startup (Windows,
+/// `vm.overcommit_memory=2`, a finite `RLIMIT_DATA`), the table pool's commit
+/// charge grows with it; elsewhere it costs nothing until a table is used.
 const TABLES_PER_MEMORY: u32 = 4;
 
 /// The pool totals `instances` linear memories resolve to, before the

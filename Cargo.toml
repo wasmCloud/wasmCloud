@@ -138,6 +138,9 @@ wasmtime-wasi = { version = "48.0.7", default-features = false }
 wasmtime-wasi-io = { version = "48.0.7", default-features = false }
 wasmtime-wasi-http = { version = "48.0.7", default-features = false }
 wasmtime-wasi-tls = { version = "48.0.7", default-features = false }
+# The parser wasmtime-environ 48 depends on: GC admission reads components
+# with the operator set wasmtime compiles them with, so bump it with wasmtime.
+wasmparser = { version = "0.254.2", default-features = false }
 windows-sys = { version = "0.61", default-features = false }
 wit-component = { version = "0.259.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
