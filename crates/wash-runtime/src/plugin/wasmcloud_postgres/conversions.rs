@@ -1188,6 +1188,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod codec_tests {
-    include!("conversion_tests.rs");
-}
+mod conversion_tests;
