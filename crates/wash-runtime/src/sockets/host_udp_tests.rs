@@ -550,3 +550,43 @@ async fn socket_properties_and_pollables_follow_resource_lifetimes() {
         Socket::drop(&mut h.view(), Resource::new_own(socket)).unwrap();
     }
 }
+
+#[tokio::test]
+async fn outgoing_readiness_tracks_send_buffer_capacity() {
+    for local in ["127.0.0.1:0", "0.0.0.0:0"] {
+        let mut h = Harness::default();
+        let (receiver, peer) = h.bind("127.0.0.1:0").await;
+        let (sender, _) = h.bind(local).await;
+        Socket::set_send_buffer_size(&mut h.view(), Resource::new_borrow(sender), 2).unwrap();
+        let (rx, _) = h.streams(receiver, None).await;
+        let (_, tx) = h.streams(sender, None).await;
+        for _ in 0..2 {
+            let stream = h
+                .table
+                .get_mut(&Resource::<OutgoingDatagramStream>::new_borrow(tx))
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), stream.ready())
+                .await
+                .unwrap();
+            assert_eq!(h.check(tx), 1);
+        }
+        h.send(tx, vec![1; 2], Some(peer)).unwrap();
+        {
+            let stream = h
+                .table
+                .get_mut(&Resource::<OutgoingDatagramStream>::new_borrow(tx))
+                .unwrap();
+            let mut ready = Box::pin(stream.ready());
+            assert!(futures::poll!(ready.as_mut()).is_pending());
+        }
+        assert_eq!(h.receive(rx, 1).len(), 1);
+        let stream = h
+            .table
+            .get_mut(&Resource::<OutgoingDatagramStream>::new_borrow(tx))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), stream.ready())
+            .await
+            .unwrap();
+        assert_eq!(h.check(tx), 1);
+    }
+}
