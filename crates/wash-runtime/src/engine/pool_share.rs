@@ -38,10 +38,8 @@ use crate::engine::pool_usage::PoolTotals;
 /// What one component instance takes from the pool while it runs: one slot
 /// of each total per thing the component has.
 ///
-/// Non-exhaustive since `gc_heaps` was added: that addition, and this
-/// attribute, break a consumer that wrote the struct out field by field,
-/// once; a total added after it will not. Build one with
-/// [`Default::default`] or [`Self::USUAL`] and set the fields.
+/// Non-exhaustive, so a total added later is not a breaking change: build
+/// one with [`Default::default`] or [`Self::USUAL`] and set the fields.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PoolCost {
@@ -218,7 +216,8 @@ impl Gate {
         if required > 0 && self.installed == 0 {
             anyhow::bail!(
                 "a component of this shape needs {required} {kind} per instance, but the pool \
-                 has none: {knob} is 0. Unset it, or set it to the pool's memory count",
+                 has none: {knob} is 0. Unset it, so the pool derives it from the memory \
+                 count, or set it to at least {required}",
                 kind = self.kind,
                 knob = self.knob,
             );

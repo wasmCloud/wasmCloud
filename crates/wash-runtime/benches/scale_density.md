@@ -81,7 +81,8 @@ footprint there.
   as multiples of that count, so they do not bind first. Windows, 32-bit
   targets, and Linux with strict overcommit accounting or a finite
   `RLIMIT_DATA` keep the host's old default of 1,000 memories, since the
-  writable table and stack mappings can otherwise prevent engine startup
+  writable table and (outside Windows) stack mappings can otherwise prevent
+  engine startup
   (`wash host --set-max-memories-from-memory-precommit-limit` sizes such a host against a
   quarter of its commit limit instead; the bench keeps the floor).
   (The bench's own earlier derivation, a fifth of the mapping limit, gave

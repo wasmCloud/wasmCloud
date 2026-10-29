@@ -331,7 +331,9 @@ pub struct HostCommand {
     /// this equally bounds instances. Unset, it is derived from the host's
     /// installed instance and memory limits. A pool of 1000 memories derives 666,
     /// leaving capacity for HTTP-triggered work, warm pools, and long-lived
-    /// services; independent pool overrides can lower that default.
+    /// services; the larger pool an unset `--max-memories` derives from the
+    /// machine (9,829 memories on a default Linux) reaches the cap of 4096.
+    /// Independent pool overrides can lower that default.
     /// Components also acquire pool resources according to their memory and
     /// table requirements, so compositions can reach a resource limit before
     /// the message cap. Raising `--max-memories` raises the pool; with pooling
@@ -362,8 +364,8 @@ pub struct HostCommand {
     ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
-    /// 666 of a pool of 1000 linear memories gives 166, and the pinned 128 of a host with pooling
-    /// disabled gives 32.
+    /// 666 of a pool of 1000 linear memories gives 166, the 4096 cap gives
+    /// 1024, and the pinned 128 of a host with pooling disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
         env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT"
@@ -477,9 +479,10 @@ pub struct HostCommand {
     /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
     /// accounting or a finite data-size limit keep: there the stack and
     /// table pools are committed at startup rather than reserved, 2.6 GiB at
-    /// the floor, and `--set-max-memories-from-memory-precommit-limit` is how
-    /// such a host asks to be sized past it. With a 65,530 mapping limit and
-    /// 47-bit address space, Linux derives 9,829 memories.
+    /// the floor (on Windows only the tables are, about 625 MiB), and
+    /// `--set-max-memories-from-memory-precommit-limit` is how such a host
+    /// asks to be sized past it. With a 65,530 mapping limit and 47-bit
+    /// address space, Linux derives 9,829 memories.
     ///
     /// Multiplied by one memory's reservation (4 GiB plus a 32 MiB guard,
     /// whatever `--default-heap-memory` is) it is the pool's address-space
@@ -514,25 +517,29 @@ pub struct HostCommand {
     /// `--max-memories`: the linear memories, whose 4 GiB reservations are
     /// address space and never committed, and the fiber stacks (2 MiB each)
     /// and tables (four of 160 KiB per memory), which are mapped read-write
-    /// when the engine is built. Most kernels charge nothing for those
+    /// when the engine is built (on Windows, only the tables; stacks are
+    /// mapped as they are used). Most kernels charge nothing for those
     /// mappings until a page is touched. Windows, Linux with
     /// `vm.overcommit_memory=2` and a process under a finite `RLIMIT_DATA`
     /// precommit them: the whole mapping is charged against the limit on
     /// such memory (`CommitLimit` in `/proc/meminfo`, `RLIMIT_DATA`, or RAM
     /// plus page file on Windows) the moment it is made, about 2.6 MiB per
-    /// memory, touched or not. So on those platforms an unset
-    /// `--max-memories` stays at 1000 (2.6 GiB) rather than the machine's
-    /// derived count (25 GiB at a default Linux's 9,829).
+    /// memory on Linux and 640 KiB on Windows, touched or not. So on those
+    /// platforms an unset `--max-memories` stays at 1000 (2.6 GiB on Linux)
+    /// rather than the machine's derived count (25 GiB at a default Linux's
+    /// 9,829).
     ///
     /// With this on, the host instead works out how many memories' stacks
     /// and tables fit in a quarter of that precommit limit (capped by the
-    /// container's limit) and takes the smallest of that, the address-space
-    /// bound and the mapping bound, never below 1000: the same rule every
-    /// other platform follows. The quarter is fixed, like the other
-    /// derivation shares, because the commit limit is shared with every
+    /// container's limit, or by physical memory where there is none, so swap
+    /// and the page file never raise it) and takes the smallest of that, the
+    /// address-space bound and the mapping bound, never below 1000: the same
+    /// rule every other platform follows. The quarter is fixed, like the
+    /// other derivation shares, because the commit limit is shared with every
     /// other process and with this host's own heap; a host that wants
     /// another count sets `--max-memories`. Elsewhere, and whenever
-    /// `--max-memories` is set, this changes nothing.
+    /// `--max-memories` or `--core-instances` is set (either one turns the
+    /// derivation off), this changes nothing.
     #[arg(
         long = "set-max-memories-from-memory-precommit-limit",
         env = "WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT",

@@ -34,20 +34,19 @@ fn gc_value(ty: ValType) -> bool {
         .is_some_and(|ty| gc_heap(ty.heap_type()))
 }
 
-/// Whether an operator from `$proposal` may allocate in, or reference, a GC
-/// heap. Every operator of these proposals counts; the few whose answer
-/// depends on an operand type are decided in `gc_operator` first.
-macro_rules! gc_proposal {
-    ($proposal:ident) => {
-        matches!(
-            stringify!($proposal),
-            "gc" | "shared_everything_threads"
-                | "exceptions"
-                | "legacy_exceptions"
-                | "custom_descriptors"
-                | "stack_switching"
-        )
-    };
+/// Whether an operator from `proposal`, as `for_each_operator!` names it, may
+/// allocate in, or reference, a GC heap. Every operator of these proposals
+/// counts; the few whose answer depends on an operand type are decided in
+/// `gc_operator` first.
+fn gc_proposal(proposal: &str) -> bool {
+    matches!(
+        proposal,
+        "gc" | "shared_everything_threads"
+            | "exceptions"
+            | "legacy_exceptions"
+            | "custom_descriptors"
+            | "stack_switching"
+    )
 }
 
 macro_rules! gc_operators {
@@ -65,7 +64,7 @@ macro_rules! gc_operators {
                 _ => {}
             }
             match op {
-                $(Operator::$op $({ $($arg: _),* })? => gc_proposal!($proposal),)*
+                $(Operator::$op $({ $($arg: _),* })? => gc_proposal(stringify!($proposal)),)*
                 _ => true,
             }
         }
