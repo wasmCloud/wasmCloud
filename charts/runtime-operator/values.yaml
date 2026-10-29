@@ -413,10 +413,10 @@ runtime:
   # host: size `limits.memory` for your expected per-host workload density, or
   # remove it to leave host memory uncapped.
   #
-  # `defaultHeapMemory`, `coreInstances`, `guestMemoryMode` and
+  # `defaultHeapMemory`, `maxMemories`, `coreInstances`, `guestMemoryMode` and
   # `maxConcurrentStarts` are host knobs rather than Kubernetes resource fields;
   # the chart strips them out of the container's `resources` block and sets them
-  # as `WASH_DEFAULT_HEAP_MEMORY` / `WASH_CORE_INSTANCES` /
+  # as `WASH_DEFAULT_HEAP_MEMORY` / `WASH_MAX_MEMORIES` / `WASH_CORE_INSTANCES` /
   # `WASH_GUEST_MEMORY_MODE` / `WASH_MAX_CONCURRENT_STARTS` for the host.
   # Leaving them empty uses the host's own defaults.
   #
@@ -432,8 +432,19 @@ runtime:
     # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
     # default of 4GiB.
     defaultHeapMemory: ""
-    # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
-    # default of 1000.
+    # -- Linear memories the pooling allocator keeps room for, the count that
+    # sizes the pool: each reserves 4 GiB of address space plus a guard, and
+    # the fiber-stack, component-instance, core-instance and table totals
+    # follow from it. Empty lets the host derive it from the node: half its
+    # address space and 90% of `vm.max_map_count` at six mappings per warm
+    # component, 9,829 on a default Linux node, never below 1000. Set it to
+    # plan a node's `vm.max_map_count` around a known pool.
+    maxMemories: ""
+    # -- Core instances (live core modules) the pool admits: a counter that
+    # reserves nothing, sixteen per memory when empty. Set alone, without
+    # `maxMemories`, it also pins the memory count to this number, as it did
+    # before `maxMemories` existed, and the host warns at startup; set
+    # `maxMemories` instead.
     coreInstances: ""
     # -- Whether the host's guest memory budget is enforced or only counted:
     # `enforce` (what an empty value renders) refuses growth past the budget,
@@ -1016,7 +1027,7 @@ runtime:
       #   limits:
       #     memory: "2Gi"
       #   defaultHeapMemory: "512MiB"
-      #   coreInstances: "200"
+      #   maxMemories: "200"
       #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
       # -- Per-host-group probes. Merged field by field over
