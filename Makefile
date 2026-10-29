@@ -1,5 +1,15 @@
 all: proto
 
+.PHONY: coverage coverage-report coverage-check
+coverage:
+	bash scripts/coverage.sh
+
+coverage-report:
+	bash scripts/coverage.sh report
+
+coverage-check:
+	bash scripts/coverage.sh check
+
 # protobuf
 .PHONY: proto
 proto: proto-generate

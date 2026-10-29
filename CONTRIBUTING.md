@@ -60,6 +60,62 @@ cargo test --lib
 cargo test --bin wash
 ```
 
+### Rust coverage
+
+Install the pinned coverage tool and the LLVM tools for this repository's Rust
+toolchain:
+
+```bash
+source .github/tool-versions.env
+cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+rustup component add llvm-tools-preview
+make coverage
+```
+
+`make coverage` builds the Wasm fixtures without coverage instrumentation, then
+runs the native Rust workspace tests with the same optional features as
+`wash.yml`, including the ignored Docker/registry tests. Docker must be running;
+registry access and the usual fixture build prerequisites are required. Coverage
+builds use a separate Cargo target directory, managed by cargo-llvm-cov.
+
+Reports are written to `target/coverage/`: `html/index.html`, `coverage.json`,
+`lcov.info`, `summary.txt`, test/threshold logs, and `provenance.txt`. The provenance
+records the commit, working tree status, toolchain, features, test scope, and CI
+run URL. `make coverage-report` regenerates reports after a failed run; partial reports are diagnostic only.
+`make coverage-check` requires a successful full test run and at least **80% line
+and compiler-region coverage**. Neither failed tests nor percentages below the
+target are treated as passing evidence.
+
+The [coverage workflow](https://github.com/wasmCloud/wasmCloud/actions/workflows/coverage.yml)
+runs on Rust pull requests, merge groups, and main pushes, and can be started
+manually. Its summary records the measured percentages and test/threshold status.
+The `rust-coverage` artifact retains the reports for 90 days, including when the
+threshold fails. This workflow is separate from the release gate.
+
+#### OpenSSF Best Practices evidence
+
+The Silver badge's
+[`test_statement_coverage80`](https://www.bestpractices.dev/en/criteria/1#test_statement_coverage80)
+criterion requires 80% **statement coverage**. cargo-llvm-cov reports LLVM source
+regions and lines, not a statement count. Using region coverage as a proxy needs
+justification in the badge assessment; line coverage must not be labeled as
+statement coverage.
+
+The report includes native workspace code and uses cargo-llvm-cov's default
+exclusions for test files, examples, benchmarks, dependencies, and build output.
+Generated protobuf bindings under `washlet/generated/` are also excluded. Inline
+unit-test modules in production source files remain included by the stable
+toolchain. Platform-specific code is measured only where compiled on Linux.
+Guest Wasm components, the Go operator/gateway, and Kubernetes E2E execution are
+outside this Rust report's scope. The Rust report alone does not establish
+project-wide compliance; the Go modules need their own statement-coverage
+reports, and these scope limits need review in the badge justification.
+
+For evidence, link a successful run for the assessed commit and preserve its
+`rust-coverage` artifact before it expires. Include the commit, test results,
+metrics, and exclusions with the justification. Installing the tool or setting
+an 80% threshold does not demonstrate that the criterion is met.
+
 ## Project Structure
 
 This repository is a workspace. The `wash` CLI lives in `crates/wash` and the core Wasm runtime it depends on lives in `crates/wash-runtime`:
