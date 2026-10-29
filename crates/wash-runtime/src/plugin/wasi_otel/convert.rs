@@ -475,3 +475,7 @@ pub fn extract_span_links(span: &wasi_tracing::SpanData) -> Vec<Link> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "convert_tests.rs"]
+mod tests;
