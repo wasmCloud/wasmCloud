@@ -1,0 +1,8 @@
+name: Setup Syft
+description: Install the checksum-pinned Syft CLI for the runner's platform
+runs:
+  using: composite
+  steps:
+    - name: Install Syft
+      shell: bash
+      run: node "${GITHUB_ACTION_PATH}/../../scripts/setup-syft.mjs"
