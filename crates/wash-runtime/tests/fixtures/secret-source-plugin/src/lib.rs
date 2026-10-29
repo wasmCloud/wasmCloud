@@ -1,48 +1,58 @@
 //! Host component plugin exporting only `wasmcloud:host/secret-source`, so the
 //! host's real call path into a plugin secret is testable end to end.
 //!
-//! Answers from a fixed table, plus two probes:
+//! Answers from a fixed table, plus probes:
 //! - `who`: `<consumer>/<binding or "-">`, so a test sees what the host sent.
-//! - `caller`: what `identity.get-caller` reports inside `resolve`.
+//! - `workload`: `<namespace>/<name>` of the workload whose bind asked.
+//! - `binary`: bytes that are not UTF-8.
 //! - `denied`: refused with `access-denied`.
 //!
-//! Any other key is left out of the answer, which the host reads as not found.
+//! Any other key is `not-found`.
 
 mod bindings {
     #![allow(unsafe_code)]
     wit_bindgen::generate!({ world: "secret-source-plugin", generate_all });
 }
 
-use bindings::exports::wasmcloud::host::secret_source::{Guest, Request, SourceError};
-use bindings::wasmcloud::host::identity::{Caller, get_caller};
+use bindings::exports::wasmcloud::host::secret_source::{
+    Guest, Request, SecretValue, SourceError,
+};
 
 struct Component;
 
 impl Guest for Component {
-    async fn resolve(request: Request) -> Result<Vec<(String, String)>, SourceError> {
+    async fn resolve(request: Request) -> Result<Vec<(String, SecretValue)>, SourceError> {
         let mut values = Vec::new();
+        let mut missing = Vec::new();
         for key in request.keys {
             let value = match key.as_str() {
                 "denied" => {
                     return Err(SourceError::AccessDenied(Some(format!(
                         "{} may not read `denied`",
-                        request.consumer
+                        request.consumer.plugin
                     ))));
                 }
-                "who" => format!(
+                "who" => SecretValue::String(format!(
                     "{}/{}",
-                    request.consumer,
-                    request.binding.as_deref().unwrap_or("-")
-                ),
-                "caller" => match get_caller() {
-                    Some(Caller::Host) => "host".to_string(),
-                    Some(Caller::Workload(id)) => format!("workload:{id}"),
-                    None => "none".to_string(),
-                },
-                "tier" => "platinum".to_string(),
-                _ => continue,
+                    request.consumer.plugin,
+                    request.consumer.binding.as_deref().unwrap_or("-")
+                )),
+                "workload" => SecretValue::String(format!(
+                    "{}/{}",
+                    request.workload.namespace, request.workload.name
+                )),
+                "binary" => SecretValue::Bytes(vec![0xff, 0xfe]),
+                "tier" => SecretValue::String("platinum".to_string()),
+                "db-password" => SecretValue::String("hunter2".to_string()),
+                _ => {
+                    missing.push(key);
+                    continue;
+                }
             };
             values.push((key, value));
+        }
+        if !missing.is_empty() {
+            return Err(SourceError::NotFound(missing));
         }
         Ok(values)
     }

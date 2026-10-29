@@ -113,7 +113,7 @@ use lifecycle::{
 };
 use secret_source::{ComponentSecretSource, HOST_SECRET_SOURCE_EXPORT, check_secret_source_export};
 pub(crate) use secret_source::{
-    SecretSourceRequest, SecretSourceResolve, SourceError, secret_source_resolve,
+    SecretSourceRequest, SecretSourceResolve, SourceError, secret_source_resolve, secret_value,
 };
 use workload_call::{WorkloadCalls, add_workload_calls_to_linker, install_host_workload};
 
@@ -1460,7 +1460,7 @@ fn caller_root_task(store: &mut StoreContextMut<'_, SharedCtx>) -> Option<GuestT
 
 /// Install the `wasmcloud:host/identity` import on the plugin's own linker:
 /// no-argument funcs describing the caller whose capability call is currently
-/// running (whom it is on behalf of, and its workload, component and binding). Each walks its async call stack back to
+/// running (its workload, component and binding). Each walks its async call stack back to
 /// the root export task and looks that task up in the current incarnation's
 /// [`JobRegistry`], so the answer is exact even while calls from other workloads
 /// interleave. A plugin that imports the interface can thereby partition its state
@@ -1535,26 +1535,6 @@ fn install_host_identity(
             },
         )
         .map_err(|e| e.context("failed to define wasmcloud:host/identity#get-binding-name"))?;
-    let caller_state = Arc::clone(state);
-    instance
-        .func_new("get-caller", move |mut store, _ty, _params, results| {
-            let caller = caller_root_task(&mut store)
-                .and_then(|task| caller_state.registry()?.caller_for_task(task))
-                .map(|c| {
-                    Box::new(match c {
-                        CallerIdentity::Host => Val::Variant("host".to_string(), None),
-                        CallerIdentity::Workload(w) => Val::Variant(
-                            "workload".to_string(),
-                            Some(Box::new(Val::String(w.workload_id.to_string()))),
-                        ),
-                    })
-                });
-            if let Some(slot) = results.first_mut() {
-                *slot = Val::Option(caller);
-            }
-            Ok(())
-        })
-        .map_err(|e| e.context("failed to define wasmcloud:host/identity#get-caller"))?;
     Ok(())
 }
 

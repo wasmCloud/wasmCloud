@@ -3359,8 +3359,14 @@ impl UnresolvedWorkload {
                 // filled again; the unnamed binding's layer is checked by the
                 // plugin's own bind, as it is without secrets. From here on an
                 // error may quote a value, so each one is redacted.
+                let requesting = crate::plugin::RequestingWorkload {
+                    id: self.id().to_string(),
+                    name: self.name().to_string(),
+                    namespace: self.namespace().to_string(),
+                };
                 let filled = crate::plugin::resolve_plugin_secrets(
                     plugins,
+                    &requesting,
                     declared,
                     &requested_interfaces,
                     &schema,
@@ -5839,7 +5845,7 @@ mod tests {
         async fn resolve(
             &self,
             request: crate::plugin::SecretRequest,
-        ) -> Result<HashMap<String, crate::plugin::SecretValue>, crate::plugin::SecretSourceError>
+        ) -> Result<BTreeMap<String, crate::plugin::SecretValue>, crate::plugin::SecretSourceError>
         {
             Ok(request
                 .keys

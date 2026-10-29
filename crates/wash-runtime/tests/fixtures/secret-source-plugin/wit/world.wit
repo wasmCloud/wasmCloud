@@ -4,5 +4,4 @@ package acme:secretsource@0.1.0;
 /// workload can import.
 world secret-source-plugin {
     include wasmcloud:host/secret-source-provider@0.1.5;
-    import wasmcloud:host/identity@0.1.5;
 }

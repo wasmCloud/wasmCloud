@@ -19,33 +19,85 @@ use crate::wit::WitInterface;
 /// What the host asks a [`HostSecretSource`] for, and on whose behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRequest {
-    /// The plugin the values are for.
-    pub consumer: String,
-    /// The binding of `consumer` the source is declared on, or `None` for the
-    /// entry itself.
-    pub binding: Option<String>,
+    /// The binding the values are delivered to.
+    pub consumer: SecretConsumer,
+    /// The workload whose bind needs them.
+    pub workload: RequestingWorkload,
     /// The keys to resolve, without duplicates.
     pub keys: Vec<String>,
 }
 
-/// A secret's value. Redacted in `Debug`, with no `Display`, so reading it is
-/// always an explicit [`Self::expose`].
+/// The binding a [`SecretRequest`]'s values are delivered to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretConsumer {
+    /// The plugin the values are for.
+    pub plugin: String,
+    /// The binding of `plugin` the source is declared on, or `None` for the
+    /// entry itself.
+    pub binding: Option<String>,
+}
+
+/// The workload whose bind a [`SecretRequest`] is made for, from the host's own
+/// records of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestingWorkload {
+    pub id: String,
+    pub name: String,
+    pub namespace: String,
+}
+
+/// A secret's value: text, or bytes for binary material. Redacted in `Debug`,
+/// with no `Display`, and zeroed on drop, so reading it is always an explicit
+/// [`Self::expose`].
 #[derive(Clone, PartialEq, Eq)]
-pub struct SecretValue(String);
+pub struct SecretValue(SecretBytes);
+
+#[derive(Clone, PartialEq, Eq)]
+enum SecretBytes {
+    Text(String),
+    Bytes(Vec<u8>),
+}
 
 impl SecretValue {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        Self(SecretBytes::Text(value.into()))
     }
 
-    /// The value itself. Never log it.
-    pub fn expose(&self) -> &str {
-        &self.0
+    pub fn from_bytes(value: impl Into<Vec<u8>>) -> Self {
+        Self(SecretBytes::Bytes(value.into()))
     }
 
-    /// The value itself, for handing to its consumer. Never log it.
-    pub fn into_exposed(self) -> String {
-        self.0
+    /// The value as text, or `None` for bytes that are not UTF-8. Never log
+    /// it.
+    pub fn expose(&self) -> Option<&str> {
+        match &self.0 {
+            SecretBytes::Text(text) => Some(text),
+            SecretBytes::Bytes(bytes) => std::str::from_utf8(bytes).ok(),
+        }
+    }
+
+    /// The value as text, for handing to a consumer whose config takes text,
+    /// or `None` for bytes that are not UTF-8. Never log it.
+    pub fn into_text(mut self) -> Option<String> {
+        match std::mem::replace(&mut self.0, SecretBytes::Text(String::new())) {
+            SecretBytes::Text(text) => Some(text),
+            SecretBytes::Bytes(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => Some(text),
+                Err(e) => {
+                    zeroize::Zeroize::zeroize(&mut e.into_bytes());
+                    None
+                }
+            },
+        }
+    }
+}
+
+impl Drop for SecretValue {
+    fn drop(&mut self) {
+        match &mut self.0 {
+            SecretBytes::Text(text) => zeroize::Zeroize::zeroize(text),
+            SecretBytes::Bytes(bytes) => zeroize::Zeroize::zeroize(bytes),
+        }
     }
 }
 
@@ -60,6 +112,8 @@ impl std::fmt::Debug for SecretValue {
 /// failing. Each message is the source's own and never carries a value.
 #[derive(Debug)]
 pub enum SecretSourceError {
+    /// These requested keys do not exist.
+    NotFound(Vec<String>),
     /// The source refuses these keys to this consumer.
     AccessDenied(Option<String>),
     /// The backend could not be reached; a later bind may succeed.
@@ -77,6 +131,10 @@ impl std::fmt::Display for SecretSourceError {
             Self::AccessDenied(detail) => ("access denied", detail),
             Self::Unavailable(detail) => ("unavailable", detail),
             Self::Other(detail) => ("failed", detail),
+            Self::NotFound(keys) => {
+                let keys: Vec<String> = keys.iter().map(|k| format!("`{k}`")).collect();
+                return write!(f, "no key {}", keys.join(", "));
+            }
             Self::Call(e) => return write!(f, "the call failed: {e:#}"),
         };
         match detail {
@@ -91,12 +149,11 @@ impl std::error::Error for SecretSourceError {}
 /// A plugin that serves secrets to the host for other plugins' bindings.
 #[async_trait::async_trait]
 pub trait HostSecretSource: Send + Sync {
-    /// The value of each key in `request.keys`, keyed by it. A key left out was
-    /// not found.
+    /// The value of each key in `request.keys`, keyed by it.
     async fn resolve(
         &self,
         request: SecretRequest,
-    ) -> Result<HashMap<String, SecretValue>, SecretSourceError>;
+    ) -> Result<BTreeMap<String, SecretValue>, SecretSourceError>;
 }
 
 /// A source as declared on one layer: the binding (`None` for the entry) and
@@ -162,7 +219,8 @@ impl SecretRedactor {
         let mut secrets: Vec<&str> = self
             .0
             .iter()
-            .flat_map(|v| [v.expose(), v.expose().trim()])
+            .filter_map(SecretValue::expose)
+            .flat_map(|v| [v, v.trim()])
             .filter(|v| !v.is_empty())
             .collect();
         let msg = format!("{e:#}");
@@ -191,6 +249,7 @@ impl SecretRedactor {
 /// [`SecretSourceError`] in the chain.
 pub(crate) async fn resolve_plugin_secrets(
     plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    workload: &RequestingWorkload,
     declared: PluginBindingSet,
     interfaces: &HashSet<WitInterface>,
     schema: &BindingSchema,
@@ -249,8 +308,11 @@ pub(crate) async fn resolve_plugin_secrets(
                     })?;
                 let resolved = resolver
                     .resolve(SecretRequest {
-                        consumer: plugin_id.to_string(),
-                        binding: binding.map(str::to_string),
+                        consumer: SecretConsumer {
+                            plugin: plugin_id.to_string(),
+                            binding: binding.map(str::to_string),
+                        },
+                        workload: workload.clone(),
                         keys: keys.iter().map(|k| k.to_string()).collect(),
                     })
                     .await
@@ -262,7 +324,7 @@ pub(crate) async fn resolve_plugin_secrets(
                 anyhow::Ok(((binding.map(str::to_string), source.to_string()), resolved))
             }
         });
-    let values: HashMap<(Option<String>, String), HashMap<String, SecretValue>> =
+    let values: HashMap<(Option<String>, String), BTreeMap<String, SecretValue>> =
         futures::future::try_join_all(calls)
             .await?
             .into_iter()
@@ -314,7 +376,7 @@ mod tests {
         async fn resolve(
             &self,
             request: SecretRequest,
-        ) -> Result<HashMap<String, SecretValue>, SecretSourceError> {
+        ) -> Result<BTreeMap<String, SecretValue>, SecretSourceError> {
             if request.keys.iter().any(|k| k == "denied") {
                 return Err(SecretSourceError::AccessDenied(Some("not for you".into())));
             }
@@ -375,6 +437,14 @@ mod tests {
         }
     }
 
+    fn requesting() -> RequestingWorkload {
+        RequestingWorkload {
+            id: "wl-1".to_string(),
+            name: "billing-api".to_string(),
+            namespace: "billing".to_string(),
+        }
+    }
+
     fn postgres(name: &str) -> WitInterface {
         let mut i = WitInterface::from("wasmcloud:postgres/query@0.2.0");
         i.name = Some(name.to_string());
@@ -409,6 +479,7 @@ mod tests {
             ..
         } = resolve_plugin_secrets(
             &plugins(source.clone()),
+            &requesting(),
             declared(),
             &HashSet::from([postgres("app-db")]),
             &BindingSchema::empty(),
@@ -434,8 +505,11 @@ mod tests {
         assert_eq!(
             *requests,
             [SecretRequest {
-                consumer: "wasmcloud-postgres".to_string(),
-                binding: Some("app-db".to_string()),
+                consumer: SecretConsumer {
+                    plugin: "wasmcloud-postgres".to_string(),
+                    binding: Some("app-db".to_string()),
+                },
+                workload: requesting(),
                 keys: vec!["pg-url-app".to_string()],
             }]
         );
@@ -462,6 +536,7 @@ mod tests {
             );
         let err = resolve_plugin_secrets(
             &plugins(fixed()),
+            &requesting(),
             set,
             &HashSet::from([postgres("app-db")]),
             &BindingSchema::empty(),
@@ -486,6 +561,7 @@ mod tests {
         ]));
         let FilledSecrets { refilled, .. } = resolve_plugin_secrets(
             &plugins(source.clone()),
+            &requesting(),
             set,
             &HashSet::from([postgres("app-db"), postgres("reports-db")]),
             &BindingSchema::empty(),
@@ -500,7 +576,10 @@ mod tests {
             ]))
         );
         let requests = source.1.lock().unwrap();
-        let shared: Vec<_> = requests.iter().filter(|r| r.binding.is_none()).collect();
+        let shared: Vec<_> = requests
+            .iter()
+            .filter(|r| r.consumer.binding.is_none())
+            .collect();
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].keys, ["pg-url-app", "pg-url-reports"]);
     }
@@ -544,6 +623,7 @@ mod tests {
             );
         let err = resolve_plugin_secrets(
             &plugins(fixed()),
+            &requesting(),
             set,
             &HashSet::from([postgres("app-db")]),
             &BindingSchema::empty(),
@@ -628,6 +708,7 @@ mod tests {
         let schema = BindingSchema::empty();
         let filled = resolve_plugin_secrets(
             &plugins(fixed()),
+            &requesting(),
             set(),
             &HashSet::from([postgres("app-db")]),
             &schema,
@@ -639,10 +720,15 @@ mod tests {
 
         let mut unnamed = WitInterface::from("wasmcloud:postgres/query@0.2.0");
         unnamed.name = None;
-        let err =
-            resolve_plugin_secrets(&plugins(fixed()), set(), &HashSet::from([unnamed]), &schema)
-                .await
-                .unwrap_err();
+        let err = resolve_plugin_secrets(
+            &plugins(fixed()),
+            &requesting(),
+            set(),
+            &HashSet::from([unnamed]),
+            &schema,
+        )
+        .await
+        .unwrap_err();
         assert!(err.downcast_ref::<SecretSourceError>().is_some(), "{err:#}");
     }
 
@@ -651,6 +737,7 @@ mod tests {
     async fn an_error_quoting_a_filled_value_is_redacted() {
         let filled = resolve_plugin_secrets(
             &plugins(fixed()),
+            &requesting(),
             declared(),
             &HashSet::from([postgres("app-db")]),
             &BindingSchema::empty(),
@@ -667,6 +754,6 @@ mod tests {
     fn a_secret_value_is_redacted() {
         let value = SecretValue::new("postgres://app:pw@db/app");
         assert_eq!(format!("{value:?}"), "SecretValue(<redacted>)");
-        assert_eq!(value.expose(), "postgres://app:pw@db/app");
+        assert_eq!(value.expose(), Some("postgres://app:pw@db/app"));
     }
 }

@@ -1418,7 +1418,8 @@ impl PluginBindingSet {
     ///
     /// # Errors
     ///
-    /// Whatever `value` returns.
+    /// Whatever `value` returns, or a value that is bytes rather than text,
+    /// since config holds text.
     pub fn fill_plugin_secrets(
         mut self,
         bindings: &BTreeSet<String>,
@@ -1432,7 +1433,8 @@ impl PluginBindingSet {
         let mut filled = false;
         for (key, r) in std::mem::take(&mut self.base_secrets) {
             if let Some(v) = value(None, &key, &r)? {
-                self.base.insert(key, v.into_exposed());
+                let text = config_text(v, &r)?;
+                self.base.insert(key, text);
                 filled = true;
             }
         }
@@ -1451,10 +1453,11 @@ impl PluginBindingSet {
             }
             for (key, r) in secrets {
                 if let Some(v) = value(Some(&name), &key, &r)? {
+                    let text = config_text(v, &r)?;
                     self.bindings
                         .entry(name.clone())
                         .or_default()
-                        .insert(key, v.into_exposed());
+                        .insert(key, text);
                     filled = true;
                 }
             }
@@ -1542,6 +1545,18 @@ impl PluginBindingSet {
         let names: Vec<String> = self.bindings.keys().map(|n| format!("`{n}`")).collect();
         format!("; it serves {}", names.join(", "))
     }
+}
+
+/// `value` as config text, or an error naming where it came from.
+fn config_text(value: SecretValue, secret: &PluginSecretRef) -> anyhow::Result<String> {
+    use anyhow::Context as _;
+    value.into_text().with_context(|| {
+        format!(
+            "secret `{}`: plugin `{}` answered `{}` with bytes that are not UTF-8, and plugin \
+             config holds text",
+            secret.source, secret.plugin, secret.key
+        )
+    })
 }
 
 /// Refuse a layer that sets a key both in its config and from a plugin secret,
