@@ -16,7 +16,7 @@ name: release-tag
 #   3. Downloads the canary-binaries artifacts produced by wash.yml on the
 #      merge commit, attests them, and creates the GitHub Release directly
 #      with those exact bytes attached (no rebuild on tag).
-#   4. Pushes the immutable annotated `vX.Y.Z` git tag at the merge commit.
+#   4. Signs and pushes the immutable `vX.Y.Z` git tag at the merge commit.
 #      That tag triggers the remaining tag-listening workflows (charts
 #      release, runtime-operator go-module-tag, wash homebrew + winget
 #      updates).
@@ -71,13 +71,17 @@ concurrency:
 jobs:
   promote:
     needs: gate
-    if: needs.gate.outputs.run == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    # Release signatures identify this workflow on main.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      needs.gate.outputs.run == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
       contents: write
       packages: write
-      # For re-attesting the promoted release manifest digest.
+      # For release attestations and keyless tag signing.
       id-token: write
       attestations: write
       # actions/attest writes an org-level artifact storage record in
@@ -96,6 +100,9 @@ jobs:
           token: ${{ secrets.WASMCLOUD_BOT_PAT }}
           persist-credentials: true
           fetch-depth: 0
+
+      - name: Set up gitsign
+        uses: chainguard-dev/actions/setup-gitsign@eb7c4e394b1b658178e6d5236e055364fd1bcc22 # main
 
       - name: Configure git
         run: |
@@ -393,9 +400,12 @@ jobs:
             echo "tag ${TAG} already exists on origin — leaving it (immutable)"
             exit 0
           fi
-          # Annotated tag pinned to the validated merge commit. Never
-          # force-push.
-          git tag -a "${TAG}" "${MERGE_SHA}" -m "Release ${TAG}"
+          # Verify the workflow identity before publishing the signed tag.
+          git tag -s "${TAG}" "${MERGE_SHA}" -m "Release ${TAG}"
+          gitsign verify-tag \
+            --certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${TAG}"
           git push origin "${TAG}"
 
       - name: Push runtime-operator Go module tag
@@ -414,7 +424,11 @@ jobs:
             echo "tag ${GO_TAG} already exists on origin — leaving it (immutable)"
             exit 0
           fi
-          git tag -a "${GO_TAG}" "${MERGE_SHA}" -m "Release ${GO_TAG}"
+          git tag -s "${GO_TAG}" "${MERGE_SHA}" -m "Release ${GO_TAG}"
+          gitsign verify-tag \
+            --certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${GO_TAG}"
           git push origin "${GO_TAG}"
 
       - name: Generate release notes

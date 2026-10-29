@@ -56,10 +56,11 @@ Wed–Thu as a buffer for any same-week follow-up patch.
    - **Re-attests** each promoted manifest digest (Sigstore-signed via Fulcio).
    - **Downloads** the canary-binaries artifacts from the wash.yml run that built them, attests
      them, and (after pushing the tag) creates the GitHub Release with those exact binaries.
-   - Pushes the annotated `vX.Y.Z` git tag at the validated merge commit. **The tag is
+   - Signs the annotated `vX.Y.Z` git tag with gitsign, verifies the workflow identity,
+     and pushes it at the validated merge commit. **The tag is
      immutable**: the workflow never force-pushes, and a re-run that finds the tag already on
      origin is a no-op.
-6. After pushing `vX.Y.Z`, `release-tag.yml` also pushes the
+6. After pushing `vX.Y.Z`, `release-tag.yml` also signs, verifies, and pushes the
    `runtime-operator/vX.Y.Z` Go module tag (so module consumers never see it before the
    matching OCI release exists), then creates the GitHub Release with the promoted binaries,
    then dispatches Homebrew and runs winget update inline. All sequenced after canary
@@ -113,7 +114,13 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
 3. Wait for canary builds on the merge commit to all succeed (`wash`, `runtime-operator`,
    `runtime-gateway`, `charts`, plus `canary-binaries` in `wash.yml`).
 4. Re-run `release-tag.yml` from the Actions tab (**Re-run failed jobs** on the failed
-   workflow_run instance) so it picks up the now-green canaries, or perform its work by hand:
+   workflow_run instance), or dispatch it from `main` with the release commit:
+   ```bash
+   gh workflow run release-tag.yml --ref main -f sha=FULL_RELEASE_COMMIT_SHA
+   ```
+   Replace `FULL_RELEASE_COMMIT_SHA` with the validated release commit.
+   Promotion only runs when the workflow ref is `refs/heads/main`, including manual dispatches.
+   If `release-tag.yml` itself is unavailable, perform its work by hand:
    - Promote the canary OCI images (bare semver, no `v`):
      ```bash
      for img in ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}; do
@@ -122,12 +129,18 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
      docker buildx imagetools create --tag ghcr.io/wasmcloud/wash:X.Y.Z-all-features \
        ghcr.io/wasmcloud/wash:sha-<MERGE_SHA>-all-features
      ```
-   - Push the immutable annotated tag and the Go module tag:
+   - Install [gitsign](https://github.com/sigstore/gitsign#installation), then sign and push
+     the immutable annotated tag and the Go module tag:
      ```bash
-     git tag -a vX.Y.Z <MERGE_SHA> -m "Release vX.Y.Z"
-     git tag -a runtime-operator/vX.Y.Z <MERGE_SHA> -m "Release runtime-operator/vX.Y.Z"
+     git config --local gpg.format x509
+     git config --local gpg.x509.program gitsign
+     git tag -s vX.Y.Z <MERGE_SHA> -m "Release vX.Y.Z"
+     git tag -s runtime-operator/vX.Y.Z <MERGE_SHA> -m "Release runtime-operator/vX.Y.Z"
      git push origin vX.Y.Z runtime-operator/vX.Y.Z
      ```
+     Local signing uses the maintainer's OIDC identity. Publish the expected identity and
+     issuer through a trusted project channel, and document this exception in the release
+     notes so users can verify it with the flags in [Verifying release tags](#verifying-release-tags).
    - Download the canary-binaries from the merge commit's `wash.yml` run and create the
      GitHub Release with them attached
      (`gh run download <RUN_ID> --pattern 'wash-*' --dir artifacts/`, then `gh release
@@ -208,6 +221,42 @@ Binaries on the GitHub Release have equivalent attestations (verifiable by diges
 ```bash
 gh attestation verify --repo wasmCloud/wasmCloud ./wash
 ```
+
+### Verifying release tags
+
+`release-tag.yml` signs new `vX.Y.Z` and `runtime-operator/vX.Y.Z` annotated tags with
+[gitsign](https://github.com/sigstore/gitsign). It uses GitHub Actions OIDC to obtain a
+short-lived Fulcio certificate and records the signature in the Rekor transparency log.
+No long-lived signing-key secret is required. The workflow verifies each new tag's signature,
+certificate identity, and issuer before pushing it.
+
+Install a current gitsign release using its
+[installation instructions](https://github.com/sigstore/gitsign#installation), then fetch and
+verify both tags (replace `vX.Y.Z` with the release version):
+
+```bash
+git fetch origin tag vX.Y.Z tag runtime-operator/vX.Y.Z
+for tag in vX.Y.Z runtime-operator/vX.Y.Z; do
+  gitsign verify-tag \
+    --certificate-identity https://github.com/wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    "${tag}" || exit 1
+done
+```
+
+Run this in a checkout whose `origin` is `https://github.com/wasmCloud/wasmCloud.git` (or its
+SSH equivalent). Require a successful exit status for each tag. Keep the exact identity and
+issuer checks: plain `git verify-tag` does not validate the expected Sigstore certificate
+claims. GitHub currently displays gitsign signatures as **Unverified** because it does not
+support Sigstore verification; use gitsign to verify them.
+
+Existing tags are never replaced or re-signed. A rerun skips a tag already on origin, so an
+older unsigned tag remains unsigned even if its counterpart is newly signed during recovery.
+After the first release with both signatures verified, record its version here and use it as
+the starting version in the Best Practices badge justification for `version_tags_signed`.
+Confirm the certificate identity against the workflow run before publishing that evidence.
+No first signed release has been recorded yet. Tag signatures cover the source revision;
+verify binary and container attestations separately as described above.
 
 ### When canary fails post-merge
 
@@ -326,6 +375,7 @@ respond by either:
 
 - [ ] All release workflows completed successfully in GitHub Actions
 - [ ] GitHub Release is visible with correct binaries attached
+- [ ] Both release tags pass the signature and identity checks in [Verifying release tags](#verifying-release-tags)
 - [ ] Docker images are available on GHCR
 - [ ] Homebrew tap updated (check [homebrew-wasmcloud](https://github.com/wasmCloud/homebrew-wasmcloud))
 - [ ] Announce the release in [Slack](https://slack.wasmcloud.com) `#announcements`
