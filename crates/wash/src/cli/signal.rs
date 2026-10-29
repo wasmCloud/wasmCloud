@@ -141,3 +141,278 @@ impl Signals {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use std::{future::poll_fn, task::Poll};
+
+    #[tokio::test]
+    async fn ready_notifies_the_listener_before_its_future_is_polled() -> Result<()> {
+        let (signal, signalled) = oneshot::channel();
+        let (ready, mut listener) = oneshot::channel();
+        let shutdown = Shutdown { signalled, ready };
+        let stopped = shutdown.ready();
+        listener.try_recv()?;
+        tokio::pin!(stopped);
+        poll_fn(|cx| {
+            assert!(stopped.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert!(signal.send(()).is_ok());
+        stopped.await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ready_completes_if_the_signal_listener_has_already_gone_away() {
+        let (signal, signalled) = oneshot::channel();
+        let (ready, listener) = oneshot::channel();
+        drop(signal);
+        drop(listener);
+        Shutdown { signalled, ready }.ready().await;
+    }
+
+    #[test]
+    fn dropping_shutdown_or_its_future_closes_the_expected_channels() {
+        let (signal, signalled) = oneshot::channel();
+        let (ready, mut listener) = oneshot::channel();
+        drop(Shutdown { signalled, ready });
+        assert_eq!(
+            listener.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        );
+        assert!(signal.send(()).is_err());
+
+        let (signal, signalled) = oneshot::channel();
+        let (ready, mut listener) = oneshot::channel();
+        drop(Shutdown { signalled, ready }.ready());
+        assert_eq!(listener.try_recv(), Ok(()));
+        assert!(signal.send(()).is_err());
+    }
+
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+        use anyhow::ensure;
+        use std::{io::Write as _, process::Stdio, time::Duration};
+        use tokio::{
+            io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines},
+            process::{Child, ChildStdin, ChildStdout, Command},
+            time::timeout,
+        };
+
+        const WAIT: Duration = Duration::from_secs(10);
+        const SCENARIO: &str = "WASH_SHUTDOWN_TEST_SCENARIO";
+
+        struct Process {
+            child: Child,
+            input: ChildStdin,
+            output: Lines<BufReader<ChildStdout>>,
+        }
+
+        impl Process {
+            async fn spawn(scenario: &str) -> Result<Self> {
+                let mut child = Command::new(std::env::current_exe()?)
+                    .args([
+                        "--exact",
+                        "cli::signal::tests::unix::signal_child",
+                        "--nocapture",
+                        "--test-threads=1",
+                    ])
+                    .env(SCENARIO, scenario)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true)
+                    .spawn()?;
+                let input = child.stdin.take().context("child stdin")?;
+                let output = BufReader::new(child.stdout.take().context("child stdout")?).lines();
+                let mut process = Self {
+                    child,
+                    input,
+                    output,
+                };
+                process.marker("armed").await?;
+                Ok(process)
+            }
+
+            async fn marker(&mut self, expected: &str) -> Result<()> {
+                timeout(WAIT, async {
+                    while let Some(line) = self.output.next_line().await? {
+                        if let Some(marker) = line.strip_prefix("shutdown-test:") {
+                            assert_eq!(marker, expected);
+                            return Ok(());
+                        }
+                    }
+                    anyhow::bail!("child closed stdout before {expected}")
+                })
+                .await?
+            }
+
+            async fn command(&mut self, command: &str) -> Result<()> {
+                self.input
+                    .write_all(format!("{command}\n").as_bytes())
+                    .await?;
+                self.input.flush().await?;
+                Ok(())
+            }
+
+            async fn signal(&self, signal: &str) -> Result<()> {
+                let pid = self.child.id().context("child has already exited")?;
+                let status = timeout(
+                    WAIT,
+                    Command::new("kill")
+                        .arg(format!("-{signal}"))
+                        .arg(pid.to_string())
+                        .status(),
+                )
+                .await??;
+                ensure!(status.success(), "kill -{signal} failed: {status}");
+                Ok(())
+            }
+
+            async fn exited(mut self, expected: i32) -> Result<()> {
+                let status = timeout(WAIT, self.child.wait()).await??;
+                let mut stderr = String::new();
+                if let Some(mut pipe) = self.child.stderr.take() {
+                    use tokio::io::AsyncReadExt as _;
+                    pipe.read_to_string(&mut stderr).await?;
+                }
+                assert_eq!(
+                    status.code(),
+                    Some(expected),
+                    "child status {status}: {stderr}"
+                );
+                Ok(())
+            }
+        }
+
+        fn marker(value: &str) -> Result<()> {
+            println!("\nshutdown-test:{value}");
+            std::io::stdout().flush()?;
+            Ok(())
+        }
+
+        fn command(expected: &str) -> Result<()> {
+            let mut line = String::new();
+            ensure!(
+                std::io::stdin().read_line(&mut line)? != 0,
+                "parent closed stdin"
+            );
+            assert_eq!(line.trim(), expected);
+            Ok(())
+        }
+
+        #[test]
+        fn signal_child() -> Result<()> {
+            let Ok(scenario) = std::env::var(SCENARIO) else {
+                return Ok(());
+            };
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let _entered = runtime.enter();
+            let shutdown = arm()?;
+            marker("armed")?;
+            match scenario.as_str() {
+                "startup" => runtime.block_on(std::future::pending::<()>()),
+                "dropped" => {
+                    drop(shutdown);
+                    marker("dropped")?;
+                    runtime.block_on(std::future::pending::<()>());
+                }
+                "ready" | "tie" => {
+                    // The runtime stays unpolled until both readiness and any queued signal exist.
+                    command("ready")?;
+                    let stopped = shutdown.ready();
+                    marker("ready")?;
+                    runtime.block_on(async {
+                        stopped.await;
+                        marker("draining")?;
+                        let mut line = String::new();
+                        tokio::io::BufReader::new(tokio::io::stdin())
+                            .read_line(&mut line)
+                            .await?;
+                        ensure!(
+                            line.trim() == "finish",
+                            "unexpected drain command: {line:?}"
+                        );
+                        Ok::<_, anyhow::Error>(())
+                    })?;
+                }
+                _ => anyhow::bail!("unknown child scenario: {scenario}"),
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn startup_signals_exit_with_the_requested_code() -> Result<()> {
+            for (signal, code) in [("INT", 130), ("TERM", 143)] {
+                let process = Process::spawn("startup").await?;
+                process.signal(signal).await?;
+                process.exited(code).await?;
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn dropping_shutdown_preserves_startup_signal_behavior() -> Result<()> {
+            for (signal, code) in [("INT", 130), ("TERM", 143)] {
+                let mut process = Process::spawn("dropped").await?;
+                process.marker("dropped").await?;
+                process.signal(signal).await?;
+                process.exited(code).await?;
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn ready_signals_allow_the_graceful_shutdown_to_finish() -> Result<()> {
+            for signal in ["INT", "TERM"] {
+                let mut process = Process::spawn("ready").await?;
+                process.command("ready").await?;
+                process.marker("ready").await?;
+                process.signal(signal).await?;
+                process.marker("draining").await?;
+                process.command("finish").await?;
+                process.exited(0).await?;
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn second_signal_exits_during_graceful_shutdown_using_its_own_code() -> Result<()> {
+            for first in ["INT", "TERM"] {
+                for (second, code) in [("INT", 130), ("TERM", 143)] {
+                    let mut process = Process::spawn("ready").await?;
+                    process.command("ready").await?;
+                    process.marker("ready").await?;
+                    process.signal(first).await?;
+                    process.marker("draining").await?;
+                    process.signal(second).await?;
+                    process.exited(code).await?;
+                }
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn readiness_wins_when_a_signal_is_already_pending() -> Result<()> {
+            for signal in ["INT", "TERM"].into_iter().cycle().take(16) {
+                let mut process = Process::spawn("tie").await?;
+                // kill completes before ready is sent, with the signal task still unpolled.
+                process.signal(signal).await?;
+                process.command("ready").await?;
+                process.marker("ready").await?;
+                process.marker("draining").await?;
+                process.command("finish").await?;
+                process.exited(0).await?;
+            }
+            Ok(())
+        }
+    }
+}
