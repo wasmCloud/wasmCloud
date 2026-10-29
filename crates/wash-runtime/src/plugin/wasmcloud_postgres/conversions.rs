@@ -1186,3 +1186,8 @@ mod tests {
         assert!(bind(&PgValue::Int4(1), &domain).is_err());
     }
 }
+
+#[cfg(test)]
+mod codec_tests {
+    include!("conversion_tests.rs");
+}
