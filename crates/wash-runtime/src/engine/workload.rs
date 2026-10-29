@@ -2766,6 +2766,8 @@ pub struct UnresolvedWorkload {
     name: Arc<str>,
     /// The namespace of the workload
     namespace: Arc<str>,
+    /// Annotations supplied with the workload.
+    pub(crate) annotations: Arc<HashMap<String, String>>,
     /// The requested host [`WitInterface`]s to resolve this workload
     host_interfaces: Vec<WitInterface>,
     /// The [`WorkloadService`] associated with this workload, if any
@@ -2965,6 +2967,7 @@ impl UnresolvedWorkload {
         let mut component_order = Vec::new();
         Self {
             stream_payloads: Arc::default(),
+            annotations: Arc::default(),
             id: id.into(),
             name: name.into(),
             namespace: namespace.into(),
@@ -2983,6 +2986,21 @@ impl UnresolvedWorkload {
             tls_provider: None,
             scratch: None,
         }
+    }
+
+    /// Attach the same annotations to the workload and all its items.
+    pub fn with_annotations(
+        mut self,
+        annotations: impl Into<Arc<HashMap<String, String>>>,
+    ) -> Self {
+        self.annotations = annotations.into();
+        if let Some(service) = &mut self.service {
+            service.metadata.annotations = Arc::clone(&self.annotations);
+        }
+        for component in self.components.values_mut() {
+            component.metadata.annotations = Arc::clone(&self.annotations);
+        }
+        self
     }
 
     /// Use the engine's stream/future payload adapters for linking and store construction.
@@ -7927,5 +7945,35 @@ mod tests {
             &implements_marker_exporter("plug").world(),
             "plug"
         ));
+    }
+
+    #[test]
+    fn workload_annotations_are_shared_with_components_and_service() {
+        let annotations = Arc::new(HashMap::from([(
+            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
+            "deployment".to_string(),
+        )]));
+        let workload = UnresolvedWorkload::new(
+            "workload",
+            "replica",
+            "test",
+            Some(WorkloadService {
+                metadata: component_from_wat("service", "(component)").metadata,
+                handle: None,
+                max_restarts: 0,
+            }),
+            [component_from_wat("component", "(component)")],
+            Vec::new(),
+        )
+        .with_annotations(Arc::clone(&annotations));
+        assert!(Arc::ptr_eq(&workload.annotations, &annotations));
+        assert!(Arc::ptr_eq(
+            &workload.service.as_ref().unwrap().metadata.annotations,
+            &annotations
+        ));
+        for component in workload.components.values() {
+            assert!(Arc::ptr_eq(&component.metadata.annotations, &annotations));
+            assert_eq!(component.metadata.annotations(), annotations.as_ref());
+        }
     }
 }

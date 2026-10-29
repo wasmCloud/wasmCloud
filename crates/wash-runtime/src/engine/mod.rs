@@ -789,11 +789,7 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized service component");
-                    Some(
-                        handle
-                            .with_annotations(Arc::clone(&annotations_arc))
-                            .with_trap_hint_flag(&trap_hint_logged),
-                    )
+                    Some(handle.with_trap_hint_flag(&trap_hint_logged))
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize service component");
@@ -817,11 +813,7 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized workload component");
-                    workload_components.push(
-                        handle
-                            .with_annotations(Arc::clone(&annotations_arc))
-                            .with_trap_hint_flag(&trap_hint_logged),
-                    );
+                    workload_components.push(handle.with_trap_hint_flag(&trap_hint_logged));
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize component");
@@ -838,6 +830,7 @@ impl Engine {
             workload_components,
             host_interfaces,
         )
+        .with_annotations(annotations_arc)
         .with_scratch(workload_scratch)
         .with_stream_payloads(Arc::clone(&self.stream_payloads));
 
