@@ -3,6 +3,7 @@ name = "oci-registry"
 version = "0.2.0"
 authors = ["wasmCloud Team"]
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]

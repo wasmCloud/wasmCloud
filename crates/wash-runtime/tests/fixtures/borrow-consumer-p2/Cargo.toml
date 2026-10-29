@@ -2,6 +2,7 @@
 name = "borrow-consumer-p2"
 edition = "2024"
 version = "0.0.0"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]

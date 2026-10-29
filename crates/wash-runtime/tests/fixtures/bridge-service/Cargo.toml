@@ -2,6 +2,7 @@
 name = "bridge-service"
 edition = "2021"
 version = "0.0.0"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
