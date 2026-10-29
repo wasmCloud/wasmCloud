@@ -13,10 +13,10 @@ use clap::Subcommand;
 const TOOLCHAIN: &str = include_str!("../coverage-toolchain");
 
 const FEATURES: &str = "wash-runtime/wasi-tls,wash/host-component-plugins";
-// Generated protobuf bindings have no maintained application logic.
+// Build tooling and generated protobuf bindings are outside the coverage scope.
 const REPORT_ARGS: &[&str] = &[
     "--ignore-filename-regex",
-    r"[/\\]washlet[/\\]generated[/\\]",
+    r"[/\\](washlet[/\\]generated|xtask)[/\\]",
 ];
 
 #[derive(Subcommand)]
@@ -195,7 +195,7 @@ impl Runner<'_> {
         )?;
         writeln!(
             provenance,
-            "Scope: native Rust workspace; generated protobuf bindings excluded"
+            "Scope: native Rust workspace; xtask and generated protobuf bindings excluded"
         )?;
         if let Ok(id) = std::env::var("GITHUB_RUN_ID") {
             let server = std::env::var("GITHUB_SERVER_URL")?;
@@ -448,7 +448,7 @@ mod tests {
         assert!(calls.contains("--fail-under-lines\t80\t--fail-under-regions\t80"));
         let filter = format!(
             "--ignore-filename-regex\t{}",
-            r"[/\\]washlet[/\\]generated[/\\]"
+            r"[/\\](washlet[/\\]generated|xtask)[/\\]"
         );
         assert!(
             calls

@@ -102,9 +102,11 @@ regions and lines, not a statement count. Using region coverage as a proxy needs
 justification in the badge assessment; line coverage must not be labeled as
 statement coverage.
 
-The report includes native workspace code and uses cargo-llvm-cov's default
-exclusions for test files, examples, benchmarks, dependencies, and build output.
-Generated protobuf bindings under `washlet/generated/` are also excluded. Inline
+The report includes native workspace code except the `xtask` developer tooling
+crate, and uses cargo-llvm-cov's default exclusions for test files, examples,
+benchmarks, dependencies, and build output. Generated protobuf bindings under
+`washlet/generated/` are also excluded. The `xtask` tests still run, but its code
+is excluded from every report format and the 80% threshold. Inline
 unit-test modules and test-only helper functions use conditional `coverage(off)`
 attributes so their bodies do not count toward the percentage. These attributes
 are active only during nightly coverage builds. Platform-specific code is measured
