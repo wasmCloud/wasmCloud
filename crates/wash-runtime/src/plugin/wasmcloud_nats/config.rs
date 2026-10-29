@@ -297,8 +297,7 @@ pub enum AckMode {
 /// A workload's complete NATS configuration.
 ///
 /// `A` is how it authenticates: [`NatsAuth`] once every value is known, and
-/// `Option<NatsAuth>` for a layer read by [`NatsConfig::from_layer`], `None`
-/// when a key a plugin secret supplies decides the credentials.
+/// `Option<NatsAuth>` while a key a plugin secret supplies may decide it.
 #[derive(Debug)]
 pub struct NatsConfig<A = NatsAuth> {
     pub servers: Vec<String>,
@@ -482,7 +481,12 @@ fn parse_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
 }
 
 /// Parses and validates a config layer, leaving its pending keys unread.
-fn read(r: &Layer<'_>) -> anyhow::Result<NatsConfig<Option<NatsAuth>>> {
+/// `auth` settles the credentials `parse_auth` found, `None` when a pending
+/// key decides them.
+fn read<A>(
+    r: &Layer<'_>,
+    auth: impl FnOnce(Option<NatsAuth>) -> anyhow::Result<A>,
+) -> anyhow::Result<NatsConfig<A>> {
     let servers = r.list("servers");
     if servers.is_empty() && !r.is_pending("servers") {
         bail!("wasmcloud:nats requires a `servers` config value");
@@ -570,7 +574,7 @@ fn read(r: &Layer<'_>) -> anyhow::Result<NatsConfig<Option<NatsAuth>>> {
         name: r.get("name").map(String::from),
         jetstream_domain: r.get("jetstream-domain").map(String::from),
         inbox_prefix: r.get("inbox-prefix").map(String::from),
-        auth: parse_auth(r)?,
+        auth: auth(parse_auth(r)?)?,
         tls,
         policy: PolicySpec {
             subject_allow: r.list("subject-allow"),
@@ -584,43 +588,26 @@ fn read(r: &Layer<'_>) -> anyhow::Result<NatsConfig<Option<NatsAuth>>> {
     })
 }
 
-impl NatsConfig<Option<NatsAuth>> {
-    /// Parses and validates a binding's layer before bind, with the keys in
-    /// `pending` still waiting on a plugin secret.
-    ///
-    /// `servers` holds only the addresses known now, and `auth` is `None` when
-    /// a pending key decides the credentials.
-    pub fn from_layer(
+impl NatsConfig {
+    /// Checks a binding's layer before bind, with the keys in `pending` still
+    /// waiting on a plugin secret, and returns the servers known now.
+    pub fn check_layer(
         cfg: &HashMap<String, String>,
         pending: &BTreeSet<String>,
-    ) -> anyhow::Result<Self> {
-        read(&Layer { cfg, pending })
+    ) -> anyhow::Result<Vec<String>> {
+        Ok(read(&Layer { cfg, pending }, Ok)?.servers)
     }
-}
 
-impl NatsConfig {
     /// Parses and validates a workload's config map.
     pub fn from_map(cfg: &HashMap<String, String>) -> anyhow::Result<Self> {
-        let layer = read(&Layer {
+        let layer = Layer {
             cfg,
             pending: &BTreeSet::new(),
-        })?;
+        };
         // With nothing pending, every mechanism `parse_auth` selects has its
         // values.
-        let Some(auth) = layer.auth else {
-            bail!("NATS credentials have no value");
-        };
-        Ok(NatsConfig {
-            servers: layer.servers,
-            name: layer.name,
-            jetstream_domain: layer.jetstream_domain,
-            inbox_prefix: layer.inbox_prefix,
-            auth,
-            tls: layer.tls,
-            policy: layer.policy,
-            limits: layer.limits,
-            ack_mode: layer.ack_mode,
-            request_timeout: layer.request_timeout,
+        read(&layer, |auth| {
+            auth.context("NATS credentials have no value")
         })
     }
 
@@ -977,16 +964,23 @@ mod tests {
         keys.iter().map(|k| k.to_string()).collect()
     }
 
+    fn read_pending(
+        cfg: &HashMap<String, String>,
+        pending: &BTreeSet<String>,
+    ) -> anyhow::Result<NatsConfig<Option<NatsAuth>>> {
+        read(&Layer { cfg, pending }, Ok)
+    }
+
     /// A layer whose credentials wait on a secret reads, with no credentials
     /// yet; one whose secret supplies only an unrelated key keeps its own.
     #[test]
     fn a_pending_key_leaves_its_credentials_unresolved() {
         let layer = map(&[("servers", "nats://a:4222"), ("username", "svc")]);
-        let read = NatsConfig::from_layer(&layer, &pending(&["password"])).unwrap();
+        let read = read_pending(&layer, &pending(&["password"])).unwrap();
         assert!(read.auth.is_none());
 
         let layer = map(&[("servers", "nats://a:4222"), ("token", "t")]);
-        let read = NatsConfig::from_layer(&layer, &pending(&["name"])).unwrap();
+        let read = read_pending(&layer, &pending(&["name"])).unwrap();
         assert!(matches!(read.auth, Some(NatsAuth::Token(_))));
         assert_eq!(read.name, None);
     }
@@ -995,9 +989,9 @@ mod tests {
     #[test]
     fn a_pending_alias_reads_as_set() {
         let layer = map(&[("servers", "nats://a:4222")]);
-        let read = NatsConfig::from_layer(&layer, &pending(&["creds-file"])).unwrap();
+        let read = read_pending(&layer, &pending(&["creds-file"])).unwrap();
         assert!(read.auth.is_none());
-        let err = NatsConfig::from_layer(
+        let err = read_pending(
             &map(&[("servers", "nats://a:4222"), ("token", "t")]),
             &pending(&["creds-file"]),
         )
@@ -1009,7 +1003,7 @@ mod tests {
     /// address.
     #[test]
     fn a_pending_servers_is_present_with_no_address() {
-        let read = NatsConfig::from_layer(&map(&[]), &pending(&["servers"])).unwrap();
+        let read = read_pending(&map(&[]), &pending(&["servers"])).unwrap();
         assert!(read.servers.is_empty());
         assert!(matches!(read.auth, Some(NatsAuth::Anonymous)));
     }
