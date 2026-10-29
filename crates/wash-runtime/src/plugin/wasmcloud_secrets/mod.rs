@@ -239,6 +239,12 @@ impl HostPlugin for WasmcloudSecrets {
         }
     }
 
+    /// Each key is one secret a label reads by itself, so a secret withheld
+    /// from a workload takes nothing else away.
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::BindingSchema::empty().and_independent_keys()
+    }
+
     /// A component may import several distinct labeled `wasmcloud:secrets/secret`
     /// instances (one per secret it needs) — the `(implements ..)` routing
     /// [`WasmcloudSecrets::on_workload_item_bind`] resolves each of against its
@@ -353,7 +359,7 @@ impl HostPlugin for WasmcloudSecrets {
                 |label: &str| match labeled.get(label) {
                     Some(Some(value)) => Ok(Arc::<str>::from(value.as_str())),
                     _ => Err(wasmtime::Error::msg(format!(
-                        "component {id:?} requires secret {label:?} but it was not provided in \
+                        "component `{id}` requires secret `{label}` but it was not provided in \
                          its resolved bind-time config"
                     ))),
                 },
