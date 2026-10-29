@@ -42,6 +42,8 @@
 //! | --- | --- | --- |
 //! | `WASH_SCALE_MEMORY_LIMIT` | the host's max-process-memory, e.g. `4GiB` | half of the machine/container budget, at most 2 GiB |
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
+//! | `WASH_SCALE_GUEST_MEMORY_MODE` | `enforce`, `count` or `growth`: how the guest budget is applied; a list (`enforce,growth`) runs each flavour in each | `enforce` |
+//! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | four times `WASH_SCALE_GUEST_MEMORY` |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
@@ -73,6 +75,7 @@ use futures::{StreamExt as _, stream};
 
 use bench_tools::density::{Report, Step, percentile, print_comparison, print_step, spread};
 use wash_runtime::engine::Engine;
+use wash_runtime::engine::guest_memory::GuestMemoryMode;
 use wash_runtime::engine::host_memory::{HostMemoryBudgets, render_bytes};
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
 use wash_runtime::engine::process_memory::process_footprint;
@@ -133,10 +136,12 @@ fn main() -> Result<()> {
     }
 
     let mut reports = Vec::new();
-    for &cpus in &settings.cpus {
-        for &flavour in &flavours {
-            eprintln!("\n== {} ==", label(flavour.name(), cpus));
-            reports.push(run_child(flavour, cpus)?);
+    for &mode in &settings.guest_modes {
+        for &cpus in &settings.cpus {
+            for &flavour in &flavours {
+                eprintln!("\n== {} ==", report_label(flavour.name(), cpus, mode));
+                reports.push(run_child(flavour, cpus, mode)?);
+            }
         }
     }
     print_comparison(&reports);
@@ -147,14 +152,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run one flavour in a fresh copy of this binary and read back its report.
-fn run_child(flavour: Flavour, cpus: Option<usize>) -> Result<Report> {
-    let name = label(flavour.name(), cpus);
+/// Run one flavour in one guest memory mode in a fresh copy of this binary,
+/// and read back its report.
+fn run_child(flavour: Flavour, cpus: Option<usize>, mode: GuestMemoryMode) -> Result<Report> {
+    let name = report_label(flavour.name(), cpus, mode);
     let report = tempfile::NamedTempFile::new()?;
     let mut child = std::process::Command::new(std::env::current_exe()?);
     child
         .env(CHILD_FLAVOUR, flavour.name())
-        .env(CHILD_REPORT, report.path());
+        .env(CHILD_REPORT, report.path())
+        // One mode per child, in place of the list the parent was given.
+        .env(GUEST_MEMORY_MODE, mode.as_str());
     if let Some(cpus) = cpus {
         child.env(CHILD_CPUS, cpus.to_string());
     }
@@ -173,6 +181,17 @@ fn label(flavour: &str, cpus: Option<usize>) -> String {
     match cpus {
         Some(n) => format!("{flavour}@{n}cpu"),
         None => flavour.to_string(),
+    }
+}
+
+/// Preserve the default series name, and keep experiments in other memory
+/// modes out of that series when `bench-tools jsonl` publishes the report.
+fn report_label(flavour: &str, cpus: Option<usize>, mode: GuestMemoryMode) -> String {
+    let label = label(flavour, cpus);
+    if mode == GuestMemoryMode::Enforce {
+        label
+    } else {
+        format!("{label}-{}", mode.as_str())
     }
 }
 
@@ -286,11 +305,17 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let wasm = fixture_bytes(settings.fixture)?;
     let digest = fixture_digest(&wasm);
 
-    // The guest budget charges each linear memory at its declared size, resident
-    // or not, so a warm workload costs it several times what it adds to the
-    // footprint. Left at the machine/container budget, it leaves the process guard to gate
-    // the run; set lower, the run shows where it binds instead.
-    let engine = Engine::builder()
+    // In enforce mode (the default) the guest budget charges each linear memory
+    // at its declared size, resident or not, so a warm workload costs it several
+    // times what it adds to the footprint; growth mode charges only growth, and
+    // count mode refuses nothing. Left at the machine/container budget, the
+    // budget leaves the process guard to gate the run; set lower, the run shows
+    // where it binds instead.
+    let mut builder = Engine::builder();
+    if let Some(cap) = settings.initial_guest_memory {
+        builder = builder.with_max_initial_guest_memory_bytes(cap);
+    }
+    let engine = builder
         .with_host_memory(
             // The bench's count is pool slots, which are memories.
             HostMemoryBudgets::resolve(
@@ -302,6 +327,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             .map_err(|e| anyhow::anyhow!(e))?,
         )
         .with_max_process_memory_bytes(settings.memory_limit)
+        .with_guest_memory_mode(settings.guest_mode)
         .build()?;
     let guard = engine
         .process_memory()
@@ -431,6 +457,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             footprint_bytes: Some(footprint),
             bytes_per_workload: Some(bytes_per_workload),
             guest_memory_bytes: Some(engine.guest_memory().in_use()),
+            initial_memory_bytes: Some(engine.guest_memory().initial_uncharged()),
             core_instances_in_use: Some(in_use),
             core_instances_total: usage.map(|u| u.core_instances.total),
             memories_in_use: usage.map(|u| u.memories.in_use),
@@ -490,11 +517,12 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let report = Report {
         bench: "scale_density".into(),
         flavour: Some(flavour),
-        label: label(flavour.name(), cpu.limit),
+        label: report_label(flavour.name(), cpu.limit, settings.guest_mode),
         subject: format!(
-            "{}, max-guest-memory {}, pool {} memories, {}{}",
+            "{}, max-guest-memory {}, guest-memory-mode {}, pool {} memories, {}{}",
             settings.fixture,
             render_bytes(settings.guest_memory),
+            settings.guest_mode.as_str(),
             settings.max_memories,
             match (cpu.limit, cpu.pinned) {
                 (Some(n), true) => format!("{n} pinned cores"),
@@ -507,6 +535,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
                 ", CPU includes the load generator's"
             },
         ),
+        guest_memory_mode: Some(settings.guest_mode.as_str().into()),
         cores: cpu.cores,
         memory_limit_bytes: settings.memory_limit,
         baseline_footprint_bytes: Some(baseline),
@@ -711,6 +740,91 @@ mod tests {
         assert_eq!(
             measured_rate(2, [(None, 1000), (Some(2.0), 10)].into_iter()),
             Some(10.0)
+        );
+    }
+
+    #[test]
+    fn observational_guest_budgets_do_not_limit_capacity() -> Result<()> {
+        for (mode, enforced) in [("enforce", true), ("growth", true), ("count", false)] {
+            let settings = Settings::from_values(|key| match key {
+                "WASH_SCALE_MEMORY_LIMIT" => Some("1GiB".into()),
+                "WASH_SCALE_GUEST_MEMORY" => Some("10MiB".into()),
+                "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
+                "WASH_SCALE_GUEST_MEMORY_MODE" => Some(mode.into()),
+                _ => None,
+            })?;
+            let step = Step {
+                workloads: 100,
+                clean: true,
+                footprint_bytes: Some(100 << 20),
+                guest_memory_bytes: Some(100 << 20),
+                ..Default::default()
+            };
+            let estimate = Estimate::from_steps(&settings, 1, 0, &None, &[step]);
+            assert_eq!(estimate.limits.contains_key("max-guest-memory"), enforced);
+            assert_eq!(estimate.binding(), Some(if enforced { 10 } else { 1024 }));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn growth_mode_is_bound_by_its_initial_cap() -> Result<()> {
+        let settings = Settings::from_values(|key| match key {
+            "WASH_SCALE_MEMORY_LIMIT" => Some("1GiB".into()),
+            "WASH_SCALE_GUEST_MEMORY" => Some("10MiB".into()),
+            "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
+            "WASH_SCALE_GUEST_MEMORY_MODE" => Some("growth".into()),
+            _ => None,
+        })?;
+        let step = Step {
+            workloads: 100,
+            clean: true,
+            footprint_bytes: Some(100 << 20),
+            guest_memory_bytes: Some(0),
+            initial_memory_bytes: Some(400 << 20),
+            ..Default::default()
+        };
+        let estimate = Estimate::from_steps(&settings, 1, 0, &None, &[step]);
+        // The default cap is four times the 10 MiB budget; each workload
+        // leaves 4 MiB uncharged.
+        assert_eq!(estimate.limits["max-initial-guest-memory"], Some(10));
+        assert_eq!(estimate.binding(), Some(10));
+        Ok(())
+    }
+
+    #[test]
+    fn a_list_of_guest_memory_modes_runs_each_in_turn() -> Result<()> {
+        let settings = |modes: Option<&str>| {
+            Settings::from_values(|key| match key {
+                "WASH_SCALE_MEMORY_LIMIT" | "WASH_SCALE_GUEST_MEMORY" => Some("1GiB".into()),
+                "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
+                GUEST_MEMORY_MODE => modes.map(Into::into),
+                _ => None,
+            })
+        };
+        let unset = settings(None)?;
+        assert_eq!(unset.guest_modes, [GuestMemoryMode::Enforce]);
+        assert_eq!(unset.guest_mode, GuestMemoryMode::Enforce);
+        let both = settings(Some("enforce, growth"))?;
+        assert_eq!(
+            both.guest_modes,
+            [GuestMemoryMode::Enforce, GuestMemoryMode::Growth]
+        );
+        assert_eq!(both.guest_mode, GuestMemoryMode::Enforce);
+        assert!(settings(Some("enforce,sideways")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn memory_modes_publish_distinct_series() {
+        assert_eq!(report_label("warm", None, GuestMemoryMode::Enforce), "warm");
+        assert_eq!(
+            report_label("warm", Some(2), GuestMemoryMode::Count),
+            "warm@2cpu-count"
+        );
+        assert_eq!(
+            report_label("warm", None, GuestMemoryMode::Growth),
+            "warm-growth"
         );
     }
 

@@ -2402,12 +2402,15 @@ fn parse_guest_memory_mode(raw: &str) -> Result<GuestMemoryMode, String> {
     if raw.is_empty() {
         return Ok(GuestMemoryMode::default());
     }
-    match raw.to_ascii_lowercase().as_str() {
-        "count" => Ok(GuestMemoryMode::Count),
-        "enforce" => Ok(GuestMemoryMode::Enforce),
-        "growth" => Ok(GuestMemoryMode::Growth),
-        _ => Err(format!(
-            "invalid guest-memory-mode {raw:?}; expected 'count', 'enforce' or 'growth'"
+    // The runtime's parser, shared with every other place a mode is named.
+    use wash_runtime::engine::guest_memory::GuestMemoryMode as Runtime;
+    match raw.parse::<Runtime>()? {
+        Runtime::Count => Ok(GuestMemoryMode::Count),
+        Runtime::Enforce => Ok(GuestMemoryMode::Enforce),
+        Runtime::Growth => Ok(GuestMemoryMode::Growth),
+        other => Err(format!(
+            "guest-memory-mode {} is not one this wash supports",
+            other.as_str()
         )),
     }
 }

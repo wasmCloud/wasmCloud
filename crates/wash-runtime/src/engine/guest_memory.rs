@@ -162,6 +162,25 @@ pub enum GuestMemoryMode {
     Growth,
 }
 
+/// The spellings `--guest-memory-mode` and every other place that names a
+/// mode accept: `count`, `enforce` or `growth`, in any case, with
+/// surrounding whitespace ignored. One parser, so a host flag and a bench
+/// knob cannot drift apart.
+impl std::str::FromStr for GuestMemoryMode {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "count" => Ok(Self::Count),
+            "enforce" => Ok(Self::Enforce),
+            "growth" => Ok(Self::Growth),
+            _ => Err(format!(
+                "invalid guest-memory-mode {raw:?}; expected 'count', 'enforce' or 'growth'"
+            )),
+        }
+    }
+}
+
 impl GuestMemoryMode {
     pub fn as_str(self) -> &'static str {
         match self {
