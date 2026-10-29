@@ -103,6 +103,21 @@ pub(super) fn lookup(normalized: &str) -> Option<&'static ConfigKeySpec> {
     CONFIG_KEYS.iter().find(|k| k.aliases.contains(&normalized))
 }
 
+/// Match `object_store`'s boolean spellings, including values inherited from
+/// the host environment. `get_config_value` returns the unparsed spelling.
+pub(super) fn virtual_hosted(builder: &AmazonS3Builder) -> anyhow::Result<bool> {
+    let value = builder
+        .get_config_value(&AmazonS3ConfigKey::VirtualHostedStyleRequest)
+        .unwrap_or_else(|| "false".into());
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" | "y" => Ok(true),
+        "0" | "false" | "off" | "no" | "n" => Ok(false),
+        _ => anyhow::bail!(
+            "invalid s3 blobstore config key 'virtual_hosted_style_request'; expected a boolean"
+        ),
+    }
+}
+
 /// One manifest setting after folding its spellings onto a canonical name.
 struct Folded<'a> {
     /// The spelling the manifest used, for the conflict message.
@@ -215,6 +230,22 @@ pub(super) fn builder_from_config(
         if let Some(target) = setting.target {
             builder = builder.with_config(target, setting.value);
         }
+    }
+    if virtual_hosted(&builder)?
+        && (builder
+            .get_config_value(&AmazonS3ConfigKey::S3Endpoint)
+            .is_some()
+            || builder
+                .get_config_value(&AmazonS3ConfigKey::Endpoint)
+                .is_some())
+    {
+        // object_store uses a virtual-hosted endpoint verbatim, ignoring the
+        // bucket passed to with_bucket_name. Distinct containers would alias
+        // one bucket, and a cross-container move could delete its own copy.
+        anyhow::bail!(
+            "s3 blobstore cannot combine 'virtual_hosted_style_request' with an 'endpoint'; \
+             use path-style requests with an endpoint, or omit the endpoint"
+        );
     }
     Ok(builder)
 }
@@ -352,7 +383,11 @@ mod tests {
             };
             for alias in spec.aliases {
                 let mut config = cfg(source);
-                config.extend(cfg(&[(alias, "v")]));
+                let value = match spec.name {
+                    "allow_http" | "virtual_hosted_style_request" | "skip_signature" => "false",
+                    _ => "v",
+                };
+                config.extend(cfg(&[(alias, value)]));
                 assert!(
                     builder_from_config(&config).is_ok(),
                     "'{alias}' must be accepted"

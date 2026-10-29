@@ -281,12 +281,28 @@ async fn multiplexed_blobstore_routes_to_s3() -> Result<()> {
     ));
 
     // --- object names are validated, not rewritten ---
-    for bad in ["a//b", "../x", "a/./b"] {
+    for bad in [
+        "a//b",
+        "../x",
+        "a/./b",
+        "",
+        "/",
+        "/cat.png",
+        "cat.png/",
+        "/cat.png/",
+    ] {
         assert!(
             be.write_data("photos", bad, b"x".to_vec()).await.is_err(),
             "'{bad}' must be refused"
         );
     }
+    assert_eq!(
+        be.get_data("photos", "cat.png", 0, u64::MAX)
+            .await
+            .map_err(err)?,
+        b"meow",
+        "a refused alias must not overwrite the original object"
+    );
 
     Ok(())
 }
