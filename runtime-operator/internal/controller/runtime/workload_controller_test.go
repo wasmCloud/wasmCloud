@@ -3,12 +3,14 @@ package runtime
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -397,5 +399,67 @@ func TestFinalizeGivesUpFailedStopWhenHostIsGone(t *testing.T) {
 
 	if err := r.finalize(context.Background(), placedWorkload()); err != nil {
 		t.Fatalf("finalize: %v", err)
+	}
+}
+
+// The host matches plugin secret grants by the replica set and deployment
+// names a start request carries, so placement takes them from the Workload's
+// controlling owners and never from annotations written on the Workload.
+func TestReplicaAnnotationsComeFromOwners(t *testing.T) {
+	controller := true
+	ownedBy := func(kind, name, uid string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{
+			APIVersion: runtimev1alpha1.GroupVersion.String(),
+			Kind:       kind,
+			Name:       name,
+			UID:        types.UID(uid),
+			Controller: &controller,
+		}}
+	}
+	replicaSet := &runtimev1alpha1.WorkloadReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "billing-api-5d8f9c",
+			Namespace:       metav1.NamespaceDefault,
+			UID:             "rs-uid",
+			OwnerReferences: ownedBy("WorkloadDeployment", "billing-api", "deployment-uid"),
+		},
+	}
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, replicaSet)}
+	spoofed := map[string]string{
+		workloadDeploymentNameAnnotation:   "billing-api",
+		workloadReplicaSetNameAnnotation:   "billing-api-5d8f9c",
+		workloadReplicaSetLegacyAnnotation: "billing-api-5d8f9c",
+		"example.com/kept":                 "yes",
+	}
+
+	for _, tc := range []struct {
+		name   string
+		owners []metav1.OwnerReference
+		want   map[string]string
+	}{
+		{"unowned", nil, map[string]string{"example.com/kept": "yes"}},
+		{"a stale owner", ownedBy("WorkloadReplicaSet", replicaSet.Name, "other-uid"), map[string]string{"example.com/kept": "yes"}},
+		{"a missing owner", ownedBy("WorkloadReplicaSet", "gone", "gone-uid"), map[string]string{"example.com/kept": "yes"}},
+		{"a replica", ownedBy("WorkloadReplicaSet", replicaSet.Name, "rs-uid"), map[string]string{
+			"example.com/kept":               "yes",
+			workloadReplicaSetNameAnnotation: replicaSet.Name,
+			workloadDeploymentNameAnnotation: "billing-api",
+		}},
+	} {
+		workload := &runtimev1alpha1.Workload{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            "scraper",
+				Namespace:       metav1.NamespaceDefault,
+				Annotations:     spoofed,
+				OwnerReferences: tc.owners,
+			},
+		}
+		got, err := r.replicaAnnotations(context.Background(), workload)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !maps.Equal(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
