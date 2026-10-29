@@ -14,9 +14,6 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - 'scripts/coverage.mjs'
-      - 'scripts/coverage.test.mjs'
-      - 'Makefile'
   merge_group:
   push:
     branches: [main]
@@ -71,18 +68,18 @@ jobs:
             echo "$DOCKERHUB_PASSWORD" | docker login --username "$DOCKERHUB_USER" --password-stdin
           fi
       - name: Validate coverage runner
-        run: node --test scripts/coverage.test.mjs
+        run: cargo test --locked -p xtask coverage::tests
       - name: Collect coverage, including Docker and registry tests
         id: tests
-        run: node scripts/coverage.mjs test
+        run: cargo xtask coverage test
       - name: Generate coverage reports
         if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         id: report
-        run: node scripts/coverage.mjs report
+        run: cargo xtask coverage report
       - name: Require 80% line and region coverage
         if: ${{ !cancelled() && steps.report.outcome == 'success' }}
         id: threshold
-        run: node scripts/coverage.mjs check
+        run: cargo xtask coverage check
       - name: Write coverage evidence summary
         if: ${{ !cancelled() && steps.report.outcome == 'success' }}
         env:

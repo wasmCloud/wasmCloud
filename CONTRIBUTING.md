@@ -62,18 +62,18 @@ cargo test --bin wash
 
 ### Rust coverage
 
-Node.js is required to run `scripts/coverage.mjs`. Install the pinned coverage
-tool and the LLVM tools for this repository's Rust toolchain:
+Install the pinned coverage tool and the LLVM tools for this repository's Rust
+toolchain:
 
 ```bash
 source .github/tool-versions.env
 cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
 rustup component add llvm-tools-preview
-make coverage
+cargo xtask coverage
 ```
 
-`make coverage` builds the Wasm fixtures without coverage instrumentation, then
-runs the native Rust workspace tests with the same optional features as
+`cargo xtask coverage` builds the Wasm fixtures without coverage instrumentation,
+then runs the native Rust workspace tests with the same optional features as
 `wash.yml`, including the ignored Docker/registry tests. Docker must be running;
 registry access and the usual fixture build prerequisites are required. Coverage
 builds use a separate Cargo target directory, managed by cargo-llvm-cov.
@@ -81,9 +81,9 @@ builds use a separate Cargo target directory, managed by cargo-llvm-cov.
 Reports are written to `target/coverage/`: `html/index.html`, `coverage.json`,
 `lcov.info`, `summary.txt`, test/threshold logs, and `provenance.txt`. The provenance
 records the commit, working tree status, toolchain, features, test scope, and CI
-run URL. `make coverage-report` regenerates reports after a failed run; partial reports are diagnostic only.
-`make coverage-check` requires a successful full test run and at least **80% line
-and compiler-region coverage**. Neither failed tests nor percentages below the
+run URL. `cargo xtask coverage report` regenerates reports after a failed run;
+partial reports are diagnostic only. `cargo xtask coverage check` requires a
+successful full test run and at least **80% line and compiler-region coverage**. Neither failed tests nor percentages below the
 target are treated as passing evidence.
 
 The [coverage workflow](https://github.com/wasmCloud/wasmCloud/actions/workflows/coverage.yml)
