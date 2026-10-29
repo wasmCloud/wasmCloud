@@ -388,41 +388,7 @@ async fn dir_size(path: &Path) -> anyhow::Result<u64> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::cli::DirectoryStrategy;
-    use std::sync::Arc;
-
-    #[derive(Debug)]
-    struct TestDirectories(PathBuf);
-    impl DirectoryStrategy for TestDirectories {
-        fn home_dir(&self) -> &Path {
-            &self.0
-        }
-        fn config_dir(&self) -> PathBuf {
-            self.0.join("user")
-        }
-        fn data_dir(&self) -> PathBuf {
-            self.0.join("data")
-        }
-        fn cache_dir(&self) -> PathBuf {
-            self.0.join("cache")
-        }
-        fn state_dir(&self) -> Option<PathBuf> {
-            None
-        }
-        fn runtime_dir(&self) -> Option<PathBuf> {
-            None
-        }
-    }
-    fn context(root: &Path) -> CliContext {
-        CliContext {
-            app_strategy: Arc::new(TestDirectories(root.into())),
-            non_interactive: true,
-            config: None,
-            project_dir: root.into(),
-            original_working_dir: root.into(),
-            meters: Default::default(),
-        }
-    }
+    use crate::cli::test_support::context;
 
     #[tokio::test]
     async fn init_formats_preserve_existing_files_unless_forced() -> anyhow::Result<()> {

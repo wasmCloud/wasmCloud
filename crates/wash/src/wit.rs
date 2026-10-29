@@ -2219,8 +2219,8 @@ mod tests {
 
     #[tokio::test]
     async fn http_sources_extract_wit_from_a_package_archive() -> Result<()> {
+        use crate::cli::test_support::{HttpFixture, Response};
         use std::io::Write as _;
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         wash_runtime::init_crypto();
         let contents = b"package acme:example;";
@@ -2233,33 +2233,14 @@ mod tests {
         let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         gzip.write_all(&archive.into_inner()?)?;
         let body = gzip.finish()?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await?;
-            // Drain the request headers before closing to avoid a TCP reset.
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") {
-                request.push(socket.read_u8().await?);
-            }
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await?;
-            socket.write_all(&body).await?;
-            Ok::<_, std::io::Error>(())
-        });
+        let mut server = HttpFixture::start(vec![Response::new(200, body)]).await?;
         let wit = tokio::time::timeout(
             Duration::from_secs(10),
-            download_and_extract_http(&format!("http://{address}/source.tar.gz")),
+            download_and_extract_http(&format!("http://{}/source.tar.gz", server.address)),
         )
         .await??;
-        server.await??;
+        let requests = server.finish().await?;
+        assert_eq!(requests[0].target, "GET /source.tar.gz HTTP/1.1");
         assert_eq!(tokio::fs::read(wit.join("example.wit")).await?, contents);
         let unpacked = wit
             .parent()
