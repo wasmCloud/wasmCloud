@@ -84,6 +84,11 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
         let mut plane = None;
 
         if let Some(addr) = remote_address {
+            // Family is checked only after the policy, which may rewrite a
+            // v4-mapped sentinel on a v6 socket into a valid destination.
+            if !super::util::is_valid_remote_address(addr) {
+                return Err(se(super::util::ErrorCode::InvalidArgument));
+            }
             let check = store.with(|mut view| view.get().ctx.socket_addr_check.clone());
             let allowed = check(addr, SocketAddrUse::UdpOutgoingDatagram)
                 .into_allowed()
@@ -145,7 +150,6 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                 local_address: SocketAddr,
                 addr: SocketAddr,
                 loopback: Arc<std::sync::Mutex<super::loopback::Network>>,
-                permits: Arc<tokio::sync::Semaphore>,
             },
         }
 
@@ -164,21 +168,18 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                     (None, true) => lo.remote_address().map_err(se)?,
                     (None, false) => return Err(se(super::util::ErrorCode::InvalidArgument)),
                 };
-                let permits = match &lo.state {
-                    super::loopback::UdpState::Bound { permits, .. }
-                    | super::loopback::UdpState::Connected { permits, .. } => Arc::clone(permits),
-                    _ => return Err(se(super::util::ErrorCode::InvalidState)),
-                };
-                SocketResult::Ok((local_address, addr, permits))
+                if data.len() > lo.send_buffer_size as usize {
+                    return Err(se(super::util::ErrorCode::DatagramTooLarge));
+                }
+                SocketResult::Ok((local_address, addr))
             };
             match socket {
                 UdpSocket::Unspecified { lo, .. } if virtual_plane => {
-                    let (local_address, addr, permits) = loopback_half(lo)?;
+                    let (local_address, addr) = loopback_half(lo)?;
                     SocketResult::Ok(SendTarget::Loopback {
                         local_address,
                         addr,
                         loopback: Arc::clone(&view.ctx.loopback),
-                        permits,
                     })
                 }
                 UdpSocket::Network(net) | UdpSocket::Unspecified { net, .. } => {
@@ -200,12 +201,11 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                     Err(se(super::util::ErrorCode::InvalidArgument))
                 }
                 UdpSocket::Loopback(lo) => {
-                    let (local_address, addr, permits) = loopback_half(lo)?;
+                    let (local_address, addr) = loopback_half(lo)?;
                     SocketResult::Ok(SendTarget::Loopback {
                         local_address,
                         addr,
                         loopback: Arc::clone(&view.ctx.loopback),
-                        permits,
                     })
                 }
             }
@@ -240,18 +240,22 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                 local_address,
                 addr,
                 loopback,
-                permits,
             } => {
                 let required = data.len().max(1) as u32;
 
                 let mut lo = loopback
                     .lock()
                     .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
-                if let Some(tx) = lo.connect_udp(&local_address, &addr).map_err(se)? {
-                    let permit = permits
-                        .try_acquire_many_owned(required)
-                        .map_err(|_| se(super::util::ErrorCode::OutOfMemory))?;
-                    _ = tx.send((
+                if let Some(endpoint) = lo.connect_udp(&local_address, &addr).map_err(se)? {
+                    // A receiver that is not reading fills its own buffer, not
+                    // the sender's: like a full kernel receive queue, the
+                    // datagram is dropped and the send still succeeds.
+                    let Ok(permit) =
+                        Arc::clone(&endpoint.receive_permits).try_acquire_many_owned(required)
+                    else {
+                        return Ok(());
+                    };
+                    _ = endpoint.tx.send((
                         super::loopback::UdpDatagram {
                             source_address: local_address,
                             data,
@@ -337,6 +341,8 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
             SocketResult::Ok((source, connected_addr))
         })?;
 
+        // Reused across refusals: a fresh 64 KiB zeroed allocation per refused
+        // datagram would make refusing more expensive than delivering.
         let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
         let mut refused = 0;
         loop {
@@ -350,6 +356,10 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                         loop {
                             let (n, addr) =
                                 socket.recv_from(&mut buf).await.map_err(|e| se(e.into()))?;
+                            // An unspecified-bound socket hears from anyone, so
+                            // deliver only what answers something the guest sent;
+                            // anything else would make it an unsolicited server
+                            // on a real interface.
                             if connected_addr.is_none()
                                 && let Some(peers) = egress_peers.as_ref()
                                 && !peers.lock().is_ok_and(|peers| peers.contains(&addr))
@@ -373,13 +383,15 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                 }
                 RecvSource::Loopback(rx) => recv_loopback(rx).await?,
             };
-            if connected_addr.is_some_and(|peer| peer != addr) {
+            if connected_addr.is_some_and(|peer| !super::util::is_same_peer(peer, addr)) {
                 continue;
             }
             if permissions.check(addr, SocketAddrUse::UdpReceive).is_ok() {
                 return Ok((data, addr.into()));
             }
             refused += 1;
+            // Waiting forever for a datagram the policy will accept leaves the
+            // guest's `receive` with no answer and no error.
             if refused >= MAX_REFUSED_DATAGRAMS_PER_RECEIVE {
                 tracing::warn!(
                     refused,

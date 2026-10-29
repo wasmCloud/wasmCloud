@@ -63,11 +63,12 @@ async fn bind_lifecycle_and_drop_release_virtual_ports() {
             let mut virtual_addr: SocketAddr = local.parse().unwrap();
             virtual_addr.set_port(bound.port());
             assert!(matches!(
-                net.bind_udp(virtual_addr),
+                net.bind_udp(virtual_addr, Arc::new(tokio::sync::Semaphore::new(0))),
                 Err(ErrorCode::AddressInUse)
             ));
             sock.drop(&mut net).unwrap();
-            net.bind_udp(virtual_addr).unwrap();
+            net.bind_udp(virtual_addr, Arc::new(tokio::sync::Semaphore::new(0)))
+                .unwrap();
         }
     }
 }
@@ -79,7 +80,8 @@ async fn drop_during_bind_releases_registration() {
     let addr = "127.0.0.1:1234".parse().unwrap();
     sock.bind(addr, &mut net).unwrap();
     sock.drop(&mut net).unwrap();
-    net.bind_udp(addr).unwrap();
+    net.bind_udp(addr, Arc::new(tokio::sync::Semaphore::new(0)))
+        .unwrap();
 }
 
 #[tokio::test]
