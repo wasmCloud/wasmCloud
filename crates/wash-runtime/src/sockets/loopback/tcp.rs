@@ -388,6 +388,9 @@ impl TcpSocket {
     }
 
     pub fn set_listen_backlog_size(&mut self, value: u64) -> Result<(), ErrorCode> {
+        if value == 0 {
+            return Err(ErrorCode::InvalidArgument);
+        }
         let value = value.try_into().unwrap_or(u32::MAX);
         match &self.state {
             TcpState::Bound(..) => {
