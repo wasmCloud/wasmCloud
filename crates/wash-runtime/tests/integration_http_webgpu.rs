@@ -9,6 +9,7 @@
 //! Note: This is a basic integration test that verifies plugin loading and host functionality.
 //! Full component binding and request routing would require proper WIT interface configuration.
 //!
+#![cfg_attr(coverage_nightly, recursion_limit = "256")]
 #![cfg(all(
     feature = "wasi-webgpu",
     not(target_os = "windows"),
