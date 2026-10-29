@@ -102,10 +102,12 @@ async fn test_p3_tcp_and_udp_loopback() -> Result<()> {
         .await
         .context("P3 socket test service should start")?;
 
+    // The plugin holds the sender for the host's lifetime, so a guest that traps
+    // before `done` surfaces as this timeout; the trap itself is in the log.
     timeout(Duration::from_secs(30), done_rx)
         .await
-        .context("P3 TCP/UDP loopback assertions timed out")?
-        .context("P3 socket guest did not report successful assertions")?;
+        .context("P3 socket guest did not report passing TCP/UDP assertions")?
+        .expect("the completion plugin outlives the guest");
     host.workload_stop(WorkloadStopRequest { workload_id })
         .await?;
 
