@@ -307,6 +307,20 @@ mod tests {
             Ok(())
         }
 
+        async fn drain(stopped: impl Future<Output = ()>) -> Result<()> {
+            stopped.await;
+            marker("draining")?;
+            let mut line = String::new();
+            tokio::io::BufReader::new(tokio::io::stdin())
+                .read_line(&mut line)
+                .await?;
+            ensure!(
+                line.trim() == "finish",
+                "unexpected drain command: {line:?}"
+            );
+            Ok(())
+        }
+
         #[test]
         fn signal_child() -> Result<()> {
             let Ok(scenario) = std::env::var(SCENARIO) else {
@@ -325,25 +339,30 @@ mod tests {
                     marker("dropped")?;
                     runtime.block_on(std::future::pending::<()>());
                 }
-                "ready" | "tie" => {
-                    // The runtime stays unpolled until both readiness and any queued signal exist.
+                "ready" => {
                     command("ready")?;
                     let stopped = shutdown.ready();
                     marker("ready")?;
-                    runtime.block_on(async {
-                        stopped.await;
-                        marker("draining")?;
-                        let mut line = String::new();
-                        tokio::io::BufReader::new(tokio::io::stdin())
-                            .read_line(&mut line)
-                            .await?;
-                        ensure!(
-                            line.trim() == "finish",
-                            "unexpected drain command: {line:?}"
-                        );
-                        Ok::<_, anyhow::Error>(())
-                    })?;
+                    runtime.block_on(drain(stopped))?;
                 }
+                "tie" => runtime.block_on(async {
+                    use tokio::signal::unix::{SignalKind, signal};
+
+                    // One driver turn delivers the signal to this future and to the
+                    // armed task alike. The runtime polls this future first, so
+                    // `ready` is sent before the task sees either: the task's next
+                    // poll finds both ready, and only its `biased` order decides.
+                    let mut interrupt = signal(SignalKind::interrupt())?;
+                    let mut terminate = signal(SignalKind::terminate())?;
+                    marker("waiting")?;
+                    tokio::select! {
+                        _ = interrupt.recv() => {}
+                        _ = terminate.recv() => {}
+                    }
+                    let stopped = shutdown.ready();
+                    marker("ready")?;
+                    drain(stopped).await
+                })?,
                 _ => anyhow::bail!("unknown child scenario: {scenario}"),
             }
             Ok(())
@@ -404,9 +423,8 @@ mod tests {
         async fn readiness_wins_when_a_signal_is_already_pending() -> Result<()> {
             for signal in ["INT", "TERM"].into_iter().cycle().take(16) {
                 let mut process = Process::spawn("tie").await?;
-                // kill completes before ready is sent, with the signal task still unpolled.
+                process.marker("waiting").await?;
                 process.signal(signal).await?;
-                process.command("ready").await?;
                 process.marker("ready").await?;
                 process.marker("draining").await?;
                 process.command("finish").await?;
