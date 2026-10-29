@@ -80,10 +80,7 @@ name_type!(
 
 /// The workloads a plugin-backed `secrets:` entry is granted to. Every entry
 /// states one, so none reaches a workload the operator did not name.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
-)]
-#[serde(try_from = "RawWorkloadGrant", into = "RawWorkloadGrant")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WorkloadGrant {
     /// Every workload on the host: `workloads: all`.
     All,
@@ -153,41 +150,57 @@ impl std::fmt::Display for WorkloadGrant {
     }
 }
 
-/// The YAML spelling of [`WorkloadGrant`]: the keyword `all`, or a list of
-/// selectors.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-enum RawWorkloadGrant {
-    All(AllWorkloads),
-    Only(Vec<WorkloadSelector>),
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-enum AllWorkloads {
-    #[serde(rename = "all")]
-    All,
-}
-
-impl TryFrom<RawWorkloadGrant> for WorkloadGrant {
-    type Error = &'static str;
-
-    fn try_from(raw: RawWorkloadGrant) -> Result<Self, Self::Error> {
-        match raw {
-            RawWorkloadGrant::All(AllWorkloads::All) => Ok(Self::All),
-            RawWorkloadGrant::Only(selectors) if selectors.is_empty() => {
-                Err("`workloads` grants no workload; name at least one namespace, or write `all`")
-            }
-            RawWorkloadGrant::Only(selectors) => Ok(Self::Only(selectors)),
+/// Spelled as the keyword `all`, or a list of selectors. An empty list is
+/// refused here as it is when parsed, so a saved grant always loads again.
+impl serde::Serialize for WorkloadGrant {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::All => s.serialize_str("all"),
+            Self::Only(selectors) if selectors.is_empty() => Err(serde::ser::Error::custom(
+                "`workloads` grants no workload; name at least one namespace, or write `all`",
+            )),
+            Self::Only(selectors) => selectors.serialize(s),
         }
     }
 }
 
-impl From<WorkloadGrant> for RawWorkloadGrant {
-    fn from(grant: WorkloadGrant) -> Self {
-        match grant {
-            WorkloadGrant::All => Self::All(AllWorkloads::All),
-            WorkloadGrant::Only(selectors) => Self::Only(selectors),
+impl<'de> serde::Deserialize<'de> for WorkloadGrant {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Grant;
+
+        impl<'de> serde::de::Visitor<'de> for Grant {
+            type Value = WorkloadGrant;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("`all`, or a list of `namespace` (and optional `name`) selectors")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<WorkloadGrant, E> {
+                match v {
+                    "all" => Ok(WorkloadGrant::All),
+                    other => Err(E::invalid_value(serde::de::Unexpected::Str(other), &self)),
+                }
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<WorkloadGrant, A::Error> {
+                let mut selectors = Vec::new();
+                while let Some(selector) = seq.next_element()? {
+                    selectors.push(selector);
+                }
+                if selectors.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "`workloads` grants no workload; name at least one namespace, or write \
+                         `all`",
+                    ));
+                }
+                Ok(WorkloadGrant::Only(selectors))
+            }
         }
+
+        d.deserialize_any(Grant)
     }
 }
 
@@ -1264,6 +1277,21 @@ mod tests {
             .errors
             .explain(anyhow::anyhow!("bad url `postgres://app:pw@db/app`"));
         assert_eq!(format!("{err:#}"), "bad url `<redacted>`");
+    }
+
+    /// A grant writes back the way it parses, and an empty one is refused on
+    /// the way out too.
+    #[test]
+    fn a_grant_round_trips() {
+        for grant in [
+            WorkloadGrant::All,
+            WorkloadGrant::Only(vec![WorkloadSelector::workload("billing", "billing-api")]),
+        ] {
+            let json = serde_json::to_string(&grant).unwrap();
+            assert_eq!(serde_json::from_str::<WorkloadGrant>(&json).unwrap(), grant);
+        }
+        let err = serde_json::to_string(&WorkloadGrant::Only(Vec::new())).unwrap_err();
+        assert!(err.to_string().contains("grants no workload"), "{err}");
     }
 
     #[test]
