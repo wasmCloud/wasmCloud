@@ -75,7 +75,8 @@ footprint there.
   (`derive_max_memories`): half the usable address space at one 4 GiB +
   32 MiB reservation each, and no more than nine tenths of `vm.max_map_count`
   holds at six mappings per warm component (two for its pooled stack, four for
-  its memory). That is 9,829 on a default Linux. A warm workload holds one
+  its memory, or two with `WASMTIME_MEMORY_INIT_COW=false`). That is 9,829 on
+  a default Linux, 14,744 with images off. A warm workload holds one
   linear memory, one fiber stack and one component instance, from totals of
   the same size; its four core instances and two tables draw on totals sized
   as multiples of that count, so they do not bind first. Windows, 32-bit

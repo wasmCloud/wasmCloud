@@ -1317,6 +1317,7 @@ pub struct EngineBuilder {
     fuel_consumption: Option<bool>,
     parallel_compilation: Option<bool>,
     native_unwind_info: Option<bool>,
+    memory_init_cow: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     reserved_host_paths: Vec<PathBuf>,
     allowed_host_paths: Vec<PathBuf>,
@@ -1626,6 +1627,34 @@ impl EngineBuilder {
         self
     }
 
+    /// Whether a linear memory starts as a copy-on-write mapping of its
+    /// component's data segments, or has them copied in at instantiation.
+    ///
+    /// On, as in wasmtime, unless this or `WASMTIME_MEMORY_INIT_COW` (`true`
+    /// or `false`) turns it off; a base config given to [`Self::with_config`]
+    /// keeps its own setting when neither says anything.
+    ///
+    /// Off, each instance copies its data segments into its own pages, which
+    /// costs time and memory in proportion to them. What that buys is
+    /// mappings: a live memory splits into two instead of four, so a host
+    /// that cannot raise `vm.max_map_count` holds about half again as many
+    /// warm instances, and the map-count advisory counts it that way. So does
+    /// the derived memory count when told the same:
+    /// `host_memory::derive_max_memories` reads only the environment variable,
+    /// so an embedder that calls this passes it to
+    /// [`Self::with_derived_max_memories`] too
+    /// (`MaxMemoriesDerivation::with_memory_init_cow`). Raising the limit is
+    /// the better lever when it is available.
+    ///
+    /// Under [`guest_memory::GuestMemoryMode::Growth`], the copied pages are
+    /// resident from instantiation but still uncharged, so they come out of
+    /// the initial cap's overcommit rather than staying shared.
+    #[must_use]
+    pub fn with_memory_init_cow(mut self, enable: bool) -> Self {
+        self.memory_init_cow = Some(enable);
+        self
+    }
+
     /// Sets a custom wasmtime configuration to use as the *base* for the engine.
     ///
     /// This config is used as the starting point, and any other builder
@@ -1752,6 +1781,15 @@ impl EngineBuilder {
         let max_process_memory =
             max_process_memory_bytes.map_or_else(|| "off".to_string(), host_memory::render_bytes);
 
+        // Resolved here, ahead of the pool advisories, which count a live
+        // memory's mappings by it; applied to the config further down. What
+        // the engine will use: the explicit choice, or wasmtime's default of
+        // on, or, under a base config that may set it, unknown until built.
+        let memory_init_cow = self
+            .memory_init_cow
+            .or_else(host_memory::memory_init_cow_from_env);
+        let assumed_memory_init_cow = memory_init_cow.or((!has_custom_config).then_some(true));
+
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
         // caller-supplied config both override what was asked for.
@@ -1817,6 +1855,7 @@ impl EngineBuilder {
                 pool.max_memory_size,
                 pool.table_elements,
                 assumed_stack_size,
+                assumed_memory_init_cow,
                 sized_to_commit_limit,
                 memory_limit,
             ) {
@@ -1902,6 +1941,12 @@ impl EngineBuilder {
             config.native_unwind_info(unwind || cfg!(windows));
         }
 
+        // Copy-on-write images are wasmtime's own default, so this only
+        // carries an explicit choice through; see `with_memory_init_cow`.
+        if let Some(cow) = memory_init_cow {
+            config.memory_init_cow(cow);
+        }
+
         for proposal in &self.proposals {
             proposal.apply(&mut config);
         }
@@ -1939,8 +1984,19 @@ impl EngineBuilder {
             )),
             None => e,
         })?;
-        // The stack advisory deferred above: with a base config only the
-        // engine knows its stack size.
+        // The advisories deferred above: with a base config only the engine
+        // knows its stack size and copy-on-write setting. The mapping count
+        // was checked before the build at its lower bound, without images;
+        // an engine that maps them gets the full count, unless the lower
+        // bound already warned.
+        if let Some(pool) = installed_pool
+            && assumed_memory_init_cow.is_none()
+            && inner.get_memory_init_cow()
+            && host_memory::pool_map_count_advisory_for(&pool.totals, false).is_none()
+            && let Some(advisory) = host_memory::pool_map_count_advisory_for(&pool.totals, true)
+        {
+            tracing::warn!("{advisory}");
+        }
         if let Some(pool) = installed_pool
             && assumed_stack_size.is_none()
             && let Some(advisory) = host_memory::pool_stack_advisory(
@@ -2591,6 +2647,23 @@ mod tests {
             .build()
             .expect("serial compilation should build");
         assert!(!engine.inner().get_parallel_compilation());
+    }
+
+    // Copy-on-write images follow the builder, whichever way it is set. The
+    // default is not asserted: `WASMTIME_MEMORY_INIT_COW` in the test's own
+    // environment (a bench runner's, say) would decide it, not the builder.
+    #[test]
+    fn memory_init_cow_follows_the_builder() {
+        let engine = Engine::builder()
+            .with_memory_init_cow(true)
+            .build()
+            .expect("images on should build");
+        assert!(engine.inner().get_memory_init_cow());
+        let engine = Engine::builder()
+            .with_memory_init_cow(false)
+            .build()
+            .expect("turning copy-on-write images off should build");
+        assert!(!engine.inner().get_memory_init_cow());
     }
 
     // Unwind tables are on unless a host turns them off, and turning them off

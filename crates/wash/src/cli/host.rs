@@ -503,7 +503,8 @@ pub struct HostCommand {
     /// Unset, this uses the `--core-instances` count when that is given.
     /// Otherwise it is derived from the machine: half the usable address
     /// space and at most 90% of `vm.max_map_count`, allowing six mappings per
-    /// warm component (two for its stack, four for its memory). The floor is
+    /// warm component (two for its stack, four for its memory; two with
+    /// copy-on-write images off, `WASMTIME_MEMORY_INIT_COW=false`). The floor is
     /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
     /// accounting or a finite data-size limit keep: there the stack and
     /// table pools are committed at startup rather than reserved, 2.6 GiB at
