@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -130,6 +131,18 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtimev1alpha1.Workload) (*runtimev1alpha1.Host, error) {
 	hostList := runtimev1alpha1.HostList{}
 
+	environmentFilter, err := hostEnvironmentFilter(r.AllowSharedHosts, workload.Namespace, &workload.Spec)
+	if err != nil {
+		if errors.Is(err, errCrossEnvironmentDenied) && r.Recorder != nil {
+			r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
+				"CrossEnvironmentSchedulingDenied", "Reject",
+				"Environment %q is outside %q and operator has allowSharedHosts=false",
+				workload.Spec.Environment, workload.Namespace,
+			)
+		}
+		return nil, err
+	}
+
 	// Every Host object lives in the operator's namespace. Tenant
 	// isolation is enforced by an indexed match on Host.Environment, not by
 	// Host.Namespace.
@@ -140,38 +153,6 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 			workloadSchedulableHostsIndex: string(condition.ConditionTrue),
 		},
 	}
-
-	// Resolve which Environment value the scheduler accepts per the
-	// AllowSharedHosts × Spec.Environment matrix in namespace-host.md.
-	// Default mode (AllowSharedHosts=true, Environment unset) imposes no
-	// Environment filter — every matching host is fair game, exactly
-	// preserving the legacy Cluster-scope scheduling behavior.
-	var environmentFilter string
-	switch {
-	case workload.Spec.Environment != "" && workload.Spec.Environment != workload.Namespace:
-		// Explicit cross-tenant target.
-		if !r.AllowSharedHosts {
-			if r.Recorder != nil {
-				r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
-					"CrossEnvironmentSchedulingDenied", "Reject",
-					"Environment %q is outside %q and operator has allowSharedHosts=false",
-					workload.Spec.Environment, workload.Namespace,
-				)
-			}
-			return nil, fmt.Errorf(
-				"workload targets Environment %q but operator has allowSharedHosts=false",
-				workload.Spec.Environment,
-			)
-		}
-		environmentFilter = workload.Spec.Environment
-	case workload.Spec.Environment != "":
-		// Environment explicitly set to the workload's own namespace.
-		environmentFilter = workload.Namespace
-	case !r.AllowSharedHosts:
-		// No Environment, sharing disabled — lock to the workload's namespace.
-		environmentFilter = workload.Namespace
-	}
-
 	if environmentFilter != "" {
 		listOpts = append(listOpts, client.MatchingFields{
 			hostEnvironmentIndex: environmentFilter,
@@ -194,6 +175,34 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 	}
 
 	return nil, fmt.Errorf("no suitable host found")
+}
+
+var errCrossEnvironmentDenied = errors.New("cross-environment scheduling denied")
+
+// hostEnvironmentFilter returns the Host.Environment that a workload with
+// spec, in namespace, may be scheduled onto; "" accepts any. It follows the
+// AllowSharedHosts × Spec.Environment matrix in namespace-host.md. Default
+// mode (AllowSharedHosts=true, Environment unset) imposes no filter, exactly
+// preserving the legacy Cluster-scope scheduling behavior.
+func hostEnvironmentFilter(allowSharedHosts bool, namespace string, spec *runtimev1alpha1.WorkloadSpec) (string, error) {
+	switch {
+	case spec.Environment != "" && spec.Environment != namespace:
+		// Explicit cross-tenant target.
+		if !allowSharedHosts {
+			return "", fmt.Errorf(
+				"%w: workload targets Environment %q but operator has allowSharedHosts=false",
+				errCrossEnvironmentDenied, spec.Environment,
+			)
+		}
+		return spec.Environment, nil
+	case spec.Environment != "":
+		// Environment explicitly set to the workload's own namespace.
+		return namespace, nil
+	case !allowSharedHosts:
+		// No Environment, sharing disabled — lock to the workload's namespace.
+		return namespace, nil
+	}
+	return "", nil
 }
 
 // isSchedulable reports whether new workloads may be placed on host. A Host

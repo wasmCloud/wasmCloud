@@ -767,6 +767,13 @@ spec:
                   - type
                   type: object
                 type: array
+              currentReplicas:
+                description: |-
+                  CurrentReplicas is the number of Workloads of the current template.
+                  Exposed as the /scale subresource statusReplicasPath; mirrors
+                  .status.replicas.current as a flat int.
+                format: int32
+                type: integer
               replicas:
                 properties:
                   current:
@@ -782,9 +789,18 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              selector:
+                description: |-
+                  Selector is the serialized label selector exposed by the /scale
+                  subresource (scale.status.selector).
+                type: string
             type: object
         type: object
     served: true
     storage: true
     subresources:
+      scale:
+        labelSelectorPath: .status.selector
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.currentReplicas
       status: {}

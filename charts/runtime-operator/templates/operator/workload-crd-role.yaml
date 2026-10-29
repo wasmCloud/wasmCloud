@@ -1,8 +1,9 @@
 {{- if and .Values.operator.enabled .Values.operator.serviceAccount.create .Values.operator.watchNamespaces -}}
 # When operator.watchNamespaces is set, the operator's workload-side CRD access
-# (artifacts / workloads / workloadreplicasets / workloaddeployments, plus their
-# /status and /finalizers subresources) is scoped to each watched namespace via a
-# Role + RoleBinding rather than the cluster-wide ClusterRole in clusterrole.yaml.
+# (artifacts / workloads / workloadreplicasets / workloaddeployments /
+# workloaddaemonsets, plus their /status and /finalizers subresources) is scoped
+# to each watched namespace via a Role + RoleBinding rather than the cluster-wide
+# ClusterRole in clusterrole.yaml.
 # The informer cache is likewise scoped to these namespaces via
 # cacheOpts.DefaultNamespaces (see runtime-operator/cmd/main.go), so namespaced
 # RBAC is sufficient for the controllers' list/watch.
@@ -26,6 +27,7 @@ rules:
     - workloads
     - workloadreplicasets
     - workloaddeployments
+    - workloaddaemonsets
     verbs:
     - create
     - delete
@@ -41,6 +43,7 @@ rules:
     - workloads/status
     - workloadreplicasets/status
     - workloaddeployments/status
+    - workloaddaemonsets/status
     verbs:
     - get
     - update
@@ -54,6 +57,7 @@ rules:
     - workloads/finalizers
     - workloadreplicasets/finalizers
     - workloaddeployments/finalizers
+    - workloaddaemonsets/finalizers
     verbs:
     - update
 ---
