@@ -16,3 +16,6 @@ clap = { workspace = true, features = ["std"] }
 pbjson-build = { workspace = true, default-features = true }
 tempfile = { workspace = true, default-features = true }
 tonic-prost-build = { workspace = true, default-features = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }

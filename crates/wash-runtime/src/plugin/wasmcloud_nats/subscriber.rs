@@ -2416,6 +2416,7 @@ pub(super) async fn spawn_kv_watches(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
 
     /// Replicas of one deployment must land on the same durable, or a queue

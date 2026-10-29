@@ -34,9 +34,11 @@ mod credentials;
 mod disk_cache;
 #[cfg(test)]
 #[path = "../tests/common/oci_ca.rs"]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod test_ca;
 #[cfg(test)]
 #[path = "../tests/common/oci_registry.rs"]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod test_registry;
 use coalescer::Coalescer;
 use credentials::CredentialResolver;
@@ -953,6 +955,7 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

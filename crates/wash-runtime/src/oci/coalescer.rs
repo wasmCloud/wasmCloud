@@ -65,6 +65,7 @@ where
     V: Clone + Send + Sync + 'static,
 {
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(super) fn new(
         capacity: u64,
         join: Duration,
@@ -93,6 +94,7 @@ where
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(super) async fn run<F, Fut>(&self, key: K, work: F) -> Result<V>
     where
         F: FnOnce() -> Fut,
@@ -103,6 +105,7 @@ where
 
     /// Requests in flight now, for tests.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(super) fn in_flight_count(&self) -> usize {
         self.in_flight
             .lock()
@@ -112,6 +115,7 @@ where
 
     /// Callers sharing the request in flight for `key`, for tests.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(super) fn waiters(&self, key: &K) -> usize {
         self.in_flight
             .lock()
@@ -216,6 +220,7 @@ where
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

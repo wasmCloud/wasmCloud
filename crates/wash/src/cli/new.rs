@@ -169,6 +169,7 @@ async fn run_new_command(new_cmd: &str, working_dir: &Path) -> anyhow::Result<()
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use std::fs;

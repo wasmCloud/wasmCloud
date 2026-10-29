@@ -1920,6 +1920,7 @@ fn check_url_scheme(field: &str, value: &url::Url, expected: &[&str], errors: &m
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::time::Duration;
 

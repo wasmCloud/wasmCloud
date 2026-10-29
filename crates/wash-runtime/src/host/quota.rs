@@ -637,6 +637,7 @@ const ALL_REASONS: [DenyReason; DENY_REASONS] = [
 ];
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod policy_meter_tests {
     use super::*;
 
@@ -697,6 +698,7 @@ mod policy_meter_tests {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod outbound_http_tests {
     use super::*;
 
@@ -754,6 +756,7 @@ mod outbound_http_tests {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     /// The ceiling tracks the descriptor budget the process actually has: a
     /// container started with 1024 and one started with a million want very

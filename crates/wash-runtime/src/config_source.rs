@@ -651,6 +651,7 @@ fn parse_env_file(file: File, path: &Path) -> Result<HashMap<String, String>> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use tempfile::TempDir;

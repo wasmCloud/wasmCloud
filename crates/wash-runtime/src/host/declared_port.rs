@@ -262,6 +262,7 @@ pub fn validate_ports(ports: &[DeclaredPort], owner: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

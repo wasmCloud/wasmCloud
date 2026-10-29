@@ -5,6 +5,7 @@
 pub mod engine;
 /// Setting a named environment variable in a test without racing the others.
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod env_guard;
 pub mod host;
 #[cfg(any(feature = "washlet", feature = "wasmcloud-nats"))]

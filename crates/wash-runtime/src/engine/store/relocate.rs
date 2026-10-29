@@ -448,6 +448,7 @@ pub fn inject(mut store: StoreContextMut<SharedCtx>, r: Relocated) -> wasmtime::
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::{Relocated, contains_handle, extract, inject, stream_pump};
     use crate::engine::ctx::{Ctx, SharedCtx};

@@ -363,6 +363,7 @@ pub(super) fn is_async_version(iface: &WitInterface) -> bool {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::plugin::wasmcloud_messaging::{InMemoryMsgProvider, MsgError};

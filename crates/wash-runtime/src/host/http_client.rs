@@ -1493,6 +1493,7 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

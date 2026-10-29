@@ -160,6 +160,7 @@ impl std::fmt::Debug for NatsAuth {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

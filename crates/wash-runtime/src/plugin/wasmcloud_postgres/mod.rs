@@ -820,6 +820,7 @@ impl HostPlugin for WasmcloudPostgres {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

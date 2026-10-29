@@ -226,6 +226,7 @@ impl HostPlugin for DynamicConfig {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::engine::{

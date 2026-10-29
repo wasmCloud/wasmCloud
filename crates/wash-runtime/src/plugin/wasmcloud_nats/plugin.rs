@@ -1152,6 +1152,7 @@ impl HostPlugin for WasmcloudNats {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::host::allowed_loopback::AllowedLoopbackPort;
