@@ -62,8 +62,8 @@ cargo test --bin wash
 
 ### Rust coverage
 
-Install the pinned coverage tool and the LLVM tools for this repository's Rust
-toolchain:
+Node.js is required to run `scripts/coverage.mjs`. Install the pinned coverage
+tool and the LLVM tools for this repository's Rust toolchain:
 
 ```bash
 source .github/tool-versions.env

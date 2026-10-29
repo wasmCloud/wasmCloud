@@ -14,7 +14,8 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - 'scripts/coverage.sh'
+      - 'scripts/coverage.mjs'
+      - 'scripts/coverage.test.mjs'
       - 'Makefile'
   merge_group:
   push:
@@ -69,17 +70,19 @@ jobs:
           if [[ -n "$DOCKERHUB_PASSWORD" ]]; then
             echo "$DOCKERHUB_PASSWORD" | docker login --username "$DOCKERHUB_USER" --password-stdin
           fi
+      - name: Validate coverage runner
+        run: node --test scripts/coverage.test.mjs
       - name: Collect coverage, including Docker and registry tests
         id: tests
-        run: bash scripts/coverage.sh test
+        run: node scripts/coverage.mjs test
       - name: Generate coverage reports
         if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         id: report
-        run: bash scripts/coverage.sh report
+        run: node scripts/coverage.mjs report
       - name: Require 80% line and region coverage
         if: ${{ !cancelled() && steps.report.outcome == 'success' }}
         id: threshold
-        run: bash scripts/coverage.sh check
+        run: node scripts/coverage.mjs check
       - name: Write coverage evidence summary
         if: ${{ !cancelled() && steps.report.outcome == 'success' }}
         env:
