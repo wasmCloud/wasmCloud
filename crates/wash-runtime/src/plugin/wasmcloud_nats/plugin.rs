@@ -1259,9 +1259,9 @@ mod tests {
         HashMap::from([(
             key.to_string(),
             crate::plugin::PluginSecretRef {
-                source: "nats-creds".to_string(),
-                plugin: "vault".to_string(),
-                key: format!("nats/{key}"),
+                source: "nats-creds".into(),
+                plugin: "vault".into(),
+                key: format!("nats/{key}").into(),
             },
         )])
     }
