@@ -1,15 +1,5 @@
 all: proto
 
-.PHONY: coverage coverage-report coverage-check
-coverage:
-	node scripts/coverage.mjs
-
-coverage-report:
-	node scripts/coverage.mjs report
-
-coverage-check:
-	node scripts/coverage.mjs check
-
 # protobuf
 .PHONY: proto
 proto: proto-generate
