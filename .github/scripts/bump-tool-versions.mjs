@@ -13,6 +13,7 @@
 // Tracked tools:
 //   WASM_TOOLS_VERSION ← bytecodealliance/wasm-tools
 //   PROTOC_VERSION     ← protocolbuffers/protobuf
+//   CARGO_LLVM_COV_VERSION ← taiki-e/cargo-llvm-cov
 //
 // Usage: node bump-tool-versions.mjs [path-to-versions.env]
 //   Defaults to .github/tool-versions.env; the optional arg exists so
@@ -32,6 +33,11 @@
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const TOOLS = [
+  {
+    var: 'CARGO_LLVM_COV_VERSION',
+    repo: 'taiki-e/cargo-llvm-cov',
+    name: 'cargo-llvm-cov',
+  },
   {
     var: 'WASM_TOOLS_VERSION',
     repo: 'bytecodealliance/wasm-tools',
