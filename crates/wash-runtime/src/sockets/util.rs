@@ -62,6 +62,12 @@ pub fn is_valid_remote_address(addr: SocketAddr) -> bool {
     !addr.ip().to_canonical().is_unspecified() && addr.port() != 0
 }
 
+/// Whether `a` and `b` name the same UDP peer. Only ip and port count: a v6
+/// address can carry a flow label or scope id the other spelling lacks.
+pub fn is_same_peer(a: SocketAddr, b: SocketAddr) -> bool {
+    a.ip() == b.ip() && a.port() == b.port()
+}
+
 pub fn is_valid_unicast_address(addr: IpAddr) -> bool {
     match addr.to_canonical() {
         IpAddr::V4(ipv4) => !ipv4.is_multicast() && !ipv4.is_broadcast(),

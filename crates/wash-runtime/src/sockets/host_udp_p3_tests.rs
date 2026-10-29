@@ -506,23 +506,96 @@ async fn independent_virtual_sockets_do_not_share_send_capacity() {
 }
 
 #[tokio::test]
-async fn send_buffer_exhaustion_recovers_after_receive() {
+async fn datagram_larger_than_the_send_buffer_is_too_large() {
     let mut data = Data::default();
     let (receiver, peer) = bind(&mut data, "127.0.0.1:0").await;
     let (sender, _) = bind(&mut data, "127.0.0.1:0").await;
     HostUdpSocket::set_send_buffer_size(&mut view(&mut data), Resource::new_borrow(sender), 2)
         .unwrap();
     let mut store = store(data);
+    assert_code(
+        send(&mut store, sender, vec![1; 3], Some(peer)).await,
+        ErrorCode::DatagramTooLarge,
+    );
     send(&mut store, sender, vec![1; 2], Some(peer))
         .await
         .unwrap();
-    assert_code(
-        send(&mut store, sender, vec![2], Some(peer)).await,
-        ErrorCode::OutOfMemory,
-    );
     assert_eq!(receive(&mut store, receiver).await.unwrap().0, [1, 1]);
-    send(&mut store, sender, vec![], Some(peer)).await.unwrap();
-    assert!(receive(&mut store, receiver).await.unwrap().0.is_empty());
+}
+
+#[tokio::test]
+async fn full_receive_buffer_drops_without_pinning_the_sender() {
+    let mut data = Data::default();
+    let (idle, idle_addr) = bind(&mut data, "127.0.0.1:0").await;
+    let (healthy, healthy_addr) = bind(&mut data, "127.0.0.1:0").await;
+    let (sender, _) = bind(&mut data, "127.0.0.1:0").await;
+    HostUdpSocket::set_receive_buffer_size(&mut view(&mut data), Resource::new_borrow(idle), 2)
+        .unwrap();
+    let mut store = store(data);
+    send(&mut store, sender, vec![1; 2], Some(idle_addr))
+        .await
+        .unwrap();
+    send(&mut store, sender, vec![2], Some(idle_addr))
+        .await
+        .unwrap();
+    send(&mut store, sender, vec![3], Some(healthy_addr))
+        .await
+        .unwrap();
+    assert_eq!(receive(&mut store, healthy).await.unwrap().0, [3]);
+    assert_eq!(receive(&mut store, idle).await.unwrap().0, [1, 1]);
+    send(&mut store, sender, vec![4], Some(idle_addr))
+        .await
+        .unwrap();
+    assert_eq!(receive(&mut store, idle).await.unwrap().0, [4]);
+}
+
+#[tokio::test]
+async fn malformed_destination_is_rejected_before_the_policy() {
+    let mut data = Data::default();
+    let (sender, _) = bind(&mut data, "127.0.0.1:0").await;
+    data.ctx.socket_addr_check = SocketAddrCheck::new(|addr, reason| {
+        if matches!(reason, SocketAddrUse::UdpOutgoingDatagram) {
+            AddrDecision::Deny(DenyReason::NotPermitted)
+        } else {
+            AddrDecision::allow_by_address(addr)
+        }
+    });
+    let mut store = store(data);
+    for destination in ["127.0.0.1:0", "0.0.0.0:9"] {
+        assert_code(
+            send(
+                &mut store,
+                sender,
+                vec![1],
+                Some(destination.parse().unwrap()),
+            )
+            .await,
+            ErrorCode::InvalidArgument,
+        );
+    }
+}
+
+#[tokio::test]
+async fn connected_v6_receive_ignores_flow_label_and_scope() {
+    let mut data = Data::default();
+    let (receiver, destination) = bind(&mut data, "[::1]:0").await;
+    let (sender, source) = bind(&mut data, "[::1]:0").await;
+    let SocketAddr::V6(source) = source else {
+        unreachable!("bound a v6 socket")
+    };
+    let labelled = std::net::SocketAddrV6::new(*source.ip(), source.port(), 7, 0);
+    HostUdpSocket::connect(
+        &mut view(&mut data),
+        Resource::new_borrow(receiver),
+        SocketAddr::V6(labelled).into(),
+    )
+    .await
+    .unwrap();
+    let mut store = store(data);
+    send(&mut store, sender, vec![5], Some(destination))
+        .await
+        .unwrap();
+    assert_eq!(receive(&mut store, receiver).await.unwrap().0, [5]);
 }
 
 #[tokio::test]

@@ -671,11 +671,11 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
             let mut loopback = loopback
                 .lock()
                 .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
-            if let Some(tx) = loopback
+            if let Some(endpoint) = loopback
                 .connect_udp(&stream.local_address, &addr)
                 .map_err(super::network::socket_error_from_util)?
             {
-                _ = tx.send((
+                _ = endpoint.tx.send((
                     super::loopback::UdpDatagram {
                         source_address: stream.local_address,
                         data: datagram.data,

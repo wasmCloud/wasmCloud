@@ -79,7 +79,11 @@ impl LoopbackIncomingDatagramStream {
                 break;
             };
             match self.remote_address {
-                Some(connected_addr) if connected_addr != dgram.source_address => continue,
+                Some(connected_addr)
+                    if !super::util::is_same_peer(connected_addr, dgram.source_address) =>
+                {
+                    continue;
+                }
                 _ if self.socket_addr_check.as_ref().is_some_and(|check| {
                     check
                         .check(dgram.source_address, super::SocketAddrUse::UdpReceive)

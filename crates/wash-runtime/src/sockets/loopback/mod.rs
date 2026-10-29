@@ -84,6 +84,7 @@ impl Network {
     pub fn bind_udp(
         &mut self,
         mut addr: SocketAddr,
+        receive_permits: std::sync::Arc<tokio::sync::Semaphore>,
     ) -> Result<
         (
             SocketAddr,
@@ -96,6 +97,7 @@ impl Network {
         let ep = UdpEndpoint {
             tx,
             connected_address: None,
+            receive_permits,
         };
         let port = bind(net, addr.port(), ep)?;
         addr.set_port(port.into());
@@ -117,24 +119,19 @@ impl Network {
         &mut self,
         local_address: &SocketAddr,
         remote_address: &SocketAddr,
-    ) -> Result<Option<&mpsc::UnboundedSender<(UdpDatagram, OwnedSemaphorePermit)>>, ErrorCode>
-    {
+    ) -> Result<Option<&UdpEndpoint>, ErrorCode> {
         let net = self.get_udp_net(remote_address.ip());
         let Some(port) = NonZeroU16::new(remote_address.port()) else {
             return Err(ErrorCode::InvalidArgument);
         };
-        let Some(UdpEndpoint {
-            tx,
-            connected_address,
-        }) = net.get(&port)
-        else {
+        let Some(endpoint) = net.get(&port) else {
             return Ok(None);
         };
-        if let Some(addr) = connected_address
-            && local_address != addr
+        if let Some(addr) = endpoint.connected_address
+            && !crate::sockets::util::is_same_peer(*local_address, addr)
         {
             return Ok(None);
         }
-        Ok(Some(tx))
+        Ok(Some(endpoint))
     }
 }
