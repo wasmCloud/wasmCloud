@@ -6,6 +6,7 @@
 //! - `workload`: `<namespace>/<name>` of the workload whose bind asked.
 //! - `binary`: bytes that are not UTF-8.
 //! - `denied`: refused with `access-denied`.
+//! - `twice`: answered twice.
 //!
 //! Any other key is `not-found`.
 
@@ -44,6 +45,10 @@ impl Guest for Component {
                 "binary" => SecretValue::Bytes(vec![0xff, 0xfe]),
                 "tier" => SecretValue::String("platinum".to_string()),
                 "db-password" => SecretValue::String("hunter2".to_string()),
+                "twice" => {
+                    values.push((key.clone(), SecretValue::String("first".to_string())));
+                    SecretValue::String("second".to_string())
+                }
                 _ => {
                     missing.push(key);
                     continue;
