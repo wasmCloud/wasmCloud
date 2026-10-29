@@ -359,13 +359,37 @@ type LayerSource<'a> = (Option<&'a str>, &'a str);
 
 /// Check `plugin_id`'s plugin secrets at host start: each must name another
 /// registered plugin that serves `wasmcloud:host/secret-source`, and none may
-/// fill a ceiling key, which is checked against its declared value.
+/// fill a ceiling key, which is checked against its declared value. While the
+/// entry itself reads one, no other plugin may serve an interface this plugin
+/// serves: a plain import routes to whichever plugin serves it, and the
+/// secret's grant is checked only here.
 pub(crate) fn validate_plugin_secrets(
     plugin_id: &str,
     declared: &PluginBindingSet,
     schema: &BindingSchema,
     plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
 ) -> anyhow::Result<()> {
+    let entry_reads_a_secret = declared
+        .plugin_secrets()
+        .any(|(binding, _, _)| binding.is_none());
+    if entry_reads_a_secret && let Some(this) = plugins.get(plugin_id) {
+        let mut others: Vec<(&&'static str, &Arc<dyn HostPlugin>)> =
+            plugins.iter().filter(|(id, _)| **id != plugin_id).collect();
+        others.sort_by_key(|(id, _)| **id);
+        for served in &this.world().imports {
+            if let Some((other, _)) = others
+                .iter()
+                .find(|(_, q)| q.world().includes_bidirectional(served) && q.claims(served))
+            {
+                anyhow::bail!(
+                    "`host.plugins` entry `{plugin_id}` reads a plugin secret for every binding, \
+                     and plugin `{other}` also serves {served}; a workload's plain import of it \
+                     would route to `{other}`, where the secret's grant does not apply, so only \
+                     one plugin may serve it"
+                );
+            }
+        }
+    }
     for (binding, key, secret) in declared.plugin_secrets() {
         let place = match binding {
             Some(name) => format!("`host.plugins` entry `{plugin_id}` binding `{name}`"),
@@ -731,8 +755,8 @@ mod tests {
         }
     }
 
-    /// A plugin that serves nothing but may serve secrets to the host.
-    struct Stub(&'static str, Option<Arc<Fixed>>);
+    /// A plugin serving `world`, which may also serve secrets to the host.
+    struct Stub(&'static str, Option<Arc<Fixed>>, WitWorld);
 
     #[async_trait::async_trait]
     impl HostPlugin for Stub {
@@ -740,7 +764,7 @@ mod tests {
             self.0
         }
         fn world(&self) -> WitWorld {
-            WitWorld::default()
+            self.2.clone()
         }
         fn secret_source(&self) -> Option<Arc<dyn HostSecretSource>> {
             self.1.clone().map(|r| r as Arc<dyn HostSecretSource>)
@@ -751,11 +775,12 @@ mod tests {
         HashMap::from([
             (
                 "vault",
-                Arc::new(Stub("vault", Some(source))) as Arc<dyn HostPlugin>,
+                Arc::new(Stub("vault", Some(source), WitWorld::default())) as Arc<dyn HostPlugin>,
             ),
             (
                 "wasmcloud-postgres",
-                Arc::new(Stub("wasmcloud-postgres", None)) as Arc<dyn HostPlugin>,
+                Arc::new(Stub("wasmcloud-postgres", None, WitWorld::default()))
+                    as Arc<dyn HostPlugin>,
             ),
         ])
     }
@@ -1142,6 +1167,82 @@ mod tests {
             let err = check(id, key, plugin).unwrap_err();
             assert!(err.contains(expect) && err.contains("`app-db`"), "{err}");
         }
+    }
+
+    /// A plain import routes to whichever plugin serves it, so a source that
+    /// also serves `wasmcloud:secrets` to workloads is refused while an
+    /// entry-level secret feeds `wasmcloud-secrets`: a workload's import would
+    /// reach the source, where the grant is never checked. A named binding's
+    /// secret routes by the operator's declaration, so it is not refused.
+    #[test]
+    fn host_start_refuses_a_second_server_of_an_interface_an_entry_secret_feeds() {
+        let serving = |world: &[&str]| WitWorld {
+            imports: world.iter().map(|w| WitInterface::from(*w)).collect(),
+            exports: HashSet::new(),
+        };
+        let secrets = [
+            "wasmcloud:secrets/store,reveal@2.1.0",
+            "wasmcloud:secrets/secret@2.1.0",
+        ];
+        let source = fixed();
+        let plugins = |vault: WitWorld| -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+            HashMap::from([
+                (
+                    "vault",
+                    Arc::new(Stub("vault", Some(source.clone()), vault)) as Arc<dyn HostPlugin>,
+                ),
+                (
+                    "wasmcloud-secrets",
+                    Arc::new(Stub("wasmcloud-secrets", None, serving(&secrets)))
+                        as Arc<dyn HostPlugin>,
+                ),
+            ])
+        };
+        let schema = BindingSchema::empty().and_independent_keys();
+        let on_entry = PluginBindingSet::new("wasmcloud-secrets").with_base_secrets(HashMap::from(
+            [("db-password".to_string(), secret("tenant", "db-password"))],
+        ));
+        validate_plugin_secrets(
+            "wasmcloud-secrets",
+            &on_entry,
+            &schema,
+            &plugins(serving(&[])),
+        )
+        .unwrap();
+        validate_plugin_secrets(
+            "wasmcloud-secrets",
+            &on_entry,
+            &schema,
+            &plugins(serving(&["acme:kv/store@0.1.0"])),
+        )
+        .unwrap();
+        let err = validate_plugin_secrets(
+            "wasmcloud-secrets",
+            &on_entry,
+            &schema,
+            &plugins(serving(&["wasmcloud:secrets/store,reveal@2.1.0"])),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("plugin `vault` also serves wasmcloud:secrets")
+                && err.contains("grant does not apply"),
+            "{err}"
+        );
+
+        let on_binding = PluginBindingSet::new("wasmcloud-secrets")
+            .with_binding("db-password", HashMap::new())
+            .with_binding_secrets(
+                "db-password",
+                HashMap::from([("db-password".to_string(), secret("tenant", "db-password"))]),
+            );
+        validate_plugin_secrets(
+            "wasmcloud-secrets",
+            &on_binding,
+            &schema,
+            &plugins(serving(&secrets)),
+        )
+        .unwrap();
     }
 
     /// A source's refusal reaches the bind failure as its typed case.
