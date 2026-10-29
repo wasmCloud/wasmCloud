@@ -2237,8 +2237,11 @@ mod tests {
         let address = listener.local_addr()?;
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await?;
-            let mut request = [0; 1];
-            socket.read_exact(&mut request).await?;
+            // Drain the request headers before closing to avoid a TCP reset.
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await?);
+            }
             socket
                 .write_all(
                     format!(
