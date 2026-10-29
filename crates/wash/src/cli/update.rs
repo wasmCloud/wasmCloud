@@ -744,12 +744,12 @@ mod tests {
             assert_eq!(
                 output.json(),
                 Some(
-                    &json!({"version": tag, "backup_path": ctx.in_cache_dir("update/wash_backup").display().to_string(), "install_path": executable.display().to_string()})
+                    &json!({"version": tag, "backup_path": ctx.in_cache_dir("update").join("wash_backup").display().to_string(), "install_path": executable.display().to_string()})
                 )
             );
             assert_eq!(fs::read(&executable).await?, NEW_BINARY);
             assert_eq!(
-                fs::read(ctx.in_cache_dir("update/wash_backup")).await?,
+                fs::read(ctx.in_cache_dir("update").join("wash_backup")).await?,
                 b"old binary"
             );
             assert!(!executable.with_extension("tmp_upgrade").exists());
@@ -792,10 +792,10 @@ mod tests {
         assert_eq!(
             output.json(),
             Some(
-                &json!({"version": tag, "backup_path": ctx.in_cache_dir("update/wash_backup").display().to_string(), "install_path": installed.display().to_string()})
+                &json!({"version": tag, "backup_path": ctx.in_cache_dir("update").join("wash_backup").display().to_string(), "install_path": installed.display().to_string()})
             )
         );
-        assert!(!ctx.in_cache_dir("update/wash_backup").exists());
+        assert!(!ctx.in_cache_dir("update").join("wash_backup").exists());
         server
             .finish(&["/releases/latest", "/releases/assets/42"], None)
             .await?;
@@ -869,7 +869,7 @@ mod tests {
         assert_eq!(fs::read(&executable).await?, b"original");
         assert!(!executable.with_extension("tmp_upgrade").exists());
         assert_eq!(
-            fs::read(ctx.in_cache_dir("update/wash_backup")).await?,
+            fs::read(ctx.in_cache_dir("update").join("wash_backup")).await?,
             b"original"
         );
         server
@@ -1051,7 +1051,7 @@ mod tests {
             error.downcast_ref::<io::Error>().map(io::Error::kind),
             Some(io::ErrorKind::NotFound)
         );
-        assert!(!ctx.in_cache_dir("update/wash_backup").exists());
+        assert!(!ctx.in_cache_dir("update").join("wash_backup").exists());
         assert!(!ctx.data_dir().exists());
         assert!(!missing.with_extension("tmp_upgrade").exists());
         server
@@ -1075,7 +1075,9 @@ mod tests {
             fs::write(&executable, b"original").await?;
             match failure {
                 "cache" => fs::write(ctx.cache_dir(), b"block directory creation").await?,
-                "backup" => fs::create_dir_all(ctx.in_cache_dir("update/wash_backup")).await?,
+                "backup" => {
+                    fs::create_dir_all(ctx.in_cache_dir("update").join("wash_backup")).await?
+                }
                 "temporary" => fs::create_dir(executable.with_extension("tmp_upgrade")).await?,
                 "data-directory" => fs::write(ctx.data_dir(), b"block directory creation").await?,
                 "data-file" => {
