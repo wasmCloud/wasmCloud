@@ -2096,6 +2096,19 @@ where
     Some(value)
 }
 
+/// A `WASMTIME_POOLING_*` value as [`new_pooling_config`] will apply it,
+/// read without the warnings it gives, so sizing can follow the pool the
+/// engine installs: unset or unparseable is `None`.
+fn pooling_env_quiet<T: FromStr>(key: &str) -> Option<T> {
+    env::var(key).ok()?.parse().ok()
+}
+
+/// [`pooling_env_quiet`] for a total, which [`pooling_env_override`] ignores
+/// at zero.
+fn pooling_env_total_quiet(key: &str) -> Option<u32> {
+    pooling_env_quiet(key).filter(|&total| total != 0)
+}
+
 /// [`pooling_env_override`] for the knobs that are plain instance counts.
 ///
 /// All of them derive from the resolved `--max-memories` and all of them
