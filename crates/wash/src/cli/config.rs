@@ -383,3 +383,7 @@ async fn dir_size(path: &Path) -> anyhow::Result<u64> {
     .await
     .context("directory size task panicked")?
 }
+
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod tests;
