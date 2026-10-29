@@ -8,7 +8,7 @@
 //! | --- | --- | --- |
 //! | [`HostMemoryBudgets::max_guest_memory`] | Total guest memory this host may use | Derived from the cgroup limit that would OOM-kill this process |
 //! | [`HostMemoryBudgets::default_heap_memory`] | How large any single linear memory may grow | wasmtime's own default (4 GiB) |
-//! | [`HostMemoryBudgets::max_memories`] | Linear memories the pooling allocator keeps room for, and with them the fiber stacks and component instances it admits | Library default 1000; a host process uses [`derive_max_memories`] |
+//! | [`HostMemoryBudgets::max_memories`] | Linear memories the pooling allocator keeps room for, and with them the fiber stacks and component instances it admits | Library default 1000; a host process uses [`crate::engine::EngineBuilder::with_derived_max_memories`] |
 //! | [`HostMemoryBudgets::core_instances`] | Core instances (live core modules) the pool admits, a counter that reserves nothing | [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory |
 //!
 //! Unset, the memory count falls through to wasmtime's own 1000, and the
@@ -673,8 +673,9 @@ impl HostMemoryBudgets {
 
 impl HostMemoryBudgets {
     /// Resolve the four knobs, falling back to the derived budget and to
-    /// wasmtime's own defaults. A host running one engine passes
-    /// [`derive_max_memories`] when neither pool count was explicitly set.
+    /// wasmtime's own defaults. A host running one engine that set neither
+    /// pool count here sizes the memory count with
+    /// [`crate::engine::EngineBuilder::with_derived_max_memories`].
     ///
     /// `max_memories` alone derives `core_instances` at
     /// [`crate::engine::CORE_INSTANCES_PER_MEMORY`] per memory.
@@ -847,15 +848,11 @@ pub(crate) fn pool_advisories(
     max_memory_size: u64,
     table_elements: usize,
     async_stack_size: Option<usize>,
-    max_memories_from_memory_precommit_limit: bool,
+    sized_to_commit_limit: bool,
     memory_limit: Option<u64>,
 ) -> Vec<String> {
     let limits = process_limits();
-    let commit = PoolCommit::read_within(
-        limits.as_deref(),
-        max_memories_from_memory_precommit_limit,
-        memory_limit,
-    );
+    let commit = PoolCommit::read_within(limits.as_deref(), sized_to_commit_limit, memory_limit);
     [
         pool_heap_ceiling_advisory(max_memory_size),
         pool_reservation_advisory(
@@ -877,10 +874,10 @@ pub(crate) fn pool_advisories(
 pub(crate) fn pool_stack_advisory(
     stacks: u32,
     async_stack_size: usize,
-    max_memories_from_memory_precommit_limit: bool,
+    sized_to_commit_limit: bool,
     memory_limit: Option<u64>,
 ) -> Option<String> {
-    let commit = PoolCommit::read(max_memories_from_memory_precommit_limit, memory_limit);
+    let commit = PoolCommit::read(sized_to_commit_limit, memory_limit);
     pool_stack_commit_advisory(stacks, async_stack_size, &commit)
 }
 
@@ -900,10 +897,10 @@ struct PoolCommit {
 }
 
 impl PoolCommit {
-    fn read(max_memories_from_memory_precommit_limit: bool, memory_limit: Option<u64>) -> Self {
+    fn read(sized_to_commit_limit: bool, memory_limit: Option<u64>) -> Self {
         Self::read_within(
             process_limits().as_deref(),
-            max_memories_from_memory_precommit_limit,
+            sized_to_commit_limit,
             memory_limit,
         )
     }
@@ -911,7 +908,7 @@ impl PoolCommit {
     /// [`Self::read`] from a `/proc/self/limits` already read.
     fn read_within(
         limits: Option<&str>,
-        max_memories_from_memory_precommit_limit: bool,
+        sized_to_commit_limit: bool,
         memory_limit: Option<u64>,
     ) -> Self {
         let platform = pool_mapping_charge();
@@ -926,7 +923,7 @@ impl PoolCommit {
             // A host sized against its precommit limit may take the
             // derivation's share: the very check it was sized for must not
             // warn about it.
-            percent: if max_memories_from_memory_precommit_limit {
+            percent: if sized_to_commit_limit {
                 DERIVED_STACK_TABLE_COMMIT_PERCENT
             } else {
                 STACK_TABLE_COMMIT_PERCENT
