@@ -431,7 +431,7 @@ fn bitfield_decoding_preserves_bit_lengths_and_hstore_preserves_nulls() -> TestR
             PgValue::Hstore(pairs.clone()),
             PgValue::Hstore(pairs.clone()),
             ty.clone(),
-            &HashMap::from_iter(pairs),
+            &HashMap::<String, Option<String>>::from_iter(pairs),
         )?;
     }
     assert!(matches!(
