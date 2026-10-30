@@ -425,11 +425,12 @@ func TestReplicaAnnotationsComeFromOwners(t *testing.T) {
 		},
 	}
 	r := &WorkloadReconciler{Client: newWorkloadClient(t, replicaSet)}
+	const keptAnnotation, keptValue = "example.com/kept", "yes"
 	spoofed := map[string]string{
 		workloadDeploymentNameAnnotation:   "billing-api",
-		workloadReplicaSetNameAnnotation:   "billing-api-5d8f9c",
-		workloadReplicaSetLegacyAnnotation: "billing-api-5d8f9c",
-		"example.com/kept":                 "yes",
+		workloadReplicaSetNameAnnotation:   replicaSet.Name,
+		workloadReplicaSetLegacyAnnotation: replicaSet.Name,
+		keptAnnotation:                     keptValue,
 	}
 
 	for _, tc := range []struct {
@@ -437,11 +438,11 @@ func TestReplicaAnnotationsComeFromOwners(t *testing.T) {
 		owners []metav1.OwnerReference
 		want   map[string]string
 	}{
-		{"unowned", nil, map[string]string{"example.com/kept": "yes"}},
-		{"a stale owner", ownedBy("WorkloadReplicaSet", replicaSet.Name, "other-uid"), map[string]string{"example.com/kept": "yes"}},
-		{"a missing owner", ownedBy("WorkloadReplicaSet", "gone", "gone-uid"), map[string]string{"example.com/kept": "yes"}},
+		{"unowned", nil, map[string]string{keptAnnotation: keptValue}},
+		{"a stale owner", ownedBy("WorkloadReplicaSet", replicaSet.Name, "other-uid"), map[string]string{keptAnnotation: keptValue}},
+		{"a missing owner", ownedBy("WorkloadReplicaSet", "gone", "gone-uid"), map[string]string{keptAnnotation: keptValue}},
 		{"a replica", ownedBy("WorkloadReplicaSet", replicaSet.Name, "rs-uid"), map[string]string{
-			"example.com/kept":               "yes",
+			keptAnnotation:                   keptValue,
 			workloadReplicaSetNameAnnotation: replicaSet.Name,
 			workloadDeploymentNameAnnotation: "billing-api",
 		}},
