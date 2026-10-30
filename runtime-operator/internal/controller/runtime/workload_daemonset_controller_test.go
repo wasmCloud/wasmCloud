@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -81,6 +82,7 @@ func newDaemonSetReconciler(t *testing.T, objs ...client.Object) *WorkloadDaemon
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
+		WithStatusSubresource(&runtimev1alpha1.WorkloadDaemonSet{}).
 		WithIndex(&runtimev1alpha1.Workload{}, workloadDaemonSetOwnerIndex,
 			func(obj client.Object) []string {
 				if ownerUID, ok := controllerUID(obj, daemonSetGvk); ok {
@@ -327,6 +329,21 @@ func TestDaemonSetSchedule_TerminatingOrphanHoldsItsSlot(t *testing.T) {
 	if byHost[dsHostA][0].Name != daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 1) {
 		t.Fatalf("expected the next slot used, got %s", byHost[dsHostA][0].Name)
 	}
+
+	// With nothing left to do, a stuck orphan costs no API read on later passes.
+	r.APIReader = failingReader{}
+	schedule(t, r, ds)
+}
+
+// failingReader rejects every read past the cache.
+type failingReader struct{}
+
+func (failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return errors.New("unexpected uncached read")
+}
+
+func (failingReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
+	return errors.New("unexpected uncached read")
 }
 
 // predecessorInstance is what a deleted DaemonSet of the same name leaves until
@@ -390,6 +407,7 @@ func TestDaemonSetSchedule_CollisionWithUnseenInstanceRetries(t *testing.T) {
 		name     string
 		existing *runtimev1alpha1.Workload
 	}{
+		{name: "orphan", existing: orphanedWorkload(name, dsHostA, hash)},
 		{name: "predecessor", existing: predecessorInstance(name, dsHostA, hash)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -400,6 +418,50 @@ func TestDaemonSetSchedule_CollisionWithUnseenInstanceRetries(t *testing.T) {
 				t.Fatalf("expected a no-op, got %v", err)
 			}
 			assertPerHost(t, workloadsByHost(t, r), map[string]int{})
+		})
+	}
+}
+
+// hiddenWorkloadsClient reads like a cache that hasn't seen any Workloads yet.
+type hiddenWorkloadsClient struct {
+	client.Client
+}
+
+func (c hiddenWorkloadsClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*runtimev1alpha1.WorkloadList); ok {
+		return nil
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+// A pass that stops to wait for the cache has to come back soon, not on the
+// next interval. Only the Schedule condition runs, so no other condition's
+// change can cause the requeue.
+func TestDaemonSetReconcile_RetriesRequeue(t *testing.T) {
+	const interval = time.Hour
+	for _, tc := range []struct {
+		name string
+		stub func(client.Client) client.Client
+	}{
+		{name: "create collides with an unseen orphan", stub: func(c client.Client) client.Client { return hiddenWorkloadsClient{Client: c} }},
+		{name: "adoption conflicts", stub: func(c client.Client) client.Client { return conflictingPatchClient{Client: c} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := testDaemonSet(1)
+			hash := ds.Spec.Template.Hash()
+			orphan := orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
+			r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
+			r.Client = tc.stub(r.Client)
+
+			reconciler := condition.NewConditionedReconciler(r.Client, r.Scheme, &runtimev1alpha1.WorkloadDaemonSet{}, interval)
+			reconciler.SetCondition(runtimev1alpha1.WorkloadDaemonSetConditionSchedule, r.reconcileSchedule)
+			result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ds)})
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if result.RequeueAfter >= interval {
+				t.Fatalf("expected an early requeue, got %s", result.RequeueAfter)
+			}
 		})
 	}
 }
@@ -482,9 +544,11 @@ func TestDaemonSetSchedule_DeletingDaemonSetLeavesOrphans(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		staleCached bool
+		terminating bool
 	}{
 		{name: "cached copy shows the delete"},
 		{name: "cached copy predates the delete", staleCached: true},
+		{name: "cached copy predates the delete, orphan terminating", staleCached: true, terminating: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ds := testDaemonSet(1)
@@ -493,6 +557,10 @@ func TestDaemonSetSchedule_DeletingDaemonSetLeavesOrphans(t *testing.T) {
 			ds.Finalizers = []string{"orphan"}
 			hash := ds.Spec.Template.Hash()
 			orphan := orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
+			if tc.terminating {
+				orphan.DeletionTimestamp = &now
+				orphan.Finalizers = []string{"example.com/hold"}
+			}
 			r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
 
 			seen := ds.DeepCopy()
@@ -585,27 +653,40 @@ func TestDaemonSetSchedule_DeletingDaemonSetStartsNothing(t *testing.T) {
 }
 
 // Without the DaemonSet's label a Workload isn't an orphan of it, so one that
-// happens to hold a slot's name is an error rather than taken over.
+// happens to hold a slot's name is an error rather than taken over. A retry
+// wouldn't help, since the label is how a later pass would find it.
 func TestDaemonSetSchedule_UnlabelledSlotHolderFails(t *testing.T) {
-	ds := testDaemonSet(1)
-	holder := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: testDaemonSetNamespace,
-			Name:      daemonSetWorkloadName(testDaemonSetName, dsHostA, ds.Spec.Template.Hash(), 0),
-		},
-		Spec: runtimev1alpha1.WorkloadSpec{HostID: dsHostA},
-	}
-	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), holder)
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+	}{
+		{name: "no annotation"},
+		{name: "DaemonSet annotation", annotations: map[string]string{workloadDaemonSetNameAnnotation: testDaemonSetName}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := testDaemonSet(1)
+			holder := &runtimev1alpha1.Workload{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:   testDaemonSetNamespace,
+					Name:        daemonSetWorkloadName(testDaemonSetName, dsHostA, ds.Spec.Template.Hash(), 0),
+					Annotations: tc.annotations,
+				},
+				Spec: runtimev1alpha1.WorkloadSpec{HostID: dsHostA},
+			}
+			r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), holder)
 
-	if err := r.reconcileSchedule(context.Background(), ds); err == nil {
-		t.Fatal("expected an error for a slot held by an unlabelled Workload")
-	}
-	got := &runtimev1alpha1.Workload{}
-	if err := r.Get(context.Background(), client.ObjectKeyFromObject(holder), got); err != nil {
-		t.Fatalf("get holder: %v", err)
-	}
-	if metav1.GetControllerOf(got) != nil {
-		t.Fatal("expected the unlabelled Workload left alone")
+			err := r.reconcileSchedule(context.Background(), ds)
+			if err == nil || errors.Is(err, condition.ErrNoop()) {
+				t.Fatalf("expected an error for a slot held by an unlabelled Workload, got %v", err)
+			}
+			got := &runtimev1alpha1.Workload{}
+			if err := r.Get(context.Background(), client.ObjectKeyFromObject(holder), got); err != nil {
+				t.Fatalf("get holder: %v", err)
+			}
+			if metav1.GetControllerOf(got) != nil {
+				t.Fatal("expected the unlabelled Workload left alone")
+			}
+		})
 	}
 }
 

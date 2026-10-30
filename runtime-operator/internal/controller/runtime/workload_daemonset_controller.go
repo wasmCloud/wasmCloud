@@ -214,8 +214,16 @@ func (r *WorkloadDaemonSetReconciler) syncHosts(
 		}
 	}
 
+	confirmed := false
 	for _, hostID := range desired {
 		host := hosts[hostID]
+
+		if !confirmed && len(host.current) < int(perHost) {
+			if err := r.confirmNotDeleted(ctx, daemonSet); err != nil {
+				return err
+			}
+			confirmed = true
+		}
 
 		if len(host.outdated) > 0 {
 			switch {
@@ -452,8 +460,8 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 
 // existingInstance resolves a create that hit an existing name. It reads past
 // the cache, which may not hold this DaemonSet's own create yet, or an instance
-// the next pass would leave for the garbage collector. Anything else this
-// DaemonSet doesn't control is holding the slot, which is an error.
+// the next pass would adopt or leave for the garbage collector. Anything else
+// this DaemonSet doesn't control is holding the slot, which is an error.
 func (r *WorkloadDaemonSetReconciler) existingInstance(
 	ctx context.Context,
 	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
@@ -465,9 +473,9 @@ func (r *WorkloadDaemonSetReconciler) existingInstance(
 	}
 	owner := metav1.GetControllerOf(existing)
 	switch {
-	case owner != nil && owner.UID == daemonSet.UID:
+	case metav1.IsControlledBy(existing, daemonSet):
 		return existing, nil
-	case owner != nil && isInstanceOf(existing, daemonSet) && isPredecessor(owner, daemonSet):
+	case isInstanceOf(existing, daemonSet) && (owner == nil || isPredecessor(owner, daemonSet)):
 		condition.ForceRequeue(ctx)
 		return nil, condition.ErrNoop()
 	}
@@ -491,8 +499,8 @@ func isPredecessor(owner *metav1.OwnerReference, daemonSet *runtimev1alpha1.Work
 // adoptOrphans takes over the Workloads this DaemonSet started that have no
 // controller, such as those --cascade=orphan left behind, so they roll, scale
 // and leave like any other instance. It returns them for this pass, then the
-// names of a predecessor's instances, which are out of its hands but still in
-// use.
+// names that are out of its hands but still in use: orphans being deleted and
+// the instances of a predecessor.
 func (r *WorkloadDaemonSetReconciler) adoptOrphans(
 	ctx context.Context,
 	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
@@ -513,9 +521,9 @@ func (r *WorkloadDaemonSetReconciler) adoptOrphans(
 		}
 		owner := metav1.GetControllerOf(workload)
 		switch {
-		case owner == nil:
+		case owner == nil && workload.DeletionTimestamp.IsZero():
 			orphans = append(orphans, *workload)
-		case isPredecessor(owner, daemonSet):
+		case owner == nil || isPredecessor(owner, daemonSet):
 			held = append(held, workload.Name)
 		}
 	}
@@ -523,40 +531,50 @@ func (r *WorkloadDaemonSetReconciler) adoptOrphans(
 		return nil, held, nil
 	}
 
-	// Deleting a DaemonSet is what orphans its Workloads, and the cached copy
-	// may not show that delete yet.
-	latest := &runtimev1alpha1.WorkloadDaemonSet{}
-	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(daemonSet), latest); client.IgnoreNotFound(err) != nil {
+	if err := r.confirmNotDeleted(ctx, daemonSet); err != nil {
 		return nil, nil, err
-	}
-	if latest.UID != daemonSet.UID || !latest.DeletionTimestamp.IsZero() {
-		return nil, nil, condition.ErrNoop()
 	}
 
 	adopted := orphans[:0]
 	for i := range orphans {
 		workload := &orphans[i]
-		if workload.DeletionTimestamp.IsZero() {
-			base := workload.DeepCopy()
-			if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
-				return nil, nil, err
+		base := workload.DeepCopy()
+		if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
+			return nil, nil, err
+		}
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		if err := r.Patch(ctx, workload, patch); err != nil {
+			switch {
+			case apierrors.IsNotFound(err):
+				continue
+			case apierrors.IsConflict(err):
+				// The cached copy is behind. Decide again once it catches up.
+				condition.ForceRequeue(ctx)
+				return nil, nil, condition.ErrNoop()
 			}
-			patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
-			if err := r.Patch(ctx, workload, patch); err != nil {
-				switch {
-				case apierrors.IsNotFound(err):
-					continue
-				case apierrors.IsConflict(err):
-					// The cached copy is behind. Decide again once it catches up.
-					condition.ForceRequeue(ctx)
-					return nil, nil, condition.ErrNoop()
-				}
-				return nil, nil, err
-			}
+			return nil, nil, err
 		}
 		adopted = append(adopted, *workload)
 	}
 	return adopted, held, nil
+}
+
+// confirmNotDeleted stops the pass if this DaemonSet is deleted or on its way.
+// The cached copy may not show a delete yet, and a delete is what orphans its
+// Workloads and removes its instances, so it reads past the cache before
+// anything is adopted or started.
+func (r *WorkloadDaemonSetReconciler) confirmNotDeleted(
+	ctx context.Context,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+) error {
+	latest := &runtimev1alpha1.WorkloadDaemonSet{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(daemonSet), latest); client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if latest.UID != daemonSet.UID || !latest.DeletionTimestamp.IsZero() {
+		return condition.ErrNoop()
+	}
+	return nil
 }
 
 func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads []*runtimev1alpha1.Workload) error {
