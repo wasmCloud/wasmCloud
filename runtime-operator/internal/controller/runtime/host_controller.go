@@ -387,7 +387,7 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 
 	// Patch only LastSeen on the status subresource. The measured system/OS
 	// fields are written by reconcileReporting and must not be touched here.
-	statusPatch, err := hostStatusPatch(&existing.Status)
+	statusPatch, err := hostStatusPatch()
 	if err != nil {
 		log.Error(err, "failed to build Host status patch", "host", req.FriendlyName, "hostID", req.Id)
 		return
@@ -409,8 +409,7 @@ func hostSpecChanged(existing, next *runtimev1alpha1.Host) bool {
 
 // hostStatusPatch builds a JSON merge patch for the Host status subresource
 // that always refreshes LastSeen.
-func hostStatusPatch(status *runtimev1alpha1.HostStatus) ([]byte, error) {
+func hostStatusPatch() ([]byte, error) {
 	s := map[string]any{"lastSeen": metav1.Now()}
-
 	return json.Marshal(map[string]any{"status": s})
 }

@@ -50,9 +50,9 @@ var hostStatusMeasuredKeys = []string{
 	"systemCPUUsage", "systemMemoryTotal", "systemMemoryFree",
 }
 
-func patchStatusKeys(t *testing.T, status *runtimev1alpha1.HostStatus) map[string]json.RawMessage {
+func patchStatusKeys(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
-	raw, err := hostStatusPatch(status)
+	raw, err := hostStatusPatch()
 	if err != nil {
 		t.Fatalf("hostStatusPatch: %v", err)
 	}
@@ -65,48 +65,18 @@ func patchStatusKeys(t *testing.T, status *runtimev1alpha1.HostStatus) map[strin
 	return p.Status
 }
 
-// TestHostStatusPatch_EmptyStatusInjectsRequiredKeys ensures an empty status
-// produces a patch with only lastSeen, no placeholder values.
-func TestHostStatusPatch_EmptyStatusInjectsRequiredKeys(t *testing.T) {
-	keys := patchStatusKeys(t, &runtimev1alpha1.HostStatus{})
+// TestHostStatusPatch_OnlyLastSeen ensures the heartbeat patch carries only
+// lastSeen, so it never clobbers fields owned by reconcileReporting or the
+// ConditionedReconciler.
+func TestHostStatusPatch_OnlyLastSeen(t *testing.T) {
+	keys := patchStatusKeys(t)
 
 	if _, ok := keys["lastSeen"]; !ok {
 		t.Errorf("lastSeen must always be present in the patch")
 	}
-	for _, k := range hostStatusMeasuredKeys {
-		if _, ok := keys[k]; ok {
-			t.Errorf("field %q must not be set on an empty status", k)
-		}
-	}
-	// Conditions and the optional counts must never be in this patch — they are
-	// owned by the ConditionedReconciler / reconcileReporting respectively.
-	for _, k := range []string{"conditions", "componentCount", "workloadCount"} {
+	for _, k := range append(hostStatusMeasuredKeys, "conditions", "componentCount", "workloadCount") {
 		if _, ok := keys[k]; ok {
 			t.Errorf("patch must not include %q", k)
-		}
-	}
-}
-
-// TestHostStatusPatch_ReportedFieldsPreserved ensures already-reported values
-// are omitted from the patch so the heartbeat handler never clobbers real data
-// written by reconcileReporting — only lastSeen is refreshed.
-func TestHostStatusPatch_ReportedFieldsPreserved(t *testing.T) {
-	keys := patchStatusKeys(t, &runtimev1alpha1.HostStatus{
-		Version:           testVersion,
-		OSName:            testOSName,
-		OSArch:            testOSArch,
-		OSKernel:          testOSKernel,
-		SystemCPUUsage:    testCPUUsage,
-		SystemMemoryTotal: 16000,
-		SystemMemoryFree:  8000,
-	})
-
-	if _, ok := keys["lastSeen"]; !ok {
-		t.Errorf("lastSeen must always be present in the patch")
-	}
-	for _, k := range hostStatusMeasuredKeys {
-		if _, ok := keys[k]; ok {
-			t.Errorf("reported field %q must be omitted to avoid clobbering its real value", k)
 		}
 	}
 }
@@ -173,7 +143,7 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	// handler patches a host that reconcileReporting has not polled yet. The
 	// seven measured fields are optional now, so the API server must accept
 	// this patch leaving them unset.
-	patch, err := hostStatusPatch(&host.Status)
+	patch, err := hostStatusPatch()
 	if err != nil {
 		t.Fatalf("hostStatusPatch: %v", err)
 	}
@@ -199,7 +169,7 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	if err := c.Status().Update(ctx, got); err != nil {
 		t.Fatalf("seed reported status: %v", err)
 	}
-	patch2, err := hostStatusPatch(&got.Status)
+	patch2, err := hostStatusPatch()
 	if err != nil {
 		t.Fatalf("hostStatusPatch (reported): %v", err)
 	}
