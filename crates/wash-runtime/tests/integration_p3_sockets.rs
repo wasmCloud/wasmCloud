@@ -12,12 +12,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{sync::oneshot, time::timeout};
 
 use wash_runtime::{
-    engine::Engine,
+    engine::{Engine, workload::WorkloadItem},
     host::{HostApi, HostBuilder},
-    types::{Component, Service, Workload, WorkloadStartRequest},
+    plugin::{HostPlugin, WitInterfaces},
+    types::{Component, Service, Workload, WorkloadStartRequest, WorkloadStopRequest},
+    wit::WitWorld,
 };
 
 const SOCKET_TEST_P3_WASM: &[u8] = include_bytes!("wasm/socket_test_p3.wasm");
@@ -28,16 +35,48 @@ fn engine_with_p3() -> Engine {
         .expect("failed to build engine with wasip3")
 }
 
-/// Test P3 TCP loopback: bind, listen, connect, send, receive.
-///
-/// The socket-test-p3 component creates a TCP listener on loopback,
-/// connects a client, sends data, and verifies receipt on the server side.
-/// This exercises ListenStreamProducer, ReceiveStreamProducer, and
-/// SendStreamConsumer in host_tcp_p3.rs.
+struct Completion(Arc<Mutex<Option<oneshot::Sender<()>>>>);
+
+#[async_trait::async_trait]
+impl HostPlugin for Completion {
+    fn id(&self) -> &'static str {
+        "socket-completion"
+    }
+
+    fn world(&self) -> WitWorld {
+        WitWorld {
+            imports: ["wasmcloud:test-p3/completion@0.1.0".into()].into(),
+            ..Default::default()
+        }
+    }
+
+    async fn on_workload_item_bind<'a>(
+        &self,
+        item: &mut WorkloadItem<'a>,
+        _: WitInterfaces<'_>,
+    ) -> Result<()> {
+        let done = self.0.clone();
+        item.linker()
+            .instance("wasmcloud:test-p3/completion@0.1.0")?
+            .func_wrap("done", move |_, (): ()| {
+                if let Some(tx) = done.lock().unwrap().take() {
+                    let _ = tx.send(());
+                }
+                Ok(())
+            })?;
+        Ok(())
+    }
+}
+
+/// The guest reports completion only after its TCP and UDP assertions pass.
 #[tokio::test]
-async fn test_p3_tcp_loopback() -> Result<()> {
+async fn test_p3_tcp_and_udp_loopback() -> Result<()> {
     let engine = engine_with_p3();
-    let host = HostBuilder::new().with_engine(engine).build()?;
+    let (done_tx, done_rx) = oneshot::channel();
+    let host = HostBuilder::new()
+        .with_engine(engine)
+        .with_plugin(Arc::new(Completion(Arc::new(Mutex::new(Some(done_tx))))))?
+        .build()?;
     let host = host.start().await?;
 
     let req = WorkloadStartRequest {
@@ -53,18 +92,24 @@ async fn test_p3_tcp_loopback() -> Result<()> {
                 max_restarts: 0,
             }),
             components: vec![],
-            host_interfaces: vec![],
+            host_interfaces: vec!["wasmcloud:test-p3/completion@0.1.0".into()],
             volumes: vec![],
         },
     };
 
+    let workload_id = req.workload_id.clone();
     host.workload_start(req)
         .await
-        .context("P3 socket test service should start and complete")?;
+        .context("P3 socket test service should start")?;
 
-    // The service runs both TCP and UDP tests, then exits.
-    // Give it time to complete.
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    // The plugin holds the sender for the host's lifetime, so a guest that traps
+    // before `done` surfaces as this timeout; the trap itself is in the log.
+    timeout(Duration::from_secs(30), done_rx)
+        .await
+        .context("P3 socket guest did not report passing TCP/UDP assertions")?
+        .expect("the completion plugin outlives the guest");
+    host.workload_stop(WorkloadStopRequest { workload_id })
+        .await?;
 
     Ok(())
 }

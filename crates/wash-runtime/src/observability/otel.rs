@@ -54,7 +54,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use opentelemetry::{Key, KeyValue, trace::TracerProvider as _};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{WithHttpConfig as _, WithTonicConfig as _};
+use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _, WithTonicConfig as _};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
@@ -404,9 +404,14 @@ fn signal_or_shared(signal_var: &str, shared_var: &str) -> Option<String> {
 }
 
 /// What `SdkProvidedResourceDetector` emits for `service.name` when nothing
-/// named the service. The Rust SDK uses the bare literal, not the
-/// specification's `unknown_service:<executable>`.
+/// named the service: `unknown_service:<executable>`, or the bare literal when
+/// the executable name is unavailable.
 const UNKNOWN_SERVICE: &str = "unknown_service";
+
+fn is_unknown_service(name: &str) -> bool {
+    name.strip_prefix(UNKNOWN_SERVICE)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+}
 
 /// This runtime's own `service.name`, or `None` when the environment already
 /// named one.
@@ -418,7 +423,7 @@ const UNKNOWN_SERVICE: &str = "unknown_service";
 fn default_service_name(detected: &Resource) -> Option<KeyValue> {
     let named = detected
         .get(&Key::from_static_str(resource::SERVICE_NAME))
-        .is_some_and(|value| value.as_str() != UNKNOWN_SERVICE);
+        .is_some_and(|value| !is_unknown_service(&value.as_str()));
     (!named).then(|| KeyValue::new(resource::SERVICE_NAME.to_string(), env!("CARGO_PKG_NAME")))
 }
 
@@ -1024,6 +1029,7 @@ pub(crate) fn build_log_exporter() -> anyhow::Result<opentelemetry_otlp::LogExpo
             .build()?,
         Protocol::HttpBinary => builder
             .with_http()
+            .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
             .with_http_client(http_client(resolve_timeout(
                 opentelemetry_otlp::OTEL_EXPORTER_OTLP_LOGS_TIMEOUT,
             ))?)
@@ -1041,6 +1047,7 @@ pub(crate) fn build_span_exporter() -> anyhow::Result<opentelemetry_otlp::SpanEx
                 .build()?,
             Protocol::HttpBinary => builder
                 .with_http()
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
                 .with_http_client(http_client(resolve_timeout(
                     opentelemetry_otlp::OTEL_EXPORTER_OTLP_TRACES_TIMEOUT,
                 ))?)
@@ -1059,6 +1066,7 @@ pub(crate) fn build_metric_exporter() -> anyhow::Result<opentelemetry_otlp::Metr
                 .build()?,
             Protocol::HttpBinary => builder
                 .with_http()
+                .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
                 .with_http_client(http_client(resolve_timeout(
                     opentelemetry_otlp::OTEL_EXPORTER_OTLP_METRICS_TIMEOUT,
                 ))?)
@@ -1220,7 +1228,9 @@ mod tests {
             default_service_name(&named(UNKNOWN_SERVICE)).map(|kv| kv.value.as_str().to_string()),
             Some(env!("CARGO_PKG_NAME").to_string()),
         );
+        assert!(default_service_name(&named("unknown_service:wash")).is_some());
         assert!(default_service_name(&named("checkout")).is_none());
+        assert!(default_service_name(&named("unknown_services")).is_none());
         // Nothing detected at all is still nobody naming it.
         assert!(default_service_name(&Resource::builder_empty().build()).is_some());
     }
@@ -1411,6 +1421,36 @@ mod tests {
                 build_metric_exporter().expect("metric exporter over http");
             },
         );
+    }
+
+    /// The SDK must use our normalized selection instead of rereading the raw
+    /// environment and falling back to the shared gRPC protocol.
+    #[tokio::test]
+    async fn http_exporters_honor_trimmed_signal_protocols() -> anyhow::Result<()> {
+        crate::env_guard::with_vars(
+            [
+                ("OTEL_EXPORTER_OTLP_PROTOCOL", Some("grpc")),
+                (
+                    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+                    Some(" http/protobuf "),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+                    Some("\thttp/protobuf\t"),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+                    Some("http/protobuf\n"),
+                ),
+                ("OTEL_EXPORTER_OTLP_ENDPOINT", Some("http://localhost:4318")),
+            ],
+            || {
+                build_span_exporter().context("span exporter over http")?;
+                build_log_exporter().context("log exporter over http")?;
+                build_metric_exporter().context("metric exporter over http")?;
+                Ok(())
+            },
+        )
     }
 
     /// An `http/protobuf` export reaches a collector.

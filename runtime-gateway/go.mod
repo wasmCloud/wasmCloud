@@ -7,7 +7,7 @@ toolchain go1.27.2
 tool github.com/air-verse/air
 
 require (
-	go.wasmcloud.dev/runtime-operator/v2 v2.10.3
+	go.wasmcloud.dev/runtime-operator/v2 v2.11.0
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
 	sigs.k8s.io/controller-runtime v0.25.2

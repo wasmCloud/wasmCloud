@@ -10,6 +10,8 @@ on:
     paths:
       - '.github/workflows/**'
       - '.github/actions/**'
+      - '.github/scripts/release-*'
+      - '.github/scripts/lib/release-fakes.mjs'
 
 permissions: {}
 
@@ -33,6 +35,8 @@ jobs:
             relevant:
               - '.github/workflows/**'
               - '.github/actions/**'
+              - '.github/scripts/release-*'
+              - '.github/scripts/lib/release-fakes.mjs'
 
   zizmor:
     needs:
@@ -59,10 +63,25 @@ jobs:
           # referenced action's tag still resolves to its pinned SHA).
           GH_TOKEN: ${{ github.token }}
 
+  release-scripts:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test release promotion and SBOM checks
+        run: node --test .github/scripts/release-*.test.mjs
+
   gate:
     name: gate-lint-workflows
     needs:
       - zizmor
+      - release-scripts
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:

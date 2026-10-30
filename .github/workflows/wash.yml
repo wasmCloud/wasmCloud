@@ -58,6 +58,8 @@ jobs:
               - '.github/actions/setup-rust/**'
               - '.github/tool-versions.env'
               - '.github/scripts/wasmtime-features.mjs'
+              - '.github/actions/setup-syft/**'
+              - '.github/scripts/release-sboms.mjs'
               - '.cargo/**'
               - 'xtask/**'
               - 'scripts/bench/run-bench.sh'
@@ -76,6 +78,9 @@ jobs:
               - 'deploy/kind/kind-config.yaml'
             workflow:
               - '.github/workflows/wash.yml'
+              # canary-binaries runs the binary inventory check with these.
+              - '.github/actions/setup-syft/**'
+              - '.github/scripts/release-sboms.mjs'
 
   check:
     needs:
@@ -188,7 +193,7 @@ jobs:
           rust-toolchain: nightly
           rust-components: rustfmt
       - name: Install cargo-machete
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -930,44 +935,44 @@ jobs:
             # Fedora, Arch, RHEL, etc. are glibc-linked, so this binary can
             # dlopen them reliably (unlike the musl build).
             buildTarget: x86_64-unknown-linux-gnu.2.17
-            buildCommand: cargo zigbuild
+            buildCommand: cargo auditable zigbuild
             artifact: wash-x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             bin: wash
           - target: aarch64-unknown-linux-gnu
             buildTarget: aarch64-unknown-linux-gnu.2.17
-            buildCommand: cargo zigbuild
+            buildCommand: cargo auditable zigbuild
             artifact: wash-aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             bin: wash
           - target: s390x-unknown-linux-gnu
             buildTarget: s390x-unknown-linux-gnu.2.17
-            buildCommand: cargo zigbuild
+            buildCommand: cargo auditable zigbuild
             artifact: wash-s390x-unknown-linux-gnu
             runner: ubuntu-latest
             bin: wash
           - target: x86_64-unknown-linux-musl
-            buildCommand: cargo zigbuild
+            buildCommand: cargo auditable zigbuild
             artifact: wash-x86_64-unknown-linux-musl
             runner: ubuntu-latest
             bin: wash
           - target: aarch64-unknown-linux-musl
-            buildCommand: cargo zigbuild
+            buildCommand: cargo auditable zigbuild
             artifact: wash-aarch64-unknown-linux-musl
             runner: ubuntu-latest
             bin: wash
           - target: x86_64-apple-darwin
-            buildCommand: cargo build
+            buildCommand: cargo auditable build
             artifact: wash-x86_64-apple-darwin
             runner: macos-15-intel
             bin: wash
           - target: aarch64-apple-darwin
-            buildCommand: cargo build
+            buildCommand: cargo auditable build
             artifact: wash-aarch64-apple-darwin
             runner: macos-latest
             bin: wash
           - target: x86_64-pc-windows-msvc
-            buildCommand: cargo build
+            buildCommand: cargo auditable build
             artifact: wash-x86_64-pc-windows-msvc
             runner: windows-latest
             bin: wash.exe
@@ -984,6 +989,16 @@ jobs:
           # Only needed for ubuntu
           install-zigbuild: ${{ matrix.runner == 'ubuntu-latest' }}
           rust-targets: "${{ matrix.target }}"
+
+      - name: Install cargo-auditable
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-auditable@0.7.7
+
+      - name: Install pinned SBOM generator
+        uses: $/.github/actions/setup-syft
 
       - name: Set SOURCE_DATE_EPOCH from commit timestamp
         # Pin embedded timestamps in the binary to the merge commit's author
@@ -1005,6 +1020,10 @@ jobs:
           # image, not shipped in a release build).
           ${{ matrix.buildCommand }} --release --target ${{ matrix.buildTarget || matrix.target }} -p wash
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ${{ matrix.artifact }}
+
+      # release-tag.yml refuses binaries without embedded dependency metadata.
+      - name: Check embedded dependency inventory
+        run: node .github/scripts/release-sboms.mjs check-binary ${{ matrix.artifact }}
 
       - name: Create Windows zip archive
         if: runner.os == 'Windows'

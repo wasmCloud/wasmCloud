@@ -84,6 +84,11 @@ fn build_pool_from_url(url: &str) -> anyhow::Result<Pool> {
 }
 
 impl PgId {
+    #[cfg(test)]
+    pub(super) fn pool(&self) -> &Pool {
+        &self.pool
+    }
+
     /// Acquire a pooled connection for this named import. `pub(super)` so the
     /// async (`0.2.0`) binding can stream from the same per-credential pool.
     pub(super) async fn client(&self) -> Result<deadpool_postgres::Client, String> {
