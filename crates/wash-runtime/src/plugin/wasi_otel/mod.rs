@@ -94,20 +94,43 @@ struct CumulativeSeries {
 /// picks the names and attributes, so a guest could otherwise grow this forever.
 const MAX_CUMULATIVE_SERIES: usize = 4_096;
 
+/// How many bytes of series names and attributes one guest instance can have
+/// the host remember. The series limit alone leaves each key's size unbounded.
+const MAX_CUMULATIVE_BYTES: usize = 1 << 20;
+
+impl CumulativeSeries {
+    fn bytes(&self) -> usize {
+        self.scope.len()
+            + self.name.len()
+            + self
+                .attributes
+                .iter()
+                .map(|(key, value)| key.len() + value.len())
+                .sum::<usize>()
+    }
+}
+
 /// The last total each series reported, kept per guest instance on its store,
 /// so the totals last exactly as long as the instance reporting them.
 #[derive(Debug, Default)]
 pub(crate) struct CumulativeTotals {
     series: BTreeMap<CumulativeSeries, ((u64, u32), f64)>,
+    bytes: usize,
     warned_full: bool,
 }
 
 impl CumulativeTotals {
     /// What to add to the host's instrument for `counter`, whose SDK treats
     /// every `add` as an increment: a delta as it is, a total as its growth.
-    /// `None` for a new series past the limit: it has no remembered total, so
-    /// adding its total on every export would count it repeatedly.
+    /// An up-down total always adds its change, so a restarted series replaces
+    /// its old level instead of stacking on it.
+    /// `None` for a non-finite value, or a new series past the limits: it has
+    /// no remembered total, so adding its total on every export would count it
+    /// repeatedly.
     fn increment(&mut self, counter: &convert::CounterValue) -> Option<f64> {
+        if !counter.value.is_finite() {
+            return None;
+        }
         let Some(start) = counter.series_start else {
             return Some(counter.value);
         };
@@ -118,27 +141,31 @@ impl CumulativeTotals {
             name: counter.name.clone(),
             attributes,
         };
-        let remembered = self.series.len();
+        let bytes = series.bytes();
+        let fits = self.series.len() < MAX_CUMULATIVE_SERIES
+            && self.bytes.saturating_add(bytes) <= MAX_CUMULATIVE_BYTES;
         match self.series.entry(series) {
             Entry::Occupied(mut last) => {
                 let (last_start, last_total) = last.insert((start, counter.value));
                 let growth = counter.value - last_total;
-                if last_start != start || (counter.is_monotonic && growth < 0.0) {
+                if counter.is_monotonic && (last_start != start || growth < 0.0) {
                     Some(counter.value)
                 } else {
                     Some(growth)
                 }
             }
-            Entry::Vacant(slot) if remembered < MAX_CUMULATIVE_SERIES => {
+            Entry::Vacant(slot) if fits => {
                 slot.insert((start, counter.value));
+                self.bytes += bytes;
                 Some(counter.value)
             }
             Entry::Vacant(slot) => {
                 if !self.warned_full {
                     self.warned_full = true;
                     tracing::warn!(
-                        metric = %slot.key().name,
-                        limit = MAX_CUMULATIVE_SERIES,
+                        metric = %slot.key().name.chars().take(128).collect::<String>(),
+                        series_limit = MAX_CUMULATIVE_SERIES,
+                        bytes_limit = MAX_CUMULATIVE_BYTES,
                         "a guest instance reported too many cumulative metric series; dropping new ones"
                     );
                 }

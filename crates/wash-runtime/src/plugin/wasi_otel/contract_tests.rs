@@ -591,16 +591,18 @@ async fn instances_sharing_a_start_time_count_separately() {
     assert_eq!(totals, [(3.0, 1.0), (5.0, 2.0), (6.0, 2.0)]);
 }
 
+/// A restarted counter adds its new total; a restarted up-down counter
+/// replaces its old level rather than stacking on it.
 #[tokio::test]
 async fn a_new_start_time_begins_a_new_total() {
     use m::Temporality::Cumulative;
     let totals = totals_after(vec![
-        sums(Cumulative, 1, 3, 1),
+        sums(Cumulative, 1, 3, 3),
         sums(Cumulative, 2, 1, 1),
-        sums(Cumulative, 2, 2, 1),
+        sums(Cumulative, 2, 2, 2),
     ])
     .await;
-    assert_eq!(totals, [(3.0, 1.0), (4.0, 2.0), (5.0, 2.0)]);
+    assert_eq!(totals, [(3.0, 3.0), (4.0, 1.0), (5.0, 2.0)]);
 }
 
 #[tokio::test]
@@ -650,4 +652,39 @@ fn an_instance_stops_tracking_new_series_at_the_limit() {
     assert_eq!(totals.increment(&counter("late".into(), 1.0)), None);
     assert_eq!(totals.increment(&counter("late".into(), 2.0)), None);
     assert_eq!(totals.increment(&counter("m0".into(), 3.0)), Some(2.0));
+}
+
+#[test]
+fn an_instance_stops_tracking_new_series_past_the_byte_limit() {
+    let counter = |name: String, value| convert::CounterValue {
+        scope: String::new(),
+        name,
+        value,
+        is_monotonic: true,
+        attributes: vec![],
+        series_start: Some((1, 0)),
+    };
+    let mut totals = CumulativeTotals::default();
+    let big = |tag: char| tag.to_string().repeat(MAX_CUMULATIVE_BYTES / 2);
+    assert_eq!(totals.increment(&counter(big('a'), 1.0)), Some(1.0));
+    assert_eq!(totals.increment(&counter(big('b'), 1.0)), Some(1.0));
+    assert_eq!(totals.increment(&counter(big('c'), 1.0)), None);
+    assert_eq!(totals.increment(&counter(big('a'), 4.0)), Some(3.0));
+}
+
+#[test]
+fn non_finite_values_are_dropped_and_leave_the_total_intact() {
+    let counter = |value| convert::CounterValue {
+        scope: "scope".into(),
+        name: "requests".into(),
+        value,
+        is_monotonic: true,
+        attributes: vec![],
+        series_start: Some((1, 0)),
+    };
+    let mut totals = CumulativeTotals::default();
+    assert_eq!(totals.increment(&counter(2.0)), Some(2.0));
+    assert_eq!(totals.increment(&counter(f64::NAN)), None);
+    assert_eq!(totals.increment(&counter(f64::INFINITY)), None);
+    assert_eq!(totals.increment(&counter(5.0)), Some(3.0));
 }
