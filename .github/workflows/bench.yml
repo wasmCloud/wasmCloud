@@ -15,6 +15,8 @@ on:
           - wasmtime_serve
           - gungraun_plugin
           - scale_density
+          # scale_density with the settings in BENCH_VARIANTS below.
+          - max_scale
       ref:
         description: "git ref to bench (branch, tag, sha, or #PR; default = the workflow ref)"
         type: string
@@ -37,7 +39,8 @@ permissions: {}
 
 jobs:
   # Compute the matrix shape from the trigger:
-  #   - workflow_dispatch: a one-element matrix (just inputs.bench)
+  #   - workflow_dispatch: a one-element matrix (just inputs.bench, or the
+  #                        bench and environment a BENCH_VARIANTS name stands for)
   #   - release:           a matrix of $RELEASE_BENCHES (the reference
   #                        subset we track on the releases timeline)
   # The dispatch path keeps the one-bench UX so a maintainer can compare
@@ -51,7 +54,8 @@ jobs:
     permissions:
       contents: read
     outputs:
-      benches: ${{ steps.set.outputs.benches }}
+      # One entry per bench job: {name, bench, env, publish}.
+      runs: ${{ steps.set.outputs.runs }}
       # `ref` labels each data row; the matrix checkout resolves the commit.
       # Pull-request labels use `pull/123`, while checkout uses the full ref.
       ref: ${{ steps.set.outputs.ref }}
@@ -62,6 +66,22 @@ jobs:
       # and don't shift with our changes — run them on demand via
       # workflow_dispatch when wasmtime is upgraded.
       RELEASE_BENCHES: '["http_invoke","service_http","gungraun"]'
+      # Named runs of an existing bench with environment variables preset,
+      # for settings a bench reads from its environment:
+      #
+      # - `bench` is the bench that runs, `env` what it runs with.
+      # - Dispatch-only: never in the release subset.
+      # - Never published. On a ref whose bench ignores the variables, the
+      #   rows would be indistinguishable from the bench's own series.
+      #
+      # max_scale: each guest memory's reservation and guard shrunk, past
+      # the ~16,000 warm instances the address space holds at wasmtime's
+      # 4 GiB + 32 MiB (WASH_SCALE_MEMORY_RESERVATION and
+      # WASH_SCALE_MEMORY_GUARD; a ref without them runs plain scale_density).
+      BENCH_VARIANTS: >-
+        {"max_scale": {"bench": "scale_density",
+                       "env": {"WASH_SCALE_MEMORY_RESERVATION": "256MiB",
+                               "WASH_SCALE_MEMORY_GUARD": "64KiB"}}}
     steps:
       - id: set
         env:
@@ -73,11 +93,18 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = "release" ]; then
-            benches="${RELEASE_BENCHES}"
+            runs="$(jq -cn --argjson benches "$RELEASE_BENCHES" \
+              '[$benches[] | {name: ., bench: ., env: {}, publish: true}]')"
             ref="${RELEASE_TAG}"
             checkout_ref="${RELEASE_TAG}"
           else
-            benches="[\"${INPUT_BENCH}\"]"
+            runs="$(jq -cn --arg name "$INPUT_BENCH" --argjson variants "$BENCH_VARIANTS" '
+              if $variants[$name] then
+                [{name: $name, bench: $variants[$name].bench,
+                  env: $variants[$name].env, publish: false}]
+              else
+                [{name: $name, bench: $name, env: {}, publish: true}]
+              end')"
             ref="${INPUT_REF:-${DEFAULT_REF}}"
             # Normalize to the short name (main, v2.5.2) so it matches
             # GITHUB_REF_NAME's style and, when it's a tag, passes the
@@ -105,7 +132,7 @@ jobs:
             esac
           fi
           {
-            echo "benches=${benches}"
+            echo "runs=${runs}"
             echo "ref=${ref}"
             echo "checkout_ref=${checkout_ref}"
           } >> "$GITHUB_OUTPUT"
@@ -124,13 +151,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bench: ${{ fromJSON(needs.matrix.outputs.benches) }}
+        run: ${{ fromJSON(needs.matrix.outputs.runs) }}
     uses: $/.github/workflows/bench-run.yml
     permissions:
       contents: read
       id-token: write
     with:
-      bench: ${{ matrix.bench }}
+      bench: ${{ matrix.run.bench }}
+      name: ${{ matrix.run.name }}
+      env: ${{ toJSON(matrix.run.env) }}
+      publish: ${{ matrix.run.publish }}
       ref: ${{ needs.matrix.outputs.ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}
       artifact_id: ${{ format('{0}', strategy.job-index) }}

@@ -1021,12 +1021,21 @@ impl ResolvedWorkload {
 
     /// Execute a service using P3 (wasi:cli@0.3) CommandPre.
     async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
-        let service = self
-            .service
-            .as_ref()
-            .map(|s| (s.pre_instantiate_p3(), s.max_restarts));
+        let service = match self.service.as_ref() {
+            Some(s) => Some((
+                anyhow::Context::with_context(s.pre_instantiate_p3(), || {
+                    format!(
+                        "failed to pre-instantiate the P3 service of workload '{}/{}'",
+                        s.metadata.workload_namespace(),
+                        s.metadata.workload_name()
+                    )
+                })?,
+                s.max_restarts,
+            )),
+            None => None,
+        };
 
-        if let Some((Ok(pre), mut max_restarts)) = service {
+        if let Some((pre, mut max_restarts)) = service {
             self.resolve_service_volume_mounts().await?;
             // Capture the store recipe so each restarted incarnation gets a
             // FRESH store: a trapped store cannot re-enter any component
@@ -1797,7 +1806,7 @@ impl ResolvedWorkload {
                                         engine: plugin_engine.clone(),
                                         stream_payloads: self.stream_payloads.clone(),
                                         http_handler: self.http_handler.clone(),
-                                        components: self.components.clone(),
+                                        components: Arc::downgrade(&self.components),
                                         active_component_id: plugin_component_id.clone(),
                                         linked_component_ids: nested_linked_component_ids.clone(),
                                         #[cfg(feature = "wasi-tls")]
@@ -2550,7 +2559,7 @@ impl ResolvedWorkload {
                         engine: engine.clone(),
                         stream_payloads: self.stream_payloads.clone(),
                         http_handler: self.http_handler.clone(),
-                        components: self.components.clone(),
+                        components: Arc::downgrade(&self.components),
                         active_component_id: Arc::clone(&component_id),
                         linked_component_ids: linked_component_ids.clone(),
                         #[cfg(feature = "wasi-tls")]
@@ -8172,5 +8181,131 @@ mod tests {
             &implements_marker_exporter("plug").world(),
             "plug"
         ));
+    }
+
+    /// A component linked to a sibling's async export registers a closure in
+    /// its linker that reaches back to the component map, which holds that
+    /// linker. The map must still be freed once the workload drops.
+    #[tokio::test]
+    async fn a_linked_async_export_does_not_keep_the_components_alive() -> anyhow::Result<()> {
+        let engine = crate::engine::Engine::builder().build()?;
+        let engine = engine.inner();
+        let component = |id: &str, wat: &str| -> anyhow::Result<WorkloadComponent> {
+            Ok(WorkloadComponent::new(
+                "linked-cycle",
+                "linked-cycle",
+                "test",
+                id,
+                Component::new(engine, wat::parse_str(wat)?)?,
+                Linker::new(engine),
+                Vec::new(),
+                LocalResources::default(),
+                Arc::default(),
+                InstancePolicy::Ephemeral,
+            ))
+        };
+        let exporter = component(
+            "exporter",
+            r#"(component
+                (core module $m
+                    (func (export "f") (result i32) (i32.const 0))
+                    (func (export "cb") (param i32 i32 i32) (result i32) (i32.const 0)))
+                (core instance $i (instantiate $m))
+                (type $f (func async))
+                (func $f (type $f)
+                    (canon lift (core func $i "f") async (callback (core func $i "cb"))))
+                (instance $inst (export "f" (func $f)))
+                (export "test:probe/linked@0.1.0" (instance $inst))
+            )"#,
+        )?;
+        let importer = component(
+            "importer",
+            r#"(component
+                (import "test:probe/linked@0.1.0" (instance (export "f" (func async))))
+            )"#,
+        )?;
+
+        let resolved = UnresolvedWorkload::new(
+            "linked-cycle",
+            "linked-cycle",
+            "test",
+            None,
+            [exporter, importer],
+            vec![],
+        )
+        .resolve(
+            None,
+            &crate::plugin::PluginBindings::default(),
+            &crate::host::HostRef::detached(),
+            &crate::observability::Meters::default(),
+        )
+        .await?;
+        let importer_links = resolved
+            .components
+            .read()
+            .await
+            .values()
+            .find(|c| c.name() == "importer")
+            .map(|c| c.linked_components.len());
+        assert_eq!(importer_links, Some(1), "the importer should be linked");
+
+        let components = Arc::downgrade(&resolved.components);
+        drop(resolved);
+        assert!(
+            components.upgrade().is_none(),
+            "the component map outlived its workload"
+        );
+        Ok(())
+    }
+
+    /// A p3 service that cannot be pre-instantiated fails the start rather than
+    /// reading as a workload without a service.
+    #[tokio::test]
+    async fn a_p3_service_that_cannot_pre_instantiate_fails_to_execute() -> anyhow::Result<()> {
+        let engine = wasmtime::Engine::default();
+        let service = WorkloadService::new(
+            "p3-service-error",
+            "p3-service-error",
+            "test",
+            Component::new(
+                &engine,
+                wat::parse_str(
+                    r#"(component
+                        (import "wasi:probe/missing@0.3.0" (instance (export "f" (func))))
+                    )"#,
+                )?,
+            )?,
+            Linker::new(&engine),
+            vec![],
+            LocalResources::default(),
+            0,
+            Arc::default(),
+        );
+        assert!(service.metadata.targets_p3());
+        let mut resolved = UnresolvedWorkload::new(
+            "p3-service-error",
+            "p3-service-error",
+            "test",
+            Some(service),
+            [],
+            vec![],
+        )
+        .resolve(
+            None,
+            &crate::plugin::PluginBindings::default(),
+            &crate::host::HostRef::detached(),
+            &crate::observability::Meters::default(),
+        )
+        .await?;
+
+        let err = resolved
+            .execute_service()
+            .await
+            .expect_err("a service that cannot pre-instantiate must fail");
+        assert!(
+            format!("{err:#}").contains("P3 service of workload 'test/p3-service-error'"),
+            "the error should name the service, got: {err:#}"
+        );
+        Ok(())
     }
 }

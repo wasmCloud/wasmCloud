@@ -468,6 +468,11 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
 - Trigger: `workflow_dispatch` and published releases. Inputs: `bench` (choice of
   `http_invoke` / `wasmtime_baseline` / `wasmtime_serve`) and `ref`
   (any branch/tag/sha; defaults to the workflow's ref).
+- Variants: a `bench` choice may name an entry in `BENCH_VARIANTS` (in
+  `bench.yml`) instead of a bench. It runs that entry's `bench` with its `env`
+  preset, and is never published or part of the release subset.
+  - `max_scale`: `scale_density` with each guest memory's reservation and
+    guard shrunk (`WASH_SCALE_MEMORY_RESERVATION`, `WASH_SCALE_MEMORY_GUARD`).
 - The single `[self-hosted, bench, hetzner]` runner serializes measurements.
   Each entry measures the commit resolved before queuing and publishes as soon
   as its own measurement completes.
