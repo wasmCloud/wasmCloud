@@ -269,8 +269,18 @@ pub fn extract_gauge_values(metrics: &wasi_metrics::ResourceMetrics) -> Vec<Gaug
     values
 }
 
-/// Counter value: (metric_name, value, is_monotonic, attributes)
-type CounterValue = (String, f64, bool, Vec<(String, String)>);
+/// One data point of a guest sum.
+#[derive(Debug)]
+pub struct CounterValue {
+    pub scope: String,
+    pub name: String,
+    pub value: f64,
+    pub is_monotonic: bool,
+    pub attributes: Vec<(String, String)>,
+    /// When the guest started this running total, in seconds and nanoseconds.
+    /// `None` when the value is an increment rather than a total.
+    pub series_start: Option<(u64, u32)>,
+}
 
 /// Extract counter/sum values from ResourceMetrics for recording via SDK instruments
 pub fn extract_counter_values(metrics: &wasi_metrics::ResourceMetrics) -> Vec<CounterValue> {
@@ -282,18 +292,30 @@ pub fn extract_counter_values(metrics: &wasi_metrics::ResourceMetrics) -> Vec<Co
                 wasi_metrics::MetricData::F64Sum(s)
                 | wasi_metrics::MetricData::U64Sum(s)
                 | wasi_metrics::MetricData::S64Sum(s) => {
+                    // Low-memory makes synchronous counters delta and leaves
+                    // up-down counters cumulative.
+                    let series_start = match (s.temporality, s.is_monotonic) {
+                        (wasi_metrics::Temporality::Cumulative, _)
+                        | (wasi_metrics::Temporality::LowMemory, false) => {
+                            Some((s.start_time.seconds, s.start_time.nanoseconds))
+                        }
+                        (wasi_metrics::Temporality::Delta, _)
+                        | (wasi_metrics::Temporality::LowMemory, true) => None,
+                    };
                     for point in &s.data_points {
-                        let attrs: Vec<(String, String)> = point
+                        let attributes: Vec<(String, String)> = point
                             .attributes
                             .iter()
                             .map(|kv| (kv.key.clone(), kv.value.clone()))
                             .collect();
-                        values.push((
-                            metric.name.clone(),
-                            metric_number_to_f64(&point.value),
-                            s.is_monotonic,
-                            attrs,
-                        ));
+                        values.push(CounterValue {
+                            scope: scope.scope.name.clone(),
+                            name: metric.name.clone(),
+                            value: metric_number_to_f64(&point.value),
+                            is_monotonic: s.is_monotonic,
+                            attributes,
+                            series_start,
+                        });
                     }
                 }
                 _ => {}
@@ -736,7 +758,15 @@ mod tests {
             ]
         );
         assert_eq!(
-            extract_counter_values(&metrics),
+            extract_counter_values(&metrics)
+                .into_iter()
+                .map(|counter| (
+                    counter.name,
+                    counter.value,
+                    counter.is_monotonic,
+                    counter.attributes
+                ))
+                .collect::<Vec<_>>(),
             vec![
                 ("metric-3".into(), 1.5, true, attributes.clone()),
                 ("metric-4".into(), -2.0, false, attributes.clone()),

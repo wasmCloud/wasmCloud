@@ -23,7 +23,8 @@ use opentelemetry::trace::SpanContext;
 use opentelemetry_sdk::logs::{BatchLogProcessor, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::SdkTracerProvider;
-use std::collections::HashSet;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -79,6 +80,72 @@ struct ComponentContext {
     workload_name: String,
     /// Current span context for this component's execution
     current_span_context: Option<SpanContext>,
+}
+
+/// One running total a guest instance reports.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CumulativeSeries {
+    scope: String,
+    name: String,
+    attributes: Vec<(String, String)>,
+}
+
+/// How many series one guest instance can have the host remember. The guest
+/// picks the names and attributes, so a guest could otherwise grow this forever.
+const MAX_CUMULATIVE_SERIES: usize = 4_096;
+
+/// The last total each series reported, kept per guest instance on its store,
+/// so the totals last exactly as long as the instance reporting them.
+#[derive(Debug, Default)]
+pub(crate) struct CumulativeTotals {
+    series: BTreeMap<CumulativeSeries, ((u64, u32), f64)>,
+    warned_full: bool,
+}
+
+impl CumulativeTotals {
+    /// What to add to the host's instrument for `counter`, whose SDK treats
+    /// every `add` as an increment: a delta as it is, a total as its growth.
+    /// `None` for a new series past the limit: it has no remembered total, so
+    /// adding its total on every export would count it repeatedly.
+    fn increment(&mut self, counter: &convert::CounterValue) -> Option<f64> {
+        let Some(start) = counter.series_start else {
+            return Some(counter.value);
+        };
+        let mut attributes = counter.attributes.clone();
+        attributes.sort();
+        let series = CumulativeSeries {
+            scope: counter.scope.clone(),
+            name: counter.name.clone(),
+            attributes,
+        };
+        let remembered = self.series.len();
+        match self.series.entry(series) {
+            Entry::Occupied(mut last) => {
+                let (last_start, last_total) = last.insert((start, counter.value));
+                let growth = counter.value - last_total;
+                if last_start != start || (counter.is_monotonic && growth < 0.0) {
+                    Some(counter.value)
+                } else {
+                    Some(growth)
+                }
+            }
+            Entry::Vacant(slot) if remembered < MAX_CUMULATIVE_SERIES => {
+                slot.insert((start, counter.value));
+                Some(counter.value)
+            }
+            Entry::Vacant(slot) => {
+                if !self.warned_full {
+                    self.warned_full = true;
+                    tracing::warn!(
+                        metric = %slot.key().name,
+                        limit = MAX_CUMULATIVE_SERIES,
+                        "a guest instance reported too many cumulative metric series; dropping new ones"
+                    );
+                }
+                None
+            }
+        }
+    }
 }
 
 /// WASI OpenTelemetry Plugin
@@ -341,18 +408,21 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
                 }
 
                 // Record counter values
-                for (name, value, is_monotonic, attrs) in extract_counter_values(&resource_metrics)
-                {
-                    let kv_attrs: Vec<KeyValue> = attrs
+                for counter in extract_counter_values(&resource_metrics) {
+                    let Some(increment) = self.ctx.cumulative_totals.increment(&counter) else {
+                        continue;
+                    };
+                    let kv_attrs: Vec<KeyValue> = counter
+                        .attributes
                         .into_iter()
                         .map(|(k, v)| KeyValue::new(k, v))
                         .collect();
-                    if is_monotonic {
-                        let counter = meter.f64_counter(name).build();
-                        counter.add(value, &kv_attrs);
+                    if counter.is_monotonic {
+                        let instrument = meter.f64_counter(counter.name).build();
+                        instrument.add(increment, &kv_attrs);
                     } else {
-                        let up_down = meter.f64_up_down_counter(name).build();
-                        up_down.add(value, &kv_attrs);
+                        let instrument = meter.f64_up_down_counter(counter.name).build();
+                        instrument.add(increment, &kv_attrs);
                     }
                 }
 
