@@ -268,6 +268,7 @@ async fn test_inter_component_call() -> Result<()> {
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -276,6 +277,7 @@ async fn test_inter_component_call() -> Result<()> {
                     version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
                     config: HashMap::new(),
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
             ],
             volumes: vec![],

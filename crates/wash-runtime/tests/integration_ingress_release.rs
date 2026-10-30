@@ -238,6 +238,7 @@ async fn plugin_host_release(
                     version: Some(semver::Version::parse("0.1.0")?),
                     config: HashMap::new(),
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
             ],
         ))

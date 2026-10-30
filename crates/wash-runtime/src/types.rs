@@ -225,7 +225,17 @@ pub struct HostHeartbeat {
     /// `wash host --environment`. Empty when no environment was
     /// configured.
     pub environment: String,
+    /// Start-request features this host acts on, which an older host would
+    /// ignore; see [`HOST_FEATURES`].
+    pub features: Vec<String>,
 }
+
+/// A start request whose host interfaces name plugin-backed secrets
+/// ([`crate::plugin::PluginSecretFrom`]).
+pub const FEATURE_PLUGIN_SECRET_REFS: &str = "plugin-secret-refs";
+
+/// The features every host of this build advertises in its heartbeat.
+pub const HOST_FEATURES: &[&str] = &[FEATURE_PLUGIN_SECRET_REFS];
 
 /// Status information about a workload including its ID, state, and any messages.
 #[derive(Debug, Clone, PartialEq)]

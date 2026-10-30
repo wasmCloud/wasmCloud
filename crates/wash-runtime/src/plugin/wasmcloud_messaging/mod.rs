@@ -1852,6 +1852,7 @@ mod tests {
             version: version.map(|v| semver::Version::parse(v).unwrap()),
             config: std::collections::HashMap::new(),
             name: None,
+            plugin_secrets: Vec::new(),
         }
     }
 

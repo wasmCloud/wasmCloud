@@ -3,18 +3,22 @@
 //! plugin (`secret-source-plugin`) and delivered to another component plugin
 //! (`kv-plugin`) as its binding config, read back through a caller workload;
 //! and the same source serving a workload its own secrets through the native
-//! `wasmcloud-secrets` plugin, limited to the workloads the entry grants.
+//! `wasmcloud-secrets` plugin, limited to the workloads the entry grants,
+//! whether the operator's binding names the entry or the workload's own
+//! interface does.
 
 #![cfg(feature = "host-component-plugins")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 
+use wash_runtime::config_source::PluginSecretSource;
 use wash_runtime::host::HostApi;
 use wash_runtime::plugin::{
-    PluginBindingSet, PluginBindings, PluginSecretRef, WorkloadGrant, WorkloadSelector,
+    PluginBindingSet, PluginBindings, PluginSecretFrom, PluginSecretRef, WorkloadGrant,
+    WorkloadSelector,
 };
 use wash_runtime::types::{LocalResources, WorkloadState};
 
@@ -311,5 +315,272 @@ async fn a_labeled_import_of_a_withheld_secret_says_it_was_withheld() -> Result<
             assert!(!msg.contains("billing-api"), "{msg}");
         }
     }
+    Ok(())
+}
+
+/// A host serving the `billing-pw` catalog entry from `acme-secrets` to the
+/// workloads `grant` admits, with `wasmcloud-secrets` declared as `declared`.
+async fn start_with_catalog(
+    grant: WorkloadGrant,
+    declared: PluginBindingSet,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let entry = PluginSecretSource::new(
+        SECRETS_ID,
+        [
+            ("db-password".to_string(), "db-password".into()),
+            ("requested-by".to_string(), "workload".into()),
+            ("consumer".to_string(), "who".into()),
+        ],
+        grant,
+    );
+    start(
+        PluginBindings::new()
+            .with_plugin(declared)
+            .with_secret_catalog([("billing-pw".into(), entry)]),
+    )
+    .await
+}
+
+/// A `secrets-caller` workload called `name` whose `wasmcloud:secrets`
+/// interface names `secrets` and sets no config of its own.
+fn secrets_caller_naming(
+    name: &str,
+    secrets: Vec<PluginSecretFrom>,
+) -> wash_runtime::types::WorkloadStartRequest {
+    let mut request = secrets_caller(name);
+    for interface in &mut request.workload.host_interfaces {
+        if interface.package == "secrets" {
+            interface.plugin_secrets = secrets.clone();
+        }
+    }
+    request
+}
+
+fn naming(entry: &str, keys: &[(&str, &str)]) -> PluginSecretFrom {
+    PluginSecretFrom {
+        name: entry.into(),
+        keys: keys
+            .iter()
+            .map(|(config_key, key)| (config_key.to_string(), key.to_string()))
+            .collect::<BTreeMap<_, _>>(),
+    }
+}
+
+/// The start's error, whether the host refused the request or the workload.
+fn start_error(resp: Result<wash_runtime::types::WorkloadStartResponse>) -> Option<String> {
+    match resp {
+        Ok(resp) if resp.workload_status.workload_state == WorkloadState::Running => None,
+        Ok(resp) => Some(resp.workload_status.message),
+        Err(e) => Some(format!("{e:#}")),
+    }
+}
+
+/// A workload naming a granted entry on its own interface reads every key of
+/// it, or the keys it selects under the names it gives them, and the source
+/// was told which workload asked and which plugin the values were for.
+#[tokio::test]
+async fn a_workload_reads_a_secret_its_interface_names() -> Result<()> {
+    let consumer = format!("{WORKLOAD_SECRETS_ID}/-");
+    for (secret, expect) in [
+        (
+            naming("billing-pw", &[]),
+            vec![
+                ("db-password", Some("hunter2")),
+                ("requested-by", Some("test/billing-api")),
+                ("consumer", Some(consumer.as_str())),
+            ],
+        ),
+        (
+            naming("billing-pw", &[("password", "db-password")]),
+            vec![("password", Some("hunter2")), ("requested-by", None)],
+        ),
+    ] {
+        let grant = WorkloadGrant::Only(vec![WorkloadSelector::workload("test", "billing-api")]);
+        let (addr, h) =
+            start_with_catalog(grant, PluginBindingSet::new(WORKLOAD_SECRETS_ID)).await?;
+        let resp = h
+            .workload_start(secrets_caller_naming("billing-api", vec![secret.clone()]))
+            .await?;
+        assert_eq!(
+            resp.workload_status.workload_state,
+            WorkloadState::Running,
+            "{secret:?}: {}",
+            resp.workload_status.message
+        );
+        let client = reqwest::Client::new();
+        for (key, want) in expect {
+            let (status, body) =
+                req(&client, &addr, "billing-api", &format!("/get?key={key}")).await?;
+            match want {
+                Some(value) => assert_eq!((status.as_u16(), body.as_str()), (200, value), "{key}"),
+                None => assert_eq!(status.as_u16(), 404, "{key} was not selected: {body}"),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A workload outside the entry's grant is refused, named without the grant,
+/// and a reference to an entry the host does not serve, or to a key the entry
+/// lacks, fails the start naming the reference.
+#[tokio::test]
+async fn a_workload_reference_outside_its_grant_or_unknown_fails() -> Result<()> {
+    let grant = WorkloadGrant::Only(vec![WorkloadSelector::workload("test", "billing-api")]);
+    let (_, h) = start_with_catalog(grant, PluginBindingSet::new(WORKLOAD_SECRETS_ID)).await?;
+    for (name, secret, expect) in [
+        (
+            "intruder",
+            naming("billing-pw", &[]),
+            "names secret `billing-pw`, which this host does not serve to it",
+        ),
+        (
+            "billing-api",
+            naming("vault-prod", &[]),
+            "names secret `vault-prod`, which this host does not serve to it",
+        ),
+        (
+            "billing-api",
+            naming("billing-pw", &[("password", "nope")]),
+            "takes `nope` from secret `billing-pw`, which has no such key",
+        ),
+    ] {
+        let msg = start_error(
+            h.workload_start(secrets_caller_naming(name, vec![secret]))
+                .await,
+        )
+        .unwrap_or_else(|| panic!("{name}: the start must fail"));
+        assert!(msg.contains(expect), "{name}: {msg}");
+        assert!(msg.contains(&format!("test/{name}")), "{name}: {msg}");
+        assert!(!msg.contains("hunter2"), "{name}: {msg}");
+        if name == "intruder" {
+            assert!(!msg.contains("billing-api"), "the grant leaked: {msg}");
+        }
+    }
+    Ok(())
+}
+
+/// A reference on an interface no plugin binds, here the HTTP ingress the host
+/// serves itself, would reach nothing, so the start fails naming it.
+#[tokio::test]
+async fn a_workload_reference_no_plugin_binds_fails() -> Result<()> {
+    let (_, h) =
+        start_with_catalog(test_namespace(), PluginBindingSet::new(WORKLOAD_SECRETS_ID)).await?;
+    let mut request = secrets_caller("billing-api");
+    for interface in &mut request.workload.host_interfaces {
+        if interface.package == "http" {
+            interface.plugin_secrets = vec![naming("billing-pw", &[])];
+        }
+    }
+    let msg = start_error(h.workload_start(request).await).expect("the start must fail");
+    assert!(msg.contains("which no plugin binds"), "{msg}");
+    assert!(msg.contains("`wasi:http"), "{msg}");
+    Ok(())
+}
+
+/// The values are the workload's own config, so a plugin denying workloads a
+/// key the host owns refuses one a reference delivers, without the value.
+#[tokio::test]
+async fn a_workload_reference_is_judged_as_workload_config() -> Result<()> {
+    let (_, h) = start_with_catalog(
+        test_namespace(),
+        PluginBindingSet::new(WORKLOAD_SECRETS_ID).with_host_owned_keys(["db-password"]),
+    )
+    .await?;
+    let msg = start_error(
+        h.workload_start(secrets_caller_naming(
+            "billing-api",
+            vec![naming("billing-pw", &[])],
+        ))
+        .await,
+    )
+    .expect("the policy must refuse a host-owned key");
+    assert!(msg.contains("`db-password`"), "{msg}");
+    assert!(msg.contains("belong to the operator"), "{msg}");
+    assert!(!msg.contains("hunter2"), "{msg}");
+    Ok(())
+}
+
+/// A reference works beside an entry-level secret on a host that passes the
+/// host-start check. A workload the entry's grant leaves out still reads what
+/// it names and never the withheld value, even under the withheld key's name.
+#[tokio::test]
+async fn a_workload_reference_works_beside_an_entry_level_secret() -> Result<()> {
+    let declared = PluginBindingSet::new(WORKLOAD_SECRETS_ID).with_base_secrets(HashMap::from([(
+        "entry-tier".to_string(),
+        PluginSecretRef {
+            source: "shared".into(),
+            plugin: SECRETS_ID.into(),
+            key: "tier".into(),
+            grant: WorkloadGrant::Only(vec![WorkloadSelector::workload("test", "granted")]),
+        },
+    )]));
+    let (addr, h) = start_with_catalog(test_namespace(), declared).await?;
+    let client = reqwest::Client::new();
+    for (name, secret, tier) in [
+        (
+            "granted",
+            naming("billing-pw", &[("password", "db-password")]),
+            Some("platinum"),
+        ),
+        (
+            "outside",
+            naming("billing-pw", &[("password", "db-password")]),
+            None,
+        ),
+        (
+            "same-key",
+            naming(
+                "billing-pw",
+                &[("password", "db-password"), ("entry-tier", "db-password")],
+            ),
+            Some("hunter2"),
+        ),
+    ] {
+        assert_eq!(
+            start_error(
+                h.workload_start(secrets_caller_naming(name, vec![secret]))
+                    .await
+            ),
+            None,
+            "{name}"
+        );
+        let (status, body) = req(&client, &addr, name, "/get?key=password").await?;
+        assert_eq!((status.as_u16(), body.as_str()), (200, "hunter2"), "{name}");
+        let (status, body) = req(&client, &addr, name, "/get?key=entry-tier").await?;
+        match tier {
+            Some(value) => assert_eq!((status.as_u16(), body.as_str()), (200, value), "{name}"),
+            None => assert_eq!(status.as_u16(), 404, "{name} read a withheld key: {body}"),
+        }
+    }
+    Ok(())
+}
+
+/// A catalog entry naming a plugin that serves no secret-source fails only the
+/// workload that names it, not the host or a workload that does not.
+#[tokio::test]
+async fn a_catalog_entry_that_cannot_resolve_fails_only_what_names_it() -> Result<()> {
+    let entry = PluginSecretSource::new(
+        "nope",
+        [("db-password".to_string(), "db-password".into())],
+        test_namespace(),
+    );
+    let (_, h) =
+        start(PluginBindings::new().with_secret_catalog([("billing-pw".into(), entry)])).await?;
+    let msg = start_error(
+        h.workload_start(secrets_caller_naming(
+            "names-it",
+            vec![naming("billing-pw", &[])],
+        ))
+        .await,
+    )
+    .expect("the start must fail");
+    assert!(
+        msg.contains("plugin `nope` serves no secret-source"),
+        "{msg}"
+    );
+    assert_eq!(
+        start_error(h.workload_start(secrets_caller("names-nothing")).await),
+        None
+    );
     Ok(())
 }

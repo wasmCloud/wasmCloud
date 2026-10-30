@@ -454,6 +454,7 @@ mod tests {
             version: None,
             config,
             name: name.map(String::from),
+            plugin_secrets: Vec::new(),
         }
     }
 
@@ -511,6 +512,7 @@ mod tests {
                 ("root".to_string(), dir.to_string_lossy().to_string()),
             ]),
             name: Some("team-fs".to_string()),
+            plugin_secrets: Vec::new(),
         };
 
         let plugin = MultiplexedKeyValue::new().with_provider(Arc::new(FilesystemProvider));

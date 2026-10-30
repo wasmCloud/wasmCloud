@@ -56,6 +56,7 @@ fn redis_store(name: &str, url: &str) -> WitInterface {
             ("prefix".to_string(), name.to_string()),
         ]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 

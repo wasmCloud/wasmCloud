@@ -76,6 +76,7 @@ fn fetch_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: HashMap::new(),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

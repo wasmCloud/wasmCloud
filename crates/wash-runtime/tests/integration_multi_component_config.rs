@@ -139,6 +139,7 @@ fn http_interface() -> WitInterface {
         version: None,
         config: config(&[("host", "test")]),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

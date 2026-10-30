@@ -122,6 +122,7 @@ async fn start_msg_sleeper(
         version: Some(semver::Version::new(0, 3, 0)),
         config: HashMap::from([("subscriptions".to_string(), subject.to_string())]),
         name: None,
+        plugin_secrets: Vec::new(),
     });
 
     let workload_id = uuid::Uuid::new_v4().to_string();

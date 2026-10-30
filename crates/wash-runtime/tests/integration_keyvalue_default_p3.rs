@@ -50,6 +50,7 @@ fn default_kv_iface() -> WitInterface {
         version: Some(semver::Version::parse("0.2.0").unwrap()),
         config: HashMap::new(),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

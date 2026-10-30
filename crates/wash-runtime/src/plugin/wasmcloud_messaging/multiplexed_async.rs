@@ -376,6 +376,7 @@ mod tests {
             version: version.map(|v| semver::Version::parse(v).unwrap()),
             config: HashMap::from([("backend".to_string(), "in-memory".to_string())]),
             name: name.map(String::from),
+            plugin_secrets: Vec::new(),
         }
     }
 

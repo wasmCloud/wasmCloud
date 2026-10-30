@@ -203,6 +203,7 @@ pub(super) fn http_interface(host_header: &str, fixture: &str) -> WitInterface {
         version: Some(version),
         config: HashMap::from([("host".to_string(), host_header.to_string())]),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

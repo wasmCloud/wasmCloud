@@ -54,6 +54,7 @@ fn s3_blob_iface(name: &str, endpoint: &str) -> WitInterface {
             ("secret_access_key".to_string(), SECRET_KEY.to_string()),
         ]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 
@@ -327,6 +328,7 @@ fn real_s3_iface(name: &str, region: &str, credentials: &[(&str, &str)]) -> WitI
         version: None,
         config,
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 

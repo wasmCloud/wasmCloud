@@ -701,6 +701,7 @@ mod tests {
             version: None,
             config,
             name: name.map(String::from),
+            plugin_secrets: Vec::new(),
         }
     }
 
