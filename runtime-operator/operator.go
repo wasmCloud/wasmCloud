@@ -175,6 +175,7 @@ func NewEmbeddedOperator(
 	default:
 		if err = (&runtime_controllers.WorkloadDaemonSetReconciler{
 			Client:            mgr.GetClient(),
+			APIReader:         mgr.GetAPIReader(),
 			Scheme:            mgr.GetScheme(),
 			OperatorNamespace: cfg.Namespace,
 			AllowSharedHosts:  cfg.AllowSharedHosts,
