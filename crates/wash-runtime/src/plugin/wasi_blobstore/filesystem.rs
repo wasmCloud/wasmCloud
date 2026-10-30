@@ -861,7 +861,7 @@ fn open_container_directory(root: &Path) -> std::io::Result<std::fs::File> {
 fn clear_directory_contents(directory: &std::fs::File) -> std::io::Result<()> {
     use cap_primitives::fs;
     #[cfg(windows)]
-    use cap_primitives::fs::FileTypeExt as _;
+    use cap_primitives::fs::MetadataExt as _;
 
     // Resolve every removal against the opened directory, so replacing its
     // original path with a symlink cannot redirect deletion to another tree.
@@ -874,9 +874,17 @@ fn clear_directory_contents(directory: &std::fs::File) -> std::io::Result<()> {
             fs::remove_dir_all(directory, path)?;
         } else {
             #[cfg(windows)]
-            if file_type.is_symlink_dir() {
-                fs::remove_dir(directory, path)?;
-                continue;
+            {
+                // `cap-primitives` only exposes Windows FileTypeExt on
+                // nightly. Read the link's own attributes instead, including
+                // for dangling directory links whose targets cannot be read.
+                const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+                if file_type.is_symlink()
+                    && entry.metadata()?.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0
+                {
+                    fs::remove_dir(directory, path)?;
+                    continue;
+                }
             }
             fs::remove_file(directory, path)?;
         }
