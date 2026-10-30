@@ -217,8 +217,8 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             {{- /* Host memory knobs, from the effective `resources`:
-                   guestMemoryMode says whether the guest memory budget is
-                   enforced or only counted, and defaultHeapMemory/maxMemories/
+                   guestMemoryMode says how the guest memory budget is applied
+                   (see values.yaml), and defaultHeapMemory/maxMemories/
                    coreInstances are wasmtime knobs parked alongside it (all
                    stripped back out of the `resources:` block below). An unset
                    maxMemories is derived by the host from the node; the other
