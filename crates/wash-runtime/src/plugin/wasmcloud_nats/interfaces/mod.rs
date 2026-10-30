@@ -248,3 +248,7 @@ impl<T: 'static + Send> labeled_core::HostWithStore<T> for SharedCtx {
 }
 
 impl core::Host for ActiveCtx<'_> {}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod contract_tests;

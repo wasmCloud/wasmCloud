@@ -2622,3 +2622,8 @@ mod tests {
         assert!(!host.admits(4097));
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "subscriber_contract_tests.rs"]
+mod contract_tests;
