@@ -477,10 +477,9 @@ async fn new_ephemeral_store(
     let components = call.components()?;
     resolve_component_volume_mounts_in_map(&components, &component_ids).await?;
 
-    // One read-lock scope, no `WorkloadMetadata` clones: cloning metadata would
-    // deep-clone its by-value `Linker`, and `pre_instantiate_ref` needs only
-    // read access, so concurrent ephemeral calls don't serialize on a write
-    // lock. Nothing is retained past this store.
+    // One read-lock scope: `pre_instantiate_ref` needs only read access, so
+    // concurrent ephemeral calls don't serialize on a write lock. Nothing is
+    // retained past this store.
     #[cfg(feature = "wasi-tls")]
     let template_of = |metadata: &WorkloadMetadata| {
         component_ctx_template_from_metadata_with_tls(metadata, call.tls_provider.clone())
