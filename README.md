@@ -101,7 +101,7 @@ helm install wasmcloud oci://ghcr.io/wasmcloud/charts/runtime-operator \
 
 For a local `kind` cluster, the deploy assets and full walkthrough live at [wasmcloud.com/docs/installation](https://wasmcloud.com/docs/installation#install-wasmcloud-on-kubernetes).
 
-`helm upgrade` does not install or update CRDs. Apply the chart's CRDs before upgrading, or kinds a release adds stay unavailable:
+`helm upgrade` does not install or update CRDs. Apply the chart's CRDs before upgrading. If a kind a release adds is missing, the operator runs without its controller and restarts itself within 30 seconds of the CRD being applied:
 
 ```bash
 helm pull oci://ghcr.io/wasmcloud/charts/runtime-operator --version <version> --untar --untardir /tmp/wasmcloud-chart

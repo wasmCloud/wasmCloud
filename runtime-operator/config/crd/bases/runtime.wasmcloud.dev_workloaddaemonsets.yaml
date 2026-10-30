@@ -15,8 +15,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.replicas
-      name: REPLICAS
+    - jsonPath: .spec.replicasPerHost
+      name: PER-HOST
       type: integer
     - jsonPath: .status.desiredHosts
       name: DESIRED
@@ -34,8 +34,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: WorkloadDaemonSet runs a Workload on every Host that matches
-          its host selector, spec.replicas instances per Host, and follows the Host
-          set as it changes.
+          its host selector, spec.replicasPerHost instances per Host, and follows
+          the Host set as it changes.
         properties:
           apiVersion:
             description: |-
@@ -122,11 +122,12 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
-              replicas:
+              replicasPerHost:
                 default: 1
                 description: |-
-                  Replicas is the number of Workload instances to run on each Host that
-                  matches template.spec.hostSelector.
+                  ReplicasPerHost is the number of Workload instances to run on each Host
+                  that matches template.spec.hostSelector. Unlike WorkloadDeployment's
+                  replicas, it is not a total.
                 format: int32
                 minimum: 0
                 type: integer
@@ -852,7 +853,10 @@ spec:
                 format: int32
                 type: integer
               hosts:
-                description: Hosts reports the instances on each Host, sorted by HostID.
+                description: |-
+                  Hosts reports the desired Hosts that are not ready or still run an
+                  outdated instance, sorted by HostID. Hosts that are up to date and
+                  ready are left out, so it stays small on a large host group.
                 items:
                   description: WorkloadDaemonSetHostStatus is the observed state of
                     one Host's instances.
@@ -886,7 +890,7 @@ spec:
                 type: integer
               replicas:
                 description: Replicas totals the instances across Hosts; Expected
-                  is DesiredHosts × spec.replicas.
+                  is DesiredHosts × spec.replicasPerHost.
                 properties:
                   current:
                     format: int32

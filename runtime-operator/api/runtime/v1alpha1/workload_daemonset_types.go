@@ -12,12 +12,13 @@ const (
 
 // WorkloadDaemonSetSpec defines the desired state of WorkloadDaemonSet.
 type WorkloadDaemonSetSpec struct {
-	// Replicas is the number of Workload instances to run on each Host that
-	// matches template.spec.hostSelector.
+	// ReplicasPerHost is the number of Workload instances to run on each Host
+	// that matches template.spec.hostSelector. Unlike WorkloadDeployment's
+	// replicas, it is not a total.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default=1
-	Replicas *int32 `json:"replicas,omitempty"`
+	ReplicasPerHost *int32 `json:"replicasPerHost,omitempty"`
 
 	// +kubebuilder:validation:Required
 	Template WorkloadReplicaTemplate `json:"template,omitempty"`
@@ -76,24 +77,26 @@ type WorkloadDaemonSetStatus struct {
 	// +kubebuilder:validation:Optional
 	UpdatedHosts int32 `json:"updatedHosts,omitempty"`
 
-	// Replicas totals the instances across Hosts; Expected is DesiredHosts × spec.replicas.
+	// Replicas totals the instances across Hosts; Expected is DesiredHosts × spec.replicasPerHost.
 	// +kubebuilder:validation:Optional
 	Replicas *ReplicaSetStatus `json:"replicas,omitempty"`
 
-	// Hosts reports the instances on each Host, sorted by HostID.
+	// Hosts reports the desired Hosts that are not ready or still run an
+	// outdated instance, sorted by HostID. Hosts that are up to date and
+	// ready are left out, so it stays small on a large host group.
 	// +kubebuilder:validation:Optional
 	Hosts []WorkloadDaemonSetHostStatus `json:"hosts,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="REPLICAS",type=integer,JSONPath=`.spec.replicas`
+// +kubebuilder:printcolumn:name="PER-HOST",type=integer,JSONPath=`.spec.replicasPerHost`
 // +kubebuilder:printcolumn:name="DESIRED",type=integer,JSONPath=`.status.desiredHosts`
 // +kubebuilder:printcolumn:name="UP-TO-DATE",type=integer,JSONPath=`.status.updatedHosts`
 // +kubebuilder:printcolumn:name="READY-HOSTS",type=integer,JSONPath=`.status.readyHosts`
 // +kubebuilder:printcolumn:name="READY",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 
-// WorkloadDaemonSet runs a Workload on every Host that matches its host selector, spec.replicas instances per Host, and follows the Host set as it changes.
+// WorkloadDaemonSet runs a Workload on every Host that matches its host selector, spec.replicasPerHost instances per Host, and follows the Host set as it changes.
 type WorkloadDaemonSet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

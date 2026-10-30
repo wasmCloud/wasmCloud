@@ -137,8 +137,8 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	}
 
 	perHost := int32(1)
-	if daemonSet.Spec.Replicas != nil {
-		perHost = *daemonSet.Spec.Replicas
+	if daemonSet.Spec.ReplicasPerHost != nil {
+		perHost = *daemonSet.Spec.ReplicasPerHost
 	}
 	maxConcurrentHosts := 1
 	if daemonSet.Spec.MaxConcurrentHosts != nil {
@@ -316,7 +316,7 @@ func (r *WorkloadDaemonSetReconciler) setScheduleStatus(
 	status.DesiredHosts = int32(len(desired))
 	status.ReadyHosts = 0
 	status.UpdatedHosts = 0
-	status.Hosts = make([]runtimev1alpha1.WorkloadDaemonSetHostStatus, 0, len(desired))
+	status.Hosts = nil
 
 	replicas := &runtimev1alpha1.ReplicaSetStatus{Expected: status.DesiredHosts * perHost}
 	for _, hostID := range desired {
@@ -327,13 +327,15 @@ func (r *WorkloadDaemonSetReconciler) setScheduleStatus(
 			Ready:    host.readyCurrent(),
 			Outdated: int32(len(host.outdated)),
 		}
-		status.Hosts = append(status.Hosts, hostStatus)
-
-		if hostStatus.Ready >= perHost {
+		ready, updated := hostStatus.Ready >= perHost, hostStatus.Outdated == 0
+		if ready {
 			status.ReadyHosts++
 		}
-		if hostStatus.Outdated == 0 {
+		if updated {
 			status.UpdatedHosts++
+		}
+		if !ready || !updated {
+			status.Hosts = append(status.Hosts, hostStatus)
 		}
 		replicas.Current += hostStatus.Current
 		replicas.Ready += hostStatus.Ready
@@ -385,10 +387,38 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 	if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
 		return nil, err
 	}
-	if err := r.Create(ctx, workload); err != nil && !apierrors.IsAlreadyExists(err) {
+	err := r.Create(ctx, workload)
+	if !apierrors.IsAlreadyExists(err) {
+		return workload, err
+	}
+	return r.adoptWorkload(ctx, daemonSet, name)
+}
+
+// adoptWorkload resolves a create that hit an existing name: ours is used
+// as-is, an orphan (e.g. from --cascade=orphan) is adopted, and one another
+// controller owns is an error.
+func (r *WorkloadDaemonSetReconciler) adoptWorkload(
+	ctx context.Context,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+	name string,
+) (*runtimev1alpha1.Workload, error) {
+	existing := &runtimev1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: daemonSet.Namespace, Name: name}, existing); err != nil {
 		return nil, err
 	}
-	return workload, nil
+	if owner := metav1.GetControllerOf(existing); owner != nil {
+		if owner.UID == daemonSet.UID {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("workload %s is controlled by %s %s", name, owner.Kind, owner.Name)
+	}
+	if err := controllerutil.SetControllerReference(daemonSet, existing, r.Scheme); err != nil {
+		return nil, err
+	}
+	if err := r.Update(ctx, existing); err != nil {
+		return nil, err
+	}
+	return existing, nil
 }
 
 func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads []*runtimev1alpha1.Workload) error {
