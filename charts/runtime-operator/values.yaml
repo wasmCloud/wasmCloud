@@ -420,12 +420,14 @@ runtime:
   # host: size `limits.memory` for your expected per-host workload density, or
   # remove it to leave host memory uncapped.
   #
-  # `defaultHeapMemory`, `coreInstances`, `guestMemoryMode` and
-  # `maxConcurrentStarts` are host knobs rather than Kubernetes resource fields;
-  # the chart strips them out of the container's `resources` block and sets them
-  # as `WASH_DEFAULT_HEAP_MEMORY` / `WASH_CORE_INSTANCES` /
-  # `WASH_GUEST_MEMORY_MODE` / `WASH_MAX_CONCURRENT_STARTS` for the host.
-  # Leaving them empty uses the host's own defaults.
+  # `defaultHeapMemory`, `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`,
+  # `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` are host knobs
+  # rather than Kubernetes resource fields; the chart strips them out of the
+  # container's `resources` block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
+  # `WASH_MAX_MEMORIES` / `WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT` /
+  # `WASH_CORE_INSTANCES` / `WASH_GUEST_MEMORY_MODE` /
+  # `WASH_MAX_CONCURRENT_STARTS` for the host. Leaving them empty uses the
+  # host's own defaults.
   #
   # The simplest way to change host sizing for the whole release:
   #   --set runtime.resources.limits.memory=2Gi
@@ -439,15 +441,48 @@ runtime:
     # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
     # default of 4GiB.
     defaultHeapMemory: ""
-    # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
-    # default of 1000.
+    # -- Linear memories the pooling allocator keeps room for, the count that
+    # sizes the pool: each reserves 4 GiB of address space plus a guard, and
+    # the fiber-stack, component-instance, core-instance, table and GC heap
+    # totals follow from it. Empty lets the host derive it from the node: half its
+    # address space and 90% of `vm.max_map_count` at six mappings per warm
+    # component, 9,829 on a default Linux node, never below 1000. Set it to
+    # plan a node's `vm.max_map_count` around a known pool.
+    maxMemories: ""
+    # -- On a node that commits the pool's stack and table mappings at
+    # startup (Linux with `vm.overcommit_memory=2`, or a finite `RLIMIT_DATA`),
+    # an empty `maxMemories` keeps the host at 1000 memories rather than the
+    # derived count, since the derived count would commit about 25 GiB of
+    # stacks and tables. `true` lets the host size itself against a quarter
+    # of its commit limit instead, the smallest of that and the usual bounds.
+    # No effect on other nodes or when `maxMemories` is set.
+    setMaxMemoriesFromMemoryPrecommitLimit: false
+    # -- Core instances (live core modules) the pool admits: a counter that
+    # reserves nothing, sixteen per memory when empty. Set alone, without
+    # `maxMemories`, it also pins the memory count to this number, as it did
+    # before `maxMemories` existed, and the host warns at startup; set
+    # `maxMemories` instead.
     coreInstances: ""
-    # -- Whether the host's guest memory budget is enforced or only counted:
-    # `enforce` (what an empty value renders) refuses growth past the budget,
-    # which the guest sees as `memory.grow` returning -1; `count` charges every
-    # guest `memory.grow` to the budget and reports what it would have refused,
-    # but allows it. Use `count` to size a host: watch its reported high-water
-    # mark, then return to `enforce`.
+    # -- How the host's guest memory budget is applied:
+    #
+    # - `enforce` (what an empty value renders) refuses growth past the budget.
+    #   The guest sees `memory.grow` return -1.
+    # - `count` charges every guest `memory.grow` to the budget
+    #   and reports what it would have refused, but allows it.
+    #   Use it to size a host: watch the reported high-water mark,
+    #   then return to `enforce`.
+    # - `growth` enforces like `enforce`,
+    #   but leaves up to 2 MiB of each memory's first allocation
+    #   (its initial size) uncharged.
+    #   It is for hosts packing many small instances.
+    #
+    # `growth` overcommits.
+    # The process-memory guard (on by default, derived from `limits.memory`)
+    # refuses only new instances and growth,
+    # so instances that come to write all their initial memory
+    # can take the host past its limit.
+    # `WASH_HOST_MAX_INITIAL_GUEST_MEMORY` bounds the overcommit:
+    # four times the budget, unless set in `runtime.env`.
     #
     # The host derives the budget: three quarters of `limits.memory`, and
     # never less than 256MiB — so keep `limits.memory` above 342Mi, or the
@@ -1023,7 +1058,7 @@ runtime:
       #   limits:
       #     memory: "2Gi"
       #   defaultHeapMemory: "512MiB"
-      #   coreInstances: "200"
+      #   maxMemories: "200"
       #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
       # -- Per-host-group probes. Merged field by field over

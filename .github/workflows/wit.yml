@@ -303,7 +303,7 @@ jobs:
 
       - name: Push and attest
         id: push
-        uses: ./.github/actions/oci-push-with-digest
+        uses: $/.github/actions/oci-push-with-digest
         with:
           ref: ${{ matrix.ref }}
           artifact: wit-build/${{ matrix.artifact }}

@@ -4,7 +4,7 @@ use anyhow::{Context as _, bail};
 use clap::Args;
 use tracing::info;
 use wash_runtime::{
-    engine::{Engine, WasmProposal},
+    engine::{Engine, WasmProposal, guest_memory::GuestMemoryMode},
     observability::Meters,
     plugin::{self},
 };
@@ -329,9 +329,11 @@ pub struct HostCommand {
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
     /// this equally bounds instances. Unset, it is derived from the host's
-    /// installed instance and memory limits. The stock pool derives 666,
+    /// installed instance and memory limits. A pool of 1000 memories derives 666,
     /// leaving capacity for HTTP-triggered work, warm pools, and long-lived
-    /// services; independent pool overrides can lower that default.
+    /// services; the larger pool an unset `--max-memories` derives from the
+    /// machine (9,829 memories on a default Linux) reaches the cap of 4096.
+    /// Independent pool overrides can lower that default.
     /// Components also acquire pool resources according to their memory and
     /// table requirements, so compositions can reach a resource limit before
     /// the message cap. Raising `--max-memories` raises the pool; with pooling
@@ -362,8 +364,8 @@ pub struct HostCommand {
     ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
-    /// 666 of a stock host gives 166, and the pinned 128 of a host with pooling
-    /// disabled gives 32.
+    /// 666 of a pool of 1000 linear memories gives 166, the 4096 cap gives
+    /// 1024, and the pinned 128 of a host with pooling disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
         env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT"
@@ -429,7 +431,21 @@ pub struct HostCommand {
     /// what it would have refused, but allows the growth anyway. Use it to
     /// size a budget: watch the reported high-water mark and `would_refuse`
     /// count, then return to `enforce`. The separate `--max-process-memory`
-    /// limit remains enforced in either mode.
+    /// limit remains enforced in every mode.
+    ///
+    /// `growth` enforces like `enforce`, but leaves up to 2 MiB of each
+    /// memory's first allocation (its initial size) uncharged. Choose it for
+    /// hosts packing many small instances.
+    ///
+    /// Initial memory is mapped lazily and costs only what the guest touches,
+    /// which is what `--max-process-memory` measures. Charged at its declared
+    /// size, a 1 MiB handler that touches 70 KiB fills the budget fifteen
+    /// times faster than it fills the container.
+    ///
+    /// The trade is overcommit. `--max-process-memory` refuses new instances
+    /// and growth once the host is over, but cannot stop admitted instances
+    /// writing the initial memory they hold. `--max-initial-guest-memory`
+    /// bounds how far that goes.
     ///
     /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
     /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
@@ -449,6 +465,23 @@ pub struct HostCommand {
         default_value = "enforce"
     )]
     pub guest_memory_mode: GuestMemoryMode,
+
+    /// Under `--guest-memory-mode=growth`, the most initial memory the host
+    /// leaves uncharged across all its instances (e.g. `4GiB`).
+    ///
+    /// This is the overcommit bound: instances may come to write all of it,
+    /// and nothing else refuses them once admitted. Past it, a new instance
+    /// fails to instantiate, and a running guest's first `memory.grow` of an
+    /// empty memory returns -1.
+    ///
+    /// Unset, it is four times `--max-guest-memory`. Ignored in the other
+    /// modes, which charge initial memory to `--max-guest-memory`, and the
+    /// host warns if it is set there.
+    #[arg(
+        long = "max-initial-guest-memory",
+        env = "WASH_HOST_MAX_INITIAL_GUEST_MEMORY"
+    )]
+    pub max_initial_guest_memory: Option<String>,
 
     /// Ceiling on how large any single guest linear memory may grow
     /// (e.g. `512MiB`).
@@ -470,14 +503,25 @@ pub struct HostCommand {
     /// GC heaps it admits, one count for all: a component instance of the
     /// usual shape takes one of each.
     ///
-    /// Unset, this is wasmtime's default of 1000, or the `--core-instances`
-    /// count when only that is given. Multiplied by one
-    /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
-    /// `--default-heap-memory` is) it is the pool's address-space reservation,
-    /// so it is the knob that sizes the pool. The core-instance and table
-    /// totals are multiples of it, since a component spends several of each
-    /// and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set any
-    /// total on its own.
+    /// Unset, this uses the `--core-instances` count when that is given.
+    /// Otherwise it is derived from the machine: half the usable address
+    /// space and at most 90% of `vm.max_map_count`, allowing six mappings per
+    /// warm component (two for its stack, four for its memory; two with
+    /// copy-on-write images off, `WASMTIME_MEMORY_INIT_COW=false`). The floor is
+    /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
+    /// accounting or a finite data-size limit keep: there the stack and
+    /// table pools are committed at startup rather than reserved, 2.6 GiB at
+    /// the floor (on Windows only the tables are, about 625 MiB), and
+    /// `--set-max-memories-from-memory-precommit-limit` is how such a host
+    /// asks to be sized past it. With a 65,530 mapping limit and 47-bit
+    /// address space, Linux derives 9,829 memories.
+    ///
+    /// Multiplied by one memory's reservation (4 GiB plus a 32 MiB guard,
+    /// whatever `--default-heap-memory` is) it is the pool's address-space
+    /// reservation, so it is the knob that sizes the pool. The core-instance
+    /// and table totals are multiples of it, since a component spends several
+    /// of each and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set
+    /// any total on its own.
     #[arg(long = "max-memories", env = "WASH_MAX_MEMORIES")]
     pub max_memories: Option<u32>,
 
@@ -497,6 +541,46 @@ pub struct HostCommand {
     /// total.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
+
+    /// Set `--max-memories` from the memory precommit limit on a platform
+    /// that precommits the stack and table pools, instead of keeping 1000.
+    ///
+    /// wasmtime's pooling allocator is three pools, all sized by
+    /// `--max-memories`: the linear memories, whose 4 GiB reservations are
+    /// address space and never committed, and the fiber stacks (2 MiB each)
+    /// and tables (four of 160 KiB per memory), which are mapped read-write
+    /// when the engine is built (on Windows, only the tables; stacks are
+    /// mapped as they are used). Most kernels charge nothing for those
+    /// mappings until a page is touched. Windows, Linux with
+    /// `vm.overcommit_memory=2` and a process under a finite `RLIMIT_DATA`
+    /// precommit them: the whole mapping is charged against the limit on
+    /// such memory (`CommitLimit` in `/proc/meminfo`, `RLIMIT_DATA`, or RAM
+    /// plus page file on Windows) the moment it is made, about 2.6 MiB per
+    /// memory on Linux and 640 KiB on Windows, touched or not. So on those
+    /// platforms an unset `--max-memories` stays at 1000 (2.6 GiB on Linux)
+    /// rather than the machine's derived count (25 GiB at a default Linux's
+    /// 9,829).
+    ///
+    /// With this on, the host instead works out how many memories' stacks
+    /// and tables fit in a quarter of that precommit limit (capped by the
+    /// container's limit, or by physical memory where there is none, so swap
+    /// and the page file never raise it), at the sizes the pool will install:
+    /// `WASMTIME_POOLING_TABLE_ELEMENTS` sizes each table, and a
+    /// `WASMTIME_POOLING_TOTAL_STACKS` or `WASMTIME_POOLING_TOTAL_TABLES`
+    /// total comes off the top rather than growing with the count. It takes
+    /// the smallest of that, the address-space bound and the mapping bound,
+    /// never below 1000: the same rule every other platform follows. The
+    /// quarter is fixed, like the other derivation shares, because the
+    /// commit limit is shared with every other process and with this host's
+    /// own heap; a host that wants another count sets `--max-memories`.
+    /// Elsewhere, and whenever `--max-memories` or `--core-instances` is set
+    /// (either one turns the derivation off), this changes nothing.
+    #[arg(
+        long = "set-max-memories-from-memory-precommit-limit",
+        env = "WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT",
+        default_value_t = false
+    )]
+    pub max_memories_from_memory_precommit_limit: bool,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
@@ -1128,7 +1212,8 @@ impl CliCommand for HostCommand {
         // in a flag, and reporting it after a NATS dial has already failed
         // buries the actionable error under an unrelated one. The resolved
         // numbers are reported later, by the engine that installs them.
-        let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
+        use wash_runtime::engine::host_memory as hm;
+        let host_memory = hm::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
             self.max_memories,
@@ -1136,6 +1221,8 @@ impl CliCommand for HostCommand {
         )
         .map_err(|e| anyhow::anyhow!(e))?;
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
+        let max_initial_guest_memory =
+            parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1273,7 +1360,15 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
-        engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
+        // A host runs one engine, so a pool count nobody named is sized to the
+        // machine rather than left at the engine's library default.
+        if self.max_memories.is_none() && self.core_instances.is_none() {
+            engine_builder = engine_builder.with_derived_max_memories(
+                hm::MaxMemoriesDerivation::default()
+                    .with_memory_precommit_limit(self.max_memories_from_memory_precommit_limit),
+            );
+        }
+        engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode);
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
                 engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
@@ -1282,6 +1377,9 @@ impl CliCommand for HostCommand {
                 engine_builder = engine_builder.without_max_process_memory()
             }
             ProcessMemoryPolicy::Automatic => {}
+        }
+        if let Some(bytes) = max_initial_guest_memory {
+            engine_builder = engine_builder.with_max_initial_guest_memory_bytes(bytes);
         }
 
         let engine = engine_builder.build()?;
@@ -1637,6 +1735,109 @@ impl CliCommand for HostCommand {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used)]
+mod tls_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn host() -> HostCommand {
+        TestCli::parse_from(["wash-host"]).host
+    }
+
+    #[test]
+    fn outbound_identity_requires_both_files_for_public_callers() {
+        for (cert, key, expected) in [
+            (
+                Some("client.pem"),
+                None,
+                "--http-client-cert-path needs --http-client-key-path",
+            ),
+            (
+                None,
+                Some("client.key"),
+                "--http-client-key-path needs --http-client-cert-path",
+            ),
+        ] {
+            let mut host = host();
+            host.http_client_cert_path = cert.map(PathBuf::from);
+            host.http_client_key_path = key.map(PathBuf::from);
+            assert_eq!(host.client_tls_options().unwrap_err().to_string(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn outbound_tls_loads_static_and_rotating_identities() -> anyhow::Result<()> {
+        wash_runtime::init_crypto();
+        let dir = tempfile::tempdir()?;
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert_path = dir.path().join("client.pem");
+        let key_path = dir.path().join("client.key");
+        std::fs::write(&cert_path, cert.pem())?;
+        std::fs::write(&key_path, signing_key.serialize_pem())?;
+        let mut host = host();
+        host.egress_handler()?;
+        host.http_client_cert_path = Some(cert_path.clone());
+        host.http_client_key_path = Some(key_path.clone());
+        host.http_client_ca_paths = vec![cert_path];
+        let options = host.client_tls_options()?;
+        assert_eq!(options.extra_ca_paths, host.http_client_ca_paths);
+        assert!(options.client_identity.is_some());
+        host.egress_handler()?;
+        host.http_client_identity_refresh = Some(std::time::Duration::from_secs(60));
+        host.egress_handler()?;
+        host.http_client_identity_refresh = Some(std::time::Duration::ZERO);
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid --http-client-identity-refresh"),
+            "{error:#}"
+        );
+        std::fs::write(key_path, "not a private key")?;
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load the outbound client identity"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_tls_reports_missing_identity_and_ca_files() -> anyhow::Result<()> {
+        wash_runtime::init_crypto();
+        let dir = tempfile::tempdir()?;
+        let mut host = host();
+        host.http_client_identity_refresh = Some(std::time::Duration::from_secs(1));
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error.to_string().contains("needs --http-client-cert-path"),
+            "{error:#}"
+        );
+        host.http_client_identity_refresh = None;
+        host.http_client_ca_paths = vec![dir.path().join("missing.pem")];
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load --http-client-ca-path CA certificates"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod nats_tests {
     use clap::Parser;
 
@@ -1783,7 +1984,7 @@ host:
     }
 
     fn config_from(yaml: &str) -> crate::config::Config {
-        serde_yaml_ng::from_str(yaml).expect("config must parse")
+        serde_saphyr::from_str(yaml).expect("config must parse")
     }
 
     fn nats_bindings(
@@ -1941,7 +2142,7 @@ host:
     /// An unparseable policy is a config error, named as one.
     #[test]
     fn the_workload_config_value_is_typed() {
-        serde_yaml_ng::from_str::<crate::config::Config>(
+        serde_saphyr::from_str::<crate::config::Config>(
             "host:\n  plugins:\n    - id: wasmcloud-nats\n      workloadConfig: sometimes\n",
         )
         .expect_err("`sometimes` is not a policy");
@@ -1949,6 +2150,7 @@ host:
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod shutdown_tests {
     use std::path::PathBuf;
     use std::time::Duration;
@@ -2015,6 +2217,7 @@ mod shutdown_tests {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod policy_mode_tests {
     use clap::Parser;
 
@@ -2048,6 +2251,14 @@ mod policy_mode_tests {
     }
 
     #[test]
+    fn the_growth_mode_is_spelled_growth() {
+        assert_eq!(
+            parse(&["--guest-memory-mode=growth"]).guest_memory_mode,
+            GuestMemoryMode::Growth
+        );
+    }
+
+    #[test]
     fn an_ip_name_lookup_grant_lapses_only_when_given_a_lifetime() {
         assert_eq!(parse(&[]).ip_name_lookup_grant_lifetime, None);
         assert_eq!(
@@ -2069,6 +2280,7 @@ mod policy_mode_tests {
 }
 
 #[cfg(all(test, feature = "host-component-plugins"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::host_plugin_registry_credentials;
 
@@ -2094,16 +2306,6 @@ mod tests {
     }
 }
 
-/// CLI spelling of [`wash_runtime::engine::guest_memory::GuestMemoryMode`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum GuestMemoryMode {
-    /// Charge and report guest memory growth; allow it either way.
-    Count,
-    /// Refuse guest memory growth past `--max-guest-memory`.
-    #[default]
-    Enforce,
-}
-
 /// `--ip-name-lookup-grant-lifetime` from a flag or environment value, reading a
 /// blank one as unset.
 fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, String> {
@@ -2113,6 +2315,20 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, St
     humantime::parse_duration(raw)
         .map(Some)
         .map_err(|e| e.to_string())
+}
+
+/// `--max-initial-guest-memory`, reading a blank value as unset.
+fn parse_max_initial_guest_memory(raw: Option<&str>) -> anyhow::Result<Option<u64>> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
+        .map_err(|e| anyhow::anyhow!("invalid max-initial-guest-memory: {e}"))?;
+    anyhow::ensure!(
+        bytes > 0,
+        "max-initial-guest-memory must be greater than zero"
+    );
+    Ok(Some(bytes))
 }
 
 /// The three distinct meanings of the process-memory flag.
@@ -2142,6 +2358,7 @@ impl ProcessMemoryPolicy {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod process_memory_policy_tests {
     use super::*;
     #[test]
@@ -2166,30 +2383,27 @@ mod process_memory_policy_tests {
         assert!(ProcessMemoryPolicy::parse(Some("invalid")).is_err());
         Ok(())
     }
+
+    #[test]
+    fn max_initial_guest_memory_reads_blank_as_unset() -> anyhow::Result<()> {
+        for raw in [None, Some(""), Some("  ")] {
+            assert_eq!(parse_max_initial_guest_memory(raw)?, None);
+        }
+        assert_eq!(parse_max_initial_guest_memory(Some("4GiB"))?, Some(4 << 30));
+        assert!(parse_max_initial_guest_memory(Some("0")).is_err());
+        assert!(parse_max_initial_guest_memory(Some("off")).is_err());
+        Ok(())
+    }
 }
 
-/// Parse the guest mode, treating a blank environment value as unset.
+/// Parse the guest mode with the runtime's own parser,
+/// treating a blank environment value as unset.
 fn parse_guest_memory_mode(raw: &str) -> Result<GuestMemoryMode, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(GuestMemoryMode::default());
     }
-    match raw.to_ascii_lowercase().as_str() {
-        "count" => Ok(GuestMemoryMode::Count),
-        "enforce" => Ok(GuestMemoryMode::Enforce),
-        _ => Err(format!(
-            "invalid guest-memory-mode {raw:?}; expected 'count' or 'enforce'"
-        )),
-    }
-}
-
-impl From<GuestMemoryMode> for wash_runtime::engine::guest_memory::GuestMemoryMode {
-    fn from(mode: GuestMemoryMode) -> Self {
-        match mode {
-            GuestMemoryMode::Count => Self::Count,
-            GuestMemoryMode::Enforce => Self::Enforce,
-        }
-    }
+    raw.parse()
 }
 
 /// CLI spelling of [`wash_runtime::sockets::policy::EgressMode`].

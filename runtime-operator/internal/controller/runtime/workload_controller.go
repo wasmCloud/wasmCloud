@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -169,7 +170,7 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 	// overwrite the first after the start already went to it.
 	condition.RequireOptimisticLock(ctx)
 	if workload.Spec.HostID != "" {
-		environment, err := r.allowedEnvironment(workload)
+		environment, err := hostEnvironmentFilter(r.AllowSharedHosts, workload.Namespace, &workload.Spec)
 		if err != nil {
 			return r.denyEnvironment(workload, "Reject", err)
 		}
@@ -226,6 +227,11 @@ func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workloa
 func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtimev1alpha1.Workload) (*runtimev1alpha1.Host, error) {
 	hostList := runtimev1alpha1.HostList{}
 
+	environmentFilter, err := hostEnvironmentFilter(r.AllowSharedHosts, workload.Namespace, &workload.Spec)
+	if err != nil {
+		return nil, r.denyEnvironment(workload, "Reject", err)
+	}
+
 	// Every Host object lives in the operator's namespace. Tenant
 	// isolation is enforced by an indexed match on Host.Environment, not by
 	// Host.Namespace.
@@ -235,11 +241,6 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 		client.MatchingFields{
 			workloadSchedulableHostsIndex: string(condition.ConditionTrue),
 		},
-	}
-
-	environmentFilter, err := r.allowedEnvironment(workload)
-	if err != nil {
-		return nil, r.denyEnvironment(workload, "Reject", err)
 	}
 	if environmentFilter != "" {
 		listOpts = append(listOpts, client.MatchingFields{
@@ -289,7 +290,7 @@ func (r *WorkloadReconciler) denyHost(workload *runtimev1alpha1.Workload, host *
 // that is not answering.
 func (r *WorkloadReconciler) evictOutsideEnvironment(ctx context.Context, workload *runtimev1alpha1.Workload) error {
 	hostID := workload.Status.HostID
-	environment, denied := r.allowedEnvironment(workload)
+	environment, denied := hostEnvironmentFilter(r.AllowSharedHosts, workload.Namespace, &workload.Spec)
 	if denied == nil && environment == "" {
 		return nil
 	}
@@ -364,7 +365,7 @@ func (r *WorkloadReconciler) evictOutsideEnvironment(ctx context.Context, worklo
 // denyEnvironment records that the workload's own spec.environment is refused,
 // and returns err for its condition.
 func (r *WorkloadReconciler) denyEnvironment(workload *runtimev1alpha1.Workload, action string, err error) error {
-	if r.Recorder != nil {
+	if errors.Is(err, errCrossEnvironmentDenied) && r.Recorder != nil {
 		r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning,
 			"CrossEnvironmentSchedulingDenied", action,
 			"Environment %q is outside %q and operator has allowSharedHosts=false",
@@ -374,30 +375,32 @@ func (r *WorkloadReconciler) denyEnvironment(workload *runtimev1alpha1.Workload,
 	return err
 }
 
-// allowedEnvironment resolves the Host.Environment a workload may be placed in,
-// per the AllowSharedHosts × Spec.Environment matrix in namespace-host.md, for
-// both a chosen and a pinned host. Empty allows any: the default mode
-// (AllowSharedHosts=true, Environment unset) keeps Cluster-scope scheduling.
-func (r *WorkloadReconciler) allowedEnvironment(workload *runtimev1alpha1.Workload) (string, error) {
+var errCrossEnvironmentDenied = errors.New("cross-environment scheduling denied")
+
+// hostEnvironmentFilter returns the Host.Environment that a workload with
+// spec, in namespace, may be scheduled onto; "" accepts any. It follows the
+// AllowSharedHosts × Spec.Environment matrix in namespace-host.md. Default
+// mode (AllowSharedHosts=true, Environment unset) imposes no filter, exactly
+// preserving the legacy Cluster-scope scheduling behavior.
+func hostEnvironmentFilter(allowSharedHosts bool, namespace string, spec *runtimev1alpha1.WorkloadSpec) (string, error) {
 	switch {
-	case workload.Spec.Environment != "" && workload.Spec.Environment != workload.Namespace:
+	case spec.Environment != "" && spec.Environment != namespace:
 		// Explicit cross-tenant target.
-		if !r.AllowSharedHosts {
+		if !allowSharedHosts {
 			return "", fmt.Errorf(
-				"workload targets Environment %q but operator has allowSharedHosts=false",
-				workload.Spec.Environment,
+				"%w: workload targets Environment %q but operator has allowSharedHosts=false",
+				errCrossEnvironmentDenied, spec.Environment,
 			)
 		}
-		return workload.Spec.Environment, nil
-	case workload.Spec.Environment != "":
+		return spec.Environment, nil
+	case spec.Environment != "":
 		// Environment explicitly set to the workload's own namespace.
-		return workload.Namespace, nil
-	case !r.AllowSharedHosts:
+		return namespace, nil
+	case !allowSharedHosts:
 		// No Environment, sharing disabled — lock to the workload's namespace.
-		return workload.Namespace, nil
-	default:
-		return "", nil
+		return namespace, nil
 	}
+	return "", nil
 }
 
 // isSchedulable reports whether new workloads may be placed on host. A Host

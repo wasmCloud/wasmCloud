@@ -646,7 +646,7 @@ impl HostPlugin for MultiplexedBlobstore {
         // Clone the component (cheap, Arc-backed) so the immutable borrow ends
         // before we take the mutable linker borrow.
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         // `blobstore` (create/get container, copy/move) is routed per `(implements
         // ..)` label so each label lands on its own backend. `container` and
@@ -863,3 +863,8 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "multiplexed_contract_tests.rs"]
+mod contract_tests;

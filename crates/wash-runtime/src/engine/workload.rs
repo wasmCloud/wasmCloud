@@ -145,10 +145,11 @@ pub struct WorkloadMetadata {
     workload_namespace: Arc<str>,
     /// The actual wasmtime [`Component`] that can be instantiated
     component: Component,
-    /// The wasmtime [`Linker`] used to instantiate the component. Shared with
-    /// every component that started from the same base until something
-    /// writes to it (see [`Self::linker`]).
-    linker: Arc<Linker<SharedCtx>>,
+    /// Whether a store of this component may need a GC heap, as the engine
+    /// read off its source; `true`, the safe answer, until the engine says.
+    pub(crate) may_use_gc: bool,
+    /// The component's linker and the link built from it; see [`LinkState`].
+    link: LinkState,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
     /// Pinned directory handles with guest mount names and permissions.
@@ -183,12 +184,39 @@ pub struct WorkloadMetadata {
     /// Keeps the engine reusing this compile for any workload that loads the
     /// same digest while this one runs (see [`super::LiveCompile`]).
     pub(crate) compiled: Option<Arc<super::LiveCompile>>,
-    /// The component linked against `linker`, kept once a caller asked for it.
-    pre: std::sync::OnceLock<InstancePre<SharedCtx>>,
+}
+
+/// The component's linker, cached link, and write access in one state.
+#[derive(Clone)]
+enum LinkState {
+    /// Binding and linking are under way.
+    ///
+    /// - `linker` is the engine's shared base until something writes to it,
+    ///   and a copy of its own from then on (`written`).
+    /// - `pre` is the link, kept once a caller asks for it; a write forgets it.
+    Open {
+        linker: Arc<Linker<SharedCtx>>,
+        pre: std::sync::OnceLock<InstancePre<SharedCtx>>,
+        written: bool,
+    },
+    /// Resolved, and nothing ever wrote to the linker:
+    /// it is still the engine's shared base, so dropping it would free nothing.
+    /// The link is made on first use, as before sealing.
+    Shared {
+        linker: Arc<Linker<SharedCtx>>,
+        pre: std::sync::OnceLock<InstancePre<SharedCtx>>,
+    },
+    /// Resolved and linked: the linker copy is gone, and the link stands.
+    Linked(InstancePre<SharedCtx>),
+    /// Resolved without a link (an import nothing satisfied).
+    /// Only wasmtime's error is kept, rendered, so each use repeats it.
+    Unlinked(Arc<str>),
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
 pub const WORKLOAD_DEPLOYMENT_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-deployment";
+/// Kubernetes annotation set by the runtime-operator for the parent WorkloadDaemonSet.
+pub const WORKLOAD_DAEMONSET_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-daemonset";
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadReplicaSet.
 pub const WORKLOAD_REPLICASET_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-replicaset-name";
 /// Alternate WorkloadReplicaSet annotation key.
@@ -221,8 +249,9 @@ impl WorkloadMetadata {
         &self.workload_name
     }
 
-    /// Returns the stable workload name across replicas, if a deployment or
-    /// replicaset annotation was supplied by the orchestrator. Falls back to `workload_name`.
+    /// Returns the stable workload name across replicas, if a deployment,
+    /// daemonset or replicaset annotation was supplied by the orchestrator.
+    /// Falls back to `workload_name`.
     pub fn stable_workload_name(&self) -> &str {
         let non_empty = |key: &str| {
             self.annotations
@@ -234,6 +263,9 @@ impl WorkloadMetadata {
 
         if let Some(deployment) = non_empty(WORKLOAD_DEPLOYMENT_ANNOTATION) {
             return deployment;
+        }
+        if let Some(daemonset) = non_empty(WORKLOAD_DAEMONSET_ANNOTATION) {
+            return daemonset;
         }
         if let Some(replicaset) = non_empty(WORKLOAD_REPLICASET_ANNOTATION)
             .or_else(|| non_empty(WORKLOAD_REPLICASET_LEGACY_ANNOTATION))
@@ -261,18 +293,100 @@ impl WorkloadMetadata {
         self.component.engine()
     }
 
-    /// Returns a mutable reference to the component's linker.
+    /// Returns the mutable linker before workload resolution.
     ///
-    /// Copies the linker first if it is still the engine's shared one, so ask
-    /// for it only to write to it: a component nothing writes to never pays
-    /// for a linker of its own.
+    /// Copies the shared base on first write and invalidates the cached link.
+    /// Plugins bind in [`HostPlugin::on_workload_item_bind`], before resolution.
     ///
-    /// Forgets the linked component [`WorkloadComponent::pre_instantiate_ref`]
-    /// keeps, since a caller holding the linker mutably may change what it
-    /// links.
-    pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
-        self.pre = std::sync::OnceLock::new();
-        Arc::make_mut(&mut self.linker)
+    /// # Errors
+    ///
+    /// Returns an error if workload resolution has sealed the linker.
+    pub fn linker(&mut self) -> anyhow::Result<&mut Linker<SharedCtx>> {
+        let LinkState::Open {
+            linker,
+            pre,
+            written,
+        } = &mut self.link
+        else {
+            bail!(
+                "linker for component {} in workload {} is sealed; plugins must bind in \
+                 on_workload_item_bind, before resolution",
+                self.id,
+                self.workload_id,
+            );
+        };
+        *pre = std::sync::OnceLock::new();
+        *written = true;
+        Ok(Arc::make_mut(linker))
+    }
+
+    /// Whether workload resolution has sealed the linker against writes.
+    pub fn is_sealed(&self) -> bool {
+        !matches!(self.link, LinkState::Open { .. })
+    }
+
+    /// The link, for both component invocations and service starts:
+    /// kept once made, and forgotten by a write before sealing.
+    fn linked_pre(&self) -> wasmtime::Result<InstancePre<SharedCtx>> {
+        match &self.link {
+            LinkState::Open { linker, pre, .. } | LinkState::Shared { linker, pre } => {
+                if let Some(kept) = pre.get() {
+                    return Ok(kept.clone());
+                }
+                let linked = linker.instantiate_pre(&self.component)?;
+                // Losing a race to another caller leaves the same answer stored.
+                let _ = pre.set(linked.clone());
+                Ok(linked)
+            }
+            LinkState::Linked(kept) => Ok(kept.clone()),
+            LinkState::Unlinked(error) => Err(wasmtime::format_err!("{error}")),
+        }
+    }
+
+    /// Seal the linker against further writes.
+    ///
+    /// - **Nothing wrote to the linker:** it is still the engine's shared base,
+    ///   so it is kept, and the link is made on first use, as before.
+    ///   Dropping it would free nothing.
+    /// - **Something wrote to it:** the component holds a copy of the base,
+    ///   every WASI and `wasi:http` definition included: about 140 KiB,
+    ///   against the ~10 KiB the rest of an idle workload costs.
+    ///   The [`InstancePre`] keeps only what this component imports,
+    ///   so the link is made here and the copy let go.
+    /// - **It does not link** (an import nothing satisfied):
+    ///   only the error is kept, so each use repeats it,
+    ///   and the workload still runs, as it did before sealing.
+    ///
+    /// Returns whether a linker copy was let go for a kept link.
+    pub(crate) fn seal_linker(&mut self) -> bool {
+        let LinkState::Open {
+            linker,
+            pre,
+            written,
+        } = &self.link
+        else {
+            return matches!(self.link, LinkState::Linked(_));
+        };
+        if !written {
+            self.link = LinkState::Shared {
+                linker: Arc::clone(linker),
+                pre: pre.clone(),
+            };
+            return false;
+        }
+        self.link = match self.linked_pre() {
+            Ok(linked) => LinkState::Linked(linked),
+            Err(error) => {
+                tracing::warn!(
+                    workload_id = %self.workload_id,
+                    component_id = %self.id,
+                    error = format!("{error:#}"),
+                    "component does not link; every call to it will fail with this error"
+                );
+                LinkState::Unlinked(format!("{error:#}").into())
+            }
+        };
+        matches!(self.link, LinkState::Linked(_))
     }
 
     /// Reopen a host-linked WASI interface for a declared plugin override.
@@ -283,7 +397,7 @@ impl WorkloadMetadata {
     ///
     /// Resolves compatible revisions to the exact instance the host registered,
     /// preserving every function and resource the plugin does not redefine.
-    /// Calling `linker().instance(...)` with a different revision creates a
+    /// Calling `linker()?.instance(...)` with a different revision creates a
     /// separate instance: it neither overrides the host's newer name nor
     /// inherits the host's remaining definitions.
     pub fn wasi_override_instance(
@@ -309,7 +423,7 @@ impl WorkloadMetadata {
             .next()
             .context("missing WASI interface name")?;
         let instance = format!("wasi:{}/{name}@{version}", interface.package);
-        Ok(self.linker().instance(&instance)?)
+        Ok(self.linker()?.instance(&instance)?)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
@@ -488,7 +602,12 @@ impl WorkloadService {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker: linker.into(),
+                may_use_gc: true,
+                link: LinkState::Open {
+                    linker: linker.into(),
+                    pre: std::sync::OnceLock::new(),
+                    written: false,
+                },
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -501,7 +620,6 @@ impl WorkloadService {
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
                 compiled: None,
-                pre: std::sync::OnceLock::new(),
             },
             handle: None,
             max_restarts,
@@ -524,20 +642,21 @@ impl WorkloadService {
     }
 
     /// Pre-instantiate the component to prepare for execution.
+    ///
+    /// Reuses the linked component the service keeps once it is sealed (see
+    /// [`WorkloadMetadata::is_sealed`]), so service restarts do not need to
+    /// retain a linker copy.
     pub fn pre_instantiate(&self) -> anyhow::Result<CommandPre<SharedCtx>> {
-        let component = self.metadata.component.clone();
-        let pre = self.metadata.linker.instantiate_pre(&component)?;
-        let command = CommandPre::new(pre)?;
+        let command = CommandPre::new(self.metadata.linked_pre()?)?;
         Ok(command)
     }
 
-    /// Pre-instantiate the component for P3 execution.
+    /// Pre-instantiate the component for P3 execution using the same cached
+    /// link as [`Self::pre_instantiate`].
     pub fn pre_instantiate_p3(
         &self,
     ) -> anyhow::Result<wasmtime_wasi::p3::bindings::CommandPre<SharedCtx>> {
-        let component = self.metadata.component.clone();
-        let pre = self.metadata.linker.instantiate_pre(&component)?;
-        let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?;
+        let command = wasmtime_wasi::p3::bindings::CommandPre::new(self.metadata.linked_pre()?)?;
         Ok(command)
     }
 
@@ -547,10 +666,7 @@ impl WorkloadService {
     pub fn pre_instantiate_raw(
         &self,
     ) -> anyhow::Result<wasmtime::component::InstancePre<SharedCtx>> {
-        Ok(self
-            .metadata
-            .linker
-            .instantiate_pre(&self.metadata.component)?)
+        Ok(self.metadata.linked_pre()?)
     }
 
     /// Whether or not the service is currently running.
@@ -609,7 +725,12 @@ impl WorkloadComponent {
                 workload_name: workload_name.into(),
                 workload_namespace: workload_namespace.into(),
                 component,
-                linker: linker.into(),
+                may_use_gc: true,
+                link: LinkState::Open {
+                    linker: linker.into(),
+                    pre: std::sync::OnceLock::new(),
+                    written: false,
+                },
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -622,7 +743,6 @@ impl WorkloadComponent {
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
                 compiled: None,
-                pre: std::sync::OnceLock::new(),
             },
             name: component_name.into(),
             instances: Arc::new(InstancePool::new(instances)),
@@ -644,32 +764,22 @@ impl WorkloadComponent {
         self
     }
 
-    /// Pre-instantiate the component to prepare for instantiation.
-    pub fn pre_instantiate(&mut self) -> wasmtime::Result<InstancePre<SharedCtx>> {
-        let component = self.metadata.component.clone();
-        self.metadata.linker.instantiate_pre(&component)
+    /// Pre-instantiate the component to prepare for instantiation. The same
+    /// as [`Self::pre_instantiate_ref`]; both names are kept.
+    pub fn pre_instantiate(&self) -> wasmtime::Result<InstancePre<SharedCtx>> {
+        self.pre_instantiate_ref()
     }
 
-    /// Like [`Self::pre_instantiate`] but without requiring `&mut self`:
-    /// `Linker::instantiate_pre` only needs `&self`, so callers holding a read
-    /// lock on the component map can pre-instantiate without serializing on a
-    /// write lock.
+    /// The component's kept link, ready to instantiate.
     ///
     /// Linked once and reused: a request store or dispatch asks for this every
     /// time, and checking every import against the linker per request is work
     /// whose answer cannot change while nothing takes the linker mutably
-    /// (see [`WorkloadMetadata::linker`], which forgets it).
+    /// (see [`WorkloadMetadata::linker`], which forgets it). Once the workload
+    /// is resolved the link is sealed, and the linker gone if the component
+    /// linked (see [`WorkloadMetadata::is_sealed`]).
     pub fn pre_instantiate_ref(&self) -> wasmtime::Result<InstancePre<SharedCtx>> {
-        if let Some(pre) = self.metadata.pre.get() {
-            return Ok(pre.clone());
-        }
-        let pre = self
-            .metadata
-            .linker
-            .instantiate_pre(&self.metadata.component)?;
-        // Losing a race to another caller leaves the same answer stored.
-        let _ = self.metadata.pre.set(pre.clone());
-        Ok(pre)
+        self.metadata.linked_pre()
     }
 
     pub fn metadata(&self) -> &WorkloadMetadata {
@@ -794,8 +904,9 @@ pub struct ResolvedWorkload {
     name: Arc<str>,
     /// The namespace of the workload
     namespace: Arc<str>,
-    /// All components in the workload. This is behind a `RwLock` to support mutable
-    /// access to the component linkers.
+    /// All components in the workload. Behind a `RwLock` because resolving
+    /// writes to them (binding and linking, then sealing each linker) while
+    /// the cleanup snapshot shares them; resolved, they are only read.
     components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
     /// How many entries `components` holds, which never changes once resolved.
     component_count: usize,
@@ -809,8 +920,8 @@ pub struct ResolvedWorkload {
     invocation: crate::observability::InvocationMeter,
     /// An optional service component that runs once to completion or for the duration of the workload
     ///
-    /// Shared for the same reason as `host_interfaces`: its `Linker` is held
-    /// by value. The few writes after resolution go through `Arc::make_mut`,
+    /// Shared so workload clones reuse the service metadata and cached link.
+    /// The few writes after resolution go through `Arc::make_mut`,
     /// so a clone taken earlier keeps what it saw, as a by-value copy did.
     service: Option<Arc<WorkloadService>>,
     /// The ingress plugin-dispatched calls reach the service on, once one has
@@ -977,28 +1088,46 @@ impl ResolvedWorkload {
         let Some(service) = self.service.as_ref() else {
             bail!("service unexpectedly missing during execution");
         };
-        let mut store = self
-            .service_store_recipe(&service.metadata)
-            .await?
-            .build()
-            .await?;
-        let instance = pre
+        let recipe = self.service_store_recipe(&service.metadata).await?;
+        let mut store = recipe.build().await?;
+        let mut instance = pre
             .instantiate_async(&mut store)
             .await
             .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
         let handle = tokio::spawn(async move {
             loop {
-                if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
-                    error!(err = %e, retries = max_restarts, "service execution failed");
-                    if max_restarts == 0 {
-                        warn!("max restarts reached, service will not be restarted");
+                match instance.wasi_cli_run().call_run(&mut store).await {
+                    Ok(Ok(())) => {
+                        info!("service exited successfully");
                         break;
                     }
-                } else {
-                    info!("service exited successfully");
+                    Ok(Err(())) => error!(retries = max_restarts, "service exited with error"),
+                    Err(e) => {
+                        error!(err = ?e, retries = max_restarts, "service execution failed");
+                        crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
+                    }
+                }
+                if max_restarts == 0 {
+                    warn!("max restarts reached, service will not be restarted");
                     break;
                 }
                 max_restarts = max_restarts.saturating_sub(1);
+                store = match recipe.build().await {
+                    Ok(fresh) => fresh,
+                    Err(e) => {
+                        error!(err = ?e, "failed to rebuild service store; giving up");
+                        break;
+                    }
+                };
+                instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                }) {
+                    Ok(instance) => instance,
+                    Err(e) => {
+                        error!(err = ?e, "failed to instantiate service; giving up");
+                        break;
+                    }
+                };
             }
         });
 
@@ -1011,12 +1140,21 @@ impl ResolvedWorkload {
 
     /// Execute a service using P3 (wasi:cli@0.3) CommandPre.
     async fn execute_service_p3(&mut self) -> anyhow::Result<Option<Arc<JoinHandle<()>>>> {
-        let service = self
-            .service
-            .as_ref()
-            .map(|s| (s.pre_instantiate_p3(), s.max_restarts));
+        let service = match self.service.as_ref() {
+            Some(s) => Some((
+                anyhow::Context::with_context(s.pre_instantiate_p3(), || {
+                    format!(
+                        "failed to pre-instantiate the P3 service of workload '{}/{}'",
+                        s.metadata.workload_namespace(),
+                        s.metadata.workload_name()
+                    )
+                })?,
+                s.max_restarts,
+            )),
+            None => None,
+        };
 
-        if let Some((Ok(pre), mut max_restarts)) = service {
+        if let Some((pre, mut max_restarts)) = service {
             self.resolve_service_volume_mounts().await?;
             // Capture the store recipe so each restarted incarnation gets a
             // FRESH store: a trapped store cannot re-enter any component
@@ -1030,17 +1168,15 @@ impl ResolvedWorkload {
                 self.service_store_recipe(&service.metadata).await?
             };
             let mut store = recipe.build().await?;
+            let mut instance = pre
+                .instantiate_async(&mut store)
+                .await
+                .map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })
+                .context("failed to instantiate P3 service")?;
             let handle = tokio::spawn(async move {
                 loop {
-                    let instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
-                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
-                    }) {
-                        Ok(i) => i,
-                        Err(e) => {
-                            error!(err = %e, "failed to instantiate P3 service");
-                            break;
-                        }
-                    };
                     let result = store
                         .run_concurrent(async move |accessor| {
                             instance.wasi_cli_run().call_run(accessor).await
@@ -1077,6 +1213,15 @@ impl ResolvedWorkload {
                             break;
                         }
                     }
+                    instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                    }) {
+                        Ok(instance) => instance,
+                        Err(e) => {
+                            error!(err = ?e, "failed to instantiate P3 service; giving up");
+                            break;
+                        }
+                    };
                 }
             });
 
@@ -1150,6 +1295,10 @@ impl ResolvedWorkload {
         let service_calls = Arc::clone(&self.service_calls);
         let (ingresses, http_tx, messaging_tx) =
             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
+        let first = crate::host::trigger_service::PreparedTriggerDriver::instantiate(
+            &mut store, &pre, ingresses,
+        )
+        .await?;
         if let Some(http_tx) = http_tx {
             self.http_handler()?
                 .on_service_http_resolved(self.id(), &ingress_routes, http_tx)
@@ -1165,18 +1314,14 @@ impl ResolvedWorkload {
                 })?;
         }
 
-        // Supervise the driver: on a fault (e.g. a guest trap in `cli/run` or a
-        // handler), re-instantiate into the same store, rebuild the ingresses, and
-        // re-register their handlers (swapping the stale senders) until the restart
-        // budget is exhausted. A clean exit (every channel closed) stops it.
-        // A property of what the component exports, not of an incarnation.
+        // Each restart gets a fresh store and replaces the ingress senders.
         let needs_handler = serves_http || serves_messaging;
         let handle = tokio::spawn(async move {
-            let mut first = Some(ingresses);
+            let mut first = Some(first);
             let mut restarts = max_restarts;
             loop {
-                let ingresses = match first.take() {
-                    Some(ingresses) => ingresses,
+                let result = match first.take() {
+                    Some(first) => first.run(&mut store, cli_run_error).await,
                     None => {
                         let (ingresses, http_tx, messaging_tx) =
                             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
@@ -1228,17 +1373,16 @@ impl ResolvedWorkload {
                                 );
                             }
                         }
-                        ingresses
+                        crate::host::trigger_service::run_trigger_driver(
+                            &mut store,
+                            &pre,
+                            ingresses,
+                            cli_run_error,
+                        )
+                        .await
                     }
                 };
-                match crate::host::trigger_service::run_trigger_driver(
-                    &mut store,
-                    &pre,
-                    ingresses,
-                    cli_run_error,
-                )
-                .await
-                {
+                match result {
                     Ok(()) => {
                         info!("trigger service exited");
                         break;
@@ -1318,7 +1462,8 @@ impl ResolvedWorkload {
 
     /// Access the resolved components and their metadata.
     ///
-    /// The map remains writable for updates to existing component metadata.
+    /// The map remains writable for metadata updates, but resolution seals
+    /// each linker: [`WorkloadMetadata::linker`] then returns an error.
     /// Adding or removing components after resolution is unsupported: the
     /// component count and bindings are settled when the workload is resolved.
     pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
@@ -1723,7 +1868,7 @@ impl ResolvedWorkload {
                         e.context("failed to pre-instantiate during component linking")
                     })?;
 
-                    let mut linker_instance = match metadata.linker().instance(import_name) {
+                    let mut linker_instance = match metadata.linker()?.instance(import_name) {
                         Ok(i) => i,
                         Err(e) => {
                             trace!(name = import_name, error = %e, "error finding instance in linker, skipping");
@@ -1787,7 +1932,7 @@ impl ResolvedWorkload {
                                         engine: plugin_engine.clone(),
                                         stream_payloads: self.stream_payloads.clone(),
                                         http_handler: self.http_handler.clone(),
-                                        components: self.components.clone(),
+                                        components: Arc::downgrade(&self.components),
                                         active_component_id: plugin_component_id.clone(),
                                         linked_component_ids: nested_linked_component_ids.clone(),
                                         #[cfg(feature = "wasi-tls")]
@@ -1977,13 +2122,37 @@ impl ResolvedWorkload {
         self.component_count
     }
 
-    /// Helper to create a new wasmtime Store for multiple components and set active given component in the workload.
+    /// Cost exactly the components `new_store` instantiates, plus the active
+    /// component its caller instantiates afterwards. Resolve this once when a
+    /// trigger binds, under the same metadata lock used to build stores.
+    pub(crate) async fn admit_store(
+        &self,
+        component_id: &str,
+        pool: &super::pool_share::PoolShare,
+    ) -> anyhow::Result<super::pool_share::PoolCost> {
+        let components = self.components.read().await;
+        let component = components
+            .get(component_id)
+            .context("component ID not found in workload")?;
+        let mut instantiated = Vec::with_capacity(component.metadata.linked_components.len() + 1);
+        instantiated.push(component.metadata.component());
+        let mut may_use_gc = component.metadata.may_use_gc;
+        for linked_id in &component.metadata.linked_components {
+            let linked = components
+                .get(linked_id)
+                .with_context(|| format!("linked component '{linked_id}' not found in workload"))?;
+            instantiated.push(linked.metadata.component());
+            may_use_gc |= linked.metadata.may_use_gc;
+        }
+        pool.admit_store(instantiated, may_use_gc)
+    }
+
+    /// A store for `component_id`, with the components it links to, stamped
+    /// with whose execution it runs.
     ///
-    /// Builds the store under one read lock: cloning `WorkloadMetadata` would
-    /// deep-clone its by-value `Linker`, and `pre_instantiate_ref` needs only
-    /// read access, so concurrent callers don't serialize on a write lock.
-    /// Nothing is retained past the returned store.
-    /// A store for `component_id`, stamped with whose execution it runs.
+    /// Built under one read lock: `pre_instantiate_ref` needs only read
+    /// access, so concurrent callers don't serialize on a write lock, and
+    /// nothing is retained past the returned store.
     ///
     /// The stamp is what lets the epoch callback credit `guest.execution.total`
     /// without a call to hang the number on — the only correct instrument for a
@@ -2213,7 +2382,7 @@ impl ResolvedWorkload {
 
     /// What dispatching to `component_id` needs, resolved once: this workload's
     /// own key for it (so a caller holding one does not keep a second copy of
-    /// the id), the component pre-linked against its linker, and the warm set
+    /// the id), the component's kept link, and the warm set
     /// its calls run on.
     ///
     /// All three under one read lock, so a dispatch takes none: what they answer
@@ -2345,8 +2514,31 @@ impl ResolvedWorkload {
         })
     }
 
-    /// Pre-link `component_id` against its linker, ready to instantiate into a
-    /// store the caller owns.
+    /// Seal component and service linkers after their imports are resolved
+    /// (see [`WorkloadMetadata::seal_linker`]), then point `cleanup` at the
+    /// sealed workload. Components share their lock with the snapshot, but
+    /// linking may have copied the service, so the snapshot taken before
+    /// would otherwise keep the old copy's open linker.
+    async fn seal_linkers(&mut self, cleanup: Option<&WorkloadResources>) {
+        let mut components = self.components.write().await;
+        let sealed = components
+            .values_mut()
+            .map(|component| component.metadata.seal_linker())
+            .filter(|sealed| *sealed)
+            .count();
+        trace!(sealed, total = components.len(), "sealed component linkers");
+        drop(components);
+        if let Some(service) = &mut self.service {
+            let sealed = Arc::make_mut(service).metadata.seal_linker();
+            trace!(sealed, "sealed service linker");
+        }
+        if let Some(cleanup) = cleanup {
+            cleanup.resolved(self);
+        }
+    }
+
+    /// The kept link for `component_id`, ready to instantiate into a store
+    /// the caller owns.
     ///
     /// Only a *component* has one: the workload's service is already
     /// instantiated, so a plugin that would call into either goes through
@@ -2356,8 +2548,8 @@ impl ResolvedWorkload {
         &self,
         component_id: &str,
     ) -> anyhow::Result<wasmtime::component::InstancePre<SharedCtx>> {
-        // A read lock: linking needs only `&Linker`, and a write lock here
-        // would serialize every request and dispatch on this workload.
+        // A read lock: the link is kept, so reading it needs only `&self`,
+        // and a write lock here would serialize every request and dispatch.
         let components = self.components.read().await;
         let component = components
             .get(component_id)
@@ -2515,7 +2707,7 @@ impl ResolvedWorkload {
                         engine: engine.clone(),
                         stream_payloads: self.stream_payloads.clone(),
                         http_handler: self.http_handler.clone(),
-                        components: self.components.clone(),
+                        components: Arc::downgrade(&self.components),
                         active_component_id: Arc::clone(&component_id),
                         linked_component_ids: linked_component_ids.clone(),
                         #[cfg(feature = "wasi-tls")]
@@ -3517,19 +3709,23 @@ impl UnresolvedWorkload {
                     // A WASI override redefines names the host already linked; the
                     // linker allows that only for the duration of this bind.
                     let overriding = !p.wasi_overrides().imports.is_empty();
-                    if overriding {
-                        workload_item.linker().allow_shadowing(true);
+                    let bound = async {
+                        if overriding {
+                            workload_item.linker()?.allow_shadowing(true);
+                        }
+                        let bound = p
+                            .on_workload_item_bind(
+                                &mut workload_item,
+                                WitInterfaces::new(&matching_interfaces),
+                            )
+                            .instrument(item_bind_span)
+                            .await;
+                        if overriding {
+                            workload_item.linker()?.allow_shadowing(false);
+                        }
+                        bound
                     }
-                    let bound = p
-                        .on_workload_item_bind(
-                            &mut workload_item,
-                            WitInterfaces::new(&matching_interfaces),
-                        )
-                        .instrument(item_bind_span)
-                        .await;
-                    if overriding {
-                        workload_item.linker().allow_shadowing(false);
-                    }
+                    .await;
                     if let Err(e) = bound {
                         tracing::error!(
                             plugin_id = plugin_id,
@@ -3747,6 +3943,11 @@ impl UnresolvedWorkload {
             }
             bail!(e);
         }
+
+        // Binding and linking are done, including the service's sibling
+        // imports. Keep the links before notifying plugins, so their
+        // `instantiate_pre` finds them already kept.
+        resolved_workload.seal_linkers(cleanup).await;
 
         // Notify plugins of the resolved workload
         for (plugin, component_ids) in bound_plugins.iter() {
@@ -4770,6 +4971,9 @@ mod tests {
     /// A component built from WAT, so a test can state an exact import/export
     /// shape rather than take whatever a fixture happens to have.
     fn component_from_wat(id: &str, wat: &str) -> WorkloadComponent {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
         let engine = wasmtime::Engine::default();
         let linker = Linker::new(&engine);
         let wasm = wat::parse_str(wat).expect("failed to parse WAT");
@@ -4794,7 +4998,7 @@ mod tests {
     /// The linked component is kept once asked for, and forgotten whenever the
     /// linker is taken mutably, so a link added afterwards is never missed.
     #[test]
-    fn pre_instantiate_ref_is_kept_until_the_linker_changes() {
+    fn pre_instantiate_ref_is_kept_until_the_linker_changes() -> anyhow::Result<()> {
         let mut component = component_from_wat(
             "pre",
             r#"(component
@@ -4805,30 +5009,28 @@ mod tests {
             component.pre_instantiate_ref().is_err(),
             "the import is not linked yet"
         );
-        assert!(
-            component.metadata.pre.get().is_none(),
-            "a failure is not kept"
-        );
+        assert!(!kept_link(&component), "a failure is not kept");
 
         component
             .metadata
-            .linker()
+            .linker()?
             .instance("test:pre/iface")
             .unwrap()
             .func_wrap("f", |_, (): ()| Ok(()))
             .unwrap();
         component.pre_instantiate_ref().unwrap();
-        assert!(component.metadata.pre.get().is_some());
+        assert!(kept_link(&component));
         component.pre_instantiate_ref().unwrap();
 
-        let _ = component.metadata.linker();
-        assert!(component.metadata.pre.get().is_none());
+        component.metadata.linker()?;
+        assert!(!kept_link(&component));
+        Ok(())
     }
 
     /// Components share the linker they start from until one is written to;
     /// the write lands on a copy of that one component's own.
     #[test]
-    fn a_shared_linker_is_copied_only_when_written() {
+    fn a_shared_linker_is_copied_only_when_written() -> anyhow::Result<()> {
         let mut a = component_from_wat(
             "a",
             r#"(component
@@ -4845,13 +5047,13 @@ mod tests {
                     (canon lift (core func $forward "call")))
             )"#,
         );
-        let shared = Arc::clone(&a.metadata.linker);
+        let shared = Arc::clone(linker_of(&a));
         let mut b = a.clone();
-        assert!(Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+        assert!(Arc::ptr_eq(linker_of(&a), linker_of(&b)));
         assert!(a.pre_instantiate_ref().is_err());
 
         b.metadata
-            .linker()
+            .linker()?
             .instance("test:cow/iface")
             .unwrap()
             .func_wrap("f", |_, (): ()| Ok((2_u32,)))
@@ -4865,19 +5067,19 @@ mod tests {
             shared.instantiate_pre(a.metadata.component()).is_err(),
             "the shared base must not inherit a component's binding"
         );
-        assert!(!Arc::ptr_eq(&a.metadata.linker, &b.metadata.linker));
+        assert!(!Arc::ptr_eq(linker_of(&a), linker_of(&b)));
         assert!(
-            Arc::ptr_eq(&a.metadata.linker, &shared),
+            Arc::ptr_eq(linker_of(&a), &shared),
             "the component not written to keeps the shared linker"
         );
         a.metadata
-            .linker()
+            .linker()?
             .instance("test:cow/iface")
             .unwrap()
             .func_wrap("f", |_, (): ()| Ok((1_u32,)))
             .unwrap();
         assert!(
-            !Arc::ptr_eq(&a.metadata.linker, &shared),
+            !Arc::ptr_eq(linker_of(&a), &shared),
             "taking it mutably while shared copies it"
         );
 
@@ -4898,6 +5100,7 @@ mod tests {
         assert_eq!(call(&a), 1);
         assert_eq!(call(&b), 2, "the first component's binding must survive");
         assert!(shared.instantiate_pre(a.metadata.component()).is_err());
+        Ok(())
     }
 
     fn marker_importer(id: &str) -> WorkloadComponent {
@@ -4905,6 +5108,430 @@ mod tests {
             id,
             &format!(r#"(component (import "{MARKER}" (instance)))"#),
         )
+    }
+
+    /// Sealing keeps the linked component, frees the linker copy the binding
+    /// made, and turns a late write into a refusal; a component that does not
+    /// link is sealed the same way, keeping only its error.
+    #[test]
+    fn sealing_frees_the_linker_copy_and_keeps_the_link() -> anyhow::Result<()> {
+        let mut a = component_from_wat(
+            "a",
+            r#"(component
+                (import "test:cow/iface" (instance $iface
+                    (export "f" (func (result u32)))))
+                (alias export $iface "f" (func $f))
+                (core func $f (canon lower (func $f)))
+                (core module $forward
+                    (import "host" "f" (func $f (result i32)))
+                    (func (export "call") (result i32) call $f))
+                (core instance $forward (instantiate $forward
+                    (with "host" (instance (export "f" (func $f))))))
+                (func (export "call") (result u32)
+                    (canon lift (core func $forward "call")))
+            )"#,
+        );
+        let call = |component: &WorkloadComponent| {
+            let ctx = crate::engine::ctx::Ctx::builder("seal", component.id()).build();
+            let mut store = wasmtime::Store::new(component.metadata.engine(), SharedCtx::new(ctx));
+            let instance = component
+                .pre_instantiate_ref()
+                .unwrap()
+                .instantiate(&mut store)
+                .unwrap();
+            let func = instance
+                .get_typed_func::<(), (u32,)>(&mut store, "call")
+                .unwrap();
+            let (value,) = func.call(&mut store, ()).unwrap();
+            value
+        };
+
+        a.metadata
+            .linker()?
+            .instance("test:cow/iface")
+            .unwrap()
+            .func_wrap("f", |_, (): ()| Ok((3_u32,)))
+            .unwrap();
+        let copy = Arc::downgrade(linker_of(&a));
+        assert!(a.metadata.seal_linker());
+        assert!(a.metadata.is_sealed());
+        assert!(
+            matches!(a.metadata.link, LinkState::Linked(_)),
+            "the linker is let go"
+        );
+        assert!(
+            copy.upgrade().is_none(),
+            "the linker copy is freed once the link is kept"
+        );
+        assert!(kept_link(&a));
+        assert_eq!(call(&a), 3);
+        assert_eq!(call(&a), 3, "the kept link survives use");
+
+        let error = a
+            .metadata
+            .linker()
+            .err()
+            .expect("sealed linker must reject writes");
+        assert!(error.to_string().contains("sealed"));
+        assert!(error.to_string().contains(a.id()));
+        assert!(error.to_string().contains(a.metadata.workload_id()));
+        assert!(kept_link(&a));
+        assert_eq!(call(&a), 3, "a rejected write preserves the kept link");
+
+        assert!(a.metadata.seal_linker(), "sealing again is a no-op");
+
+        // A component that does not link is sealed all the same, keeps the
+        // error it failed with, and refuses late writes like its siblings.
+        // Something wrote to its linker, so there is a copy to let go.
+        let mut unlinked = component_from_wat(
+            "unlinked",
+            r#"(component
+                 (import "test:pre/iface" (instance (export "f" (func))))
+               )"#,
+        );
+        unlinked
+            .metadata
+            .linker()?
+            .instance("test:other/iface")
+            .unwrap();
+        let before = unlinked
+            .pre_instantiate_ref()
+            .err()
+            .expect("missing import must fail before sealing");
+        assert!(!unlinked.metadata.seal_linker());
+        assert!(unlinked.metadata.is_sealed());
+        assert!(matches!(unlinked.metadata.link, LinkState::Unlinked(_)));
+        let after = unlinked
+            .pre_instantiate_ref()
+            .err()
+            .expect("missing import must still fail after sealing");
+        assert_eq!(
+            format!("{after:#}"),
+            format!("{before:#}"),
+            "wasmtime's own error, as before"
+        );
+        assert!(unlinked.metadata.linker().is_err());
+        assert!(
+            !unlinked.metadata.seal_linker(),
+            "sealing again still has no link"
+        );
+        Ok(())
+    }
+
+    /// A component nothing wrote to still shares the engine's linker, so
+    /// sealing keeps it, makes no link, and frees nothing; the link is made on
+    /// first use, as before sealing.
+    #[test]
+    fn sealing_an_untouched_component_keeps_the_shared_linker_and_links_lazily() {
+        let mut untouched = component_from_wat(
+            "untouched",
+            r#"(component
+                (core module $m (func (export "f")))
+                (core instance (instantiate $m)))"#,
+        );
+        let shared = Arc::clone(linker_of(&untouched));
+        assert!(!untouched.metadata.seal_linker(), "no copy to let go");
+        assert!(untouched.metadata.is_sealed());
+        assert!(untouched.metadata.linker().is_err());
+        match &untouched.metadata.link {
+            LinkState::Shared { linker, pre } => {
+                assert!(Arc::ptr_eq(linker, &shared), "the shared linker is kept");
+                assert!(pre.get().is_none(), "sealing made no link");
+            }
+            _ => panic!("an untouched component seals as shared"),
+        }
+        untouched.pre_instantiate_ref().unwrap();
+        assert!(kept_link(&untouched), "the first use links it");
+        assert!(untouched.metadata.linker().is_err());
+    }
+
+    /// The linker a component holds, for the tests that watch it being
+    /// shared, copied and let go.
+    fn linker_of(component: &WorkloadComponent) -> &Arc<Linker<SharedCtx>> {
+        open_linker_of(&component.metadata)
+    }
+
+    fn open_linker_of(metadata: &WorkloadMetadata) -> &Arc<Linker<SharedCtx>> {
+        match &metadata.link {
+            LinkState::Open { linker, .. } => linker,
+            LinkState::Shared { .. } | LinkState::Linked(_) | LinkState::Unlinked(_) => {
+                panic!("an unsealed component keeps its linker")
+            }
+        }
+    }
+
+    /// Whether a link is kept: cached while open, or standing once sealed.
+    fn kept_link(component: &WorkloadComponent) -> bool {
+        match &component.metadata.link {
+            LinkState::Open { pre, .. } | LinkState::Shared { pre, .. } => pre.get().is_some(),
+            LinkState::Linked(_) => true,
+            LinkState::Unlinked(_) => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn sealing_service_linkers_preserves_sibling_imports() -> anyhow::Result<()> {
+        for with_cleanup in [false, true] {
+            let engine = wasmtime::Engine::default();
+            let service = WorkloadService::new(
+                "sealed-service",
+                "sealed-service",
+                "test",
+                Component::new(
+                    &engine,
+                    wat::parse_str(
+                        r#"(component
+                            (import "test:service/probe" (instance (export "probe" (func)))))"#,
+                    )?,
+                )?,
+                Linker::new(&engine),
+                vec![],
+                LocalResources::default(),
+                1,
+                Arc::default(),
+            );
+            let original_linker = Arc::downgrade(open_linker_of(&service.metadata));
+            let callee = WorkloadComponent::new(
+                "sealed-service",
+                "sealed-service",
+                "test",
+                "callee",
+                Component::new(
+                    &engine,
+                    wat::parse_str(
+                        r#"(component
+                            (core module $m (func (export "probe")))
+                            (core instance $m (instantiate $m))
+                            (func $probe (canon lift (core func $m "probe")))
+                            (instance $api (export "probe" (func $probe)))
+                            (export "test:service/probe" (instance $api)))"#,
+                    )?,
+                )?,
+                Linker::new(&engine),
+                vec![],
+                LocalResources::default(),
+                Arc::default(),
+                InstancePolicy::Ephemeral,
+            );
+            let callee_id = Arc::clone(&callee.metadata.id);
+            // Linking writes the callee's export into the importer's linker, so
+            // it holds a copy that sealing lets go; `broken` also imports
+            // something nothing provides, so it seals without a link.
+            let sibling = |id: &str, extra: &str| -> anyhow::Result<WorkloadComponent> {
+                Ok(WorkloadComponent::new(
+                    "sealed-service",
+                    "sealed-service",
+                    "test",
+                    id,
+                    Component::new(
+                        &engine,
+                        wat::parse_str(format!(
+                            r#"(component
+                                (import "test:service/probe" (instance (export "probe" (func))))
+                                {extra})"#
+                        ))?,
+                    )?,
+                    Linker::new(&engine),
+                    vec![],
+                    LocalResources::default(),
+                    Arc::default(),
+                    InstancePolicy::Ephemeral,
+                ))
+            };
+            let importer = sibling("importer", "")?;
+            let importer_linker = Arc::downgrade(open_linker_of(&importer.metadata));
+            let importer_id = Arc::clone(&importer.metadata.id);
+            let broken = sibling(
+                "broken",
+                r#"(import "test:missing/iface" (instance (export "f" (func))))"#,
+            )?;
+            let broken_id = Arc::clone(&broken.metadata.id);
+            let cleanup = with_cleanup.then(WorkloadResources::default);
+            let resolved = UnresolvedWorkload::new(
+                "sealed-service",
+                "sealed-service",
+                "test",
+                Some(service),
+                [callee, importer, broken],
+                vec![],
+            )
+            .resolve_for_start(
+                None,
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+                cleanup.as_ref(),
+            )
+            .await?;
+            let service = resolved.service.as_ref().unwrap();
+            assert!(service.metadata.is_sealed());
+            assert_eq!(
+                service.metadata.linked_components,
+                HashSet::from([Arc::clone(&callee_id)])
+            );
+            service.pre_instantiate_raw()?;
+            assert!(original_linker.upgrade().is_none());
+            {
+                let components = resolved.components();
+                let components = components.read().await;
+                assert!(
+                    matches!(
+                        components[&callee_id].metadata.link,
+                        LinkState::Shared { .. }
+                    ),
+                    "nothing wrote to the callee's linker"
+                );
+                assert!(
+                    matches!(components[&importer_id].metadata.link, LinkState::Linked(_)),
+                    "the importer's link is kept"
+                );
+                assert!(
+                    importer_linker.upgrade().is_none(),
+                    "and its linker copy freed"
+                );
+                assert!(
+                    matches!(components[&broken_id].metadata.link, LinkState::Unlinked(_)),
+                    "a component that does not link still resolves, keeping its error"
+                );
+            }
+            if let Some(cleanup) = cleanup {
+                let state = cleanup.state.lock().unwrap();
+                let saved = state.resolved.as_ref().unwrap().service.as_ref().unwrap();
+                assert!(
+                    Arc::ptr_eq(service, saved),
+                    "cleanup must keep the sealed service"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sealing_service_linkers_preserves_repeated_starts() -> anyhow::Result<()> {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
+        for p3 in [false, true] {
+            let mut config = wasmtime::Config::new();
+            config.wasm_component_model_async(true);
+            let engine = wasmtime::Engine::new(&config)?;
+            let (run, lift, version) = if p3 {
+                (
+                    r#"(core func $return (canon task.return (result (result))))
+                       (core module $m
+                         (import "host" "probe" (func $probe))
+                         (import "host" "return" (func $return (param i32)))
+                         (func (export "run") (result i32)
+                           call $probe i32.const 0 call $return i32.const 0)
+                         (func (export "callback") (param i32 i32 i32) (result i32)
+                           unreachable))
+                       (core instance $m (instantiate $m (with "host" (instance
+                         (export "probe" (func $probe)) (export "return" (func $return))))))"#,
+                    r#"(func $run async (result (result)) (canon lift (core func $m "run")
+                         async (callback (core func $m "callback"))))"#,
+                    "0.3.0",
+                )
+            } else {
+                (
+                    r#"(core module $m
+                         (import "host" "probe" (func $probe))
+                         (func (export "run") (result i32) call $probe i32.const 0))
+                       (core instance $m (instantiate $m (with "host" (instance
+                         (export "probe" (func $probe))))))"#,
+                    r#"(func $run (result (result)) (canon lift (core func $m "run")))"#,
+                    "0.2.0",
+                )
+            };
+            let wasm = wat::parse_str(format!(
+                r#"(component
+                     (import "test:service/probe" (instance $host (export "probe" (func))))
+                     (alias export $host "probe" (func $probe))
+                     (core func $probe (canon lower (func $probe)))
+                     {run}
+                     {lift}
+                     (instance $cli (export "run" (func $run)))
+                     (export "wasi:cli/run@{version}" (instance $cli)))"#
+            ))?;
+            let mut service = WorkloadService::new(
+                "sealed-service",
+                "sealed-service",
+                "test",
+                Component::new(&engine, wasm)?,
+                Linker::new(&engine),
+                vec![],
+                LocalResources::default(),
+                1,
+                Arc::default(),
+            );
+            let calls = Arc::new(AtomicUsize::new(0));
+            service
+                .metadata
+                .linker()?
+                .instance("test:service/probe")?
+                .func_wrap("probe", {
+                    let calls = Arc::clone(&calls);
+                    move |_, (): ()| {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                })?;
+            // Populate the cache before resolution too; sealing must preserve it.
+            service.pre_instantiate_raw()?;
+            let copy = Arc::downgrade(open_linker_of(&service.metadata));
+            let cleanup = WorkloadResources::default();
+            let mut resolved = UnresolvedWorkload::new(
+                "sealed-service",
+                "sealed-service",
+                "test",
+                Some(service),
+                [],
+                vec![],
+            )
+            .resolve_for_start(
+                None,
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+                Some(&cleanup),
+            )
+            .await?;
+            assert!(
+                copy.upgrade().is_none(),
+                "service and cleanup must release the linker"
+            );
+            let service = resolved.service_mut().unwrap();
+            assert!(service.metadata.linker().is_err());
+            for start in 1..=2 {
+                let ctx = crate::engine::ctx::Ctx::builder("sealed-service", service.id()).build();
+                let mut store = wasmtime::Store::new(&engine, SharedCtx::new(ctx));
+                // Both the raw view (used by trigger services) and typed command
+                // views must keep working after the linker is gone.
+                service
+                    .pre_instantiate_raw()?
+                    .instantiate_async(&mut store)
+                    .await?;
+                if p3 {
+                    let command = service
+                        .pre_instantiate_p3()?
+                        .instantiate_async(&mut store)
+                        .await?;
+                    let result = store
+                        .run_concurrent(async |accessor| {
+                            command.wasi_cli_run().call_run(accessor).await
+                        })
+                        .await??;
+                    assert_eq!(result, Ok(()));
+                } else {
+                    let command = service
+                        .pre_instantiate()?
+                        .instantiate_async(&mut store)
+                        .await?;
+                    assert_eq!(command.wasi_cli_run().call_run(&mut store).await?, Ok(()));
+                }
+                assert_eq!(calls.load(Ordering::SeqCst), start);
+            }
+        }
+        Ok(())
     }
 
     fn marker_exporter(id: &str) -> WorkloadComponent {
@@ -5049,6 +5676,37 @@ mod tests {
             .await
             .unwrap();
         assert!(bound.is_empty(), "no entry, no binding");
+    }
+
+    #[tokio::test]
+    async fn a_sealed_linker_failure_rolls_back_the_override_plugin() -> anyhow::Result<()> {
+        let mut component = component_from_wat(
+            "fs-user",
+            r#"(component (import "wasi:filesystem/types@0.2.12" (instance)))"#,
+        );
+        component.metadata.seal_linker();
+        let plugin = Arc::new(
+            MockPlugin::new("view-plugin", vec![WitInterface::from(MARKER)], vec![])
+                .overriding("wasi:filesystem/preopens,types@0.2.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+        let mut workload = marker_workload(vec![component]);
+
+        let error = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .err()
+            .context("binding a sealed linker unexpectedly succeeded")?;
+
+        assert!(error.to_string().contains("sealed"));
+        let methods = plugin
+            .get_call_records()
+            .into_iter()
+            .map(|record| record.method)
+            .collect::<Vec<_>>();
+        assert_eq!(methods, ["on_workload_bind", "on_workload_unbind"]);
+        Ok(())
     }
 
     /// Two plugins redefining one WASI interface cannot both take effect, so
@@ -7563,7 +8221,24 @@ mod tests {
         let comp = create_test_component("c").with_annotations(annotations);
         assert_eq!(comp.stable_workload_name(), "my-deployment");
 
-        // 2. Blank deployment annotation falls back to replicaset
+        // 2. Blank deployment annotation falls back to daemonset
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
+            "   ".to_string(),
+        );
+        annotations.insert(
+            WORKLOAD_DAEMONSET_ANNOTATION.to_string(),
+            "my-daemonset".to_string(),
+        );
+        annotations.insert(
+            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
+            "my-replicaset".to_string(),
+        );
+        let comp = create_test_component("c").with_annotations(annotations);
+        assert_eq!(comp.stable_workload_name(), "my-daemonset");
+
+        // Without a daemonset, a blank deployment annotation falls back to replicaset
         let mut annotations = HashMap::new();
         annotations.insert(
             WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
@@ -7928,4 +8603,134 @@ mod tests {
             "plug"
         ));
     }
+
+    /// A component linked to a sibling's async export registers a closure in
+    /// its linker that reaches back to the component map, which holds that
+    /// linker. The map must still be freed once the workload drops.
+    #[tokio::test]
+    async fn a_linked_async_export_does_not_keep_the_components_alive() -> anyhow::Result<()> {
+        let engine = crate::engine::Engine::builder().build()?;
+        let engine = engine.inner();
+        let component = |id: &str, wat: &str| -> anyhow::Result<WorkloadComponent> {
+            Ok(WorkloadComponent::new(
+                "linked-cycle",
+                "linked-cycle",
+                "test",
+                id,
+                Component::new(engine, wat::parse_str(wat)?)?,
+                Linker::new(engine),
+                Vec::new(),
+                LocalResources::default(),
+                Arc::default(),
+                InstancePolicy::Ephemeral,
+            ))
+        };
+        let exporter = component(
+            "exporter",
+            r#"(component
+                (core module $m
+                    (func (export "f") (result i32) (i32.const 0))
+                    (func (export "cb") (param i32 i32 i32) (result i32) (i32.const 0)))
+                (core instance $i (instantiate $m))
+                (type $f (func async))
+                (func $f (type $f)
+                    (canon lift (core func $i "f") async (callback (core func $i "cb"))))
+                (instance $inst (export "f" (func $f)))
+                (export "test:probe/linked@0.1.0" (instance $inst))
+            )"#,
+        )?;
+        let importer = component(
+            "importer",
+            r#"(component
+                (import "test:probe/linked@0.1.0" (instance (export "f" (func async))))
+            )"#,
+        )?;
+
+        let resolved = UnresolvedWorkload::new(
+            "linked-cycle",
+            "linked-cycle",
+            "test",
+            None,
+            [exporter, importer],
+            vec![],
+        )
+        .resolve(
+            None,
+            &crate::plugin::PluginBindings::default(),
+            &crate::host::HostRef::detached(),
+            &crate::observability::Meters::default(),
+        )
+        .await?;
+        let importer_links = resolved
+            .components
+            .read()
+            .await
+            .values()
+            .find(|c| c.name() == "importer")
+            .map(|c| c.linked_components.len());
+        assert_eq!(importer_links, Some(1), "the importer should be linked");
+
+        let components = Arc::downgrade(&resolved.components);
+        drop(resolved);
+        assert!(
+            components.upgrade().is_none(),
+            "the component map outlived its workload"
+        );
+        Ok(())
+    }
+
+    /// A p3 service that cannot be pre-instantiated fails the start rather than
+    /// reading as a workload without a service.
+    #[tokio::test]
+    async fn a_p3_service_that_cannot_pre_instantiate_fails_to_execute() -> anyhow::Result<()> {
+        let engine = wasmtime::Engine::default();
+        let service = WorkloadService::new(
+            "p3-service-error",
+            "p3-service-error",
+            "test",
+            Component::new(
+                &engine,
+                wat::parse_str(
+                    r#"(component
+                        (import "wasi:probe/missing@0.3.0" (instance (export "f" (func))))
+                    )"#,
+                )?,
+            )?,
+            Linker::new(&engine),
+            vec![],
+            LocalResources::default(),
+            0,
+            Arc::default(),
+        );
+        assert!(service.metadata.targets_p3());
+        let mut resolved = UnresolvedWorkload::new(
+            "p3-service-error",
+            "p3-service-error",
+            "test",
+            Some(service),
+            [],
+            vec![],
+        )
+        .resolve(
+            None,
+            &crate::plugin::PluginBindings::default(),
+            &crate::host::HostRef::detached(),
+            &crate::observability::Meters::default(),
+        )
+        .await?;
+
+        let err = resolved
+            .execute_service()
+            .await
+            .expect_err("a service that cannot pre-instantiate must fail");
+        assert!(
+            format!("{err:#}").contains("P3 service of workload 'test/p3-service-error'"),
+            "the error should name the service, got: {err:#}"
+        );
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+#[path = "workload_lifecycle_tests.rs"]
+mod lifecycle_tests;

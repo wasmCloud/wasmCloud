@@ -290,10 +290,13 @@ impl super::loopback::UdpSocket {
     pub fn new(
         socket: &NetworkUdpSocket,
         state: super::loopback::UdpState,
+        receive_permits: Arc<tokio::sync::Semaphore>,
     ) -> Result<Self, ErrorCode> {
         let hop_limit = get_unicast_hop_limit(&socket.socket, socket.family)?;
 
-        let receive_buffer_size = receive_buffer_size(&socket.socket)?;
+        let receive_buffer_size =
+            receive_buffer_size(&socket.socket)?.min(Self::MAX_RECEIVE_BUFFER_SIZE);
+        receive_permits.add_permits(receive_buffer_size as usize);
 
         let send_buffer_size = send_buffer_size(&socket.socket)?;
         let send_buffer_size = send_buffer_size
@@ -304,6 +307,7 @@ impl super::loopback::UdpSocket {
             state,
             hop_limit,
             receive_buffer_size,
+            receive_permits,
             send_buffer_size,
             family: socket.family,
             socket_addr_check: socket.socket_addr_check.clone(),
@@ -368,13 +372,15 @@ impl UdpSocket {
             }
         };
 
-        let (addr, rx) = loopback.bind_udp(addr)?;
+        let receive_permits = Arc::new(tokio::sync::Semaphore::new(0));
+        let (addr, rx) = loopback.bind_udp(addr, Arc::clone(&receive_permits))?;
         let lo = super::loopback::UdpSocket::new(
             socket,
             super::loopback::UdpState::BindStarted {
                 local_address: addr,
                 rx,
             },
+            receive_permits,
         )?;
 
         if ip.is_unspecified() {
@@ -931,3 +937,7 @@ mod tests {
         assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
     }
 }
+
+#[cfg(test)]
+#[path = "udp_tests.rs"]
+mod behavior_tests;

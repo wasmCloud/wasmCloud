@@ -30,7 +30,8 @@
        the ConfigMap this deployment mounts. */}}
 {{- /* A host group's own `resources` replaces the chart-wide block wholesale
        (no merge), and carries the host knobs `defaultHeapMemory`,
-       `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` alongside
+       `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`,
+       `guestMemoryMode` and `maxConcurrentStarts` alongside
        the Kubernetes requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- /* Probes, unlike `resources`, merge per field: a group naming one timing
@@ -216,11 +217,12 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             {{- /* Host memory knobs, from the effective `resources`:
-                   guestMemoryMode says whether the guest memory budget is
-                   enforced or only counted, and defaultHeapMemory/coreInstances
-                   are wasmtime knobs parked alongside it (all three stripped
-                   back out of the `resources:` block below). An unset pool
-                   knob stays at wasmtime's default. The mode is always
+                   guestMemoryMode says how the guest memory budget is applied
+                   (see values.yaml), and defaultHeapMemory/maxMemories/
+                   coreInstances are wasmtime knobs parked alongside it (all
+                   stripped back out of the `resources:` block below). An unset
+                   maxMemories is derived by the host from the node; the other
+                   pool knobs stay at wasmtime's defaults. The mode is always
                    rendered, `enforce` unless named, so the budget is enforced
                    whatever the paired host image defaults to.
 
@@ -239,6 +241,16 @@ spec:
             {{- with $resources.defaultHeapMemory }}
             - name: WASH_DEFAULT_HEAP_MEMORY
               value: "{{ . }}"
+            {{- end }}
+            {{- with $resources.maxMemories }}
+            - name: WASH_MAX_MEMORIES
+              value: "{{ . }}"
+            {{- end }}
+            {{- /* Compared as text: every sibling knob is a string, and a
+                   quoted "false" would be truthy to a bare `if`. */}}
+            {{- if eq (toString $resources.setMaxMemoriesFromMemoryPrecommitLimit) "true" }}
+            - name: WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT
+              value: "true"
             {{- end }}
             {{- with $resources.coreInstances }}
             - name: WASH_CORE_INSTANCES
@@ -472,7 +484,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with omit $resources "defaultHeapMemory" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
+          {{- with omit $resources "defaultHeapMemory" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

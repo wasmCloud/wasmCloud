@@ -24,16 +24,37 @@ concurrency:
 permissions: {}
 
 jobs:
+  dependency-review:
+    needs:
+      - changes
+    if: needs.changes.outputs.dependencies == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          config-file: ./.github/dependency-review-config.yml
+
   changes:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
+      dependencies: ${{ steps.filter.outputs.dependencies }}
+      audit-config: ${{ steps.filter.outputs.audit_config }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'merge_group'
         with:
           persist-credentials: false
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -45,11 +66,27 @@ jobs:
               - '**/Cargo.lock'
               - 'deny.toml'
               - '.github/workflows/audit.yml'
+              - '.github/scripts/check-dependency-licenses.mjs'
+            audit_config:
+              - '.cargo/audit.toml'
+            dependencies:
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - '**/go.mod'
+              - '**/go.sum'
+              - '**/go.work'
+              - '**/go.work.sum'
+              - 'deny.toml'
+              - '.github/dependency-review-config.yml'
+              - '.github/workflows/*.yml'
+              - '.github/workflows/*.yaml'
+              - '.github/actions/**/action.yml'
+              - '.github/actions/**/action.yaml'
 
   cargo-audit:
     needs:
       - changes
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true' || needs.changes.outputs.audit-config == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -60,7 +97,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-audit
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         env:
           # Authenticate the action's GitHub API calls so they aren't throttled
           # by the 60/hr anonymous per-IP limit shared across hosted runners.
@@ -84,17 +121,19 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-deny
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           tool: cargo-deny@0.20.2
       - name: Check dependency licenses
-        run: cargo deny --locked check licenses
+        run: node .github/scripts/check-dependency-licenses.mjs
 
   gate:
     name: gate-audit
     needs:
+      - changes
+      - dependency-review
       - cargo-audit
       - cargo-deny-licenses
     if: ${{ !cancelled() }}

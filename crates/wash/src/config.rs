@@ -10,9 +10,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use figment::{
     Figment,
-    providers::{Env, Format, Json, Toml, Yaml},
+    providers::{Env, Format, Json, Toml},
 };
 use serde::{Deserialize, Serialize};
+use serde_saphyr::figment::Yaml;
 use tracing::info;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
@@ -1715,7 +1716,7 @@ pub async fn save_config(config: &Config, path: &Path) -> Result<()> {
     }
 
     let yaml_config =
-        serde_yaml_ng::to_string(config).context("failed to serialize configuration")?;
+        serde_saphyr::to_string(config).context("failed to serialize configuration")?;
 
     tokio::fs::write(path, yaml_config)
         .await
@@ -1789,7 +1790,7 @@ async fn generate_config(config: &Config, path: &Path, force: bool) -> Result<()
             serde_json::to_string_pretty(config).context("failed to serialize config to JSON")?
         }
         Some("toml") => toml::to_string(config).context("failed to serialize config to TOML")?,
-        _ => serde_yaml_ng::to_string(config).context("failed to serialize config to YAML")?,
+        _ => serde_saphyr::to_string(config).context("failed to serialize config to YAML")?,
     };
 
     if let Some(parent) = path.parent() {
@@ -2163,7 +2164,7 @@ dev:
     RUST_LOG: debug
     OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let env = config.dev().environment;
         assert_eq!(env.get("RUST_LOG").map(String::as_str), Some("debug"));
         assert_eq!(
@@ -2209,7 +2210,7 @@ workload:
   allowedIpNameLookups:
     - "*.example.com"
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let workload = config.workload.expect("workload should parse");
 
         let env = workload
@@ -2479,7 +2480,7 @@ dev:
       image: ghcr.io/acme/sidecar:1.0.0
       pullPolicy: always
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         let source = dev.components[0].source.to_source("sidecar").unwrap();
         assert_eq!(
@@ -2546,7 +2547,7 @@ dev:
       allowedHosts:
         - https://api.example.com
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         let component = &dev.components[0];
         let env = component.environment.as_ref().unwrap();
@@ -2560,7 +2561,7 @@ dev:
 
         // Omitting all three leaves the overrides empty (inherit workload).
         let yaml = "dev:\n  components:\n    - name: hello\n      file: hello.wasm\n";
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         let component = &dev.components[0];
         assert!(component.environment.is_none());
@@ -2583,7 +2584,7 @@ dev:
       image: ghcr.io/acme/widgets:1.2.0
       pullPolicy: ifNotPresent
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         assert_eq!(dev.host_plugins.len(), 2);
 
@@ -2632,7 +2633,7 @@ host:
           secretFrom:
             - orders-nats-creds
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let bindings = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2686,7 +2687,7 @@ host:
         config:
           subject-allow: orders.>
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2701,7 +2702,7 @@ dev:
     config:
       servers: nats://127.0.0.1:4222
 "#;
-        let config: Config = serde_yaml_ng::from_str(dev_yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(dev_yaml).unwrap();
         let err = config
             .dev()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2716,7 +2717,7 @@ dev:
     /// refuses exactly the self-contained manifest dev exists to run.
     #[test]
     fn dev_allows_a_plugin_it_declares_nothing_for() {
-        let config: Config = serde_yaml_ng::from_str("dev: {}").unwrap();
+        let config: Config = serde_saphyr::from_str("dev: {}").unwrap();
         let bindings = config
             .dev()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2738,7 +2739,7 @@ dev:
 
         // `wash host` is the other way round, for the same reason it always
         // was: there an operator exists, so there is a boundary to enforce.
-        let config: Config = serde_yaml_ng::from_str("host: {}").unwrap();
+        let config: Config = serde_saphyr::from_str("host: {}").unwrap();
         assert_eq!(
             config
                 .host()
@@ -2761,7 +2762,7 @@ host:
       allowedHosts: ["nats.internal"]
       allowedHostLoopbackPorts: [4222]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2777,7 +2778,7 @@ host:
       allowedIpNameLookups: ["nats.internal"]
       allowedHostLoopbackPorts: [4222]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let bindings = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2811,7 +2812,7 @@ host:
           config:
             servers: nats://127.0.0.1:4222
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let bindings = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2834,7 +2835,7 @@ host:
       allowedHosts: ["vault.internal"]
       allowedHostLoopbackPorts: [8200]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2879,7 +2880,7 @@ host:
           config:
             subject-allow: orders.>
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2905,7 +2906,7 @@ dev:
     - id: wasmcloud-postgres
       workloadConfig: deny
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let bindings = config
             .dev()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2944,7 +2945,7 @@ host:
     - id: etcd-secrets
       image: ghcr.io/example/etcd-secrets:1.0.0
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let host = config.host();
         let ids: Vec<&str> = host
             .all_plugins()
@@ -2973,7 +2974,7 @@ host:
       config:
         servers: nats://nats:4222
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config.host().all_plugins().unwrap_err().to_string();
         assert!(err.contains("host.plugins"), "got: {err}");
         assert!(err.contains("deprecated"), "got: {err}");
@@ -2990,7 +2991,7 @@ host:
     - id: etcd-secrets
       image: ghcr.io/example/etcd-secrets:2.0.0
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config.host().all_plugins().unwrap_err().to_string();
         assert!(err.contains("more than once"), "got: {err}");
     }
@@ -3022,7 +3023,7 @@ host:
           configFrom: [orders-grants]
           secretFrom: [orders-nats-creds]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let entry = &config.host().plugins[0];
         assert_eq!(entry.workload_config, Some(WorkloadConfigPolicy::Deny));
         assert!(!entry.is_component());
@@ -3063,7 +3064,7 @@ host:
     - id: relaxed
       workloadConfig: allow
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let host = config.host();
         assert_eq!(
             host.plugins[0].workload_config, None,
@@ -3096,12 +3097,62 @@ host:
       config:
         servers: nats://nats:4222
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config.host().plugins[0]
             .to_spec_unresolved()
             .unwrap_err()
             .to_string();
         assert!(err.contains("no `file` or `image`"), "got: {err}");
+    }
+
+    #[test]
+    fn saved_yaml_loads_back_unchanged() {
+        // Values that YAML would read as booleans, numbers or null unless the
+        // writer quotes them.
+        let yaml = r#"
+configs:
+  tricky:
+    inline:
+      yes-word: "yes"
+      on-word: "on"
+      null-word: "null"
+      tilde: "~"
+      octal: "0123"
+      float: "1.0"
+      empty: ""
+      colon: "a: b"
+      multiline: "line one\nline two"
+host:
+  hostPlugins:
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+      allowedHosts:
+        - https://etcd.internal:2379
+      allowedHostLoopbackPorts:
+        - 2379
+        - 53/udp
+      ports:
+        - name: metrics
+          port: 9100
+          bind: 192.0.2.10
+      configFrom:
+        - tricky
+"#;
+        let parsed: Config = serde_saphyr::from_str(yaml).unwrap();
+        let saved = serde_saphyr::to_string(&parsed).unwrap();
+
+        let reparsed: Config = serde_saphyr::from_str(&saved).unwrap();
+        let loaded: Config = Figment::from(Yaml::string(&saved)).extract().unwrap();
+        let expected = serde_json::to_value(&parsed).unwrap();
+        let inline = &expected["configs"]["tricky"]["inline"];
+        assert_eq!(inline["octal"], "0123", "{expected}");
+        assert_eq!(inline["yes-word"], "yes", "{expected}");
+        assert_eq!(
+            serde_json::to_value(&reparsed).unwrap(),
+            expected,
+            "{saved}"
+        );
+        assert_eq!(serde_json::to_value(&loaded).unwrap(), expected, "{saved}");
     }
 
     #[test]
@@ -3141,7 +3192,7 @@ host:
       secretFrom:
         - etcd-client-cert
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let host = config.host();
         assert_eq!(host.host_plugins.len(), 1);
         let hp = &host.host_plugins[0];
@@ -3188,7 +3239,7 @@ host:
       configFrom:
         - missing
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let hp = &config.host().host_plugins[0];
         assert!(hp.to_spec(&config, Path::new("."), None).is_err());
     }
@@ -3203,7 +3254,7 @@ host:
       allowedHostLoopbackPorts:
         - 5000-6000
 "#;
-        let err = serde_yaml_ng::from_str::<Config>(yaml)
+        let err = serde_saphyr::from_str::<Config>(yaml)
             .expect_err("loopback port ranges must be rejected")
             .to_string();
         assert!(err.contains("range"), "got: {err}");
@@ -3286,7 +3337,7 @@ secrets:
     inline:
       DB_USER: alice
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
 
         let app = config
             .config_sources
@@ -3309,7 +3360,7 @@ secrets:
         // not fail to parse, and must produce an empty map (not panic on
         // the `set_var` loop reading a None).
         let yaml = "dev: {}\n";
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         assert!(config.dev().environment.is_empty());
     }
 }

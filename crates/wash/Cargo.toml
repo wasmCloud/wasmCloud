@@ -54,7 +54,7 @@ ctrlc = { workspace = true }
 dialoguer = { workspace = true, features = ["editor", "password", "zeroize", "fuzzy-select", "fuzzy-matcher"] }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
-figment = { workspace = true, features = ["json", "env", "yaml", "toml"] }
+figment = { workspace = true, features = ["json", "env", "toml"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
 humansize = { workspace = true }
 humantime = { workspace = true }
@@ -65,7 +65,7 @@ sha2 = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
-serde_yaml_ng = { workspace = true }
+serde-saphyr = { workspace = true, features = ["deserialize", "serialize", "figment"] }
 tar = { workspace = true }
 toml = { workspace = true }
 tempfile = { workspace = true }
@@ -95,7 +95,7 @@ reqwest = { workspace = true, features = ["json"] }
 wash-runtime = { workspace = true, features = ["wasi-keyvalue", "wasi-blobstore"] }
 wasmtime = { workspace = true }
 testcontainers = { workspace = true }
-wat = { workspace = true }
+wat = { workspace = true, features = ["component-model"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

@@ -3,6 +3,7 @@
 //! providing the `wasi:otel@0.2.0-rc.2` interfaces.
 
 mod convert;
+mod ids;
 
 pub use convert::otel_span_context_to_wit;
 use convert::{
@@ -11,6 +12,7 @@ use convert::{
     extract_span_links, summarize_resource_metrics, summarize_span_data, wasi_span_parent_context,
     wit_span_context_to_otel,
 };
+use ids::{GuestIdGenerator, with_guest_ids};
 
 use anyhow::bail;
 use opentelemetry::logs::{Logger, LoggerProvider};
@@ -144,6 +146,7 @@ impl HostPlugin for WasiOtel {
             Some(
                 opentelemetry_sdk::trace::TracerProviderBuilder::default()
                     .with_batch_exporter(exporter)
+                    .with_id_generator(GuestIdGenerator::default())
                     .with_resource(resource.clone())
                     .build(),
             )
@@ -200,19 +203,19 @@ impl HostPlugin for WasiOtel {
     ) -> anyhow::Result<()> {
         // Add all wasi:otel interfaces to linker
         bindings::wasi::otel::types::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
         bindings::wasi::otel::tracing::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
         bindings::wasi::otel::metrics::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
         bindings::wasi::otel::logs::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
 
@@ -435,8 +438,6 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
 
                 // Create a span builder with the WASI span data
                 let mut builder = SpanBuilder::from_name(span_data.name.clone())
-                    .with_trace_id(wasi_span_context.trace_id())
-                    .with_span_id(wasi_span_context.span_id())
                     .with_kind(span_kind)
                     .with_attributes(attributes)
                     .with_links(links);
@@ -445,7 +446,9 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
                 builder = builder.with_start_time(convert_datetime(&span_data.start_time));
 
                 // Start the span, parented according to the guest's own nesting
-                let mut span = tracer.build_with_context(builder, &parent_cx);
+                let mut span = with_guest_ids(&wasi_span_context, || {
+                    tracer.build_with_context(builder, &parent_cx)
+                });
 
                 // Add events to the span
                 for (event_name, _event_time, event_attrs) in events {
@@ -497,3 +500,7 @@ impl<'a> bindings::wasi::otel::tracing::Host for ActiveCtx<'a> {
 }
 
 impl<'a> bindings::wasi::otel::types::Host for ActiveCtx<'a> {}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod contract_tests;

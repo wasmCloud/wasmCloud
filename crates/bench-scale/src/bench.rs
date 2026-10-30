@@ -767,3 +767,8 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "bench_contract_tests.rs"]
+mod contract_tests;

@@ -7,7 +7,10 @@ use std::{
     time::Duration,
 };
 use wash_runtime::{
-    engine::host_memory::{self, parse_bytes, pool_slot_bytes},
+    engine::{
+        guest_memory::GuestMemoryMode,
+        host_memory::{self, parse_bytes},
+    },
     wit::WitInterface,
 };
 
@@ -20,6 +23,9 @@ pub(super) fn parse_flavour(name: &str) -> Result<Flavour> {
         .with_context(|| format!("unknown flavour {name}"))
 }
 
+/// The guest memory mode, or a comma-separated list of modes to run in turn.
+pub(super) const GUEST_MEMORY_MODE: &str = "WASH_SCALE_GUEST_MEMORY_MODE";
+
 /// What a run was told, from the environment.
 #[derive(Debug, Clone)]
 pub(super) struct Settings {
@@ -27,13 +33,22 @@ pub(super) struct Settings {
     pub(super) memory_limit: u64,
     /// Unset, the effective machine/container budget, so the process limit binds first.
     pub(super) guest_memory: u64,
+    /// How the guest budget is applied; `enforce` charges declared initial memory.
+    /// A run's mode: the first of `guest_modes`, and the only one a child sees.
+    pub(super) guest_mode: GuestMemoryMode,
+    /// One run per entry, each in a child told only its own mode.
+    pub(super) guest_modes: Vec<GuestMemoryMode>,
+    /// Under `growth`, the cap on uncharged initial memory.
+    /// Unset, the engine's own default, read back from the engine once it is built.
+    pub(super) initial_guest_memory: Option<u64>,
     pub(super) max_components: Option<usize>,
     pub(super) max_duration: Option<Duration>,
     pub(super) step: usize,
     /// Unset, as many as the host has cores.
     pub(super) start_concurrency: Option<usize>,
     pub(super) sample: usize,
-    pub(super) core_instances: u32,
+    /// Linear memories the pool holds; the count that sizes the pool.
+    pub(super) max_memories: u32,
     pub(super) fixture: &'static str,
     /// One run per entry; `None` is no limit.
     pub(super) cpus: Vec<Option<usize>>,
@@ -69,9 +84,41 @@ impl Settings {
                 .map_err(|e| anyhow::anyhow!("WASH_SCALE_GUEST_MEMORY={v}: {e}"))?,
             None => effective_memory()?,
         };
-        let core_instances = match number("WASH_SCALE_CORE_INSTANCES")? {
-            Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-            None => derived_core_instances(),
+        // The runtime's own parser, the one `wash --guest-memory-mode` uses,
+        // once per entry of a list (`enforce,growth`).
+        let mut guest_modes: Vec<GuestMemoryMode> = match var(GUEST_MEMORY_MODE) {
+            None => vec![GuestMemoryMode::Enforce],
+            Some(list) => list
+                .split(',')
+                .map(|mode| {
+                    mode.parse::<GuestMemoryMode>()
+                        .map_err(|e| anyhow::anyhow!("{GUEST_MEMORY_MODE}={list}: {e}"))
+                })
+                .collect::<Result<_>>()?,
+        };
+        // A mode named twice would publish the same series twice.
+        let mut seen = Vec::new();
+        guest_modes.retain(|mode| {
+            let first = !seen.contains(mode);
+            seen.push(*mode);
+            first
+        });
+        // `split` yields at least one entry, so the default is never reached.
+        let guest_mode = guest_modes.first().copied().unwrap_or_default();
+        let initial_guest_memory = var("WASH_SCALE_INITIAL_GUEST_MEMORY")
+            .map(|v| {
+                parse_bytes(v.trim())
+                    .map_err(|e| anyhow::anyhow!("WASH_SCALE_INITIAL_GUEST_MEMORY={v}: {e}"))
+            })
+            .transpose()?;
+        // `WASH_SCALE_CORE_INSTANCES` named this count before the pool's
+        // totals were derived from its memory count; still read.
+        let max_memories = match number("WASH_SCALE_MAX_MEMORIES")? {
+            Some(n) => u32::try_from(n).context("WASH_SCALE_MAX_MEMORIES")?,
+            None => match number("WASH_SCALE_CORE_INSTANCES")? {
+                Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
+                None => host_memory::derive_max_memories(),
+            },
         };
         let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
             None | Some("p3") => "http_handler_p3",
@@ -82,6 +129,9 @@ impl Settings {
             report_json: var("WASH_SCALE_REPORT_JSON"),
             memory_limit,
             guest_memory,
+            guest_mode,
+            guest_modes,
+            initial_guest_memory,
             max_components: number("WASH_SCALE_MAX_COMPONENTS")?,
             max_duration: match number("WASH_SCALE_MAX_SECS")? {
                 Some(0) => None,
@@ -93,7 +143,7 @@ impl Settings {
             sample: bench_tools::density::sample_size(number("WASH_SCALE_SAMPLE")?.unwrap_or(200))
                 .map_err(anyhow::Error::msg)
                 .context("WASH_SCALE_SAMPLE")?,
-            core_instances,
+            max_memories,
             fixture,
             cpus: match var("WASH_SCALE_CPUS") {
                 None => vec![None],
@@ -115,20 +165,6 @@ pub(super) fn effective_memory() -> Result<u64> {
     host_memory::detected_memory_limit().context(
         "cannot detect a memory budget; set WASH_SCALE_MEMORY_LIMIT and WASH_SCALE_GUEST_MEMORY",
     )
-}
-
-/// Pool slots sized the way a large host would size them: half the address
-/// space at wasmtime's fixed 4 GiB-plus-guard slot, and no more than the
-/// kernel's mapping limit allows (about five mappings per slot).
-pub(super) fn derived_core_instances() -> u32 {
-    let by_address_space = host_memory::usable_address_space()
-        / 2
-        / pool_slot_bytes(host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
-    let by_map_count = std::fs::read_to_string("/proc/sys/vm/max_map_count")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .map_or(u64::MAX, |limit| limit / 5);
-    u32::try_from(by_address_space.min(by_map_count).max(1)).unwrap_or(u32::MAX)
 }
 
 pub(super) fn fixture_bytes(name: &str) -> Result<bytes::Bytes> {

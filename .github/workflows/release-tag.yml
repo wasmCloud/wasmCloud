@@ -2,7 +2,12 @@ name: release-tag
 
 # Once the release-train PR has merged AND the canary builds on the merge
 # commit have succeeded, this workflow:
-#   1. Promotes (build-once) each canary container image: retags
+#   1. Resolves each release image, downloads the canary-binaries artifacts
+#      produced by wash.yml on the merge commit, and generates SPDX SBOMs for
+#      every binary and image platform. A missing dependency inventory or an
+#      unexpected image platform stops the release here, before anything is
+#      published.
+#   2. Promotes (build-once) each canary container image: retags
 #      `ghcr.io/wasmcloud/<image>:sha-<merge-sha>` as `X.Y.Z`. Same
 #      manifest digest, no rebuild — the bytes that passed canary CI are
 #      the bytes users pull at the release tag. Note: OCI image tags use
@@ -11,12 +16,12 @@ name: release-tag
 #      `vX.Y.Z`. The all-features wash image the e2e gate ran is
 #      promoted alongside it: `wash:sha-<merge-sha>-all-features` ->
 #      `wash:X.Y.Z-all-features`.
-#   2. Re-attests the promoted manifest digest so SLSA provenance covers
+#   3. Re-attests the promoted manifest digest so SLSA provenance covers
 #      the release tag (and not just the sha-prefixed canary).
-#   3. Downloads the canary-binaries artifacts produced by wash.yml on the
-#      merge commit, attests them, and creates the GitHub Release directly
-#      with those exact bytes attached (no rebuild on tag).
-#   4. Pushes the immutable annotated `vX.Y.Z` git tag at the merge commit.
+#   4. Attests the binaries and every SBOM, and creates the GitHub Release
+#      directly with those exact bytes, the SBOMs and their Sigstore bundles
+#      attached (no rebuild on tag).
+#   5. Signs and pushes the immutable `vX.Y.Z` git tag at the merge commit.
 #      That tag triggers the remaining tag-listening workflows (charts
 #      release, runtime-operator go-module-tag, wash homebrew + winget
 #      updates).
@@ -30,7 +35,8 @@ name: release-tag
 # `sha=<merge-sha>` once canary builds on that SHA are green — when sha
 # is passed, verify-head reads the version from Cargo.toml at that sha
 # and skips the version-bump check, so the recovery path works against
-# any SHA whose Cargo.toml carries the version we want to release. The
+# any SHA whose Cargo.toml carries the version we want to release and
+# whose canary binaries embed cargo-auditable metadata. The
 # automatic path (workflow_run from release-train) instead requires
 # HEAD's Cargo.toml workspace version to differ from HEAD~1's, which is
 # the canonical "this commit is a release" signal. Every downstream
@@ -40,7 +46,8 @@ name: release-tag
 #   - If an X.Y.Z OCI tag already exists at GHCR, the retag step skips it
 #     (immutability — never overwrite a published release).
 #   - If the git tag already exists on origin, the tag step is a no-op.
-#   - Re-running this workflow is safe: each step is idempotent.
+#   - Re-running this workflow is safe: each step is idempotent. SBOMs
+#     are byte-identical across runs; a re-run signs the same documents.
 
 on:  # zizmor: ignore[dangerous-triggers]
   # workflow_run is required: this workflow must fire after release-train
@@ -71,13 +78,20 @@ concurrency:
 jobs:
   promote:
     needs: gate
-    if: needs.gate.outputs.run == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    # Release signatures identify this workflow on main.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      needs.gate.outputs.run == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
       contents: write
       packages: write
-      # For re-attesting the promoted release manifest digest.
+      # The canary wait and binary download read workflow runs and artifacts.
+      actions: read
+      # For release attestations, keyless tag signing and the octo-sts
+      # release-tag token.
       id-token: write
       attestations: write
       # actions/attest writes an org-level artifact storage record in
@@ -92,10 +106,13 @@ jobs:
           # workflow_run / workflow_dispatch without a sha → main HEAD.
           # workflow_dispatch with sha → that exact release commit (recovery).
           ref: ${{ inputs.sha || 'main' }}
-          # PAT so the tag push triggers the downstream tag-listening workflows.
-          token: ${{ secrets.WASMCLOUD_BOT_PAT }}
-          persist-credentials: true
+          # The tag pushes authenticate with the octo-sts token minted just
+          # before them, so no credentials are left in .git/config.
+          persist-credentials: false
           fetch-depth: 0
+
+      - name: Set up gitsign
+        uses: chainguard-dev/actions/setup-gitsign@eb7c4e394b1b658178e6d5236e055364fd1bcc22 # main
 
       - name: Configure git
         run: |
@@ -159,7 +176,7 @@ jobs:
 
       - name: Wait for canary builds on the merge commit
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
         run: |
           set -euo pipefail
@@ -218,92 +235,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Promote canary container images to release tag
-        id: promote
+      - name: Resolve release images
+        id: images
         env:
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
           IMAGE_TAG: ${{ steps.ver.outputs.image_tag }}
+        # Build-once-promote: each image was pushed by its canary workflow as
+        # `sha-<full-sha>` and validated by the corresponding canary tests.
+        # This step only reads the registry, so the SBOM checks below run
+        # against the exact digests before anything is published.
         run: |
-          set -euo pipefail
-          echo "STAGE=promote-images" >> "${GITHUB_ENV}"
-          # Build-once-promote: each image was pushed by its canary workflow
-          # as `sha-<full-sha>` and validated by the corresponding canary
-          # tests. Retagging via `imagetools create` against the sha-pinned
-          # source preserves the multi-arch manifest.
-          declare -A IMAGES=(
-            [wash]="ghcr.io/wasmcloud/wash"
-            [wash_all_features]="ghcr.io/wasmcloud/wash"
-            [gateway]="ghcr.io/wasmcloud/runtime-gateway"
-            [operator]="ghcr.io/wasmcloud/runtime-operator"
-          )
-          # Tag suffix shared by the canary source and the release tag.
-          declare -A SUFFIXES=(
-            [wash_all_features]="-all-features"
-          )
-          # wash_all_features last: a missing source (e.g. recovering a commit
-          # from before it was published) must not block the shipped images.
-          for KEY in wash gateway operator wash_all_features; do
-            IMG="${IMAGES[${KEY}]}"
-            SUFFIX="${SUFFIXES[${KEY}]:-}"
-            DST_TAG="${IMAGE_TAG}${SUFFIX}"
-            # Three outcomes: tag exists (skip), manifest unknown
-            # (promote), any other error (abort with the captured stderr).
-            if INSPECT_OUT=$(docker buildx imagetools inspect "${IMG}:${DST_TAG}" --format '{{json .Manifest}}' 2>&1); then
-              echo "${IMG}:${DST_TAG} already exists — skipping (immutable)"
-              DST=$(echo "${INSPECT_OUT}" | jq -r .digest)
-            elif echo "${INSPECT_OUT}" | grep -qiE 'manifest unknown|no such manifest|not found|MANIFEST_UNKNOWN'; then
-              SRC="${IMG}:sha-${MERGE_SHA}${SUFFIX}"
-              echo "promoting ${SRC} -> ${IMG}:${DST_TAG}"
-              SRC_DIGEST=$(docker buildx imagetools inspect "${SRC}" --format '{{json .Manifest}}' | jq -r .digest)
-              docker buildx imagetools create --tag "${IMG}:${DST_TAG}" "${IMG}@${SRC_DIGEST}"
-              DST=$(docker buildx imagetools inspect "${IMG}:${DST_TAG}" --format '{{json .Manifest}}' | jq -r .digest)
-              if [[ "${DST}" != "${SRC_DIGEST}" ]]; then
-                echo "WARN: retag digest (${DST}) differs from canary source (${SRC_DIGEST}) — same content, different manifest envelope. Attestation below covers ${DST}." >&2
-              fi
-            else
-              echo "destination check for ${IMG}:${DST_TAG} failed — refusing to promote" >&2
-              echo "${INSPECT_OUT}" >&2
-              exit 1
-            fi
-            echo "${KEY}_digest=${DST}" >> "${GITHUB_OUTPUT}"
-          done
-
-      # actions/attest-build-provenance takes a single subject per invocation,
-      # so unroll one step per image. Each attestation links the released
-      # manifest digest to this workflow run (Sigstore-signed via Fulcio,
-      # verifiable with `gh attestation verify oci://<image>:<tag>`).
-      - name: Attest wash release manifest
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/wasmcloud/wash
-          subject-digest: ${{ steps.promote.outputs.wash_digest }}
-          push-to-registry: true
-
-      - name: Attest wash all-features release manifest
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/wasmcloud/wash
-          subject-digest: ${{ steps.promote.outputs.wash_all_features_digest }}
-          push-to-registry: true
-
-      - name: Attest runtime-gateway release manifest
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/wasmcloud/runtime-gateway
-          subject-digest: ${{ steps.promote.outputs.gateway_digest }}
-          push-to-registry: true
-
-      - name: Attest runtime-operator release manifest
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/wasmcloud/runtime-operator
-          subject-digest: ${{ steps.promote.outputs.operator_digest }}
-          push-to-registry: true
+          echo "STAGE=resolve-images" >> "${GITHUB_ENV}"
+          node .github/scripts/release-images.mjs resolve
 
       - name: Download canary-binaries artifacts from wash.yml run
         id: bins
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -353,11 +301,65 @@ jobs:
           echo "--- downloaded ---"
           find ./artifacts -type f | sort
 
+      - name: Install pinned SBOM generator
+        uses: $/.github/actions/setup-syft
+
+      - name: Generate and check release SBOMs
+        env:
+          PLAN: ${{ steps.images.outputs.plan }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          MERGE_SHA: ${{ steps.ver.outputs.sha }}
+        run: |
+          echo "STAGE=generate-sboms" >> "${GITHUB_ENV}"
+          node .github/scripts/release-sboms.mjs generate
+
+      - name: Promote canary container images to release tag
+        id: promote
+        env:
+          PLAN: ${{ steps.images.outputs.plan }}
+        # Retagging via `imagetools create` against the sha-pinned source
+        # preserves the multi-arch manifest.
+        run: |
+          echo "STAGE=promote-images" >> "${GITHUB_ENV}"
+          node .github/scripts/release-images.mjs promote
+
+      # actions/attest-build-provenance takes a single subject per invocation,
+      # so unroll one step per image. Each attestation links the released
+      # manifest digest to this workflow run (Sigstore-signed via Fulcio,
+      # verifiable with `gh attestation verify oci://<image>:<tag>`).
+      - name: Attest wash release manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/wasmcloud/wash
+          subject-digest: ${{ steps.promote.outputs.wash_digest }}
+          push-to-registry: true
+
+      - name: Attest wash all-features release manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/wasmcloud/wash
+          subject-digest: ${{ steps.promote.outputs.wash_all_features_digest }}
+          push-to-registry: true
+
+      - name: Attest runtime-gateway release manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/wasmcloud/runtime-gateway
+          subject-digest: ${{ steps.promote.outputs.gateway_digest }}
+          push-to-registry: true
+
+      - name: Attest runtime-operator release manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/wasmcloud/runtime-operator
+          subject-digest: ${{ steps.promote.outputs.operator_digest }}
+          push-to-registry: true
+
       - name: Attest binary build provenance
         id: attest_bins
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: "./artifacts/*/wash*"
+          subject-path: "./artifacts/wash-*/wash*"
 
       # Stage the Sigstore bundle alongside the binaries so it is also
       # uploaded as a GitHub Release asset. Duplicate of the Attestations
@@ -381,10 +383,94 @@ jobs:
           cp "${BUNDLE_PATH}" ./artifacts/attestations/wash.sigstore.json
           ls -la ./artifacts/attestations/
 
+      - name: Attest wash image SBOM
+        uses: $/.github/actions/release-image-sbom
+        with:
+          image: ghcr.io/wasmcloud/wash
+          digest: ${{ steps.promote.outputs.wash_digest }}
+          name: wash
+
+      - name: Attest wash-all-features image SBOM
+        uses: $/.github/actions/release-image-sbom
+        with:
+          image: ghcr.io/wasmcloud/wash
+          digest: ${{ steps.promote.outputs.wash_all_features_digest }}
+          name: wash-all-features
+
+      - name: Attest runtime-gateway image SBOM
+        uses: $/.github/actions/release-image-sbom
+        with:
+          image: ghcr.io/wasmcloud/runtime-gateway
+          digest: ${{ steps.promote.outputs.gateway_digest }}
+          name: runtime-gateway
+
+      - name: Attest runtime-operator image SBOM
+        uses: $/.github/actions/release-image-sbom
+        with:
+          image: ghcr.io/wasmcloud/runtime-operator
+          digest: ${{ steps.promote.outputs.operator_digest }}
+          name: runtime-operator
+
+      - name: Attest wash x86_64-unknown-linux-gnu SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-x86_64-unknown-linux-gnu
+
+      - name: Attest wash aarch64-unknown-linux-gnu SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-aarch64-unknown-linux-gnu
+
+      - name: Attest wash s390x-unknown-linux-gnu SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-s390x-unknown-linux-gnu
+
+      - name: Attest wash x86_64-unknown-linux-musl SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-x86_64-unknown-linux-musl
+
+      - name: Attest wash aarch64-unknown-linux-musl SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-aarch64-unknown-linux-musl
+
+      - name: Attest wash x86_64-apple-darwin SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-x86_64-apple-darwin
+
+      - name: Attest wash aarch64-apple-darwin SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-aarch64-apple-darwin
+
+      - name: Attest wash x86_64-pc-windows-msvc SBOM
+        uses: $/.github/actions/release-binary-sbom
+        with:
+          artifact: wash-x86_64-pc-windows-msvc
+
+      # Generation covers every downloaded target; this catches a new
+      # canary-binaries target that has no attestation step above.
+      - name: Check every SBOM is attested
+        run: node .github/scripts/release-sboms.mjs check-attested
+
+      # An app token (not GITHUB_TOKEN) so the tag pushes and the GitHub
+      # Release trigger the downstream workflows. It expires after an hour,
+      # so it is minted here, after the long canary wait.
+      - name: Get a release-tag token from octo-sts
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: ${{ github.repository }}
+          identity: release-tag
+
       - name: Push immutable release tag
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
+          PUSH_TOKEN: ${{ steps.octo-sts.outputs.token }}
         run: |
           set -euo pipefail
           echo "STAGE=push-tag" >> "${GITHUB_ENV}"
@@ -393,15 +479,19 @@ jobs:
             echo "tag ${TAG} already exists on origin — leaving it (immutable)"
             exit 0
           fi
-          # Annotated tag pinned to the validated merge commit. Never
-          # force-push.
-          git tag -a "${TAG}" "${MERGE_SHA}" -m "Release ${TAG}"
-          git push origin "${TAG}"
+          # Verify the workflow identity before publishing the signed tag.
+          git tag -s "${TAG}" "${MERGE_SHA}" -m "Release ${TAG}"
+          gitsign verify-tag \
+            --certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${TAG}"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${TAG}"
 
       - name: Push runtime-operator Go module tag
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
+          PUSH_TOKEN: ${{ steps.octo-sts.outputs.token }}
         run: |
           set -euo pipefail
           echo "STAGE=go-module-tag" >> "${GITHUB_ENV}"
@@ -414,8 +504,12 @@ jobs:
             echo "tag ${GO_TAG} already exists on origin — leaving it (immutable)"
             exit 0
           fi
-          git tag -a "${GO_TAG}" "${MERGE_SHA}" -m "Release ${GO_TAG}"
-          git push origin "${GO_TAG}"
+          git tag -s "${GO_TAG}" "${MERGE_SHA}" -m "Release ${GO_TAG}"
+          gitsign verify-tag \
+            --certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${GO_TAG}"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${GO_TAG}"
 
       - name: Generate release notes
         # Picks the previous wasmCloud release tag and pins it as
@@ -425,7 +519,7 @@ jobs:
         # Body is written to release-notes.md and passed via body_path
         # below. See .github/scripts/generate-release-notes.mjs.
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ver.outputs.tag }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
         run: node .github/scripts/generate-release-notes.mjs
@@ -457,7 +551,7 @@ jobs:
           body_path: release-notes.md
           files: |
             ./artifacts/*/*
-          token: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          token: ${{ steps.octo-sts.outputs.token }}
           prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
           fail_on_unmatched_files: true
 
@@ -465,6 +559,17 @@ jobs:
       # release is already shipped above (tag pushed, images promoted, GH
       # release created). A failure here should not fail the run state or
       # suppress the success Slack — re-run the step or republish manually.
+      # The wasmcloud-release-dispatch trust policies live in the receiving
+      # repositories and grant only this workflow on main.
+      - name: Get a Homebrew dispatch token from octo-sts
+        id: octo-sts-homebrew
+        if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: wasmCloud/homebrew-wasmcloud
+          identity: wasmcloud-release-dispatch
+
       - name: Dispatch Homebrew tap update
         # Run after the GitHub Release exists so the formula update can
         # fetch the binaries and their attestations. Skipped for pre-
@@ -472,13 +577,22 @@ jobs:
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ steps.octo-sts-homebrew.outputs.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           echo "STAGE=homebrew" >> "${GITHUB_ENV}"
           gh api repos/wasmCloud/homebrew-wasmcloud/dispatches \
             -f event_type=brew-formula-update \
             -f "client_payload[tag_version]=${VERSION}"
+
+      - name: Get a docs dispatch token from octo-sts
+        id: octo-sts-docs
+        if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: wasmCloud/wasmcloud.com
+          identity: wasmcloud-release-dispatch
 
       - name: Dispatch docs version bump
         # Notifies wasmCloud/wasmcloud.com to bump WASMCLOUD_VERSION in
@@ -489,7 +603,7 @@ jobs:
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ steps.octo-sts-docs.outputs.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           echo "STAGE=docs-version-bump" >> "${GITHUB_ENV}"

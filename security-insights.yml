@@ -1,6 +1,6 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-10-27'
+  last-updated: '2026-10-29'
   last-reviewed: '2026-10-27'
   url: https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/security-insights.yml
 
@@ -36,9 +36,9 @@ project:
       email: security@wasmcloud.com
       primary: true
     comment: >-
-      Email security@wasmcloud.com, or use GitHub private vulnerability
-      reporting at https://github.com/wasmCloud/wasmCloud/security/advisories/new.
-      Reports are acknowledged within 3 business days. Advisories are published as GitHub
+      Report privately through GitHub at
+      https://github.com/wasmCloud/wasmCloud/security/advisories/new or by email
+      to security@wasmcloud.com. Reports are acknowledged within 3 business days. Advisories are published as GitHub
       Security Advisories in the affected repository.
     in-scope:
       - Any repository in the wasmCloud GitHub organization
@@ -68,6 +68,7 @@ repository:
     expression: Apache-2.0
   documentation:
     contributing-guide: https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md
+    dependency-management-policy: https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md#dependencies
     governance: https://github.com/wasmCloud/wasmCloud/blob/main/GOVERNANCE.md
     review-policy: https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md#code-review
     security-policy: https://github.com/wasmCloud/wasmCloud/blob/main/SECURITY.md
@@ -136,6 +137,28 @@ repository:
           ci:
             name: cargo-audit
             predicate-uri: https://rustsec.org
+            location: https://github.com/wasmCloud/wasmCloud/actions/workflows/audit.yml
+      - name: Dependency Review
+        type: SCA
+        comment: >-
+          Checks dependency changes across supported ecosystems, including Rust
+          and Go, on pull requests and merge groups that change dependency files,
+          GitHub Actions, or the dependency policy. Blocks advisories of any
+          severity in runtime, development, and unknown scopes through gate-audit.
+          Checks licenses against the allowlist and crate exemptions mirrored from
+          deny.toml in .github/dependency-review-config.yml; cargo-deny enforces
+          the specific licenses approved for exempted crates in every Rust
+          workspace, including standalone examples and templates.
+        rulesets:
+          - default
+        integration:
+          adhoc: false
+          ci: true
+          release: false
+        results:
+          ci:
+            name: dependency-review
+            predicate-uri: https://github.com/actions/dependency-review-action
             location: https://github.com/wasmCloud/wasmCloud/actions/workflows/audit.yml
       - name: Dependabot
         type: SCA

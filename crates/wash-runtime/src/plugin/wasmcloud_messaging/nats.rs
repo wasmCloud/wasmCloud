@@ -368,15 +368,21 @@ impl HostPlugin for NatsMessaging {
         // surfaces are separate linker instances, and binding one a component
         // never imports is harmless but binding the wrong one is not.
         if super::declares_async_messaging(&interfaces) {
-            types_p3::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            types_p3::add_to_linker::<_, SharedCtx>(
+                component_handle.linker()?,
+                extract_active_ctx,
+            )?;
             consumer_p3::add_to_linker::<_, SharedCtx>(
-                component_handle.linker(),
+                component_handle.linker()?,
                 extract_active_ctx,
             )?;
         } else {
-            types_p2::add_to_linker::<_, SharedCtx>(component_handle.linker(), extract_active_ctx)?;
+            types_p2::add_to_linker::<_, SharedCtx>(
+                component_handle.linker()?,
+                extract_active_ctx,
+            )?;
             consumer_p2::add_to_linker::<_, SharedCtx>(
-                component_handle.linker(),
+                component_handle.linker()?,
                 extract_active_ctx,
             )?;
         }
@@ -527,7 +533,7 @@ impl HostPlugin for NatsMessaging {
         };
 
         let admission = match &pre {
-            Some(pre) => admission.with_component(pre.instance_pre().component())?,
+            Some(_) => admission.with_workload(workload, component_id).await?,
             None => admission,
         };
 

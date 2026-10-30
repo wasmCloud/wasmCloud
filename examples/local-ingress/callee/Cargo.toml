@@ -2,6 +2,7 @@
 name = "local-ingress-callee"
 edition = "2024"
 version = "0.1.0"
+publish = false
 
 [lints]
 workspace = true

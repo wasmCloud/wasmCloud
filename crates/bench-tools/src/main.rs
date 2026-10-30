@@ -1,3 +1,5 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+#![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 //! Internal CLI for processing wasmCloud bench output (criterion, gungraun
 //! and the k6 load tests in `scripts/k6bench/`).
 //!

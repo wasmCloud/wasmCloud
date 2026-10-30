@@ -8,14 +8,29 @@ The report is a `bench_tools::density::Report` per flavour, shared with
 evidence to estimate a limit, and `-` means a reading was not taken (a
 spin-down, a CPU share). Neither means the capacity is infinite: an idle
 workload uses no CPU, so CPU bounds rates, not counts. `WASH_SCALE_REPORT_JSON`
-writes the reports, with unknowns as `null`; in CI (`bench.yml`, bench
-`scale_density`) it is `<target>/density/scale_density.json`, which `bench-tools
+writes the reports, including `guest_memory_mode`, with unknowns as `null`; in
+CI (`bench.yml`, bench `scale_density`) it is
+`<target>/density/scale_density.json`, which `bench-tools
 jsonl` publishes to the trend site as `served_workloads`, `binding_limit`,
 `marginal_bytes_per_workload` and the other figures `Report::metrics` names.
 
 If a baseline or step process-footprint reading is unavailable, the runtime
 benchmark stops with a measurement error instead of recording 0 B or making a
 capacity claim from it.
+
+The default enforce-mode series keeps its existing name. Count and growth
+runs append `-count` or `-growth` to the label, so their results publish as
+separate series.
+`WASH_SCALE_GUEST_MEMORY_MODE` takes a list, and `scripts/bench/run-bench.sh`
+runs `enforce,growth`, so CI publishes both series.
+
+- Count mode measures guest bytes,
+  but does not treat the guest budget as a binding limit.
+- Growth mode charges only growth beyond each memory's first allocation,
+  so a retained charge of zero does not measure its capacity.
+  What binds it instead is the cap on uncharged initial memory
+  (`WASH_SCALE_INITIAL_GUEST_MEMORY`), which it reports as
+  max-initial-guest-memory.
 
 Warm runs need the P3 fixture. `WASH_SCALE_FIXTURE=p2` runs scale-to-zero
 only, because a P2 HTTP instance cannot stay warm.
@@ -37,9 +52,15 @@ with the component, so these are a guide, not constants.
 - **Scale-to-zero** holds only host bookkeeping: the workload record, its
   component metadata and route, and the `InstancePre` the HTTP handler keeps.
   The WASI and `wasi:http` linker that used to dominate this (~180 KiB per
-  workload) is now built once per engine and shared. A component that a
-  plugin or a link writes to still gets a copy of its own (~140 KiB), so a
-  workload importing, say, `wasi:logging` costs about that much more.
+  workload) is now built once per engine and shared.
+  - A component that a plugin or a link writes to gets a copy of its own
+    (~140 KiB) while the workload resolves.
+  - Once it resolves, the component keeps its `InstancePre` and lets the copy
+    go; later invocations and service starts reuse the kept link.
+  - A component that does not link keeps only the error, which every attempt
+    to instantiate it reports.
+  - The bench's fixture imports nothing a plugin writes to, so it holds no
+    copy, and this does not show in its figures.
 - **Warm** adds a parked instance: its stores, its core instances, and the
   pages of linear memory the guest has touched. The guest budget charges the
   declared size whether or not it is resident, which is why the guest charge
@@ -55,7 +76,8 @@ footprint there.
 | Limit | Formula | Binds for |
 | --- | --- | --- |
 | max-process-memory | `n + (limit - F) / marginal`, where `marginal = (F - F_first) / (n - n_first)` over the clean steps | both |
-| max-guest-memory | `max_guest_memory / (guest charged / n)` | warm (? when no retained charge is measurable) |
+| max-guest-memory | `max_guest_memory / (guest charged / n)` | warm in enforce or growth mode (? when no retained charge is measurable); omitted in count mode |
+| max-initial-guest-memory | `initial cap / (initial memory uncharged / n)` | warm in growth mode only |
 | pool core instances | `core instance total / (core instances in use / n)` | warm |
 | pool memories | `memory total / (memories in use / n)` | warm |
 | cpu | unbounded idle capacity: an idle workload uses no CPU | neither |
@@ -71,10 +93,24 @@ footprint there.
 
   Both are summed over the clean steps. On Linux the load generator's own
   CPU is left out.
-- **Pool totals** default to half the usable address space at one 4 GiB +
-  32 MiB slot each, capped at `vm.max_map_count / 5`. That is 13,106 slots
-  on a default Linux. A warm workload holds four core instances, so the pool
-  fits about 3,276 of them.
+- **Pool linear memories** default to what the runtime derives
+  (`derive_max_memories`): half the usable address space at one 4 GiB +
+  32 MiB reservation each, and no more than nine tenths of `vm.max_map_count`
+  holds at six mappings per warm component (two for its pooled stack, four for
+  its memory, or two with `WASMTIME_MEMORY_INIT_COW=false`). That is 9,829 on
+  a default Linux, 14,744 with images off. A warm workload holds one
+  linear memory, one fiber stack and one component instance, from totals of
+  the same size; its four core instances and two tables draw on totals sized
+  as multiples of that count, so they do not bind first. Windows, 32-bit
+  targets, and Linux with strict overcommit accounting or a finite
+  `RLIMIT_DATA` keep the host's old default of 1,000 memories, since the
+  writable table and (outside Windows) stack mappings can otherwise prevent
+  engine startup
+  (`wash host --set-max-memories-from-memory-precommit-limit` sizes such a host against a
+  quarter of its commit limit instead; the bench keeps the floor).
+  (The bench's own earlier derivation, a fifth of the mapping limit, gave
+  13,106 on a default Linux; it is gone, so runs there are not comparable
+  across the change.)
 
 ## The memory guard
 

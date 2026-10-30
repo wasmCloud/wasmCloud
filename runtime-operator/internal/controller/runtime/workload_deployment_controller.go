@@ -42,9 +42,15 @@ func (r *WorkloadDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 }
 
 func (r *WorkloadDeploymentReconciler) reconcileArtifacts(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
-	for _, configArtifact := range deployment.Spec.Artifacts {
+	return checkArtifactsPublished(ctx, r.Client, deployment.Namespace, deployment.Spec.Artifacts)
+}
+
+// checkArtifactsPublished returns a status-unknown error until every
+// referenced Artifact exists and is published.
+func checkArtifactsPublished(ctx context.Context, kubeClient client.Client, namespace string, artifactsFrom []runtimev1alpha1.WorkloadDeploymentArtifact) error {
+	for _, configArtifact := range artifactsFrom {
 		artifact := &runtimev1alpha1.Artifact{}
-		if err := r.Get(ctx, client.ObjectKey{Name: configArtifact.ArtifactFrom.Name, Namespace: deployment.Namespace}, artifact); err != nil {
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: configArtifact.ArtifactFrom.Name, Namespace: namespace}, artifact); err != nil {
 			if client.IgnoreNotFound(err) == nil {
 				return condition.ErrStatusUnknown(fmt.Errorf("artifact %s not found", configArtifact.ArtifactFrom.Name))
 			}

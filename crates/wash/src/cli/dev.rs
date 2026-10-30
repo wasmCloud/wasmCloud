@@ -927,6 +927,229 @@ async fn reload_component(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::config::{DevComponent, DevConfig};
+    use wash_runtime::types::WorkloadStatusRequest;
+
+    fn component() -> Bytes {
+        // Empty component with no imports or exports.
+        Bytes::from_static(b"\0asm\x0d\0\x01\0")
+    }
+
+    fn host() -> Host {
+        Host::builder()
+            .with_engine(
+                Engine::builder()
+                    .with_pooling_allocator(false)
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn loads_sidecars_and_service_with_resolved_resources() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("component.wasm");
+        std::fs::write(&path, component())?;
+        let config = Config {
+            dev: Some(DevConfig {
+                service_file: Some(path.clone()),
+                components: vec![DevComponent {
+                    config: HashMap::from([("shared".into(), "sidecar".into())]),
+                    pool_size: Some(2),
+                    max_invocations: Some(3),
+                    max_concurrency: Some(4),
+                    reclaim_window_seconds: Some(5),
+                    reclaim_min_instances: Some(1),
+                    ..DevComponent::new("sidecar", path)
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let resolved = ResolvedWorkload {
+            environment: HashMap::from([("APP".into(), "development".into())]),
+            config: HashMap::from([("shared".into(), "workload".into())]),
+            ..Default::default()
+        };
+        let workload = create_workload(
+            &host(),
+            &config,
+            dir.path(),
+            component(),
+            &resolved,
+            &OciConfig::new_with_cache(dir.path().join("cache")),
+        )
+        .await?;
+        let mut components = workload.components.iter();
+        let main = components.next().unwrap();
+        let sidecar = components.next().unwrap();
+        assert!(components.next().is_none());
+        assert_eq!(main.local_resources.config, resolved.config);
+        assert_eq!(sidecar.name, "sidecar");
+        assert_eq!(sidecar.bytes, component());
+        assert!(sidecar.digest.is_some());
+        assert_eq!(sidecar.local_resources.environment, resolved.environment);
+        assert_eq!(
+            sidecar.local_resources.config.get("shared").unwrap(),
+            "sidecar"
+        );
+        assert_eq!(
+            (
+                sidecar.pool_size,
+                sidecar.max_invocations,
+                sidecar.max_concurrency
+            ),
+            (2, 3, 4)
+        );
+        assert_eq!(
+            (
+                sidecar.reclaim_window_seconds,
+                sidecar.reclaim_min_instances
+            ),
+            (5, 1)
+        );
+        let service = workload.service.unwrap();
+        assert_eq!(service.bytes, component());
+        assert!(service.digest.is_some());
+        assert_eq!(service.local_resources.config, resolved.config);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dev_service_does_not_fetch_the_configured_service() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config = Config {
+            dev: Some(DevConfig {
+                service: true,
+                service_file: Some(dir.path().join("missing.wasm")),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let workload = create_workload(
+            &host(),
+            &config,
+            dir.path(),
+            component(),
+            &ResolvedWorkload::default(),
+            &OciConfig::new_with_cache(dir.path().join("cache")),
+        )
+        .await?;
+        assert!(workload.components.is_empty());
+        assert_eq!(workload.service.unwrap().bytes, component());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn loading_errors_identify_the_failing_component() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let host = host();
+        let oci = OciConfig::new_with_cache(dir.path().join("cache"));
+        for (dev, bytes, expected) in [
+            (
+                DevConfig::default(),
+                Bytes::from_static(b"invalid wasm"),
+                "failed to extract component interfaces",
+            ),
+            (
+                DevConfig {
+                    components: vec![DevComponent::new(
+                        "missing-sidecar",
+                        dir.path().join("missing.wasm"),
+                    )],
+                    ..Default::default()
+                },
+                component(),
+                "dev.components['missing-sidecar']",
+            ),
+            (
+                DevConfig {
+                    service_file: Some(dir.path().join("missing-service.wasm")),
+                    ..Default::default()
+                },
+                component(),
+                "failed to load the dev service component",
+            ),
+        ] {
+            let config = Config {
+                dev: Some(dev),
+                ..Default::default()
+            };
+            let error = create_workload(
+                &host,
+                &config,
+                dir.path(),
+                bytes,
+                &ResolvedWorkload::default(),
+                &oci,
+            )
+            .await
+            .unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reload_replaces_the_previous_workload() -> anyhow::Result<()> {
+        let host = host().start().await?;
+        let workload = build_workload(
+            &DevConfig::default(),
+            component(),
+            HashSet::new(),
+            vec![],
+            None,
+            &ResolvedWorkload::default(),
+        );
+        let first = reload_component(Arc::clone(&host), &workload, None).await?;
+        let second = reload_component(Arc::clone(&host), &workload, Some(first.clone())).await?;
+        assert_ne!(first, second);
+        let old = host
+            .workload_status(WorkloadStatusRequest { workload_id: first })
+            .await?;
+        assert_eq!(old.workload_status.workload_state, WorkloadState::NotFound);
+        let current = host
+            .workload_status(WorkloadStatusRequest {
+                workload_id: second,
+            })
+            .await?;
+        assert_eq!(
+            current.workload_status.workload_state,
+            WorkloadState::Running
+        );
+        host.stop().await
+    }
+
+    #[tokio::test]
+    async fn reload_reports_a_failed_workload() -> anyhow::Result<()> {
+        let host = host().start().await?;
+        let workload = build_workload(
+            &DevConfig::default(),
+            Bytes::from_static(b"invalid wasm"),
+            HashSet::new(),
+            vec![],
+            None,
+            &ResolvedWorkload::default(),
+        );
+        let error = reload_component(Arc::clone(&host), &workload, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("failed to reload component"),
+            "{error:#}"
+        );
+        host.stop().await
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::config::{DevComponent, DevConfig, DevVolume};
@@ -1214,7 +1437,7 @@ mod tests {
     /// entry that omits them round-trips as "unset" rather than zero.
     #[test]
     fn dev_component_warm_instance_limits_deserialize() {
-        let with: DevComponent = serde_yaml_ng::from_str(
+        let with: DevComponent = serde_saphyr::from_str(
             "name: pooled\nfile: pooled.wasm\npoolSize: 8\nmaxInvocations: 50\n\
              reclaimWindowSeconds: 60\nreclaimMinInstances: 2",
         )
@@ -1225,7 +1448,7 @@ mod tests {
         assert_eq!(with.reclaim_min_instances, Some(2));
 
         let without: DevComponent =
-            serde_yaml_ng::from_str("name: plain\nfile: plain.wasm").unwrap();
+            serde_saphyr::from_str("name: plain\nfile: plain.wasm").unwrap();
         assert_eq!(without.pool_size, None);
         assert_eq!(without.max_invocations, None);
         assert_eq!(without.reclaim_window_seconds, None);

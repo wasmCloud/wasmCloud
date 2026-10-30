@@ -969,7 +969,7 @@ impl HostPlugin for InMemoryBlobstore {
             workload_id = component_handle.id(),
             "Adding blobstore interfaces to linker for workload"
         );
-        let linker = component_handle.linker();
+        let linker = component_handle.linker()?;
 
         bindings::wasi::blobstore::blobstore::add_to_linker::<_, SharedCtx>(
             linker,

@@ -57,6 +57,7 @@ rules:
   resources:
   - artifacts
   - hosts
+  - workloaddaemonsets
   - workloaddeployments
   - workloadreplicasets
   - workloads
@@ -73,6 +74,7 @@ rules:
   resources:
   - artifacts/finalizers
   - hosts/finalizers
+  - workloaddaemonsets/finalizers
   - workloaddeployments/finalizers
   - workloadreplicasets/finalizers
   - workloads/finalizers
@@ -83,6 +85,7 @@ rules:
   resources:
   - artifacts/status
   - hosts/status
+  - workloaddaemonsets/status
   - workloaddeployments/status
   - workloadreplicasets/status
   - workloads/status

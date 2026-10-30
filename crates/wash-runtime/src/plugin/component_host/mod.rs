@@ -66,6 +66,7 @@
 //! to the workload whose capability call is being served.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -73,6 +74,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
+use futures::FutureExt as _;
 use tracing::{debug, error, warn};
 use wasmtime::AsContextMut;
 use wasmtime::component::types::Type;
@@ -91,8 +93,8 @@ use crate::engine::workload::{
 };
 use crate::host::job_registry::JobRegistry;
 use crate::host::trigger_service::{
-    CapabilityCall, CapabilityFunc, CapabilityJob, Ingress, LifecycleReplay, TriggerService,
-    decode_bind_reply,
+    CapabilityCall, CapabilityFunc, CapabilityJob, CliRunError, Ingress, LifecycleReplay,
+    decode_bind_reply, run_trigger_driver,
 };
 use crate::oci::OciConfig;
 use crate::plugin::binding_of;
@@ -588,7 +590,7 @@ impl ComponentHostPlugin {
             );
         }
 
-        let linker = item.linker();
+        let linker = item.linker()?;
         for exported in self.exports.iter() {
             let iface_names: Vec<&str> =
                 exported.wit.interfaces.iter().map(String::as_str).collect();
@@ -1045,10 +1047,7 @@ impl HostPlugin for ComponentHostPlugin {
                 .await
                 .is_err()
         {
-            // The supervisor is wedged (e.g. a driver hung on an in-flight call
-            // whose shim still holds a channel sender). Abort it so it cannot
-            // survive `stop()` and later — after a fresh `start()` — mistake the
-            // new incarnation for a fault and restart a duplicate store.
+            // The supervisor owns the driver, so aborting it also cancels the store.
             warn!(
                 id = self.id,
                 "host component plugin supervisor did not stop in time; aborting it"
@@ -1173,7 +1172,7 @@ async fn link_native_imports(
         .take_component(&component_id)
         .context("plugin's own synthetic workload component vanished during binding")?;
     Ok(std::mem::replace(
-        plugin_component.metadata.linker(),
+        plugin_component.metadata.linker()?,
         Linker::new(engine.inner()),
     ))
 }
@@ -1818,7 +1817,7 @@ async fn run_supervisor(
     loop {
         // Installs this incarnation's virtual network on the handle, which is
         // how a listener published before this incarnation existed finds it.
-        let store = build_plugin_store(
+        let mut store = build_plugin_store(
             &runtime.engine,
             state.id,
             &state.native_plugins,
@@ -1847,12 +1846,22 @@ async fn run_supervisor(
             registry,
             replay: std::mem::take(&mut replay),
         };
-        let trigger_service = TriggerService::spawn(store, runtime.pre.clone(), vec![ingress]);
-
-        // The driver runs until the capability channel closes (clean shutdown)
-        // or the store faults (e.g. a guest trap).
+        // The supervisor owns the store through driver shutdown and cancellation.
         let started = tokio::time::Instant::now();
-        let _ = trigger_service.driver.await;
+        match AssertUnwindSafe(run_trigger_driver(
+            &mut store,
+            &runtime.pre,
+            vec![ingress],
+            CliRunError::Logged,
+        ))
+        .catch_unwind()
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => error!(id = state.id, err = %e, "trigger service driver faulted"),
+            Err(_) => error!(id = state.id, "trigger service driver panicked"),
+        }
+        drop(store);
         let uptime = started.elapsed();
 
         // `stop()` clears the sender; if it is gone, this was a clean shutdown.
@@ -2150,6 +2159,54 @@ mod tests {
     use super::*;
     use crate::host::allowed_loopback::AllowedLoopbackPort;
     use crate::sockets::{AddrDecision, DenyReason, Plane, SocketAddrUse};
+
+    #[tokio::test]
+    async fn a_timed_out_plugin_stop_releases_its_store() -> anyhow::Result<()> {
+        let wasm = wat::parse_str(
+            r#"(component
+          (core module $m
+            (func (export "f") (result i32) i32.const 0)
+            (func (export "callback") (param i32 i32 i32) (result i32) i32.const 0))
+          (core instance $m (instantiate $m))
+          (func $f async (canon lift (core func $m "f") async
+            (callback (core func $m "callback"))))
+          (instance $api (export "f" (func $f)))
+          (export "test:probe/api@0.1.0" (instance $api)))"#,
+        )?;
+        let plugin = ComponentHostPlugin::builder()
+            .id("supervisor-cancellation")
+            .wasm(&wasm)
+            .engine(Engine::builder().with_pooling_allocator(false).build()?)
+            .build()
+            .await?;
+        plugin.start().await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while plugin.state.registry.load_full().is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        let network = Arc::downgrade(
+            &plugin
+                .runtime
+                .store
+                .network
+                .current()
+                .context("plugin network missing")?,
+        );
+        // An in-flight caller can keep the driver's channel open during stop.
+        let _incarnation = plugin.state.sender_arc().context("plugin sender missing")?;
+        plugin.stop().await?;
+        drop(plugin);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while network.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("a detached driver retained the plugin store")?;
+        Ok(())
+    }
 
     #[test]
     fn plugin_loopback_grant_is_applied_without_widening_the_host_gate() {

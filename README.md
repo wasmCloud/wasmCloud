@@ -36,7 +36,7 @@ This is the wasmCloud monorepo. Other parts of the project such as documentation
 | --- | --- |
 | [`crates/wash`](./crates/wash/) | **Wasm Shell (`wash`)** — the CLI for scaffolding, building, and publishing WebAssembly components, and for running a local development host. |
 | [`crates/wash-runtime`](./crates/wash-runtime/) | **`wash-runtime`** — the embeddable Rust runtime that powers `wash dev`, the cluster host, and custom embedded hosts. Wraps Wasmtime with a plugin-based capability model. |
-| [`runtime-operator/`](./runtime-operator/) | **Runtime Operator** — Kubernetes operator that reconciles wasmCloud CRDs (`Host`, `Workload`, `WorkloadDeployment`, `WorkloadReplicaSet`, `Artifact`) and schedules workloads onto host pods via NATS. |
+| [`runtime-operator/`](./runtime-operator/) | **Runtime Operator** — Kubernetes operator that reconciles wasmCloud CRDs (`Host`, `Workload`, `WorkloadDeployment`, `WorkloadReplicaSet`, `WorkloadDaemonSet`, `Artifact`) and schedules workloads onto host pods via NATS. |
 | [`runtime-gateway/`](./runtime-gateway/) | **Runtime Gateway** — HTTP gateway that proxies traffic to host pods. *Deprecated as of 2.0.3*; routing is now handled by the operator via EndpointSlices on standard Kubernetes Services. The chart still installs the gateway by default for backwards compatibility (set `gateway.enabled: false` to skip). |
 | [`charts/runtime-operator/`](./charts/runtime-operator/) | Helm chart for installing the operator, host runtime, and (optionally) NATS as a single release. |
 | [`proto/`](./proto/) | Protobuf definitions for control-plane messages exchanged between the operator and hosts over NATS. |
@@ -88,6 +88,7 @@ wash -V
 ```
 
 For details and options, see the [Installation guide](https://wasmcloud.com/docs/installation).
+Verify downloaded binaries, images, and SBOMs with the [Release verification guide](https://wasmcloud.com/docs/verify-releases).
 
 ### wasmCloud on Kubernetes
 
@@ -100,6 +101,14 @@ helm install wasmcloud oci://ghcr.io/wasmcloud/charts/runtime-operator \
 ```
 
 For a local `kind` cluster, the deploy assets and full walkthrough live at [wasmcloud.com/docs/installation](https://wasmcloud.com/docs/installation#install-wasmcloud-on-kubernetes).
+
+`helm upgrade` does not install or update CRDs. Apply the chart's CRDs before upgrading. If a kind a release adds is missing, the operator runs without its controller and restarts itself within 30 seconds of the CRD being applied:
+
+```bash
+helm pull oci://ghcr.io/wasmcloud/charts/runtime-operator --version <version> --untar --untardir /tmp/wasmcloud-chart
+kubectl apply --server-side -f /tmp/wasmcloud-chart/runtime-operator/crds/
+helm upgrade wasmcloud oci://ghcr.io/wasmcloud/charts/runtime-operator --version <version> --namespace wasmcloud
+```
 
 ## Quickstart
 

@@ -79,7 +79,11 @@ impl LoopbackIncomingDatagramStream {
                 break;
             };
             match self.remote_address {
-                Some(connected_addr) if connected_addr != dgram.source_address => continue,
+                Some(connected_addr)
+                    if !super::util::is_same_peer(connected_addr, dgram.source_address) =>
+                {
+                    continue;
+                }
                 _ if self.socket_addr_check.as_ref().is_some_and(|check| {
                     check
                         .check(dgram.source_address, super::SocketAddrUse::UdpReceive)
@@ -117,9 +121,11 @@ impl LoopbackOutgoingDatagramStream {
         if self.permit.is_some() {
             return true;
         };
-        let Ok(p) =
-            Arc::clone(&self.permits).try_acquire_many_owned(self.permits.available_permits() as _)
-        else {
+        let available = self.permits.available_permits();
+        if available == 0 {
+            return false;
+        }
+        let Ok(p) = Arc::clone(&self.permits).try_acquire_many_owned(available as _) else {
             return false;
         };
         self.permit = Some(p);

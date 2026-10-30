@@ -507,7 +507,7 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         }
 
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         // `blobstore` (create/get/delete container, copy/move) routed per
         // `(implements ..)` label so each label lands on its own backend.
@@ -639,3 +639,8 @@ mod tests {
         assert!(plugin.mux.default_for("workload-b").is_some());
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "multiplexed_async_contract_tests.rs"]
+mod contract_tests;

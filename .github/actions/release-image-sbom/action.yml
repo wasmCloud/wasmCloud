@@ -1,0 +1,55 @@
+name: Release image SBOMs
+description: Attest the generated inventory of each released image platform
+inputs:
+  image:
+    description: Fully qualified image name
+    required: true
+  digest:
+    description: Promoted multi-platform manifest digest
+    required: true
+  name:
+    description: Release asset prefix used when the SBOMs were generated
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Resolve platform subjects
+      id: subjects
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ inputs.digest }}
+        NAME: ${{ inputs.name }}
+      run: |
+        set -euo pipefail
+        echo "STAGE=image-sboms" >> "${GITHUB_ENV}"
+        node .github/scripts/release-sboms.mjs image-subjects
+
+    - name: Attest amd64 image SBOM
+      id: amd64
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.subjects.outputs.amd64_digest }}
+        sbom-path: ./artifacts/sboms/${{ inputs.name }}-image-linux-amd64.spdx.json
+        push-to-registry: true
+
+    - name: Attest arm64 image SBOM
+      id: arm64
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.subjects.outputs.arm64_digest }}
+        sbom-path: ./artifacts/sboms/${{ inputs.name }}-image-linux-arm64.spdx.json
+        push-to-registry: true
+
+    - name: Stage image SBOM bundles
+      shell: bash
+      env:
+        NAME: ${{ inputs.name }}
+        AMD64_BUNDLE: ${{ steps.amd64.outputs.bundle-path }}
+        ARM64_BUNDLE: ${{ steps.arm64.outputs.bundle-path }}
+      run: |
+        set -euo pipefail
+        cp "${AMD64_BUNDLE}" "./artifacts/sboms/${NAME}-image-linux-amd64.sbom.sigstore.json"
+        cp "${ARM64_BUNDLE}" "./artifacts/sboms/${NAME}-image-linux-arm64.sbom.sigstore.json"
