@@ -630,6 +630,9 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// the ingress the service will serve calls on. See
     /// [`crate::engine::dispatch`].
     ///
+    /// The workload's linkers are sealed; mutable access returns an error.
+    /// Bind in [`Self::on_workload_item_bind`] instead.
+    ///
     /// # Arguments
     /// * `workload` - The fully resolved workload
     /// * `component_id` - The ID of the specific component within the workload
