@@ -39,7 +39,7 @@ use wasmtime::component::Val;
 use wasmtime::component::types::Type;
 
 use crate::engine::abandon::DispatchedCall;
-use crate::engine::ctx::CallerIdentity;
+use crate::engine::ctx::{CallerIdentity, WorkloadCaller};
 use crate::engine::store::relocate::Relocated;
 use crate::engine::workload::UnresolvedWorkload;
 use crate::host::trigger_service::{CapabilityCall, CapabilityJob, LifecycleReplay};
@@ -193,7 +193,7 @@ pub(super) fn replay_snapshot(
             // A replayed bind is about the workload, not any component of it
             // nor any one of its bindings, which are listed on the
             // `workload-info` the hook is handed.
-            caller: CallerIdentity {
+            caller: WorkloadCaller {
                 workload_id: Arc::clone(workload_id),
                 component_id: None,
                 binding: None,
@@ -304,11 +304,11 @@ pub(super) async fn send_lifecycle_job(
     let job = CapabilityJob::Call(CapabilityCall {
         interface: Arc::clone(&lifecycle.interface),
         func: Arc::clone(&func.name),
-        caller: CallerIdentity {
+        caller: CallerIdentity::Workload(WorkloadCaller {
             workload_id: Arc::clone(workload_id),
             component_id: None,
             binding: None,
-        },
+        }),
         args: vec![Relocated::Val(arg)],
         result_tys: Arc::clone(&func.result_tys),
         reply: reply_tx,

@@ -190,8 +190,17 @@ mod roster_tests {
 /// decides whether a workload may write over it.
 pub mod bindings;
 pub use bindings::{
-    BindingSchema, KeyOwnership, PluginBindingSet, PluginBindings, WorkloadConfigPolicy, binding_of,
+    BindingSchema, KeyOwnership, PluginBindingSet, PluginBindings, PluginSecretRef,
+    WorkloadConfigPolicy, binding_of,
 };
+
+/// Plugin-backed `secrets:` entries, resolved through another plugin at bind.
+mod secret_source;
+pub use secret_source::{
+    BindingName, CatalogName, HostSecretSource, PluginId, RequestingWorkload, SecretConsumer,
+    SecretKey, SecretRequest, SecretSourceError, SecretValue, WorkloadGrant, WorkloadSelector,
+};
+pub(crate) use secret_source::{resolve_plugin_secrets, validate_plugin_secrets};
 
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
@@ -470,12 +479,17 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
 
     /// Check the operator's declaration for this plugin at host startup.
     ///
-    /// Called once by [`crate::host::HostBuilder::build`] with whatever
+    /// Called by [`crate::host::HostBuilder::build`] with whatever
     /// `host.plugins` declared for this id. A plugin parses each of
     /// [`PluginBindingSet::host_layers`] with its own reader here, so a
     /// declaration it cannot use fails the host rather than the first workload
     /// that needs it — and so an operator cannot write a value the manifest
     /// parser would have rejected.
+    ///
+    /// A key a plugin secret supplies has no value at startup: `host_layers`
+    /// lists it as pending beside its layer, and the reader must count it as
+    /// set without reading it. Each bind that fills such keys calls this again
+    /// with the values in place.
     ///
     /// The default accepts everything, which is what a plugin with no
     /// [`HostPlugin::binding_schema`] wants.
@@ -554,6 +568,13 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// override this if it can fail a workload asynchronously (e.g. a host
     /// component plugin evicting a workload whose lifecycle bind crash-loops).
     fn set_workload_failure_sink(&self, _sink: WorkloadFailureSink) {}
+
+    /// What resolves the plugin-backed `secrets:` entries naming this plugin:
+    /// its `wasmcloud:host/secret-source` export, for a component plugin. The
+    /// default serves none.
+    fn secret_source(&self) -> Option<Arc<dyn HostSecretSource>> {
+        None
+    }
 
     /// Called when the plugin is started during host initialization.
     ///

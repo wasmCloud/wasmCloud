@@ -82,7 +82,7 @@ use wasmtime::component::{
 use wasmtime::{Store, StoreContextMut};
 
 use crate::engine::Engine;
-use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx};
+use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx, WorkloadCaller};
 use crate::engine::instance_pool::InstancePolicy;
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
@@ -103,12 +103,17 @@ use crate::types::LocalResources;
 use crate::wit::{WitInterface, WitWorld, versions_compatible};
 
 mod lifecycle;
+mod secret_source;
 mod workload_call;
 
 use lifecycle::{
     BindReply, HOST_LIFECYCLE_EXPORT, LifecycleFuncs, POISON_EVICT_STRIKES, attribute_replay_fault,
     await_bind_reply, evict_workload, lifecycle_funcs, remove_and_unbind, replay_snapshot,
     report_workload_failed, send_lifecycle_job, spawn_deferred_unbind, workload_info_val,
+};
+use secret_source::{ComponentSecretSource, HOST_SECRET_SOURCE_EXPORT, check_secret_source_export};
+pub(crate) use secret_source::{
+    SecretSourceRequest, SecretSourceResolve, SourceError, secret_source_resolve, secret_value,
 };
 use workload_call::{WorkloadCalls, add_workload_calls_to_linker, install_host_workload};
 
@@ -291,6 +296,9 @@ pub struct ComponentHostPlugin {
     capability_funcs: Vec<CapabilityFunc>,
     /// The plugin's `wasmcloud:host/workload-lifecycle` export, if it has one.
     lifecycle: Option<Arc<LifecycleFuncs>>,
+    /// Name of the plugin's `wasmcloud:host/secret-source` export, if it has
+    /// one. Called through its typed `resolve`, not the capability path.
+    secret_source: Option<Arc<str>>,
     max_restarts: u32,
     state: Arc<ComponentHostPluginState>,
     /// This plugin's claim on the real addresses its `ports` declared, held so
@@ -396,7 +404,7 @@ impl ComponentHostPlugin {
         // hold by construction here too, not just at the caller.
         let native_plugins = native_only(&native_plugins);
         let (component, base_linker) = engine.prepare_host_component(wasm)?;
-        let (exports, lifecycle) = introspect_capability_exports(id, &component)?;
+        let (exports, (lifecycle, secret_source)) = introspect_capability_exports(id, &component)?;
         let workload_imports = classify_workload_imports(
             id,
             &component,
@@ -404,13 +412,15 @@ impl ComponentHostPlugin {
             &native_plugins,
             engine.stream_payloads(),
         )?;
-        // A plugin has to participate in one direction or the other: serve a
-        // capability a workload imports, or call an interface a workload
-        // exports. A plugin doing only the latter is a legitimate shape — a
+        // A plugin has to participate somehow: serve a capability a workload
+        // imports, call an interface a workload exports, or serve the host
+        // secrets. A plugin doing only the second is a legitimate shape — a
         // trigger that dispatches from its own `wasi:cli/run` and exports no
         // capability at all.
         anyhow::ensure!(
-            exports.iter().any(|e| !e.funcs.is_empty()) || !workload_imports.is_empty(),
+            exports.iter().any(|e| !e.funcs.is_empty())
+                || !workload_imports.is_empty()
+                || secret_source.is_some(),
             "host component plugin '{id}' exports no capability functions to serve and imports \
              no interface for a workload to export"
         );
@@ -495,6 +505,7 @@ impl ComponentHostPlugin {
             exports: Arc::new(exports),
             capability_funcs,
             lifecycle: lifecycle.map(Arc::new),
+            secret_source,
             max_restarts: DEFAULT_MAX_RESTARTS,
             state,
             _port_reservations: port_reservations,
@@ -798,6 +809,13 @@ impl HostPlugin for ComponentHostPlugin {
         self.state.failure_sink.store(Some(Arc::new(sink)));
     }
 
+    fn secret_source(&self) -> Option<Arc<dyn crate::plugin::HostSecretSource>> {
+        self.secret_source.as_ref()?;
+        Some(Arc::new(ComponentSecretSource {
+            state: Arc::clone(&self.state),
+        }))
+    }
+
     async fn start(&self) -> anyhow::Result<()> {
         let (tx, rx) = tokio::sync::mpsc::channel(CAPABILITY_CHANNEL_CAPACITY);
         // Publish the sender and snapshot the bound workloads atomically (see
@@ -817,6 +835,7 @@ impl HostPlugin for ComponentHostPlugin {
             self.runtime.clone(),
             self.capability_funcs.clone(),
             self.lifecycle.clone(),
+            self.secret_source.clone(),
             Arc::clone(&self.state),
             self.max_restarts,
             replay,
@@ -1178,33 +1197,41 @@ async fn link_native_imports(
     ))
 }
 
+/// The host-invoked exports a plugin may provide besides its capabilities.
+type HostInvokedExports = (Option<LifecycleFuncs>, Option<Arc<str>>);
+
 /// Partition a plugin component's exports: the reserved `wasmcloud:host`
-/// lifecycle interface is a host-invoked contract, while everything else is a
-/// capability workloads may import.
+/// lifecycle and secret-source interfaces are host-invoked contracts, while
+/// everything else is a capability workloads may import.
 fn introspect_capability_exports(
     id: &str,
     component: &Component,
-) -> anyhow::Result<(Vec<ExportedInterface>, Option<LifecycleFuncs>)> {
+) -> anyhow::Result<(Vec<ExportedInterface>, HostInvokedExports)> {
     let mut lifecycle = None;
+    let mut secret_source = None;
     let mut exports = Vec::new();
     for export in introspect_exports(component)? {
         if is_reserved(&export.wit) {
             // Matched by interface name, not the exact `export.name` string —
             // `wasmcloud:host` is versioned as one package, so a patch bump
             // anywhere in it must not break a plugin built against the
-            // previous patch version of `workload-lifecycle` it already
-            // exports.
-            anyhow::ensure!(
-                export.wit.interfaces.contains(HOST_LIFECYCLE_EXPORT),
-                "host component plugin '{id}' exports reserved host interface {}",
-                export.name
-            );
-            lifecycle = Some(lifecycle_funcs(id, export)?);
+            // previous patch version of an interface it already exports.
+            if export.wit.interfaces.contains(HOST_LIFECYCLE_EXPORT) {
+                lifecycle = Some(lifecycle_funcs(id, export)?);
+            } else if export.wit.interfaces.contains(HOST_SECRET_SOURCE_EXPORT) {
+                check_secret_source_export(id, &export)?;
+                secret_source = Some(export.name);
+            } else {
+                anyhow::bail!(
+                    "host component plugin '{id}' exports reserved host interface {}",
+                    export.name
+                );
+            }
         } else {
             exports.push(export);
         }
     }
-    Ok((exports, lifecycle))
+    Ok((exports, (lifecycle, secret_source)))
 }
 
 /// Whether an import is already accounted for by something other than a
@@ -1431,9 +1458,9 @@ fn caller_root_task(store: &mut StoreContextMut<'_, SharedCtx>) -> Option<GuestT
     }
 }
 
-/// Install the `wasmcloud:host/identity` import on the plugin's own linker: two
-/// no-argument funcs returning the workload/component id of the caller whose
-/// capability call is currently running. Each walks its async call stack back to
+/// Install the `wasmcloud:host/identity` import on the plugin's own linker:
+/// no-argument funcs describing the caller whose capability call is currently
+/// running (its workload, component and binding). Each walks its async call stack back to
 /// the root export task and looks that task up in the current incarnation's
 /// [`JobRegistry`], so the answer is exact even while calls from other workloads
 /// interleave. A plugin that imports the interface can thereby partition its state
@@ -1454,7 +1481,7 @@ fn install_host_identity(
                 let root = caller_root_task(&mut store);
                 let id = root
                     .and_then(|task| workload_state.registry()?.caller_for_task(task))
-                    .map(|c| c.workload_id.to_string())
+                    .and_then(|c| Some(c.workload()?.workload_id.to_string()))
                     .unwrap_or_default();
                 if let Some(slot) = results.first_mut() {
                     *slot = Val::String(id);
@@ -1479,7 +1506,7 @@ fn install_host_identity(
                 // ask who is calling.
                 let id = root
                     .and_then(|task| component_state.registry()?.caller_for_task(task))
-                    .and_then(|c| c.component_id.clone())
+                    .and_then(|c| c.workload()?.component_id.clone())
                     .map(|id| id.to_string())
                     .unwrap_or_default();
                 if let Some(slot) = results.first_mut() {
@@ -1499,7 +1526,7 @@ fn install_host_identity(
                 // and that is the common case rather than a degradation.
                 let binding = root
                     .and_then(|task| binding_state.registry()?.caller_for_task(task))
-                    .and_then(|c| c.binding)
+                    .and_then(|c| c.workload()?.binding.clone())
                     .map(|name| Box::new(Val::String(name.to_string())));
                 if let Some(slot) = results.first_mut() {
                     *slot = Val::Option(binding);
@@ -1729,13 +1756,13 @@ async fn route_capability_call(
         |mut access| -> wasmtime::Result<(CallerIdentity, Vec<Relocated>)> {
             let caller = {
                 let ctx = &access.data_mut().active_ctx;
-                CallerIdentity {
+                CallerIdentity::Workload(WorkloadCaller {
                     workload_id: Arc::clone(&ctx.workload_id),
                     component_id: Some(Arc::clone(&ctx.component_id)),
                     // Fixed when the shim was installed, not read from the
                     // call, so nothing the guest passes can influence it.
                     binding,
-                }
+                })
             };
             let mut dones = Vec::new();
             let mut out = Vec::with_capacity(params.len());
@@ -1805,10 +1832,12 @@ async fn route_capability_call(
 /// TriggerService, and await the driver. A clean shutdown (the sender cleared by
 /// `stop()`) exits; a fault restarts up to `max_restarts` times, handing each
 /// new incarnation a fresh channel whose sender the installed shims pick up.
+#[allow(clippy::too_many_arguments)]
 async fn run_supervisor(
     runtime: PluginRuntime,
     funcs: Vec<CapabilityFunc>,
     lifecycle: Option<Arc<LifecycleFuncs>>,
+    secret_source: Option<Arc<str>>,
     state: Arc<ComponentHostPluginState>,
     max_restarts: u32,
     mut replay: Vec<LifecycleReplay>,
@@ -1846,6 +1875,7 @@ async fn run_supervisor(
             rx,
             registry,
             replay: std::mem::take(&mut replay),
+            secret_source: secret_source.clone(),
         };
         let trigger_service = TriggerService::spawn(store, runtime.pre.clone(), vec![ingress]);
 

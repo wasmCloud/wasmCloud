@@ -78,7 +78,7 @@ pub struct Config {
         rename = "secrets",
         skip_serializing_if = "BTreeMap::is_empty"
     )]
-    pub secret_sources: BTreeMap<String, SecretSource>,
+    pub secret_sources: BTreeMap<String, SecretEntry>,
 
     /// WIT dependency management configuration (default: empty/optional)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,6 +121,7 @@ impl Config {
             .chain(
                 self.secret_sources
                     .values()
+                    .filter_map(SecretEntry::as_static)
                     .flat_map(|source| [&source.file, &source.dir]),
             )
             .flatten()
@@ -306,7 +307,9 @@ pub struct WorkloadConfig {
 // embedder resolves these the same way (see
 // `wash_runtime::config_source`). Re-exported here because this module is
 // the documented home of the config schema.
-pub use wash_runtime::config_source::{ConfigSource, EnvironmentLayer, SecretSource};
+pub use wash_runtime::config_source::{
+    ConfigSource, EnvironmentLayer, PluginSecretSource, SecretEntry, SecretSource,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevVolume {
@@ -700,9 +703,9 @@ impl HostPluginConfig {
             bail!("host.plugins entry is missing a non-empty `id`");
         }
         self.reject_component_only_fields()?;
-        let resolve = |env: &EnvironmentLayer, owner: &str| -> Result<HashMap<String, String>> {
-            wash_runtime::config_source::resolve_environment_layer(
-                Some(env),
+        let resolve = |env: &EnvironmentLayer, owner: &str| {
+            wash_runtime::config_source::resolve_plugin_environment_layer(
+                env,
                 owner,
                 &config.config_sources,
                 &config.secret_sources,
@@ -713,8 +716,10 @@ impl HostPluginConfig {
         };
 
         let owner = format!("host.plugins '{}'", self.id);
+        let (base, base_secrets) = resolve(&self.environment, &owner)?;
         let mut set = wash_runtime::plugin::PluginBindingSet::new(self.id.clone())
-            .with_base(resolve(&self.environment, &owner)?)
+            .with_base(base)
+            .with_base_secrets(base_secrets)
             .with_host_owned_keys(&self.host_owned_keys)
             .with_workload_config(self.workload_config.unwrap_or(default_policy).into());
         // Declared only when the operator wrote one of the lists. An entry that
@@ -739,10 +744,11 @@ impl HostPluginConfig {
                     self.id
                 );
             }
-            set = set.with_binding(
-                name.clone(),
-                resolve(&binding.environment, &format!("{owner} binding '{name}'"))?,
-            );
+            let (config, secrets) =
+                resolve(&binding.environment, &format!("{owner} binding '{name}'"))?;
+            set = set
+                .with_binding(name.clone(), config)
+                .with_binding_secrets(name.clone(), secrets);
         }
         Ok(set)
     }
@@ -3053,6 +3059,81 @@ host:
         assert!(!owned.contains("subject-allow"));
     }
 
+    /// A `secrets:` entry refuses an unknown field, and a bad value is
+    /// reported at its own key.
+    #[test]
+    fn a_secrets_entry_error_names_its_field() {
+        let load = |yaml: &str| {
+            Figment::from(Yaml::string(yaml))
+                .extract::<Config>()
+                .unwrap_err()
+                .to_string()
+        };
+        let err = load("secrets:\n  db:\n    inline:\n      ON: true\n");
+        assert!(err.contains("secrets.db.inline.ON"), "{err}");
+        let err = load("secrets:\n  db:\n    fromenv: [X]\n");
+        assert!(
+            err.contains("unknown field") && err.contains("fromenv"),
+            "{err}"
+        );
+        let err = load(
+            "secrets:\n  db:\n    plugin: vault\n    keys: {url: k}\n    workloads:\n      - \
+             {namespace: a, nmae: b}\n",
+        );
+        assert!(
+            err.contains("unknown field") && err.contains("nmae"),
+            "{err}"
+        );
+    }
+
+    /// A plugin-backed `secrets:` entry named by a binding's `secretFrom`
+    /// carries its keys into the set without values, and a component plugin
+    /// cannot take one into its own config.
+    #[test]
+    fn a_plugin_secret_reaches_a_binding_as_a_pending_key() {
+        let yaml = r#"
+secrets:
+  billing-db:
+    plugin: vault-secrets
+    keys:
+      url: apps/billing/pg-url
+    workloads:
+      - namespace: billing
+        name: billing-api
+host:
+  plugins:
+    - id: wasmcloud-postgres
+      bindings:
+        app-db:
+          secretFrom: [billing-db]
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+      secretFrom: [billing-db]
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let set = config.host().plugins[0]
+            .to_binding_set(&config, Path::new("."), None, WorkloadConfigPolicy::Deny)
+            .unwrap();
+        assert!(!set.host_layer("app-db").contains_key("url"));
+        let pending: Vec<_> = set.plugin_secrets().collect();
+        assert_eq!(pending.len(), 1);
+        let (binding, key, secret) = pending[0];
+        assert_eq!((binding, key), (Some("app-db"), "url"));
+        assert_eq!(secret.plugin.as_str(), "vault-secrets");
+        assert_eq!(secret.key.as_str(), "apps/billing/pg-url");
+        assert_eq!(
+            secret.grant,
+            wash_runtime::plugin::WorkloadGrant::Only(vec![
+                wash_runtime::plugin::WorkloadSelector::workload("billing", "billing-api")
+            ])
+        );
+
+        let err = config.host().plugins[1]
+            .to_spec(&config, Path::new("."), None)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("billing-db"), "{err:#}");
+    }
+
     #[test]
     fn workload_config_defaults_to_deny_when_the_key_is_omitted() {
         // Stricter by default, and non-breaking because it refuses nothing
@@ -3349,6 +3430,7 @@ secrets:
         let creds = config
             .secret_sources
             .get("creds")
+            .and_then(SecretEntry::as_static)
             .expect("secrets.creds should parse");
         assert_eq!(creds.from_env, vec!["DB_PASSWORD".to_string()]);
         assert_eq!(creds.inline.get("DB_USER").unwrap(), "alice");

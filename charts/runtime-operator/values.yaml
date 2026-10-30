@@ -758,6 +758,11 @@ runtime:
       #                   `(implements ..)` label a workload asks for. Each
       #                   takes its own `config`/`configFrom`/`secretFrom`,
       #                   layered over the entry's.
+
+      #
+      # A `secretFrom` name may also be a key of this host group's
+      # `pluginSecrets` (below), served by a host component plugin at bind
+      # instead of a Kubernetes Secret.
       #
       # Every entry here is file-backed (rendered into the `wash host` config
       # file, never a CLI arg), since a binding can carry credentials.
@@ -784,6 +789,47 @@ runtime:
       #         prod:
       #           configFrom: [vault-prod]
       plugins: []
+      # -- Secrets a host component plugin serves through
+      # `wasmcloud:host/secret-source`, by the name a `plugins` entry's or
+      # binding's `secretFrom` uses. `keys` maps each config key to the key
+      # the plugin is asked for. `workloads` is required: the namespaces (and
+      # optionally names) whose workloads may have its values, or `all`. A
+      # name is a WorkloadDeployment's, else a WorkloadReplicaSet's, else the
+      # Workload's own; it narrows a grant within a namespace, which is the
+      # boundary. The host asks the plugin on every workload bind, naming the
+      # workload, so one entry serves each workload its own value when the
+      # plugin scopes its answer by that name; a rotation reaches the next
+      # bind, and no volume or Reloader annotation is involved.
+      # A workload outside the grant fails to deploy. On `wasmcloud-secrets`,
+      # whose keys each stand alone, an entry its own `secretFrom` names is
+      # instead left out of that workload's config.
+      # Only `plugins` entries and bindings can name one, and while an entry's
+      # own `secretFrom` names one, no other plugin may serve the same
+      # interface, or a workload's plain import would bypass the grant.
+      #
+      #   pluginSecrets:
+      #     # Each workload's own secrets, under the key names it imports.
+      #     workload-secrets:
+      #       plugin: vault-secrets
+      #       keys:
+      #         db-password: db-password
+      #       workloads: all
+      #     # One postgres role every replica of `billing/reports` shares.
+      #     reports-db:
+      #       plugin: vault-secrets
+      #       keys:
+      #         url: platform/postgres/reports-url
+      #       workloads:
+      #         - namespace: billing
+      #           name: reports
+      #   plugins:
+      #     - id: wasmcloud-secrets
+      #       secretFrom: [workload-secrets]
+      #     - id: wasmcloud-postgres
+      #       bindings:
+      #         reports-db:
+      #           secretFrom: [reports-db]
+      pluginSecrets: {}
       # -- Deprecated alias for `plugins`, from when only component plugins
       # could be declared. Entries here must name an `image` or `file`; a
       # native plugin's configuration belongs under `plugins`. Merges with

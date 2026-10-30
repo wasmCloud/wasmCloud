@@ -143,6 +143,145 @@ pub struct SecretSource {
     pub from_env: Vec<String>,
 }
 
+/// One entry of the top-level `secrets:` catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum SecretEntry {
+    /// Read when the host starts, from `inline`/`file`/`dir`/`fromEnv`.
+    Static(SecretSource),
+    /// Served by a host plugin each time a workload binds.
+    Plugin(PluginSecretSource),
+}
+
+impl SecretEntry {
+    /// The entry read at host start, if this is one.
+    pub fn as_static(&self) -> Option<&SecretSource> {
+        match self {
+            Self::Static(source) => Some(source),
+            Self::Plugin(_) => None,
+        }
+    }
+}
+
+impl From<SecretSource> for SecretEntry {
+    fn from(source: SecretSource) -> Self {
+        Self::Static(source)
+    }
+}
+
+impl From<PluginSecretSource> for SecretEntry {
+    fn from(source: PluginSecretSource) -> Self {
+        Self::Plugin(source)
+    }
+}
+
+/// A `secrets:` entry a host plugin serves through
+/// `wasmcloud:host/secret-source`. It is resolved each time a workload binds,
+/// and only a `host.plugins` entry or binding can name it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct PluginSecretSource {
+    /// The plugin that serves the entry.
+    pub plugin: crate::plugin::PluginId,
+    /// Config key -> the key `plugin` is asked for. Never empty.
+    pub keys: BTreeMap<String, crate::plugin::SecretKey>,
+    /// The workloads that may have this entry's values. Required: a binding
+    /// is visible to every workload on the host, so the entry says which of
+    /// them may have them.
+    pub workloads: crate::plugin::WorkloadGrant,
+}
+
+impl PluginSecretSource {
+    /// An entry served by `plugin` to the workloads `workloads` admits,
+    /// mapping each config key to the backend key it is asked for.
+    pub fn new(
+        plugin: impl Into<crate::plugin::PluginId>,
+        keys: impl IntoIterator<Item = (String, crate::plugin::SecretKey)>,
+        workloads: crate::plugin::WorkloadGrant,
+    ) -> Self {
+        Self {
+            plugin: plugin.into(),
+            keys: keys.into_iter().collect(),
+            workloads,
+        }
+    }
+}
+
+/// The wire shape of a [`SecretEntry`]: either kind's fields, so a mix of the
+/// two is refused by name rather than half-ignored. Spelled out rather than
+/// flattened, so an unknown field is refused and an error names its field.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawSecretEntry {
+    #[serde(default)]
+    inline: HashMap<String, String>,
+    #[serde(default)]
+    file: Option<PathBuf>,
+    #[serde(default)]
+    dir: Option<PathBuf>,
+    #[serde(default)]
+    from_env: Vec<String>,
+    #[serde(default)]
+    plugin: Option<crate::plugin::PluginId>,
+    #[serde(default)]
+    keys: Option<BTreeMap<String, crate::plugin::SecretKey>>,
+    #[serde(default)]
+    workloads: Option<crate::plugin::WorkloadGrant>,
+}
+
+impl TryFrom<RawSecretEntry> for SecretEntry {
+    type Error = String;
+
+    fn try_from(raw: RawSecretEntry) -> std::result::Result<Self, String> {
+        let source = SecretSource {
+            inline: raw.inline,
+            file: raw.file,
+            dir: raw.dir,
+            from_env: raw.from_env,
+        };
+        match (raw.plugin, raw.keys) {
+            (None, None) if raw.workloads.is_none() => Ok(Self::Static(source)),
+            (None, _) => {
+                Err("`keys`/`workloads` are set without the `plugin` that serves them".into())
+            }
+            (Some(plugin), keys) => {
+                if source != SecretSource::default() {
+                    return Err(format!(
+                        "names plugin '{plugin}' and also `inline`/`file`/`dir`/`fromEnv`; a \
+                         plugin entry sets only `keys`"
+                    ));
+                }
+                let Some(keys) = keys.filter(|keys| !keys.is_empty()) else {
+                    return Err(format!(
+                        "names plugin '{plugin}' but no `keys` to ask it for"
+                    ));
+                };
+                let Some(workloads) = raw.workloads else {
+                    return Err(format!(
+                        "names plugin '{plugin}' but no `workloads` it is granted to; name the \
+                         namespaces (and optionally workload names) that may use it, or write \
+                         `workloads: all`"
+                    ));
+                };
+                Ok(Self::Plugin(PluginSecretSource {
+                    plugin,
+                    keys,
+                    workloads,
+                }))
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        RawSecretEntry::deserialize(d)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 /// Builds the flat env-var map for one [`EnvironmentLayer`] by walking
 /// `environment.inline`, `environment.configFrom`, and
 /// `environment.secretFrom` in K8s `envFrom` order (inline → configFrom →
@@ -154,21 +293,46 @@ pub fn resolve_environment_layer(
     env: Option<&EnvironmentLayer>,
     owner: &str,
     configs: &BTreeMap<String, ConfigSource>,
-    secrets: &BTreeMap<String, SecretSource>,
+    secrets: &BTreeMap<String, SecretEntry>,
     project_dir: &Path,
     repo_root: Option<&Path>,
 ) -> Result<HashMap<String, String>> {
     let Some(env) = env else {
         return Ok(HashMap::new());
     };
+    let mut out = HashMap::new();
+    resolve_layer(
+        env,
+        owner,
+        configs,
+        secrets,
+        project_dir,
+        repo_root,
+        &mut out,
+        None,
+    )?;
+    Ok(out)
+}
 
-    let mut out: HashMap<String, String> = HashMap::new();
-
+/// The shared walk behind [`resolve_environment_layer`] and
+/// [`resolve_plugin_environment_layer`]. With `pending`, a plugin-backed
+/// secret's keys land there instead of being read.
+#[allow(clippy::too_many_arguments)]
+fn resolve_layer(
+    env: &EnvironmentLayer,
+    owner: &str,
+    configs: &BTreeMap<String, ConfigSource>,
+    secrets: &BTreeMap<String, SecretEntry>,
+    project_dir: &Path,
+    repo_root: Option<&Path>,
+    out: &mut HashMap<String, String>,
+    pending: Option<&mut HashMap<String, crate::plugin::PluginSecretRef>>,
+) -> Result<()> {
     // Layer order matches K8s envFrom: inline values first, then configFrom,
     // then secretFrom. Later layers overwrite earlier on key conflicts.
     out.extend(env.config.clone());
 
-    apply_config_refs(&env.config_from, owner, configs, project_dir, &mut out)
+    apply_config_refs(&env.config_from, owner, configs, project_dir, out)
         .with_context(|| format!("failed to resolve {owner} environment.configFrom"))?;
     apply_secret_refs(
         &env.secret_from,
@@ -176,11 +340,10 @@ pub fn resolve_environment_layer(
         secrets,
         project_dir,
         repo_root,
-        &mut out,
+        out,
+        pending,
     )
-    .with_context(|| format!("failed to resolve {owner} environment.secretFrom"))?;
-
-    Ok(out)
+    .with_context(|| format!("failed to resolve {owner} environment.secretFrom"))
 }
 
 /// Looks up each named reference in `catalog`, resolves its
@@ -205,16 +368,53 @@ fn apply_config_refs(
     Ok(())
 }
 
+/// [`resolve_environment_layer`] for a `host.plugins` entry or binding, which
+/// may also name plugin-backed `secrets:` entries. Their keys come back
+/// separately, to be resolved at bind. A key a plugin secret supplies is set
+/// nowhere else in the layer: not in `config`, `configFrom` or another
+/// `secretFrom` entry.
+pub fn resolve_plugin_environment_layer(
+    env: &EnvironmentLayer,
+    owner: &str,
+    configs: &BTreeMap<String, ConfigSource>,
+    secrets: &BTreeMap<String, SecretEntry>,
+    project_dir: &Path,
+    repo_root: Option<&Path>,
+) -> Result<(
+    HashMap<String, String>,
+    HashMap<String, crate::plugin::PluginSecretRef>,
+)> {
+    let mut out = HashMap::new();
+    let mut pending = HashMap::new();
+    resolve_layer(
+        env,
+        owner,
+        configs,
+        secrets,
+        project_dir,
+        repo_root,
+        &mut out,
+        Some(&mut pending),
+    )?;
+    Ok((out, pending))
+}
+
 /// Looks up each named reference in `catalog`, resolves its
 /// [`SecretSource`], and merges the result into `out`. Missing names are
 /// a hard error so typos in `secretFrom` fail loudly.
+///
+/// With `pending`, a plugin-backed entry's keys go there for the bind to
+/// resolve, and one also set anywhere else in the layer is refused: a literal
+/// beside a secret for the same key is a leftover, not an override. Without
+/// it, a plugin-backed entry is refused.
 fn apply_secret_refs(
     refs: &[String],
     owner: &str,
-    catalog: &BTreeMap<String, SecretSource>,
+    catalog: &BTreeMap<String, SecretEntry>,
     project_dir: &Path,
     repo_root: Option<&Path>,
     out: &mut HashMap<String, String>,
+    mut pending: Option<&mut HashMap<String, crate::plugin::PluginSecretRef>>,
 ) -> Result<()> {
     for name in refs {
         let Some(source) = catalog.get(name) else {
@@ -222,7 +422,58 @@ fn apply_secret_refs(
                 "{owner} references secret '{name}' which is not defined in the top-level `secrets:` block",
             );
         };
+        let source = match (source, pending.as_deref_mut()) {
+            (SecretEntry::Static(source), _) => source,
+            (SecretEntry::Plugin(source), Some(pending)) => {
+                for (key, backend_key) in &source.keys {
+                    if let Some(earlier) = pending.get(key) {
+                        bail!(
+                            "{owner} reads `{key}` from both secret '{}' and secret '{name}'; set \
+                             it in one place",
+                            earlier.source
+                        );
+                    }
+                    if out.contains_key(key) {
+                        bail!(
+                            "{owner} sets `{key}` in its `config`, `configFrom` or an earlier \
+                             `secretFrom` entry, and secret '{name}' serves it from plugin '{}'; \
+                             set it in one place",
+                            source.plugin
+                        );
+                    }
+                    pending.insert(
+                        key.clone(),
+                        crate::plugin::PluginSecretRef {
+                            source: name.as_str().into(),
+                            plugin: source.plugin.clone(),
+                            key: backend_key.clone(),
+                            grant: source.workloads.clone(),
+                        },
+                    );
+                }
+                continue;
+            }
+            (SecretEntry::Plugin(source), None) => bail!(
+                "secret source '{name}' is served by plugin '{}' when a workload binds, so it can \
+                 feed only a `host.plugins` entry's bindings: not a workload, and not a component \
+                 plugin's own config",
+                source.plugin
+            ),
+        };
         let resolved = source.resolve(name, project_dir, repo_root)?;
+        if let Some(pending) = pending.as_deref()
+            && let Some((key, secret)) = resolved
+                .keys()
+                .filter_map(|key| Some((key, pending.get(key)?)))
+                .min_by_key(|(key, _)| *key)
+        {
+            bail!(
+                "{owner} reads `{key}` from secret '{name}' and from secret '{}', which plugin \
+                 '{}' serves; set it in one place",
+                secret.source,
+                secret.plugin
+            );
+        }
         out.extend(resolved);
     }
     Ok(())
@@ -655,6 +906,205 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn plugin_secret(plugin: &str, keys: &[(&str, &str)]) -> SecretEntry {
+        SecretEntry::Plugin(PluginSecretSource::new(
+            plugin,
+            keys.iter().map(|(k, v)| (k.to_string(), (*v).into())),
+            crate::plugin::WorkloadGrant::Only(vec![crate::plugin::WorkloadSelector::namespace(
+                "billing",
+            )]),
+        ))
+    }
+
+    /// A plugin entry's keys come back pending rather than read, beside the
+    /// static keys of the same layer.
+    #[test]
+    fn a_plugin_layer_keeps_plugin_keys_pending() {
+        let secrets = BTreeMap::from([
+            (
+                "db".to_string(),
+                plugin_secret("vault", &[("url", "apps/pg-url")]),
+            ),
+            (
+                "static".to_string(),
+                SecretSource::builder()
+                    .inline(HashMap::from([("password".to_string(), "pw".to_string())]))
+                    .build()
+                    .into(),
+            ),
+        ]);
+        let env = EnvironmentLayer::builder()
+            .config(HashMap::from([("user".to_string(), "svc".to_string())]))
+            .secret_from(vec!["db".to_string(), "static".to_string()])
+            .build();
+        let (values, pending) = resolve_plugin_environment_layer(
+            &env,
+            "test",
+            &BTreeMap::new(),
+            &secrets,
+            Path::new("."),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            values,
+            HashMap::from([
+                ("user".to_string(), "svc".to_string()),
+                ("password".to_string(), "pw".to_string())
+            ])
+        );
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending["url"].source.as_str(), "db");
+        assert_eq!(pending["url"].plugin.as_str(), "vault");
+        assert_eq!(pending["url"].key.as_str(), "apps/pg-url");
+    }
+
+    /// A key a plugin secret supplies, set anywhere else in its layer, is
+    /// refused whichever comes first.
+    #[test]
+    fn a_plugin_secret_key_set_elsewhere_in_the_layer_is_refused() {
+        let secrets = BTreeMap::from([
+            (
+                "db".to_string(),
+                plugin_secret("vault", &[("url", "apps/pg-url")]),
+            ),
+            (
+                "db2".to_string(),
+                plugin_secret("vault", &[("url", "apps/other")]),
+            ),
+            (
+                "static".to_string(),
+                SecretSource::builder()
+                    .inline(HashMap::from([(
+                        "url".to_string(),
+                        "postgres://x".to_string(),
+                    )]))
+                    .build()
+                    .into(),
+            ),
+        ]);
+        let layer = |config: &[(&str, &str)], secret_from: &[&str]| {
+            let env = EnvironmentLayer::builder()
+                .config(
+                    config
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                )
+                .secret_from(secret_from.iter().map(|s| s.to_string()).collect())
+                .build();
+            resolve_plugin_environment_layer(
+                &env,
+                "binding 'app-db'",
+                &BTreeMap::new(),
+                &secrets,
+                Path::new("."),
+                None,
+            )
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+        };
+        for (config, secret_from, expect) in [
+            (
+                &[("url", "postgres://inline")][..],
+                &["db"][..],
+                "in its `config`",
+            ),
+            (&[][..], &["static", "db"][..], "in its `config`"),
+            (
+                &[][..],
+                &["db", "static"][..],
+                "from secret 'static' and from secret 'db'",
+            ),
+            (
+                &[][..],
+                &["db", "db2"][..],
+                "both secret 'db' and secret 'db2'",
+            ),
+        ] {
+            let err = layer(config, secret_from).unwrap_err();
+            assert!(
+                err.contains(expect) && err.contains("`url`"),
+                "{secret_from:?}: {err}"
+            );
+            assert!(!err.contains("postgres://"), "{err}");
+        }
+    }
+
+    /// Anything else that reads `secrets:` (a workload's `secretFrom`, a
+    /// component plugin's own config) refuses a plugin entry by name.
+    #[test]
+    fn a_plugin_entry_cannot_be_read_at_start() {
+        let secrets = BTreeMap::from([("db".to_string(), plugin_secret("vault", &[("url", "k")]))]);
+        let env = EnvironmentLayer::builder()
+            .secret_from(vec!["db".to_string()])
+            .build();
+        let err = resolve_environment_layer(
+            Some(&env),
+            "workload",
+            &BTreeMap::new(),
+            &secrets,
+            Path::new("."),
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("host.plugins"), "{err:#}");
+    }
+
+    /// A plugin entry is told apart from a static one when it parses, and a
+    /// mix of the two is refused there.
+    #[test]
+    fn a_plugin_entry_sets_only_keys() {
+        let parse =
+            |json: &str| serde_json::from_str::<SecretEntry>(json).map_err(|e| e.to_string());
+        assert_eq!(
+            parse(r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "billing"}]}"#)
+                .unwrap(),
+            plugin_secret("vault", &[("url", "k")])
+        );
+        assert!(matches!(
+            parse(r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": "all"}"#).unwrap(),
+            SecretEntry::Plugin(PluginSecretSource {
+                workloads: crate::plugin::WorkloadGrant::All,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(r#"{"inline": {"x": "y"}}"#).unwrap(),
+            SecretEntry::Static(_)
+        ));
+        for (json, expect) in [
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "inline": {"x": "y"}}"#,
+                "only `keys`",
+            ),
+            (r#"{"plugin": "vault", "keys": {}}"#, "no `keys`"),
+            (r#"{"plugin": "vault"}"#, "no `keys`"),
+            (r#"{"keys": {"url": "k"}}"#, "without the `plugin`"),
+            (r#"{"workloads": "all"}"#, "without the `plugin`"),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}}"#,
+                "no `workloads`",
+            ),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": []}"#,
+                "grants no workload",
+            ),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "a", "nmae": "b"}]}"#,
+                "unknown field `nmae`",
+            ),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": "all", "rotate": "1h"}"#,
+                "unknown field `rotate`",
+            ),
+            (r#"{"fromenv": ["X"]}"#, "unknown field `fromenv`"),
+        ] {
+            let err = parse(json).unwrap_err();
+            assert!(err.contains(expect), "{json}: {err}");
+        }
+    }
+
     #[test]
     fn parse_env_file_basic() {
         let dir = TempDir::new().unwrap();
@@ -925,13 +1375,13 @@ mod tests {
         )]);
         let secrets = BTreeMap::from([(
             "shared_sec".to_string(),
-            SecretSource {
+            SecretEntry::Static(SecretSource {
                 inline: HashMap::from([
                     ("KEY".into(), "from_secret".into()),
                     ("ONLY_SECRET".into(), "1".into()),
                 ]),
                 ..Default::default()
-            },
+            }),
         )]);
 
         // The secret source has no `file:`, so no perm check fires.

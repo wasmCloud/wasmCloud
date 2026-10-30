@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.4;
+package wasmcloud:host@0.1.5;
 
 /// The identifiers every other `wasmcloud:host` interface names a workload and
 /// its components by, defined once so they mean the same thing in all of them:
@@ -14,6 +14,15 @@ interface types {
     /// Identifier of one component within a workload. Fresh per deploy, so it
     /// identifies a running component rather than a manifest entry.
     type component-id = string;
+
+    /// Identifier of a plugin: the `id` of its `host.plugins` entry.
+    @since(version = 0.1.5)
+    type plugin-id = string;
+
+    /// Name of a binding the operator declared under a plugin's
+    /// `host.plugins` entry.
+    @since(version = 0.1.5)
+    type binding-name = string;
 
     /// Why the host could not complete a plugin's call into a workload.
     ///

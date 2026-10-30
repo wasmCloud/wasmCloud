@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use wasmtime::component::GuestTaskId;
 
-use crate::engine::ctx::CallerIdentity;
+use crate::engine::ctx::{CallerIdentity, WorkloadCaller};
 
 /// Host-minted, opaque identifier for one cancellable job. Unique within a
 /// registry (one store incarnation); never reused within that lifetime.
@@ -59,7 +59,7 @@ pub struct ReplayProgress {
     /// The workload whose bind is currently being replayed, set before the
     /// bind is spawned and cleared when it returns cleanly. If the driver
     /// faults with this still set, that workload's replayed bind is the cause.
-    pub current: Option<CallerIdentity>,
+    pub current: Option<WorkloadCaller>,
     /// Set once every replayed bind has completed. If the driver faults with
     /// this still `false`, the fault happened during replay (attributable to
     /// `current`); if `true`, it happened while serving and is not a replay's
@@ -125,14 +125,15 @@ impl JobRegistry {
 
     /// Ask `job` to cancel on behalf of `requester`; returns whether the request
     /// was accepted (not whether the guest has stopped). Accepted only when the
-    /// requester shares the job owner's workload — the cross-tenant guard. The
-    /// guest observes the mark and unwinds itself.
+    /// requester acts for the job owner's workload — the cross-tenant guard; a
+    /// host-made job cannot be cancelled this way. The guest observes the mark
+    /// and unwinds itself.
     pub fn request_cancel(&self, job: JobId, requester: &CallerIdentity) -> bool {
         let mut inner = self.lock();
         let Some(entry) = inner.jobs.get_mut(&job) else {
             return false;
         };
-        if entry.owner.workload_id != requester.workload_id {
+        if !entry.owner.same_principal(requester) {
             return false;
         }
         entry.cancelled = true;
@@ -150,7 +151,7 @@ impl JobRegistry {
     /// Record that `caller`'s bind is about to be replayed. Set before the bind
     /// is spawned so that, if it traps, the fault is attributable to it even
     /// though the trapping task's own error handler never runs.
-    pub fn replay_begin(&self, caller: CallerIdentity) {
+    pub fn replay_begin(&self, caller: WorkloadCaller) {
         self.lock().replay.current = Some(caller);
     }
 
@@ -249,11 +250,11 @@ mod tests {
     use super::*;
 
     fn caller(workload: &str, component: &str) -> CallerIdentity {
-        CallerIdentity {
+        CallerIdentity::Workload(WorkloadCaller {
             workload_id: Arc::from(workload),
             component_id: Some(Arc::from(component)),
             binding: None,
-        }
+        })
     }
 
     #[test]
@@ -273,6 +274,17 @@ mod tests {
         // since authorization is by workload, not component.
         assert!(reg.request_cancel(job, &caller("wl-a", "comp-other")));
         assert!(reg.is_cancelled(job), "an authorized cancel marks the job");
+    }
+
+    #[test]
+    fn host_and_workload_jobs_cannot_cancel_each_other() {
+        let reg = JobRegistry::new();
+        let host_job = reg.admit(CallerIdentity::Host);
+        assert!(!reg.request_cancel(host_job, &caller("wl-a", "comp-a")));
+        let workload_job = reg.admit(caller("wl-a", "comp-a"));
+        assert!(!reg.request_cancel(workload_job, &CallerIdentity::Host));
+        // Two resolves for different consumers both run as the host.
+        assert!(!reg.request_cancel(host_job, &CallerIdentity::Host));
     }
 
     #[test]

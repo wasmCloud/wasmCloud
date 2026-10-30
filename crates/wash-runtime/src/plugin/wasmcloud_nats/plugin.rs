@@ -124,11 +124,11 @@ impl WasmcloudNats {
         self.connections.get(workload_id).await
     }
 
-    fn check_egress(&self, config: &NatsConfig) -> anyhow::Result<()> {
+    fn check_egress(&self, servers: &[String]) -> anyhow::Result<()> {
         let Some(policy) = self.egress_policy.load_full() else {
             return Ok(());
         };
-        for server in &config.servers {
+        for server in servers {
             policy.check_nats_server(server)?;
         }
         Ok(())
@@ -188,7 +188,7 @@ impl WasmcloudNats {
                     describe_binding(binding)
                 )
             })?;
-            self.check_egress(&config)?;
+            self.check_egress(&config.servers)?;
 
             // A stream grant alone reaches nothing: every read of a stored
             // message is checked against the *subject* grant, so a binding
@@ -674,10 +674,13 @@ impl HostPlugin for WasmcloudNats {
 
         // The base alone is not required to be complete: a host that sets only
         // grants leaves the servers to a workload under `allow`.
-        for (name, layer) in declared.host_layers(&super::binding_schema()) {
-            let config = NatsConfig::from_map(&layer)
+        //
+        // A key a plugin secret supplies has no value until bind, so it reads
+        // as set and its value is checked when a workload binds the layer.
+        for (name, layer, pending) in declared.host_layers(&super::binding_schema()) {
+            let servers = NatsConfig::check_layer(&layer, &pending)
                 .map_err(|e| anyhow::anyhow!("binding `{name}`: {e:#}"))?;
-            self.check_egress(&config)
+            self.check_egress(&servers)
                 .with_context(|| format!("binding `{name}`"))?;
         }
         Ok(())
@@ -1208,14 +1211,14 @@ mod tests {
             .unwrap();
 
         plugin
-            .check_egress(&nats_config("example.com"))
+            .check_egress(&nats_config("example.com").servers)
             .expect("a schemeless endpoint uses nats:// and port 4222");
         plugin
-            .check_egress(&nats_config("wss://secure.example.com"))
+            .check_egress(&nats_config("wss://secure.example.com").servers)
             .expect("wss uses port 443");
         assert!(
             plugin
-                .check_egress(&nats_config("ws://secure.example.com"))
+                .check_egress(&nats_config("ws://secure.example.com").servers)
                 .is_err()
         );
     }
@@ -1240,7 +1243,121 @@ mod tests {
             )))
             .unwrap();
 
-        assert!(plugin.check_egress(&nats_config("localhost:4222")).is_err());
+        assert!(
+            plugin
+                .check_egress(&nats_config("localhost:4222").servers)
+                .is_err()
+        );
+    }
+
+    fn pending(key: &str) -> HashMap<String, crate::plugin::PluginSecretRef> {
+        HashMap::from([(
+            key.to_string(),
+            crate::plugin::PluginSecretRef {
+                source: "nats-creds".into(),
+                plugin: "vault".into(),
+                key: format!("nats/{key}").into(),
+                grant: crate::plugin::WorkloadGrant::All,
+            },
+        )])
+    }
+
+    fn binding(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// An entry-level secret leaves every binding's other keys checked at host
+    /// start, and its own key reads as set.
+    #[test]
+    fn host_start_checks_the_keys_a_plugin_secret_does_not_supply() {
+        let plugin = WasmcloudNats::new();
+        let set = |orders: &[(&str, &str)]| {
+            PluginBindingSet::new(PLUGIN_NATS_ID)
+                .with_base(binding(&[("username", "svc")]))
+                .with_base_secrets(pending("password"))
+                .with_binding("orders", binding(orders))
+        };
+        plugin
+            .validate_bindings(&set(&[("servers", "nats://a:4222")]))
+            .expect("the pending password satisfies `username`");
+        let err = plugin
+            .validate_bindings(&set(&[("servers", "nats://a:4222"), ("ack-mode", "bogus")]))
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("ack-mode"), "{err:#}");
+    }
+
+    /// A typed key a secret supplies has its value checked at bind.
+    #[test]
+    fn a_pending_typed_key_does_not_fail_host_start() {
+        let plugin = WasmcloudNats::new();
+        for key in [
+            "ack-mode",
+            "max-in-flight",
+            "request-timeout-ms",
+            "jwt-as-token",
+        ] {
+            let set = PluginBindingSet::new(PLUGIN_NATS_ID)
+                .with_binding("orders", binding(&[("servers", "nats://a:4222")]))
+                .with_binding_secrets("orders", pending(key));
+            plugin
+                .validate_bindings(&set)
+                .unwrap_or_else(|e| panic!("{key}: {e:#}"));
+        }
+    }
+
+    /// A `servers` a secret supplies is egress-checked at bind.
+    #[test]
+    fn a_pending_servers_skips_the_start_egress_check() {
+        let plugin = WasmcloudNats::new();
+        plugin
+            .configure_egress_policy(Arc::new(PluginEgressPolicy::new(
+                Arc::from(["nats://example.com:4222".parse().unwrap()]),
+                Arc::from(["example.com".parse().unwrap()]),
+                Arc::from([]),
+                &enforcing_policy(None),
+            )))
+            .unwrap();
+        let set = PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_binding("orders", HashMap::new())
+            .with_binding_secrets("orders", pending("servers"));
+        plugin.validate_bindings(&set).unwrap();
+    }
+
+    /// A pending key still counts toward the rules its presence decides.
+    #[test]
+    fn a_pending_key_is_checked_for_presence_at_host_start() {
+        let plugin = WasmcloudNats::new();
+        for (orders, key, expected) in [
+            (&[("tls-cert", "/c.pem")][..], "tls-key", None),
+            (&[][..], "tls-cert", Some("`tls-cert` and `tls-key`")),
+            (
+                &[("nkey-seed-file", "/s")][..],
+                "nkey-seed",
+                Some("both supplied"),
+            ),
+            (
+                &[("token", "t")][..],
+                "password",
+                Some("conflicting NATS credentials"),
+            ),
+            (&[][..], "jwt", Some("`jwt` requires")),
+        ] {
+            let mut config = vec![("servers", "nats://a:4222")];
+            config.extend_from_slice(orders);
+            let set = PluginBindingSet::new(PLUGIN_NATS_ID)
+                .with_binding("orders", binding(&config))
+                .with_binding_secrets("orders", pending(key));
+            match (plugin.validate_bindings(&set), expected) {
+                (Ok(()), None) => {}
+                (Err(e), Some(expected)) => {
+                    assert!(format!("{e:#}").contains(expected), "{key}: {e:#}")
+                }
+                (result, expected) => panic!("{key}: {result:?}, expected {expected:?}"),
+            }
+        }
     }
 
     #[test]

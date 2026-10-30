@@ -199,6 +199,30 @@ pub const WORKLOAD_REPLICASET_LEGACY_ANNOTATION: &str = "runtime.wasmcloud.dev/w
 /// Standard Kubernetes application name annotation.
 pub const K8S_APP_NAME_ANNOTATION: &str = "app.kubernetes.io/name";
 
+fn annotation<'a>(annotations: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
+    annotations
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// The name the orchestrator gave the workload's replicas: its deployment's,
+/// else its replicaset's, if the annotations name one.
+fn replica_group(annotations: &HashMap<String, String>) -> Option<&str> {
+    annotation(annotations, WORKLOAD_DEPLOYMENT_ANNOTATION)
+        .or_else(|| annotation(annotations, WORKLOAD_REPLICASET_ANNOTATION))
+        .or_else(|| annotation(annotations, WORKLOAD_REPLICASET_LEGACY_ANNOTATION))
+}
+
+/// The workload's name across replicas: [`replica_group`], else its
+/// application name annotation, else `name`.
+pub(crate) fn stable_name<'a>(annotations: &'a HashMap<String, String>, name: &'a str) -> &'a str {
+    replica_group(annotations)
+        .or_else(|| annotation(annotations, K8S_APP_NAME_ANNOTATION))
+        .unwrap_or(name)
+}
+
 impl WorkloadMetadata {
     async fn resolve_volume_mounts(&mut self) -> anyhow::Result<()> {
         let mut resolved = Vec::with_capacity(self.volume_mounts.len());
@@ -227,26 +251,7 @@ impl WorkloadMetadata {
     /// Returns the stable workload name across replicas, if a deployment or
     /// replicaset annotation was supplied by the orchestrator. Falls back to `workload_name`.
     pub fn stable_workload_name(&self) -> &str {
-        let non_empty = |key: &str| {
-            self.annotations
-                .get(key)
-                .map(String::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-        };
-
-        if let Some(deployment) = non_empty(WORKLOAD_DEPLOYMENT_ANNOTATION) {
-            return deployment;
-        }
-        if let Some(replicaset) = non_empty(WORKLOAD_REPLICASET_ANNOTATION)
-            .or_else(|| non_empty(WORKLOAD_REPLICASET_LEGACY_ANNOTATION))
-        {
-            return replicaset;
-        }
-        if let Some(name) = non_empty(K8S_APP_NAME_ANNOTATION) {
-            return name;
-        }
-        &self.workload_name
+        stable_name(&self.annotations, &self.workload_name)
     }
 
     /// Returns the workload's annotations.
@@ -2819,6 +2824,9 @@ pub struct UnresolvedWorkload {
     tls_provider: Option<SharedTlsProvider>,
     /// Where this workload's `emptyDir` volumes live, if it has any.
     scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
+    /// The name the orchestrator gave its replicas, if any. See
+    /// [`replica_group`].
+    replica_group: Option<Arc<str>>,
 }
 
 type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
@@ -3021,6 +3029,7 @@ impl UnresolvedWorkload {
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
             scratch: None,
+            replica_group: None,
         }
     }
 
@@ -3043,6 +3052,19 @@ impl UnresolvedWorkload {
     ) -> Self {
         self.scratch = scratch;
         self
+    }
+
+    /// Take the name the orchestrator gave its replicas from `annotations`.
+    /// See [`replica_group`].
+    pub(crate) fn with_annotations(mut self, annotations: &HashMap<String, String>) -> Self {
+        self.replica_group = replica_group(annotations).map(Arc::from);
+        self
+    }
+
+    /// The name it keeps across replicas, what a plugin secret's grant
+    /// matches: the orchestrator's for its replicas, else its own.
+    pub fn grant_name(&self) -> &str {
+        self.replica_group.as_deref().unwrap_or(&self.name)
     }
 
     /// Iterates the workload's components in manifest order.
@@ -3391,10 +3413,60 @@ impl UnresolvedWorkload {
                     .iter()
                     .flat_map(|(_, interfaces)| interfaces.clone())
                     .collect();
+                // Plugin-backed secrets become operator config before the
+                // policy runs, so it judges them like any other host key. The
+                // plugin checked those layers at host start without the values,
+                // so it checks the entry and the named bindings this bind
+                // filled again; the unnamed binding's layer is checked by the
+                // plugin's own bind, as it is without secrets. From here on an
+                // error may quote a value or follow from a secret withheld from
+                // this workload, so each goes through `explain`.
+                let requesting = crate::plugin::RequestingWorkload {
+                    id: self.id().to_string(),
+                    name: self.grant_name().to_string(),
+                    namespace: self.namespace().to_string(),
+                };
+                let filled = crate::plugin::resolve_plugin_secrets(
+                    plugins,
+                    &requesting,
+                    declared,
+                    &requested_interfaces,
+                    &schema,
+                )
+                .await
+                .and_then(|filled| {
+                    if let Some(refilled) = &filled.refilled {
+                        p.validate_bindings(&filled.set.only_bindings(refilled))
+                            .map_err(|e| {
+                                filled
+                                    .errors
+                                    .explain(e)
+                                    .context("invalid `host.plugins` declaration")
+                            })?;
+                    }
+                    Ok(filled)
+                });
+                let (declared, bind_errors) = match filled {
+                    Ok(filled) => (filled.set, filled.errors),
+                    Err(e) => {
+                        unbind_all(
+                            self.id(),
+                            &bound_plugins_with_interfaces,
+                            "plugin secret",
+                            cleanup,
+                        )
+                        .await;
+                        bail!(e.context(format!(
+                            "workload {} cannot bind plugin '{plugin_id}'",
+                            self.id()
+                        )))
+                    }
+                };
                 let resolved_by_name =
                     match declared.resolve_by_name(&requested_interfaces, &schema, &narrows) {
                         Ok(resolved) => resolved,
                         Err(e) => {
+                            let e = bind_errors.explain(e);
                             unbind_all(
                                 self.id(),
                                 &bound_plugins_with_interfaces,
@@ -3488,6 +3560,7 @@ impl UnresolvedWorkload {
                     .instrument(bind_span)
                     .await
                 {
+                    let e = bind_errors.explain(e);
                     tracing::error!(
                         plugin_id = plugin_id,
                         err = ?e,
@@ -3570,6 +3643,7 @@ impl UnresolvedWorkload {
                         workload_item.linker().allow_shadowing(false);
                     }
                     if let Err(e) = bound {
+                        let e = bind_errors.explain(e);
                         tracing::error!(
                             plugin_id = plugin_id,
                             component_id = workload_item.id(),
@@ -4424,6 +4498,8 @@ mod tests {
         bound_interfaces: Arc<Mutex<Vec<WitInterface>>>,
         /// WASI interfaces this plugin claims to redefine.
         wasi_overrides: WitWorld,
+        /// Serves plugin-backed `secrets:` entries naming this plugin.
+        secret_source: Option<Arc<dyn crate::plugin::HostSecretSource>>,
     }
 
     impl MockPlugin {
@@ -4445,7 +4521,15 @@ mod tests {
                 host_owned: Vec::new(),
                 bound_interfaces: Arc::new(Mutex::new(Vec::new())),
                 wasi_overrides: WitWorld::default(),
+                secret_source: None,
             }
+        }
+
+        /// Serve plugin secrets through `source`, the way a component plugin
+        /// exporting `wasmcloud:host/secret-source` does.
+        fn serving_secrets(mut self, source: Arc<dyn crate::plugin::HostSecretSource>) -> Self {
+            self.secret_source = Some(source);
+            self
         }
         /// Declare that this plugin redefines `interfaces` (a WASI entry such
         /// as `wasi:filesystem/preopens,types@0.2.0`), the way a plugin
@@ -4543,6 +4627,10 @@ mod tests {
 
         fn binding_schema(&self) -> crate::plugin::BindingSchema {
             crate::plugin::BindingSchema::with_host_owned_keys(&self.host_owned)
+        }
+
+        fn secret_source(&self) -> Option<Arc<dyn crate::plugin::HostSecretSource>> {
+            self.secret_source.clone()
         }
 
         async fn on_workload_bind(
@@ -5809,6 +5897,91 @@ mod tests {
             1,
             "the item bind must still run against the resolved interface"
         );
+    }
+
+    /// Answers every key with `secret-for:<key>`.
+    struct EchoSecrets;
+
+    #[async_trait]
+    impl crate::plugin::HostSecretSource for EchoSecrets {
+        async fn resolve(
+            &self,
+            request: crate::plugin::SecretRequest,
+        ) -> Result<
+            BTreeMap<crate::plugin::SecretKey, crate::plugin::SecretValue>,
+            crate::plugin::SecretSourceError,
+        > {
+            Ok(request
+                .keys
+                .into_iter()
+                .map(|k| {
+                    let value = crate::plugin::SecretValue::new(format!("secret-for:{k}"));
+                    (k, value)
+                })
+                .collect())
+        }
+    }
+
+    /// A kv plugin owning `url`, a secrets plugin, and a `cache` binding whose
+    /// `url` comes from the secrets plugin.
+    fn kv_with_plugin_secret() -> (
+        Arc<MockPlugin>,
+        HashMap<&'static str, Arc<dyn HostPlugin>>,
+        crate::plugin::PluginBindings,
+    ) {
+        let kv = Arc::new(
+            MockPlugin::new("kv", vec![], vec![kv_iface(None, &[])])
+                .with_named_instance_support()
+                .owning(&["url"]),
+        );
+        let secrets = Arc::new(
+            MockPlugin::new("vault", vec![], vec![]).serving_secrets(Arc::new(EchoSecrets)),
+        );
+        let plugins = HashMap::from([
+            (kv.id(), kv.clone() as Arc<dyn HostPlugin>),
+            (secrets.id(), secrets as Arc<dyn HostPlugin>),
+        ]);
+        let bindings = crate::plugin::PluginBindings::new().with_plugin(
+            crate::plugin::PluginBindingSet::new("kv")
+                .with_binding("cache", HashMap::new())
+                .with_binding_secrets(
+                    "cache",
+                    HashMap::from([(
+                        "url".to_string(),
+                        crate::plugin::PluginSecretRef {
+                            source: "cache-db".into(),
+                            plugin: "vault".into(),
+                            key: "kv-url".into(),
+                            grant: crate::plugin::WorkloadGrant::All,
+                        },
+                    )]),
+                ),
+        );
+        (kv, plugins, bindings)
+    }
+
+    /// A plugin secret reaches the consuming plugin as resolved config.
+    #[tokio::test]
+    async fn test_a_plugin_secret_reaches_the_plugin_as_config() {
+        let (kv, plugins, bindings) = kv_with_plugin_secret();
+        let mut workload = workload_requesting(vec![kv_iface(Some("cache"), &[])]);
+        workload.bind_plugins(&plugins, &bindings).await.unwrap();
+        assert_eq!(kv.seen_config(Some("cache"))["url"], "secret-for:kv-url");
+    }
+
+    /// A plugin secret is operator config by the time the policy runs, so
+    /// `deny` refuses a workload that sets the same key.
+    #[tokio::test]
+    async fn test_deny_refuses_a_workload_overriding_a_plugin_secret() {
+        let (kv, plugins, bindings) = kv_with_plugin_secret();
+        let mut workload =
+            workload_requesting(vec![kv_iface(Some("cache"), &[("url", "redis://guest")])]);
+        let err = match workload.bind_plugins(&plugins, &bindings).await {
+            Ok(_) => panic!("binding should have been refused"),
+            Err(e) => format!("{e:#}"),
+        };
+        assert!(err.contains("`url`"), "got: {err}");
+        assert_eq!(kv.get_call_count("on_workload_bind"), 0);
     }
 
     /// Under `deny`, a workload writing a host-owned key fails the deploy — and
@@ -7654,6 +7827,48 @@ mod tests {
         annotations.insert(K8S_APP_NAME_ANNOTATION.to_string(), "   ".to_string());
         let comp = create_test_component("c").with_annotations(annotations);
         assert_eq!(comp.stable_workload_name(), "test-workload-c");
+    }
+
+    /// A grant matches the orchestrator's replica group, never the
+    /// application name annotation, which anything may carry.
+    #[test]
+    fn a_grant_name_is_the_replica_group_or_the_workload_name() {
+        let workload = |annotations: &[(&str, &str)]| {
+            let annotations = annotations
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            UnresolvedWorkload::new(
+                "id".to_string(),
+                "billing-api".to_string(),
+                "billing".to_string(),
+                None,
+                vec![],
+                vec![],
+            )
+            .with_annotations(&annotations)
+        };
+        for (annotations, expected) in [
+            (&[][..], "billing-api"),
+            (&[(K8S_APP_NAME_ANNOTATION, "billing")][..], "billing-api"),
+            (
+                &[(WORKLOAD_REPLICASET_ANNOTATION, "billing-rs")][..],
+                "billing-rs",
+            ),
+            (
+                &[
+                    (WORKLOAD_REPLICASET_ANNOTATION, "billing-rs"),
+                    (WORKLOAD_DEPLOYMENT_ANNOTATION, "billing"),
+                ][..],
+                "billing",
+            ),
+        ] {
+            assert_eq!(
+                workload(annotations).grant_name(),
+                expected,
+                "{annotations:?}"
+            );
+        }
     }
 
     /// Like [`component_from_wat`], but on an engine that parses

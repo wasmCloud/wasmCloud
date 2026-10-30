@@ -846,6 +846,7 @@ impl Engine {
             host_interfaces,
         )
         .with_scratch(workload_scratch)
+        .with_annotations(&annotations_arc)
         .with_stream_payloads(Arc::clone(&self.stream_payloads));
 
         #[cfg(feature = "wasi-tls")]
