@@ -109,6 +109,15 @@ impl PublishLedger {
         );
     }
 
+    /// Publishes that reached the wire and publishes that did not.
+    #[cfg(test)]
+    pub(super) fn totals(&self) -> (u64, u64) {
+        (
+            self.published.load(Ordering::Relaxed),
+            self.dropped.load(Ordering::Relaxed),
+        )
+    }
+
     /// Reports the binding's lifetime totals.
     ///
     /// Emitted at unbind rather than only on the interval, because the figure
