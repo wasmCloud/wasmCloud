@@ -460,22 +460,28 @@ async fn linked_store_instantiation_failures_name_the_callee() -> anyhow::Result
         )?,
     )?;
     let pre = wasmtime::component::Linker::new(engine.inner()).instantiate_pre(&component)?;
-    let error = new_store_from_templates(
-        engine.inner(),
-        engine.stream_payloads(),
-        &crate::host::HostRef::detached(),
-        &active,
-        &[linked],
-        &[("callee".into(), pre)],
-        false,
-    )
-    .await
-    .err()
-    .expect("a trapping start must fail instantiation");
-    assert!(
-        format!("{error:#}").contains("failed to instantiate linked component 'callee'"),
-        "{error:#}"
-    );
+    // Request and service stores report through the same path, so neither
+    // may claim an ephemeral store.
+    for is_service in [false, true] {
+        let error = new_store_from_templates(
+            engine.inner(),
+            engine.stream_payloads(),
+            &crate::host::HostRef::detached(),
+            &active,
+            std::slice::from_ref(&linked),
+            &[("callee".into(), pre.clone())],
+            is_service,
+        )
+        .await
+        .err()
+        .expect("a trapping start must fail instantiation");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("failed to instantiate linked component 'callee'"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("ephemeral"), "{rendered}");
+    }
     Ok(())
 }
 
