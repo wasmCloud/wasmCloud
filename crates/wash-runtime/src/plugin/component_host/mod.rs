@@ -590,7 +590,7 @@ impl ComponentHostPlugin {
             );
         }
 
-        let linker = item.linker();
+        let linker = item.linker()?;
         for exported in self.exports.iter() {
             let iface_names: Vec<&str> =
                 exported.wit.interfaces.iter().map(String::as_str).collect();
@@ -1172,7 +1172,7 @@ async fn link_native_imports(
         .take_component(&component_id)
         .context("plugin's own synthetic workload component vanished during binding")?;
     Ok(std::mem::replace(
-        plugin_component.metadata.try_linker()?,
+        plugin_component.metadata.linker()?,
         Linker::new(engine.inner()),
     ))
 }

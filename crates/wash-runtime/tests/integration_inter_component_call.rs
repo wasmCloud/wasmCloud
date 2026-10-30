@@ -132,7 +132,7 @@ impl HostPlugin for CustomLogging {
 
         // Add `wasi:logging/logging` to the workload's linker
         bindings::wasi::logging::logging::add_to_linker::<_, SharedCtx>(
-            workload_handle.linker(),
+            workload_handle.linker()?,
             extract_active_ctx,
         )?;
 
