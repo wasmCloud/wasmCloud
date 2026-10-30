@@ -1347,3 +1347,8 @@ pub(crate) async fn invoke_linked_sync_export(
     }
     .await
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "linked_call_contract_tests.rs"]
+mod contract_tests;

@@ -639,3 +639,8 @@ mod tests {
         assert!(plugin.mux.default_for("workload-b").is_some());
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "multiplexed_async_contract_tests.rs"]
+mod contract_tests;

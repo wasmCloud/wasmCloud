@@ -429,7 +429,14 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         container: Resource<ContainerData>,
     ) -> wasmtime::Result<Result<(), ContainerError>> {
         let container_data = self.table.get(&container)?;
-        match tokio::fs::remove_dir_all(&container_data.root).await {
+        let root = container_data.root.clone();
+        let cleared = tokio::task::spawn_blocking(move || {
+            let directory = open_container_directory(&root)?;
+            clear_directory_contents(&directory)
+        })
+        .await
+        .context("failed to join container clear task")?;
+        match cleared {
             Ok(_) => Ok(Ok(())),
             Err(e) => Ok(Err(format!(
                 "failed to clear container '{}': {e}",
@@ -830,3 +837,62 @@ fn created_at_secs(metadata: &std::fs::Metadata) -> u64 {
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
 }
+
+/// Reject a symlink at the container root and retain the directory being cleared.
+fn open_container_directory(root: &Path) -> std::io::Result<std::fs::File> {
+    use cap_primitives::fs::{open_ambient_dir, open_dir_nofollow};
+
+    // Strip trailing separators and `.` so `container/` and `container/.`
+    // cannot bypass the no-follow check on the container itself.
+    let root: PathBuf = root.components().collect();
+    let Some(name) = root.file_name() else {
+        // Filesystem roots, `.` and `..` already denote directories rather
+        // than a final path component that could be a symlink.
+        return open_ambient_dir(&root, cap_primitives::ambient_authority());
+    };
+    let parent = root
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent = open_ambient_dir(parent, cap_primitives::ambient_authority())?;
+    open_dir_nofollow(&parent, Path::new(name))
+}
+
+fn clear_directory_contents(directory: &std::fs::File) -> std::io::Result<()> {
+    use cap_primitives::fs;
+    #[cfg(windows)]
+    use cap_primitives::fs::MetadataExt as _;
+
+    // Resolve every removal against the opened directory, so replacing its
+    // original path with a symlink cannot redirect deletion to another tree.
+    for entry in fs::read_base_dir(directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let path = Path::new(&name);
+        if file_type.is_dir() {
+            fs::remove_dir_all(directory, path)?;
+        } else {
+            #[cfg(windows)]
+            {
+                // `cap-primitives` only exposes Windows FileTypeExt on
+                // nightly. Read the link's own attributes instead, including
+                // for dangling directory links whose targets cannot be read.
+                const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+                if file_type.is_symlink()
+                    && entry.metadata()?.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0
+                {
+                    fs::remove_dir(directory, path)?;
+                    continue;
+                }
+            }
+            fs::remove_file(directory, path)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "filesystem_contract_tests.rs"]
+mod contract_tests;

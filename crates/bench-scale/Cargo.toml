@@ -32,4 +32,6 @@ tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+testcontainers = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

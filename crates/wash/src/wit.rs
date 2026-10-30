@@ -2256,3 +2256,8 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "wit_contract_tests.rs"]
+mod contract_tests;
