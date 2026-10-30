@@ -268,8 +268,10 @@ async fn applying_project_sources_reports_missing_paths_and_preserves_overrides(
     let dir = tempfile::tempdir()?;
     let path = package(dir.path())?;
     let mut fetcher = fetcher(dir.path()).await?;
-    let mut config = WitConfig::default();
-    config.sources = HashMap::from([("contracttest".into(), "./contract".into())]);
+    let config = WitConfig {
+        sources: HashMap::from([("contracttest".into(), "./contract".into())]),
+        ..Default::default()
+    };
     fetcher.apply_wit_config(&config, dir.path()).await?;
     assert_eq!(
         fetcher
@@ -283,7 +285,10 @@ async fn applying_project_sources_reports_missing_paths_and_preserves_overrides(
             .as_ref(),
         Some(&path)
     );
-    config.sources = HashMap::from([("contracttest:missing".into(), "./missing".into())]);
+    let config = WitConfig {
+        sources: HashMap::from([("contracttest:missing".into(), "./missing".into())]),
+        ..Default::default()
+    };
     let error = fetcher
         .apply_wit_config(&config, dir.path())
         .await
@@ -605,6 +610,38 @@ async fn a_path_override_does_not_serve_a_version_it_lacks() -> Result<()> {
         PackageLookup::Found(contents) => {
             assert_eq!(contents.version, Some(semver::Version::new(1, 2, 3)));
         }
+        PackageLookup::Missing(message) => panic!("{message}"),
+        PackageLookup::Failed(error) => panic!("{error:#}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn looking_up_a_local_package_ignores_overrides_it_does_not_reach() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = package(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    fetcher.wkg_config.overrides = Some(HashMap::from([
+        (
+            "contracttest:api".into(),
+            wasm_pkg_core::manifest::Override {
+                path: Some(path),
+                version: None,
+            },
+        ),
+        (
+            "contracttest:unrelated".into(),
+            wasm_pkg_core::manifest::Override {
+                path: Some(dir.path().join("missing")),
+                version: None,
+            },
+        ),
+    ]));
+    match fetcher
+        .load_package(&"contracttest:api".parse()?, Some("1.2.3"), None)
+        .await
+    {
+        PackageLookup::Found(contents) => assert_eq!(contents.interfaces, ["values"]),
         PackageLookup::Missing(message) => panic!("{message}"),
         PackageLookup::Failed(error) => panic!("{error:#}"),
     }
