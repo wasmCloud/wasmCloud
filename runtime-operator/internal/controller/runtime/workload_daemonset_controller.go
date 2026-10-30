@@ -424,9 +424,10 @@ func (r *WorkloadDaemonSetReconciler) existingInstance(
 	return existing, nil
 }
 
-// adoptOrphans takes over the Workloads that carry this DaemonSet's label but
-// have no controller, such as those --cascade=orphan left behind, so they roll,
-// scale and leave like any other instance. It returns them for this pass.
+// adoptOrphans takes over the Workloads this DaemonSet started that have no
+// controller, such as those --cascade=orphan left behind, so they roll, scale
+// and leave like any other instance. It returns them for this pass. The label
+// finds them, but a long name's value is shortened, so the annotation decides.
 func (r *WorkloadDaemonSetReconciler) adoptOrphans(
 	ctx context.Context,
 	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
@@ -440,8 +441,9 @@ func (r *WorkloadDaemonSetReconciler) adoptOrphans(
 	}
 	orphans := labelled.Items[:0]
 	for i := range labelled.Items {
-		if metav1.GetControllerOf(&labelled.Items[i]) == nil {
-			orphans = append(orphans, labelled.Items[i])
+		workload := &labelled.Items[i]
+		if metav1.GetControllerOf(workload) == nil && workload.Annotations[workloadDaemonSetNameAnnotation] == daemonSet.Name {
+			orphans = append(orphans, *workload)
 		}
 	}
 	if len(orphans) == 0 {
@@ -466,9 +468,15 @@ func (r *WorkloadDaemonSetReconciler) adoptOrphans(
 			if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
 				return nil, err
 			}
-			if err := r.Patch(ctx, workload, client.MergeFrom(base)); err != nil {
-				if apierrors.IsNotFound(err) {
+			patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+			if err := r.Patch(ctx, workload, patch); err != nil {
+				switch {
+				case apierrors.IsNotFound(err):
 					continue
+				case apierrors.IsConflict(err):
+					// The cached copy is behind. Decide again once it catches up.
+					condition.ForceRequeue(ctx)
+					return nil, condition.ErrNoop()
 				}
 				return nil, err
 			}
