@@ -126,6 +126,7 @@ jobs:
             >> "${GITHUB_STEP_SUMMARY}"
 
       - name: upload bench artifact
+        if: ${{ !cancelled() && (success() || (inputs.bench == 'memory_pressure' && steps.run.outcome == 'failure')) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-${{ inputs.name || inputs.bench }}-${{ github.run_id }}
@@ -169,6 +170,12 @@ jobs:
       - name: remove run log
         if: ${{ always() }}
         run: rm -f "$CARGO_TARGET_DIR/run-${WASMCLOUD_BENCH_NAME}-${GITHUB_RUN_ID}.log"
+
+      - name: stop pressure-test Docker daemon
+        if: ${{ always() && inputs.bench == 'memory_pressure' }}
+        run: |
+          docker ps -aq --filter label=wasmcloud.bench=memory_pressure | xargs -r docker rm --force
+          sudo systemctl stop docker.service
 
   publish:
     needs: bench

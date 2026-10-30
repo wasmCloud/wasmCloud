@@ -1,11 +1,12 @@
-//! Container pressure scenarios, run by scripts/bench/guest-memory-pressure.py.
+//! Container pressure scenarios, run by `bench-tools memory-pressure`.
 
-use std::io::Write as _;
-use std::sync::{Arc, Barrier};
+use std::path::PathBuf;
+use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
-use serde::Serialize;
+use bench_tools::density::pressure::{Config, Phase, Sample, Shape};
+use bench_tools::density::{Report, Step, print_step};
 use wash_runtime::engine::{
     Engine,
     ctx::{Ctx, SharedCtx},
@@ -17,84 +18,61 @@ use wasmtime::component::{Component, Linker, TypedFunc};
 
 const MIB: u64 = 1 << 20;
 
-#[derive(Serialize)]
-struct Sample<'a> {
-    event: &'a str,
-    mode: &'a str,
-    cow: bool,
-    shape: &'a str,
-    memories: u64,
-    admitted: usize,
-    initial_bytes: u64,
-    limit: u64,
-    swap_limit: u64,
-    guest_limit: u64,
-    initial_limit: u64,
-    process_limit: u64,
-    charged: u64,
-    uncharged: u64,
-    guest_refused: u64,
-    initial_refused: u64,
-    process_refused: u64,
-    footprint: Option<u64>,
-    cgroup_current: Option<u64>,
-    cgroup_peak: Option<u64>,
-    process_over: bool,
-    stop: Option<&'a str>,
-    architecture: &'static str,
-    kernel: Option<String>,
-    transparent_hugepage: Option<String>,
-}
-
 struct Experiment {
     engine: Engine,
-    initial_bytes: u64,
-    limit: u64,
-    shape: String,
-    memories: u64,
+    report: Mutex<Report>,
+    path: PathBuf,
 }
 
 impl Experiment {
-    fn report(&self, event: &str, admitted: usize, stop: Option<&str>) -> Result<()> {
+    fn report(&self, phase: Phase, admitted: usize, stop: Option<&str>) -> Result<()> {
         let budget = self.engine.guest_memory();
         let guard = self
             .engine
             .process_memory()
             .context("missing process guard")?;
         let sample = Sample {
-            event,
-            mode: budget.mode().as_str(),
-            cow: self.engine.inner().get_memory_init_cow(),
-            shape: &self.shape,
-            memories: self.memories,
-            admitted,
-            initial_bytes: self.initial_bytes,
-            limit: self.limit,
-            swap_limit: cgroup_bytes("memory.swap.max")?,
-            guest_limit: budget.cap(),
-            initial_limit: budget.initial_cap(),
-            process_limit: guard.limit_bytes(),
-            charged: budget.in_use(),
-            uncharged: budget.initial_uncharged(),
+            phase,
             guest_refused: budget.refused(),
             initial_refused: budget.initial_refused(),
             process_refused: budget.process_refused(),
-            footprint: process_footprint(),
             cgroup_current: cgroup_bytes("memory.current").ok(),
             cgroup_peak: cgroup_bytes("memory.peak").ok(),
             process_over: guard.is_over(),
-            stop,
-            architecture: std::env::consts::ARCH,
-            kernel: std::fs::read_to_string("/proc/sys/kernel/osrelease").ok(),
-            transparent_hugepage: std::fs::read_to_string(
-                "/sys/kernel/mm/transparent_hugepage/enabled",
-            )
-            .ok(),
         };
-        let mut stdout = std::io::stdout().lock();
-        serde_json::to_writer(&mut stdout, &sample)?;
-        writeln!(stdout)?;
-        stdout.flush()?;
+        let mut report = self
+            .report
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pressure report poisoned"))?;
+        let refused = sample.guest_refused + sample.initial_refused + sample.process_refused;
+        let before = report
+            .steps
+            .last()
+            .and_then(|step| step.pressure.as_ref())
+            .map_or(0, |sample| {
+                sample.guest_refused + sample.initial_refused + sample.process_refused
+            });
+        let step = Step {
+            pressure: Some(sample),
+            workloads: admitted,
+            footprint_bytes: process_footprint(),
+            guest_memory_bytes: Some(budget.in_use()),
+            initial_memory_bytes: Some(budget.initial_uncharged()),
+            refused: refused.saturating_sub(before),
+            clean: phase == Phase::Touched,
+            ..Default::default()
+        };
+        if phase == Phase::Baseline {
+            report.baseline_footprint_bytes = step.footprint_bytes;
+        }
+        if let Some(stop) = stop {
+            report.stop = stop.into();
+        }
+        print_step(report.steps.is_empty(), &step);
+        report.steps.push(step);
+        let temporary = self.path.with_extension("tmp");
+        std::fs::write(&temporary, serde_json::to_vec(&[&*report])?)?;
+        std::fs::rename(temporary, &self.path)?;
         Ok(())
     }
 }
@@ -150,10 +128,10 @@ fn touch_all(experiment: &Experiment, guests: Vec<Guest>) -> Result<()> {
                 result
             }));
         }
-        let writing = experiment.report("writing", admitted, None);
+        let writing = experiment.report(Phase::Writing, admitted, None);
         start.wait();
         finished.wait();
-        let report = experiment.report("touched", admitted, None);
+        let report = experiment.report(Phase::Touched, admitted, None);
         release.wait();
         for thread in threads {
             thread
@@ -164,11 +142,22 @@ fn touch_all(experiment: &Experiment, guests: Vec<Guest>) -> Result<()> {
     })
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let args: Vec<_> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--list") || !args.iter().any(|arg| arg == "--bench") {
+        return Ok(());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
     ensure!(
         std::env::var("WASH_PRESSURE_RUN").as_deref() == Ok("1"),
-        "run with python3 scripts/bench/guest-memory-pressure.py"
+        "run with cargo run -p bench-tools -- memory-pressure"
     );
     ensure!(cfg!(target_os = "linux"), "requires Linux cgroup v2");
     let limit = cgroup_bytes("memory.max")?;
@@ -204,14 +193,10 @@ async fn main() -> Result<()> {
         dirty_bytes == MIB || dirty_bytes == 2 * MIB,
         "initial memory must be 1 MiB or 2 MiB"
     );
-    let shape = std::env::var("WASH_PRESSURE_SHAPE")?;
-    let (memories, bytes_per_memory, data_bytes) = match shape.as_str() {
-        "sparse" => (1, MIB, 4096),
-        "data-heavy" => (1, 8 * MIB, 8 * MIB),
-        "multiple" => (4, MIB, 4096),
-        "dirty" => (1, dirty_bytes, 4096),
-        _ => anyhow::bail!("unknown shape: {shape}"),
-    };
+    let shape: Shape = std::env::var("WASH_PRESSURE_SHAPE")?
+        .parse()
+        .map_err(anyhow::Error::msg)?;
+    let (memories, bytes_per_memory, data_bytes) = shape.dimensions(dirty_bytes / MIB);
     let initial_bytes = memories * bytes_per_memory;
     let guest_cap = std::env::var("WASH_PRESSURE_GUEST_CAP")
         .ok()
@@ -231,12 +216,41 @@ async fn main() -> Result<()> {
         builder = builder
             .with_max_initial_guest_memory_bytes(parse_bytes(&raw).map_err(anyhow::Error::msg)?);
     }
-    let experiment = Experiment {
-        engine: builder.build()?,
-        initial_bytes,
-        limit,
+    let engine = builder.build()?;
+    let guard = engine.process_memory().context("missing guard")?;
+    let config = Config {
         shape,
+        cow: engine.inner().get_memory_init_cow(),
+        initial_bytes,
         memories,
+        swap_limit: cgroup_bytes("memory.swap.max")?,
+        guest_limit: engine.guest_memory().cap(),
+        initial_limit: engine.guest_memory().initial_cap(),
+        process_limit: guard.limit_bytes(),
+        architecture: std::env::consts::ARCH.into(),
+        kernel: std::fs::read_to_string("/proc/sys/kernel/osrelease").ok(),
+        transparent_hugepage: std::fs::read_to_string(
+            "/sys/kernel/mm/transparent_hugepage/enabled",
+        )
+        .ok(),
+        outcome: None,
+    };
+    let report = Report {
+        bench: "memory_pressure".into(),
+        label: std::env::var("WASH_PRESSURE_LABEL")?,
+        subject: shape.name().into(),
+        guest_memory_mode: Some(mode.as_str().into()),
+        cores: 2,
+        memory_limit_bytes: limit,
+        pressure: Some(config),
+        ..Default::default()
+    };
+    let experiment = Experiment {
+        engine,
+        report: Mutex::new(report),
+        path: std::env::var_os("WASH_PRESSURE_REPORT")
+            .context("missing report path")?
+            .into(),
     };
     let engine = &experiment.engine;
     let mut source = String::from("(component");
@@ -256,7 +270,7 @@ async fn main() -> Result<()> {
             (func (export "touch-{suffix}") (canon lift (core func $i{index} "touch")))"#,
             bytes_per_memory / 65536,
             "\\ab".repeat(usize::try_from(data_bytes)?),
-            if experiment.shape == "dirty" {
+            if shape == Shape::Dirty {
                 bytes_per_memory
             } else {
                 65536
@@ -268,7 +282,7 @@ async fn main() -> Result<()> {
     drop(source);
     let component = Component::new(engine.inner(), wasm)?;
     let pre = Linker::<SharedCtx>::new(engine.inner()).instantiate_pre(&component)?;
-    experiment.report("baseline", 0, None)?;
+    experiment.report(Phase::Baseline, 0, None)?;
     let mut guests = Vec::new();
     let stop = loop {
         if let Err(error) = engine
@@ -302,12 +316,12 @@ async fn main() -> Result<()> {
             tokio::time::sleep(REFRESH_INTERVAL + Duration::from_millis(5)).await;
         }
     };
-    experiment.report("ready", guests.len(), Some(&stop))?;
+    experiment.report(Phase::Ready, guests.len(), Some(&stop))?;
     touch_all(&experiment, guests)?;
     ensure!(engine.guest_memory().in_use() == 0, "charged bytes leaked");
     ensure!(
         engine.guest_memory().initial_uncharged() == 0,
         "initial bytes leaked"
     );
-    experiment.report("released", 0, None)
+    experiment.report(Phase::Released, 0, None)
 }
