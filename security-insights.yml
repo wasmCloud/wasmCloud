@@ -104,7 +104,21 @@ repository:
   security:
     assessments:
       self:
-        comment: A self-assessment has not been completed yet.
+        name: wasmCloud security self-assessment
+        evidence: https://github.com/wasmCloud/wasmCloud/blob/main/SELF_ASSESSMENT.md
+        date: '2026-10-27'
+        comment: >-
+          Written with the OpenSSF self-assessment template. THREAT_MODEL.md
+          holds the trust boundaries, security goals and known limitations it
+          refers to. Gemara v1.6.0 capability and threat catalogs for the host
+          are in docs/security/.
+      third-party:
+        - name: OSTIF and Trail of Bits security audit
+          evidence: https://ostif.org/wp-content/uploads/2023/10/wasmcloud-audit-ostif-trail-of-bits-final.pdf
+          date: '2023-10-17'
+          comment: >-
+            Covered wasmCloud 1.x. The 2.x host in this repository replaced the
+            audited code.
     tools:
       - name: CodeQL
         type: SAST

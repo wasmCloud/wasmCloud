@@ -160,4 +160,5 @@ wasmCloud is one layer. Each layer below it must hold for the guarantees above t
 ## See also
 
 - [SECURITY.md](SECURITY.md): how to report a vulnerability, and how we disclose.
+- [Capability](docs/security/capability-catalog.yaml) and [threat](docs/security/threat-catalog.yaml) catalogs: the host's attack surface and threats, in Gemara format.
 - [wasmtime security](https://docs.wasmtime.dev/security.html), and [what wasmtime considers a vulnerability](https://docs.wasmtime.dev/security-what-is-considered-a-security-vulnerability.html).
