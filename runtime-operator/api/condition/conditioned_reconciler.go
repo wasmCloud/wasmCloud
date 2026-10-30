@@ -298,6 +298,12 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 				log.FromContext(ctx).V(1).Info("status patch built from a stale read was rejected; requeueing")
 				return reconcile.Result{RequeueAfter: time.Second}, nil
 			}
+			// A deleting object can finish going during this pass. On any other
+			// object NotFound is a real failure, such as a CRD with no status
+			// subresource.
+			if apierrors.IsNotFound(err) && !obj.GetDeletionTimestamp().IsZero() {
+				return reconcile.Result{}, nil
+			}
 			return reconcile.Result{}, err
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -526,6 +527,48 @@ func TestConditionedReconcilerOptimisticLock(t *testing.T) {
 		}
 		if locked && result.RequeueAfter == 0 {
 			t.Errorf("a conflicting patch was not requeued")
+		}
+	}
+}
+
+// An object that finishes deleting during a pass has no status left to write,
+// which is not a failure. NotFound on any other object is one.
+func TestConditionedReconcilerStatusPatchNotFound(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 to scheme: %v", err)
+	}
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+
+	for _, deleting := range []bool{true, false} {
+		obj := &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName}}
+		if deleting {
+			now := metav1.Now()
+			obj.DeletionTimestamp = &now
+			obj.Finalizers = []string{"held"}
+		}
+		kubeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(obj).
+			WithStatusSubresource(obj).
+			Build()
+
+		r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+		r.SetCondition(testCondition, func(ctx context.Context, current *conditionedResource) error {
+			if !deleting {
+				return kubeClient.Delete(ctx, current)
+			}
+			gone := current.DeepCopy()
+			gone.Finalizers = nil
+			return kubeClient.Update(ctx, gone)
+		})
+
+		_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+		if deleting && err != nil {
+			t.Errorf("deleting object: expected no error, got %v", err)
+		}
+		if !deleting && !apierrors.IsNotFound(err) {
+			t.Errorf("object not being deleted: expected NotFound, got %v", err)
 		}
 	}
 }
