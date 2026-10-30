@@ -14,28 +14,45 @@ pub enum Flavour {
     Warm,
     /// `pool_size: 0`: a request instantiates and then drops one.
     ScaleToZero,
+    /// Messaging, no `poolSize`: every delivery builds a store of its own.
+    Messaging,
+    /// Messaging with `poolSize`: deliveries the warm instances cannot take
+    /// build a store of their own from the pooled path.
+    MessagingPooled,
 }
 
 impl Flavour {
+    /// The HTTP flavours, which both density benches run.
     pub const ALL: [Self; 2] = [Self::Warm, Self::ScaleToZero];
+    /// The messaging flavours, which only the in-process bench runs.
+    pub const MESSAGING: [Self; 2] = [Self::Messaging, Self::MessagingPooled];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Warm => "warm",
             Self::ScaleToZero => "scale-to-zero",
+            Self::Messaging => "messaging",
+            Self::MessagingPooled => "messaging-pooled",
         }
     }
 
     pub fn pool_size(self) -> i32 {
         match self {
             Self::Warm => 1,
-            Self::ScaleToZero => 0,
+            Self::ScaleToZero | Self::Messaging => 0,
+            Self::MessagingPooled => 4,
         }
+    }
+
+    pub fn is_messaging(self) -> bool {
+        matches!(self, Self::Messaging | Self::MessagingPooled)
     }
 }
 
-/// One measurement, taken after a step of starts. `None` is a reading the
-/// bench did not or could not take, never zero.
+/// One measurement, taken after a step of starts, or for messaging after a
+/// burst. `None` is a reading the bench did not or could not take, never
+/// zero. For messaging the footprint, guest memory and pool readings are the
+/// highest seen during the burst.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Step {
@@ -73,6 +90,14 @@ pub struct Step {
     pub clean: bool,
     /// The workload count the measurements so far say the host can hold.
     pub theoretical_limit: Option<u64>,
+    /// Messaging: messages published in this step's burst, the most admitted
+    /// at once, and how they ended. Every offered message ends as exactly one
+    /// of completed, shed at admission, or failed.
+    pub messages_offered: Option<usize>,
+    pub messages_peak_in_flight: Option<usize>,
+    pub messages_completed: Option<usize>,
+    pub messages_shed: Option<usize>,
+    pub messages_failed: Option<usize>,
 }
 
 /// One flavour's run.
@@ -118,6 +143,24 @@ impl Report {
         self.steps.iter().rev().find(|s| s.clean)
     }
 
+    fn is_messaging(&self) -> bool {
+        self.flavour.is_some_and(Flavour::is_messaging)
+    }
+
+    /// Messaging: the most messages in flight at once on a clean step.
+    pub fn served_in_flight(&self) -> Option<usize> {
+        self.last_clean()?.messages_peak_in_flight
+    }
+
+    /// Messaging: the most messages in flight at once on any step, the stop
+    /// step included.
+    pub fn peak_in_flight(&self) -> Option<usize> {
+        self.steps
+            .iter()
+            .filter_map(|s| s.messages_peak_in_flight)
+            .max()
+    }
+
     /// The constraint that binds first, and the count it allows.
     pub fn binding(&self) -> Option<(&str, u64)> {
         self.limits
@@ -148,7 +191,36 @@ impl Report {
     pub fn metrics(&self) -> Vec<Metric> {
         let clean = self.last_clean();
         let count = |n: Option<u64>| n.map(|n| n as f64);
-        [
+        if self.is_messaging() {
+            let messages = |n: Option<usize>| count(n.map(|n| n as u64));
+            return finite([
+                (
+                    "served_in_flight",
+                    messages(self.served_in_flight()),
+                    "messages",
+                    Better::Higher,
+                ),
+                (
+                    "peak_in_flight",
+                    messages(self.peak_in_flight()),
+                    "messages",
+                    Better::Higher,
+                ),
+                (
+                    "baseline_footprint_bytes",
+                    count(self.baseline_footprint_bytes),
+                    "B",
+                    Better::Lower,
+                ),
+                (
+                    "served_footprint_bytes",
+                    count(clean.and_then(|s| s.footprint_bytes)),
+                    "B",
+                    Better::Lower,
+                ),
+            ]);
+        }
+        finite([
             (
                 "served_workloads",
                 Some(self.served() as f64),
@@ -203,7 +275,15 @@ impl Report {
                 "ms",
                 Better::Lower,
             ),
-        ]
+        ])
+    }
+}
+
+/// Unmeasured and non-finite figures are left out.
+fn finite<const N: usize>(
+    figures: [(&'static str, Option<f64>, &'static str, Better); N],
+) -> Vec<Metric> {
+    figures
         .into_iter()
         .filter_map(|(name, value, unit, better)| {
             Some(Metric {
@@ -214,7 +294,6 @@ impl Report {
             })
         })
         .collect()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,46 +432,88 @@ fn ms(value: Option<f64>) -> String {
 
 /// One row of the live step table, on stderr; `header` first.
 pub fn print_step(header: bool, step: &Step) {
+    let cells = step_cells(step);
+    let line = |cell: &dyn Fn(&(&str, usize, String)) -> String| {
+        cells.iter().map(cell).collect::<Vec<_>>().join(" ")
+    };
     if header {
-        eprintln!(
-            "{:>9} {:>8} {:>10} {:>9} {:>10} {:>13} {:>9} {:>7} {:>8} {:>8} {:>7} {:>7} {:>5} {:>8}",
-            "workloads",
-            "starts/s",
-            "footprint",
-            "per-wkld",
-            "guest mem",
-            "core inst",
-            "ok/fail",
-            "req/s",
-            "p50 ms",
-            "p99 ms",
-            "down ms",
-            "refused",
-            "cpu%",
-            "limit",
-        );
+        eprintln!("{}", line(&|(name, width, _)| format!("{name:>width$}")));
     }
-    eprintln!(
-        "{:>9} {:>8.0} {:>10} {:>9} {:>10} {:>13} {:>9} {:>7.0} {:>8} {:>8} {:>7} {:>7} {:>5} {:>8}",
-        step.workloads,
-        step.starts_per_sec,
-        or_dash(step.footprint_bytes, render_bytes),
-        or_dash(step.bytes_per_workload, render_bytes),
+    eprintln!("{}", line(&|(_, width, value)| format!("{value:>width$}")));
+}
+
+/// The step table's columns for this step's kind: a header, a width, a value.
+fn step_cells(step: &Step) -> Vec<(&'static str, usize, String)> {
+    let pool = |in_use: Option<u64>, total: Option<u64>| {
+        or_dash(in_use, |n| {
+            format!("{n}/{}", or_dash(total, |t| t.to_string()))
+        })
+    };
+    let count = |n: Option<usize>| or_dash(n, |n| n.to_string());
+    let footprint = ("footprint", 10, or_dash(step.footprint_bytes, render_bytes));
+    let guest = (
+        "guest mem",
+        10,
         or_dash(step.guest_memory_bytes, render_bytes),
-        or_dash(step.core_instances_in_use, |n| format!(
-            "{n}/{}",
-            or_dash(step.core_instances_total, |t| t.to_string())
-        )),
-        format!("{}/{}", step.requests_ok, step.requests_failed),
-        step.requests_per_sec,
-        ms(step.request_p50_ms),
-        ms(step.request_p99_ms),
-        or_dash(step.spin_down_ms, |v| format!("{v:.0}")),
-        step.refused,
-        or_dash(step.cpu_percent, |v| format!("{v:.0}")),
-        step.theoretical_limit
-            .map_or_else(|| "?".into(), |n| n.to_string()),
     );
+    let core = (
+        "core inst",
+        13,
+        pool(step.core_instances_in_use, step.core_instances_total),
+    );
+    let mut cells = match step.messages_offered {
+        Some(offered) => vec![
+            ("offered", 8, offered.to_string()),
+            ("in flight", 9, count(step.messages_peak_in_flight)),
+            ("completed", 9, count(step.messages_completed)),
+            ("shed", 7, count(step.messages_shed)),
+            ("failed", 7, count(step.messages_failed)),
+            footprint,
+            guest,
+            (
+                "memories",
+                11,
+                pool(step.memories_in_use, step.memories_total),
+            ),
+            core,
+        ],
+        None => vec![
+            ("workloads", 9, step.workloads.to_string()),
+            ("starts/s", 8, format!("{:.0}", step.starts_per_sec)),
+            footprint,
+            (
+                "per-wkld",
+                9,
+                or_dash(step.bytes_per_workload, render_bytes),
+            ),
+            guest,
+            core,
+            (
+                "ok/fail",
+                9,
+                format!("{}/{}", step.requests_ok, step.requests_failed),
+            ),
+            ("req/s", 7, format!("{:.0}", step.requests_per_sec)),
+            ("p50 ms", 8, ms(step.request_p50_ms)),
+            ("p99 ms", 8, ms(step.request_p99_ms)),
+            (
+                "down ms",
+                7,
+                or_dash(step.spin_down_ms, |v| format!("{v:.0}")),
+            ),
+        ],
+    };
+    cells.push(("refused", 7, step.refused.to_string()));
+    cells.push(("cpu%", 5, or_dash(step.cpu_percent, |v| format!("{v:.0}"))));
+    if step.messages_offered.is_none() {
+        cells.push((
+            "limit",
+            8,
+            step.theoretical_limit
+                .map_or_else(|| "?".into(), |n| n.to_string()),
+        ));
+    }
+    cells
 }
 
 /// The flavours side by side, one row per measure, on stderr. A row no
@@ -414,12 +535,36 @@ pub fn print_comparison(reports: &[Report]) {
             eprintln!("{label:<26}{}", cells.join(""));
         }
     };
+    // Workload ramps only: a messaging run starts its components once.
+    let http_row = |label: &str, cell: &dyn Fn(&Report) -> String| {
+        row(label, &|r| {
+            if r.is_messaging() {
+                "-".into()
+            } else {
+                cell(r)
+            }
+        })
+    };
+    // Unset on every HTTP step, so an HTTP report reads `-`.
+    let messages = |n: Option<usize>| or_dash(n, |n| n.to_string());
     let names: std::collections::BTreeSet<&String> =
         reports.iter().flat_map(|r| r.limits.keys()).collect();
     row("", &|r| r.label.clone());
     row("cores", &|r| r.cores.to_string());
-    row("served workloads", &|r| r.served().to_string());
-    row("achieved workloads", &|r| r.achieved().to_string());
+    http_row("served workloads", &|r| r.served().to_string());
+    http_row("achieved workloads", &|r| r.achieved().to_string());
+    row("served in flight", &|r| messages(r.served_in_flight()));
+    row("peak in flight", &|r| messages(r.peak_in_flight()));
+    row("offered at stop", &|r| {
+        messages(r.steps.last().and_then(|s| s.messages_offered))
+    });
+    row("shed at stop", &|r| {
+        messages(r.steps.last().and_then(|s| s.messages_shed))
+    });
+    row("refused at stop", &|r| {
+        let last = r.steps.last().filter(|s| s.messages_offered.is_some());
+        messages(last.map(|s| s.refused as usize))
+    });
     for name in names {
         row(&format!("limit: {name}"), &|r| match r.limits.get(name) {
             Some(Some(n)) => n.to_string(),
@@ -427,7 +572,7 @@ pub fn print_comparison(reports: &[Report]) {
             None => "-".into(),
         });
     }
-    row("binding limit", &|r| {
+    http_row("binding limit", &|r| {
         r.binding()
             .map_or_else(|| "?".into(), |(name, n)| format!("{n} ({name})"))
     });
@@ -446,16 +591,16 @@ pub fn print_comparison(reports: &[Report]) {
             render_bytes,
         )
     });
-    row("starts/s (mean)", &|r| {
+    http_row("starts/s (mean)", &|r| {
         or_dash(r.mean_starts_per_sec(), |v| format!("{v:.0}"))
     });
     row("start p99 ms (served)", &|r| {
         ms(r.last_clean().and_then(|s| s.start_p99_ms))
     });
-    row("req/s (served)", &|r| {
+    http_row("req/s (served)", &|r| {
         or_dash(r.last_clean(), |s| format!("{:.0}", s.requests_per_sec))
     });
-    row("p50 / p99 ms (served)", &|r| {
+    http_row("p50 / p99 ms (served)", &|r| {
         or_dash(r.last_clean(), |s| {
             format!("{} / {}", ms(s.request_p50_ms), ms(s.request_p99_ms))
         })
@@ -580,6 +725,41 @@ mod tests {
                 .iter()
                 .all(|m| m.name == "served_workloads")
         );
+    }
+
+    #[test]
+    fn messaging_reports_publish_in_flight_figures_not_workload_ones() {
+        let step = |peak, clean, footprint| Step {
+            workloads: 8,
+            footprint_bytes: Some(footprint),
+            messages_offered: Some(peak),
+            messages_peak_in_flight: Some(peak),
+            clean,
+            ..Default::default()
+        };
+        let report = Report {
+            flavour: Some(Flavour::Messaging),
+            baseline_footprint_bytes: Some(1 << 20),
+            steps: vec![step(64, true, 2 << 20), step(133, false, 3 << 20)],
+            ..Default::default()
+        };
+        assert_eq!(report.served_in_flight(), Some(64));
+        assert_eq!(report.peak_in_flight(), Some(133));
+        let names: Vec<_> = report.metrics().iter().map(|m| m.name).collect();
+        assert_eq!(
+            names,
+            [
+                "served_in_flight",
+                "peak_in_flight",
+                "baseline_footprint_bytes",
+                "served_footprint_bytes"
+            ]
+        );
+        // A row written before the messaging fields existed still reads.
+        let old: Step = serde_json::from_str(r#"{"workloads":250,"clean":true}"#).unwrap();
+        assert_eq!(old.messages_offered, None);
+        assert!(!Flavour::Warm.is_messaging());
+        assert!(Flavour::MESSAGING.iter().all(|f| f.is_messaging()));
     }
 
     #[test]

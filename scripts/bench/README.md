@@ -819,7 +819,9 @@ Density row (`scale_density`, from `<target>/density/<bench>.json`): no
 `throughput`; like k6 rows, each carries its own `unit` and which way is
 `better`. Metrics are `served_workloads`, `binding_limit`,
 `marginal_bytes_per_workload`, `baseline_footprint_bytes`, `starts_per_sec`,
-`start_p99_ms`, `request_p99_ms`, `spin_down_ms` and `cpu_ms_per_start`, each
+`start_p99_ms`, `request_p99_ms`, `spin_down_ms` and `cpu_ms_per_start`; the
+messaging flavours publish `served_in_flight`, `peak_in_flight`,
+`baseline_footprint_bytes` and `served_footprint_bytes` instead. Each is
 present only when measured:
 
 ```json

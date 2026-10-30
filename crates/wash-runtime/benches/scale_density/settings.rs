@@ -13,9 +13,13 @@ use wash_runtime::{
 
 pub(super) use bench_tools::density::Flavour;
 
+/// Every flavour this bench runs, in the order it runs them.
+pub(super) fn flavours() -> impl Iterator<Item = Flavour> {
+    Flavour::ALL.into_iter().chain(Flavour::MESSAGING)
+}
+
 pub(super) fn parse_flavour(name: &str) -> Result<Flavour> {
-    Flavour::ALL
-        .into_iter()
+    flavours()
         .find(|f| f.name() == name)
         .with_context(|| format!("unknown flavour {name}"))
 }
@@ -38,6 +42,12 @@ pub(super) struct Settings {
     pub(super) fixture: &'static str,
     /// One run per entry; `None` is no limit.
     pub(super) cpus: Vec<Option<usize>>,
+    /// Messaging: components subscribed, messages added to the burst each
+    /// step, the most a burst may offer, and how long each delivery sleeps.
+    pub(super) msg_components: usize,
+    pub(super) msg_step: usize,
+    pub(super) msg_max_offered: usize,
+    pub(super) msg_hold: Duration,
 }
 
 impl Settings {
@@ -113,6 +123,12 @@ impl Settings {
                     })
                     .collect::<Result<_>>()?,
             },
+            msg_components: number("WASH_SCALE_MSG_COMPONENTS")?.unwrap_or(8).max(1),
+            msg_step: number("WASH_SCALE_MSG_STEP")?.unwrap_or(64).max(1),
+            msg_max_offered: number("WASH_SCALE_MSG_MAX")?.unwrap_or(2048),
+            msg_hold: Duration::from_millis(
+                number("WASH_SCALE_MSG_HOLD_MS")?.unwrap_or(1000).max(10) as u64,
+            ),
         })
     }
 }

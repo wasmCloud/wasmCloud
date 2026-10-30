@@ -1,5 +1,6 @@
 //! How many HTTP workloads one host holds before `max-process-memory` stops
-//! it taking more, warm against scale-to-zero.
+//! it taking more, warm against scale-to-zero, and how many messages it holds
+//! in flight before messaging admission sheds or the pool refuses.
 //!
 //! The two hit different ceilings, so the bench runs both and compares them:
 //!
@@ -26,16 +27,28 @@
 //!   machine with it;
 //! - the component cap or the time budget, when set.
 //!
+//! Two more flavours measure messaging instead of workload counts. Each starts
+//! `WASH_SCALE_MSG_COMPONENTS` messaging components on the in-memory backend,
+//! whose handlers sleep, and publishes a burst a step larger each time:
+//!
+//! - **messaging** (`pool_size: 0`): every delivery builds a store of its own.
+//! - **messaging-pooled** (`pool_size: 4`): deliveries the warm instances
+//!   cannot take build a store of their own from the pooled path.
+//!
+//! A messaging run stops at the first burst the pool refuses or admission
+//! sheds, and names which, or at the memory guard as above.
+//!
 //! This is a ramp, not a repeated measurement, so it does not use criterion.
 //! Beside what it served, it prints what each constraint (max-process-memory,
 //! max-guest-memory, the pool, CPU) predicts the host can hold, ? when a
 //! constraint cannot be estimated; `scale_density.md` beside this file says how each is derived.
 //!
 //! ```text
-//! cargo xtask build-fixtures http-handler-p3
-//! cargo bench -p wash-runtime --bench scale_density                # both
+//! cargo xtask build-fixtures http-handler-p3 messaging-sleeper-p3
+//! cargo bench -p wash-runtime --bench scale_density                # all four
 //! cargo bench -p wash-runtime --bench scale_density -- warm         # one
 //! cargo bench -p wash-runtime --bench scale_density -- scale-to-zero
+//! cargo bench -p wash-runtime --bench scale_density -- messaging    # both messaging
 //! ```
 //!
 //! | Variable | Meaning | Default |
@@ -51,6 +64,10 @@
 //! | `WASH_SCALE_FIXTURE` | `p3` or `p2` HTTP handler | `p3` |
 //! | `WASH_SCALE_CPUS` | cores the host may use; a list (`1,2,4`) runs each flavour at each | all |
 //! | `WASH_SCALE_REPORT_JSON` | also write every flavour's results as JSON here | unset |
+//! | `WASH_SCALE_MSG_COMPONENTS` | messaging components the bursts are spread across | `8` |
+//! | `WASH_SCALE_MSG_STEP` | messages added to the burst each step | `64` |
+//! | `WASH_SCALE_MSG_MAX` | stop before a burst would offer more than this | `2048` |
+//! | `WASH_SCALE_MSG_HOLD_MS` | how long each delivery sleeps; admission waits half of it | `1000` |
 //!
 //! A CPU limit pins the child to that many of the cores it may use, on Linux,
 //! before it starts any thread the host uses, so tokio's workers, wasmtime's
@@ -86,6 +103,8 @@ use wash_runtime::types::{
 mod estimate;
 #[path = "scale_density/load.rs"]
 mod load;
+#[path = "scale_density/messaging.rs"]
+mod messaging;
 #[path = "scale_density/settings.rs"]
 mod settings;
 use estimate::*;
@@ -119,12 +138,13 @@ fn main() -> Result<()> {
         .map(String::as_str)
         .filter(|a| !a.starts_with('-'))
         .collect();
-    let flavours: Vec<Flavour> = Flavour::ALL
-        .into_iter()
+    let flavours: Vec<Flavour> = settings::flavours()
         .filter(|f| filters.is_empty() || filters.iter().any(|filter| f.name().contains(filter)))
         .collect();
     if flavours.is_empty() {
-        bail!("no flavour matches {filters:?}; choose from warm, scale-to-zero");
+        bail!(
+            "no flavour matches {filters:?}; choose from warm, scale-to-zero, messaging, messaging-pooled"
+        );
     }
     // Read here too, so a bad variable fails before any child starts.
     let settings = Settings::from_env()?;
@@ -178,11 +198,23 @@ fn label(flavour: &str, cpus: Option<usize>) -> String {
 
 fn child_main(flavour: Flavour) -> Result<()> {
     // The host's own logs, only when asked for: at the default level a ramp
-    // to the limit is thousands of lines.
-    if std::env::var_os("RUST_LOG").is_some() {
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_writer(std::io::stderr)
+    // to the limit is thousands of lines. Messaging runs count deliveries
+    // from the messaging plugin's own events.
+    {
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        use tracing_subscriber::{Layer as _, layer::SubscriberExt as _};
+        let logs = std::env::var_os("RUST_LOG").is_some().then(|| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_filter(tracing_subscriber::EnvFilter::from_default_env())
+        });
+        tracing_subscriber::registry()
+            .with(logs)
+            .with(
+                flavour
+                    .is_messaging()
+                    .then(messaging::DeliveryCounter::layer),
+            )
             .init();
     }
     let path = std::env::var(CHILD_REPORT).context(CHILD_REPORT)?;
@@ -219,12 +251,13 @@ fn child_main(flavour: Flavour) -> Result<()> {
         cores: cpu_limit
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get())),
     };
-    let report = host_runtime.enable_all().build()?.block_on(run(
-        flavour,
-        Settings::from_env()?,
-        cpu,
-        Load::new(load_runtime.handle().clone(), load)?,
-    ))?;
+    let load = Load::new(load_runtime.handle().clone(), load)?;
+    let host_runtime = host_runtime.enable_all().build()?;
+    let report = if flavour.is_messaging() {
+        host_runtime.block_on(messaging::run(flavour, Settings::from_env()?, cpu, load))?
+    } else {
+        host_runtime.block_on(run(flavour, Settings::from_env()?, cpu, load))?
+    };
     std::fs::write(&path, serde_json::to_vec(&report)?)
         .with_context(|| format!("writing {path}"))?;
     Ok(())
@@ -247,6 +280,11 @@ enum Stop {
     GuardDidNotHold,
     /// The host refused a start; the message says what ran out.
     StartRefused(String),
+    /// Messaging: the pool refused instantiations, whether or not admission
+    /// also shed in the same burst.
+    PoolRefused { refused: u64, shed: usize },
+    /// Messaging: admission shed messages with nothing refused by the pool.
+    AdmissionShed { shed: usize, in_flight: usize },
     /// Most sampled requests failed.
     Requests(String),
     /// Reached `WASH_SCALE_MAX_COMPONENTS`.
@@ -266,6 +304,13 @@ impl std::fmt::Display for Stop {
             }
             Self::GuardDidNotHold => f.write_str("footprint passed the limit, guard never tripped"),
             Self::StartRefused(message) => write!(f, "start refused: {message}"),
+            Self::PoolRefused { refused, shed } => write!(
+                f,
+                "pool refused {refused} instantiations ({shed} shed at admission)"
+            ),
+            Self::AdmissionShed { shed, in_flight } => {
+                write!(f, "admission shed {shed} messages at {in_flight} in flight")
+            }
             Self::Requests(message) => write!(f, "requests: {message}"),
             Self::Cap => f.write_str("component cap"),
             Self::TimeBudget => f.write_str("time budget"),
@@ -279,6 +324,58 @@ fn measured_footprint(reading: Option<u64>, phase: &str) -> Result<u64> {
     reading.with_context(|| {
         format!("process footprint unavailable during {phase}; density run stopped")
     })
+}
+
+/// Every refusal counter, read at once so a step can take its share.
+#[derive(Debug, Clone, Copy)]
+struct Refusals {
+    memory: u64,
+    guest: u64,
+    pool: u64,
+    guard: u64,
+}
+
+impl Refusals {
+    fn now(engine: &Engine) -> Self {
+        Self {
+            memory: engine.guest_memory().process_refused(),
+            guest: engine.guest_memory().refused(),
+            pool: pool_refusals(),
+            guard: engine.process_memory().map_or(0, |g| g.refused_starts()),
+        }
+    }
+
+    fn since(self, before: Self) -> Self {
+        Self {
+            memory: self.memory - before.memory,
+            guest: self.guest - before.guest,
+            pool: self.pool - before.pool,
+            guard: self.guard - before.guard,
+        }
+    }
+
+    fn total(self) -> u64 {
+        self.memory + self.guest + self.pool + self.guard
+    }
+}
+
+/// The stops every flavour checks first, the guard before the rest: a run it
+/// ends is the one this bench is for, and what fails once it trips is its
+/// doing. `refused` is counted since the run's baseline.
+fn memory_stop(engine: &Engine, refused: Refusals, footprint: u64, ceiling: u64) -> Option<Stop> {
+    if engine.process_memory().is_some_and(|g| g.is_over()) {
+        Some(Stop::MemoryGuard {
+            refused: refused.memory,
+        })
+    } else if refused.guest > 0 {
+        Some(Stop::GuestBudget {
+            refused: refused.guest,
+        })
+    } else if footprint >= ceiling {
+        Some(Stop::GuardDidNotHold)
+    } else {
+        None
+    }
 }
 
 async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) -> Result<Report> {
@@ -303,10 +400,10 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         )
         .with_max_process_memory_bytes(settings.memory_limit)
         .build()?;
-    let guard = engine
-        .process_memory()
-        .cloned()
-        .context("the engine was built without a process memory guard")?;
+    anyhow::ensure!(
+        engine.process_memory().is_some(),
+        "the engine was built without a process memory guard"
+    );
     // Routed by Host header, as a real host routes: `DevRouter` would send
     // every request to the newest workload and never reach the rest.
     let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse()?).await?;
@@ -325,11 +422,9 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let mut cpu_before = cpu_baseline;
     let pool_baseline = engine.pool_usage();
     let baseline_in_use = pool_baseline.map_or(0, |u| u.core_instances.in_use);
-    let memory_refusals_baseline = engine.guest_memory().process_refused();
-    let guest_refusals_baseline = engine.guest_memory().refused();
-    let pool_refusals_baseline = pool_refusals();
+    let refusals_baseline = Refusals::now(&engine);
     let ceiling = settings.memory_limit / 100 * GUARD_SLACK_PERCENT;
-    let mut refusals_before = (0, 0, 0, 0);
+    let mut refusals_before = refusals_baseline;
 
     let run_started = Instant::now();
     let mut steps = Vec::new();
@@ -385,7 +480,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let answered = load.send(addr, sample.clone(), concurrency * 4).await;
         let sample_secs = sample_started.elapsed().as_secs_f64();
         let spin_down_ms = match flavour {
-            Flavour::Warm => None,
+            Flavour::Warm | Flavour::Messaging | Flavour::MessagingPooled => None,
             Flavour::ScaleToZero => Some(wait_for_spin_down(&engine, baseline_in_use).await),
         };
 
@@ -393,8 +488,6 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let usage = engine.pool_usage();
         let in_use = usage.map_or(0, |u| u.core_instances.in_use);
         let bytes_per_workload = footprint.saturating_sub(baseline) / started.max(1) as u64;
-        let memory_refused = engine.guest_memory().process_refused() - memory_refusals_baseline;
-        let guest_refused = engine.guest_memory().refused() - guest_refusals_baseline;
         let (cpu_now, _) = host_cpu(&load.threads);
         let between = |from: Option<Duration>, to: Option<Duration>| {
             to.zip(from)
@@ -405,21 +498,9 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let sample_cpu_secs = between(cpu_started, cpu_now);
         cpu_before = cpu_now;
         let wall_secs = step_started.elapsed().as_secs_f64().max(f64::EPSILON);
-        let refusals_now = (
-            memory_refused,
-            guest_refused,
-            pool_refusals() - pool_refusals_baseline,
-            guard.refused_starts(),
-        );
-        let refused_in_step = [
-            refusals_now.0 - refusals_before.0,
-            refusals_now.1 - refusals_before.1,
-            refusals_now.2 - refusals_before.2,
-            refusals_now.3 - refusals_before.3,
-        ]
-        .iter()
-        .sum::<u64>()
-            + u64::from(starts.first_error.is_some());
+        let refusals_now = Refusals::now(&engine);
+        let refused_in_step =
+            refusals_now.since(refusals_before).total() + u64::from(starts.first_error.is_some());
         refusals_before = refusals_now;
         let served = serving.observe(answered.ok, answered.failed, warm_failed);
         steps.push(Step {
@@ -446,7 +527,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             start_cpu_secs,
             sample_cpu_secs,
             clean: refused_in_step == 0 && served,
-            theoretical_limit: None,
+            ..Default::default()
         });
         let so_far = Estimate::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps);
         let first = steps.len() == 1;
@@ -454,20 +535,9 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         step.theoretical_limit = so_far.binding();
         print_step(first, step);
 
-        // The guard first: a run it ends is the one this bench is for, and
-        // the starts and requests that fail once it trips are its doing.
-        if guard.is_over() {
-            break Stop::MemoryGuard {
-                refused: memory_refused,
-            };
-        }
-        if guest_refused > 0 {
-            break Stop::GuestBudget {
-                refused: guest_refused,
-            };
-        }
-        if footprint >= ceiling {
-            break Stop::GuardDidNotHold;
+        let refused = refusals_now.since(refusals_baseline);
+        if let Some(stop) = memory_stop(&engine, refused, footprint, ceiling) {
+            break stop;
         }
         if let Some(message) = starts.first_error {
             break Stop::StartRefused(message);
