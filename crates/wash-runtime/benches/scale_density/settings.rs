@@ -47,6 +47,8 @@ pub(super) struct Settings {
     /// Unset, as many as the host has cores.
     pub(super) start_concurrency: Option<usize>,
     pub(super) sample: usize,
+    /// The per-memory layout, when one is named; `None` is wasmtime's default.
+    pub(super) memory_layout: Option<host_memory::MemoryLayout>,
     /// Linear memories the pool holds; the count that sizes the pool.
     pub(super) max_memories: u32,
     pub(super) fixture: &'static str,
@@ -111,13 +113,36 @@ impl Settings {
                     .map_err(|e| anyhow::anyhow!("WASH_SCALE_INITIAL_GUEST_MEMORY={v}: {e}"))
             })
             .transpose()?;
+        let bytes = |key: &str| -> Result<Option<u64>> {
+            var(key)
+                .map(|v| parse_bytes(v.trim()).map_err(|e| anyhow::anyhow!("{key}={v}: {e}")))
+                .transpose()
+        };
+        let memory_layout = match (
+            bytes("WASH_SCALE_MEMORY_RESERVATION")?,
+            bytes("WASH_SCALE_MEMORY_GUARD")?,
+        ) {
+            (None, None) => None,
+            (reservation, guard) => {
+                let default = host_memory::MemoryLayout::default();
+                Some(host_memory::MemoryLayout {
+                    reservation: reservation.unwrap_or(default.reservation),
+                    guard: guard.unwrap_or(default.guard),
+                })
+            }
+        };
         // `WASH_SCALE_CORE_INSTANCES` named this count before the pool's
         // totals were derived from its memory count; still read.
         let max_memories = match number("WASH_SCALE_MAX_MEMORIES")? {
             Some(n) => u32::try_from(n).context("WASH_SCALE_MAX_MEMORIES")?,
             None => match number("WASH_SCALE_CORE_INSTANCES")? {
                 Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-                None => host_memory::derive_max_memories(),
+                None => match memory_layout {
+                    Some(layout) => host_memory::derive_max_memories_with(
+                        host_memory::MaxMemoriesDerivation::default().with_memory_layout(layout),
+                    ),
+                    None => host_memory::derive_max_memories(),
+                },
             },
         };
         let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
@@ -132,6 +157,7 @@ impl Settings {
             guest_mode,
             guest_modes,
             initial_guest_memory,
+            memory_layout,
             max_components: number("WASH_SCALE_MAX_COMPONENTS")?,
             max_duration: match number("WASH_SCALE_MAX_SECS")? {
                 Some(0) => None,

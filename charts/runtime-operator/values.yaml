@@ -413,10 +413,12 @@ runtime:
   # host: size `limits.memory` for your expected per-host workload density, or
   # remove it to leave host memory uncapped.
   #
-  # `defaultHeapMemory`, `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`,
-  # `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` are host knobs
-  # rather than Kubernetes resource fields; the chart strips them out of the
-  # container's `resources` block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
+  # `defaultHeapMemory`, `memoryReservation`, `memoryGuardSize`, `maxMemories`,
+  # `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`, `guestMemoryMode`
+  # and `maxConcurrentStarts` are host knobs rather than Kubernetes resource
+  # fields; the chart strips them out of the container's `resources` block and
+  # sets them as `WASH_DEFAULT_HEAP_MEMORY` / `WASH_HOST_MEMORY_RESERVATION` /
+  # `WASH_HOST_MEMORY_GUARD_SIZE` /
   # `WASH_MAX_MEMORIES` / `WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT` /
   # `WASH_CORE_INSTANCES` / `WASH_GUEST_MEMORY_MODE` /
   # `WASH_MAX_CONCURRENT_STARTS` for the host. Leaving them empty uses the
@@ -434,6 +436,19 @@ runtime:
     # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
     # default of 4GiB.
     defaultHeapMemory: ""
+    # -- Address space reserved for each guest linear memory, below wasmtime's
+    # default of 4GiB (empty).
+    #
+    # - Raises how many warm instances fit in the node's address space:
+    #   about 16,000 at 4GiB each.
+    # - Costs: every guest load and store is bounds-checked, which is slower,
+    #   and isolation rests on those checks without the guard region behind them.
+    # - `defaultHeapMemory` is lowered to it.
+    memoryReservation: ""
+    # -- Unmapped address space after each guest linear memory, below
+    # wasmtime's default of 32MiB (empty). Shrinks each slot further, at the
+    # same costs as `memoryReservation`.
+    memoryGuardSize: ""
     # -- Linear memories the pooling allocator keeps room for, the count that
     # sizes the pool: each reserves 4 GiB of address space plus a guard, and
     # the fiber-stack, component-instance, core-instance, table and GC heap

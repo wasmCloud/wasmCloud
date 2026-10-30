@@ -30,7 +30,7 @@
        the ConfigMap this deployment mounts. */}}
 {{- /* A host group's own `resources` replaces the chart-wide block wholesale
        (no merge), and carries the host knobs `defaultHeapMemory`,
-       `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`,
+       `memoryReservation`, `memoryGuardSize`, `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`,
        `guestMemoryMode` and `maxConcurrentStarts` alongside
        the Kubernetes requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
@@ -240,6 +240,14 @@ spec:
                    Keep any new host knob on this side of that line. */}}
             {{- with $resources.defaultHeapMemory }}
             - name: WASH_DEFAULT_HEAP_MEMORY
+              value: "{{ . }}"
+            {{- end }}
+            {{- with $resources.memoryReservation }}
+            - name: WASH_HOST_MEMORY_RESERVATION
+              value: "{{ . }}"
+            {{- end }}
+            {{- with $resources.memoryGuardSize }}
+            - name: WASH_HOST_MEMORY_GUARD_SIZE
               value: "{{ . }}"
             {{- end }}
             {{- with $resources.maxMemories }}
@@ -484,7 +492,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with omit $resources "defaultHeapMemory" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
+          {{- with omit $resources "defaultHeapMemory" "memoryReservation" "memoryGuardSize" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

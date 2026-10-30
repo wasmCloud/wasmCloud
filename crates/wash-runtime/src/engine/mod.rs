@@ -275,6 +275,8 @@ pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(10);
 #[derive(Debug, Clone, Copy)]
 struct InstalledPool {
     max_memory_size: u64,
+    /// The per-memory layout the slots were sized with.
+    layout: host_memory::MemoryLayout,
     /// Elements each pooled table has room for, which sizes the table pool.
     table_elements: usize,
     totals: pool_usage::PoolTotals,
@@ -284,7 +286,7 @@ impl InstalledPool {
     /// Address space the pool reserves. Keyed on the memory count, not the
     /// instance count, and never less than wasmtime's reservation per slot.
     fn reservation(&self) -> u64 {
-        host_memory::pool_slab_bytes(self.max_memory_size, self.totals.memories)
+        host_memory::pool_slab_bytes(self.max_memory_size, self.totals.memories, self.layout)
     }
 }
 
@@ -1318,6 +1320,7 @@ pub struct EngineBuilder {
     parallel_compilation: Option<bool>,
     native_unwind_info: Option<bool>,
     memory_init_cow: Option<bool>,
+    memory_layout: Option<host_memory::MemoryLayout>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     reserved_host_paths: Vec<PathBuf>,
     allowed_host_paths: Vec<PathBuf>,
@@ -1342,14 +1345,19 @@ enum MaxMemories {
 }
 
 impl MaxMemories {
-    /// The count, deriving it with the engine's copy-on-write setting
-    /// unless the derivation names its own.
-    fn count(self, memory_init_cow: Option<bool>) -> u32 {
+    /// The count, deriving it with the engine's copy-on-write setting and
+    /// memory layout unless the derivation names its own.
+    fn count(
+        self,
+        memory_init_cow: Option<bool>,
+        memory_layout: Option<host_memory::MemoryLayout>,
+    ) -> u32 {
         match self {
             Self::Named(count) => count,
             Self::Derived(derivation) => {
                 host_memory::derive_max_memories_with(host_memory::MaxMemoriesDerivation {
                     memory_init_cow: derivation.memory_init_cow.or(memory_init_cow),
+                    memory_layout: derivation.memory_layout.or(memory_layout),
                     ..derivation
                 })
             }
@@ -1611,6 +1619,27 @@ impl EngineBuilder {
         self
     }
 
+    /// The address space wasmtime lays out for each linear memory:
+    /// its reservation and guard (see [`host_memory::MemoryLayout`]).
+    ///
+    /// Unset, it is wasmtime's default: a 4 GiB reservation and a 32 MiB guard
+    /// on 64-bit hosts. A smaller layout fits more pooled memories in the
+    /// address space, which is what caps warm instances on a large host
+    /// (about 16,000 at the default), and costs:
+    ///
+    /// - every guest load and store is bounds-checked, which is slower;
+    /// - isolation rests on those checks, without the guard region behind them;
+    /// - no memory may grow past the reservation, so `default_heap_memory`
+    ///   is lowered to it.
+    ///
+    /// The engine warns at startup when the layout is below wasmtime's default.
+    /// A count from [`Self::with_derived_max_memories`] follows this layout.
+    #[must_use]
+    pub fn with_memory_layout(mut self, layout: host_memory::MemoryLayout) -> Self {
+        self.memory_layout = Some(layout);
+        self
+    }
+
     /// Whether a linear memory starts as a copy-on-write mapping of its
     /// component's data segments, or has them copied in at instantiation.
     ///
@@ -1773,6 +1802,25 @@ impl EngineBuilder {
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
         // caller-supplied config both override what was asked for.
+        // The per-memory layout, and the heap ceiling it allows: no memory may
+        // grow past its reservation, so a layout the caller names lowers the
+        // ceiling to it. Left alone, a ceiling past the default reservation is
+        // still refused, and the advisories say so.
+        let layout = self.memory_layout.unwrap_or_default();
+        let heap_ceiling = match self.memory_layout {
+            Some(layout) => host_memory.default_heap_memory.min(layout.reservation),
+            None => host_memory.default_heap_memory,
+        };
+        if layout.is_reduced() {
+            tracing::warn!(
+                memory_reservation = %host_memory::render_bytes(layout.reservation),
+                memory_guard = %host_memory::render_bytes(layout.guard),
+                default_heap_memory = %host_memory::render_bytes(heap_ceiling),
+                "guest memory layout is below wasmtime's default: every guest load and store is \
+                 bounds-checked, which is slower, and isolation rests on those checks without \
+                 the guard region behind them"
+            );
+        }
         let mut installed_pool: Option<InstalledPool> = None;
         let sized_to_commit_limit = self.sized_to_commit_limit();
         if use_pooling_allocator
@@ -1783,7 +1831,9 @@ impl EngineBuilder {
                 // The builder's own knobs win over the budgets'. A memory
                 // count set here re-derives the core total, since the
                 // budgets' was derived beside a different memory count.
-                let builder_memories = self.max_memories.map(|m| m.count(memory_init_cow));
+                let builder_memories = self
+                    .max_memories
+                    .map(|m| m.count(memory_init_cow, self.memory_layout));
                 let memories = builder_memories.unwrap_or(host_memory.max_memories);
                 let core_instances = self.max_core_instances.unwrap_or_else(|| {
                     if builder_memories.is_some() {
@@ -1797,10 +1847,11 @@ impl EngineBuilder {
                 {
                     tracing::warn!("{advisory}");
                 }
-                new_pooling_config(memories, core_instances, host_memory.default_heap_memory)
+                new_pooling_config(memories, core_instances, heap_ceiling)
             });
             installed_pool = Some(InstalledPool {
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
+                layout,
                 table_elements: pooling.get_table_elements(),
                 totals: pool_usage::PoolTotals::of(&pooling),
             });
@@ -1838,6 +1889,7 @@ impl EngineBuilder {
                 assumed_memory_init_cow,
                 sized_to_commit_limit,
                 memory_limit,
+                pool.layout,
             ) {
                 tracing::warn!("{advisory}");
             }
@@ -1853,7 +1905,7 @@ impl EngineBuilder {
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
                 core_instances = pool.totals.core_instances,
                 memories = pool.totals.memories,
-                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
+                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size, pool.layout)),
                 pool_reservation = %host_memory::render_bytes(pool.reservation()),
                 "host memory resolved"
             ),
@@ -1926,6 +1978,11 @@ impl EngineBuilder {
         if let Some(cow) = memory_init_cow {
             config.memory_init_cow(cow);
         }
+        // A reduced layout is the caller's opt-in; see `with_memory_layout`.
+        if let Some(layout) = self.memory_layout {
+            config.memory_reservation(layout.reservation);
+            config.memory_guard_size(layout.guard);
+        }
 
         for proposal in &self.proposals {
             proposal.apply(&mut config);
@@ -1940,21 +1997,23 @@ impl EngineBuilder {
         // fails there must not send the operator to the reservation alone.
         let inner = on_signal_quiet_thread(|| Ok(wasmtime::Engine::new(&config)?));
         let inner = inner.map_err(|e| match installed_pool {
-            Some(pool) if pool.max_memory_size > host_memory::WASMTIME_MEMORY_RESERVATION => e
-                .context(format!(
-                    "building the engine failed with a pooling allocator whose heap ceiling \
-                     (default-heap-memory) of {} is past wasmtime's {} memory reservation, \
+            Some(pool) if pool.max_memory_size > pool.layout.reservation => e.context(format!(
+                "building the engine failed with a pooling allocator whose heap ceiling \
+                     (default-heap-memory) of {} is past the {} memory reservation, \
                      which the pooling allocator refuses; set default-heap-memory to {} or less",
-                    host_memory::render_bytes(pool.max_memory_size),
-                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
-                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
-                )),
+                host_memory::render_bytes(pool.max_memory_size),
+                host_memory::render_bytes(pool.layout.reservation),
+                host_memory::render_bytes(pool.layout.reservation),
+            )),
             Some(pool) => e.context(format!(
                 "building the engine failed with a pooling allocator reserving {} of address \
                  space ({} memories of {} each) out of the {} this process can map, and {}",
                 host_memory::render_bytes(pool.reservation()),
                 pool.totals.memories,
-                host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
+                host_memory::render_bytes(host_memory::pool_slot_bytes(
+                    pool.max_memory_size,
+                    pool.layout
+                )),
                 host_memory::render_bytes(host_memory::usable_address_space()),
                 host_memory::pool_startup_commit(
                     &pool.totals,
@@ -2657,6 +2716,25 @@ mod tests {
             .build()
             .expect("an explicit cap should build");
         assert_eq!(engine.guest_memory().initial_cap(), 10 << 20);
+    }
+
+    // A reduced layout lowers the pool's heap ceiling to its reservation, so
+    // the pool builds rather than being refused.
+    #[test]
+    fn a_reduced_memory_layout_lowers_the_heap_ceiling() {
+        let layout = host_memory::MemoryLayout {
+            reservation: 256 << 20,
+            guard: 64 << 10,
+        };
+        let engine = Engine::builder()
+            .with_pooling_allocator(true)
+            .with_max_memories(10)
+            .with_memory_layout(layout)
+            .build()
+            .expect("a reduced layout should build");
+        if let Some(heap) = engine.installed_heap_memory {
+            assert_eq!(heap, 256 << 20);
+        }
     }
 
     // Unwind tables are on unless a host turns them off, and turning them off
