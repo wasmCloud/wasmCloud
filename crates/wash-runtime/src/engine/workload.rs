@@ -5032,6 +5032,9 @@ mod tests {
     /// A component built from WAT, so a test can state an exact import/export
     /// shape rather than take whatever a fixture happens to have.
     fn component_from_wat(id: &str, wat: &str) -> WorkloadComponent {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
         let engine = wasmtime::Engine::default();
         let linker = Linker::new(&engine);
         let wasm = wat::parse_str(wat).expect("failed to parse WAT");
@@ -5461,6 +5464,9 @@ mod tests {
 
     #[tokio::test]
     async fn sealing_service_linkers_preserves_repeated_starts() -> anyhow::Result<()> {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+
         for p3 in [false, true] {
             let mut config = wasmtime::Config::new();
             config.wasm_component_model_async(true);
