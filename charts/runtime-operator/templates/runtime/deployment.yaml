@@ -246,9 +246,11 @@ spec:
             - name: WASH_HOST_MEMORY_RESERVATION
               value: "{{ . }}"
             {{- end }}
-            {{- with $resources.memoryGuardSize }}
+            {{- /* Zero disables the guard; `with` would silently drop a numeric 0. */}}
+            {{- $guard := $resources.memoryGuardSize }}
+            {{- if or (kindIs "int64" $guard) (kindIs "float64" $guard) (and (kindIs "string" $guard) (ne $guard "")) }}
             - name: WASH_HOST_MEMORY_GUARD_SIZE
-              value: "{{ . }}"
+              value: "{{ $guard }}"
             {{- end }}
             {{- with $resources.maxMemories }}
             - name: WASH_MAX_MEMORIES
