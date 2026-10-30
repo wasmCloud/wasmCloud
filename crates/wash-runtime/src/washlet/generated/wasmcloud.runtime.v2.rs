@@ -20,6 +20,26 @@ pub struct WitInterface {
     /// store::open(name) for keyvalue, create-container(name) for blobstore).
     #[prost(string, tag = "6")]
     pub name: ::prost::alloc::string::String,
+    /// Entries of the host's plugin-backed `secrets:` catalog whose values this
+    /// interface's config takes. The host resolves them when it binds the
+    /// workload; a request never carries the values.
+    #[prost(message, repeated, tag = "7")]
+    pub plugin_secrets: ::prost::alloc::vec::Vec<PluginSecretRef>,
+}
+/// A workload's reference to an entry of the host's plugin-backed `secrets:`
+/// catalog.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginSecretRef {
+    /// The catalog entry.
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Config key -> the entry's key it takes. Empty takes every key of the
+    /// entry under its own name.
+    #[prost(map = "string, string", tag = "2")]
+    pub keys: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HostHeartbeat {
@@ -86,6 +106,11 @@ pub struct HostHeartbeat {
     /// per-tenant isolation.
     #[prost(string, tag = "18")]
     pub environment: ::prost::alloc::string::String,
+    /// Start-request features this host acts on, which an older host would
+    /// ignore. A scheduler places a workload that uses one only on a host that
+    /// lists it.
+    #[prost(string, repeated, tag = "19")]
+    pub features: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HostHeartbeatRequest {

@@ -59,6 +59,7 @@ fn kv_store_iface(name: &str) -> WitInterface {
             "in-memory".to_string(),
         )]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 

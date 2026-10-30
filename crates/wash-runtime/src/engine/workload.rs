@@ -3481,6 +3481,9 @@ impl UnresolvedWorkload {
         // Track bound plugins with their matched interfaces for cleanup on failure
         let mut bound_plugins_with_interfaces: Vec<BoundPluginWithInterfaces> = Vec::new();
         let mut bound_plugins: Vec<(Arc<dyn HostPlugin + 'static>, Vec<String>)> = Vec::new();
+        // The instances of the host interfaces naming plugin secrets that a
+        // plugin bound.
+        let mut secrets_bound: BTreeSet<String> = BTreeSet::new();
 
         // Collect all component's required (unmatched) host interfaces
         // This tracks which interfaces each component still needs to be bound
@@ -3739,6 +3742,45 @@ impl UnresolvedWorkload {
                     .iter()
                     .flat_map(|(_, interfaces)| interfaces.clone())
                     .collect();
+                let requesting = crate::plugin::RequestingWorkload {
+                    id: self.id().to_string(),
+                    name: self.grant_name().to_string(),
+                    namespace: self.namespace().to_string(),
+                };
+                // The secrets a workload names on its own interfaces become its
+                // own config, so the policy below judges them as it would a
+                // value the manifest wrote.
+                let referenced: Vec<String> = requested_interfaces
+                    .iter()
+                    .filter(|i| !i.plugin_secrets.is_empty())
+                    .map(WitInterface::instance)
+                    .collect();
+                let requested_interfaces =
+                    match crate::plugin::resolve_workload_secrets(
+                        plugins,
+                        plugin_bindings.secret_catalog(),
+                        plugin_id,
+                        &requesting,
+                        requested_interfaces,
+                        &schema,
+                    )
+                    .await
+                    {
+                        Ok(resolved) => resolved,
+                        Err(e) => {
+                            unbind_all(
+                                self.id(),
+                                &bound_plugins_with_interfaces,
+                                "plugin secret",
+                                cleanup,
+                            )
+                            .await;
+                            bail!(e.context(format!(
+                                "workload {} cannot bind plugin '{plugin_id}'",
+                                self.id()
+                            )))
+                        }
+                    };
                 // Plugin-backed secrets become operator config before the
                 // policy runs, so it judges them like any other host key. The
                 // plugin checked those layers at host start without the values,
@@ -3747,11 +3789,6 @@ impl UnresolvedWorkload {
                 // plugin's own bind, as it is without secrets. From here on an
                 // error may quote a value or follow from a secret withheld from
                 // this workload, so each goes through `explain`.
-                let requesting = crate::plugin::RequestingWorkload {
-                    id: self.id().to_string(),
-                    name: self.grant_name().to_string(),
-                    namespace: self.namespace().to_string(),
-                };
                 let filled = crate::plugin::resolve_plugin_secrets(
                     plugins,
                     &requesting,
@@ -4027,6 +4064,7 @@ impl UnresolvedWorkload {
                     }
                 }
 
+                secrets_bound.extend(referenced);
                 // Add this plugin with all its bound component IDs
                 bound_plugins.push((p.clone(), plugin_component_ids.clone()));
                 bound_plugins_with_interfaces.push((
@@ -4035,6 +4073,34 @@ impl UnresolvedWorkload {
                     plugin_component_ids,
                 ));
             }
+        }
+
+        // A secret named on an interface no plugin bound would reach nothing.
+        let unbound: BTreeSet<String> = self
+            .host_interfaces
+            .iter()
+            .filter(|i| !i.plugin_secrets.is_empty())
+            .map(WitInterface::instance)
+            .filter(|instance| !secrets_bound.contains(instance))
+            .collect();
+        if !unbound.is_empty() {
+            unbind_all(
+                self.id(),
+                &bound_plugins_with_interfaces,
+                "unbound plugin secret",
+                cleanup,
+            )
+            .await;
+            bail!(
+                "workload {} names plugin secrets on {}, which no plugin binds for it, so \
+                 nothing would receive them",
+                self.id(),
+                unbound
+                    .iter()
+                    .map(|i| format!("`{i}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         }
 
         // Check if all required interfaces were matched
@@ -8177,6 +8243,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0").unwrap()),
             config: Default::default(),
             name: None,
+            plugin_secrets: Vec::new(),
         };
 
         let messaging_consumer = WitInterface {
@@ -8188,6 +8255,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0").unwrap()),
             config: Default::default(),
             name: None,
+            plugin_secrets: Vec::new(),
         };
 
         let logging = WitInterface {
@@ -8197,6 +8265,7 @@ mod tests {
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: Default::default(),
             name: None,
+            plugin_secrets: Vec::new(),
         };
 
         let messaging_plugin = Arc::new(MockPlugin::new(
@@ -8240,6 +8309,7 @@ mod tests {
                     version: Some(semver::Version::parse("0.2.0").unwrap()),
                     config: Default::default(),
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
                 logging,
             ],
@@ -8272,6 +8342,7 @@ mod tests {
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
             config: Default::default(),
             name: None,
+            plugin_secrets: Vec::new(),
         };
 
         let plugin = Arc::new(MockPlugin::new(
@@ -8320,6 +8391,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
             config: Default::default(),
             name: name.map(String::from),
+            plugin_secrets: Vec::new(),
         }
     }
 
@@ -8592,6 +8664,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
             config: Default::default(),
             name: None,
+            plugin_secrets: Vec::new(),
         };
 
         let plugin = Arc::new(MockPlugin::new(

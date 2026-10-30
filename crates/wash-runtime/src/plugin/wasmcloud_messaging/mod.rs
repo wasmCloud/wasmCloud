@@ -1863,6 +1863,7 @@ mod tests {
             version: version.map(|v| semver::Version::parse(v).unwrap()),
             config: Default::default(),
             name: None,
+            plugin_secrets: Vec::new(),
         }
     }
 

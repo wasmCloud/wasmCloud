@@ -125,6 +125,7 @@ async fn start_msg_sleeper(
             subject.to_string(),
         )]),
         name: None,
+        plugin_secrets: Vec::new(),
     });
 
     let workload_id = uuid::Uuid::new_v4().to_string();

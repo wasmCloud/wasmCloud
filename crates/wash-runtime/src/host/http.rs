@@ -6186,6 +6186,7 @@ mod tests {
             version: Some(semver::Version::parse("0.2.2").unwrap()),
             config,
             name: None,
+            plugin_secrets: Vec::new(),
         }
     }
 
@@ -6476,6 +6477,7 @@ mod tests {
             version: None,
             config: Default::default(),
             name: None,
+            plugin_secrets: Vec::new(),
         };
         assert!(http_ingress_routes(&[kv]).unwrap().is_empty());
     }

@@ -59,6 +59,7 @@ fn messaging_interface(version: (u64, u64, u64), subscriptions: &str) -> WitInte
             subscriptions.to_string(),
         )]),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

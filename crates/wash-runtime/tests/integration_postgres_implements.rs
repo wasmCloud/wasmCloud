@@ -66,6 +66,7 @@ fn named_pg(name: &str, url: &str) -> WitInterface {
         version: Some(semver::Version::parse(PG_VERSION).unwrap()),
         config: wash_runtime::wit::Config::from_iter([("url".to_string(), url.to_string())]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 
