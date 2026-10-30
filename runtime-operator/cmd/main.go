@@ -81,6 +81,7 @@ func main() {
 		watchNamespaces             string
 		hostNamespaces              string
 		allowSharedHosts            bool
+		clusterDomain               string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to. "+
@@ -140,6 +141,13 @@ func main() {
 			"If false, scheduling is locked to the workload's own namespace and any non-matching "+
 			"environment is rejected.",
 	)
+	flag.StringVar(
+		&clusterDomain,
+		"cluster-domain",
+		runtime_operator.DefaultClusterDomain,
+		"The cluster's DNS domain, used to register <svc>.<ns>.svc.<domain> as a "+
+			"host alias for workloads that set kubernetes.service.",
+	)
 
 	opts := zap.Options{
 		Development: true,
@@ -174,6 +182,7 @@ func main() {
 		Namespace:                 operatorNamespace,
 		HostNamespaces:            splitCSVList(hostNamespaces),
 		AllowSharedHosts:          allowSharedHosts,
+		ClusterDomain:             clusterDomain,
 	}
 
 	clientOptions, err := natsClient.Options()
