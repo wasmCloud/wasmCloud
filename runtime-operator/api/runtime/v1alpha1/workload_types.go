@@ -230,9 +230,59 @@ type WorkloadService struct {
 	LocalResources *LocalResources `json:"localResources,omitempty"`
 }
 
+// PluginSecretReference names an entry of the host's `pluginSecrets`.
+type PluginSecretReference struct {
+	// Name of the `pluginSecrets` entry.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// Keys selects the entry's keys this interface takes. Unset takes every
+	// key of the entry under its own name.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinItems=1
+	Keys []PluginSecretKey `json:"keys,omitempty"`
+}
+
+// PluginSecretKey selects one key of a `pluginSecrets` entry.
+type PluginSecretKey struct {
+	// Key is the entry's key.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
+	// As is the config key the value is delivered under. Defaults to Key.
+	// +kubebuilder:validation:Optional
+	As string `json:"as,omitempty"`
+}
+
+// ConfigKey is the config key the value is delivered under.
+func (k PluginSecretKey) ConfigKey() string {
+	if k.As != "" {
+		return k.As
+	}
+	return k.Key
+}
+
 type HostInterface struct {
 	// Provides the config / configmap / secret references for this host interface
 	ConfigLayer `json:",inline"`
+
+	// PluginSecretFrom names entries of the host's `pluginSecrets` (its
+	// plugin-backed `secrets:` catalog) whose values this interface's config
+	// takes. Each time it binds the Workload, the host checks the entry's
+	// `workloads` grant against the Workload's namespace and the name its
+	// replicas share, then asks the entry's plugin for the values through
+	// `wasmcloud:host/secret-source`. The values never pass through the
+	// operator or a Kubernetes Secret.
+	//
+	// They are the Workload's own config: a plugin whose `workloadConfig` is
+	// `deny` refuses a key the host owns, and a key also set by `config`,
+	// `configFrom` or `secretFrom` is refused. An unknown entry, or one not
+	// granted to this Workload, fails the start. Only a host that advertises
+	// support is chosen for a Workload that sets this.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=name
+	PluginSecretFrom []PluginSecretReference `json:"pluginSecretFrom,omitempty"`
 
 	// Name uniquely identifies this interface instance when multiple entries
 	// share the same namespace+package. It is the `(implements <name>)` id the

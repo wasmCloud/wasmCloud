@@ -155,6 +155,7 @@ func (r *HostReconciler) reconcileReporting(ctx context.Context, host *runtimev1
 	host.Status.OSArch = heartbeat.GetOsArch()
 	host.Status.OSKernel = heartbeat.GetOsKernel()
 	host.Status.Version = heartbeat.GetVersion()
+	host.Status.Features = heartbeat.GetFeatures()
 
 	host.Status.LastSeen = metav1.Now()
 	return nil

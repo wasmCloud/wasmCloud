@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"slices"
+
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -22,6 +24,10 @@ type HostStatus struct {
 	SystemMemoryFree  int64  `json:"systemMemoryFree,omitempty"`
 	ComponentCount    int    `json:"componentCount,omitempty"`
 	WorkloadCount     int    `json:"workloadCount,omitempty"`
+	// Features lists the start-request features the host acts on, from its
+	// heartbeat. A Workload that uses one is placed only on a host listing it.
+	// +kubebuilder:validation:Optional
+	Features []string `json:"features,omitempty"`
 
 	LastSeen metav1.Time `json:"lastSeen,omitempty"`
 }
@@ -53,6 +59,16 @@ type Host struct {
 	Environment string `json:"environment,omitempty"`
 
 	Status HostStatus `json:"status,omitempty"`
+}
+
+// HostFeaturePluginSecretRefs is the feature of a host that resolves a host
+// interface's PluginSecretFrom at bind. An older host ignores the field and
+// starts the Workload without the secret.
+const HostFeaturePluginSecretRefs = "plugin-secret-refs"
+
+// HasFeature reports whether the host's last heartbeat listed feature.
+func (a *Host) HasFeature(feature string) bool {
+	return slices.Contains(a.Status.Features, feature)
 }
 
 // fulfill the ConditionedStatus interface
