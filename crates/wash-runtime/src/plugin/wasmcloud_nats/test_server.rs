@@ -24,6 +24,11 @@ impl NatsServer {
         Self::container().await
     }
 
+    /// A `NATS_URL` server outlives the test, so whatever it creates stays.
+    pub(super) fn is_external(&self) -> bool {
+        self._container.is_none()
+    }
+
     /// Always a server of its own, for a test that needs two distinct servers.
     pub(super) async fn container() -> anyhow::Result<Self> {
         let container = GenericImage::new("nats", "2.12.8-alpine")
