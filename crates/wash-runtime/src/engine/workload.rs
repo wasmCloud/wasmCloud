@@ -1792,7 +1792,7 @@ impl ResolvedWorkload {
                                         engine: plugin_engine.clone(),
                                         stream_payloads: self.stream_payloads.clone(),
                                         http_handler: self.http_handler.clone(),
-                                        components: self.components.clone(),
+                                        components: Arc::downgrade(&self.components),
                                         active_component_id: plugin_component_id.clone(),
                                         linked_component_ids: nested_linked_component_ids.clone(),
                                         #[cfg(feature = "wasi-tls")]
@@ -2545,7 +2545,7 @@ impl ResolvedWorkload {
                         engine: engine.clone(),
                         stream_payloads: self.stream_payloads.clone(),
                         http_handler: self.http_handler.clone(),
-                        components: self.components.clone(),
+                        components: Arc::downgrade(&self.components),
                         active_component_id: Arc::clone(&component_id),
                         linked_component_ids: linked_component_ids.clone(),
                         #[cfg(feature = "wasi-tls")]
@@ -7957,5 +7957,80 @@ mod tests {
             &implements_marker_exporter("plug").world(),
             "plug"
         ));
+    }
+
+    /// A component linked to a sibling's async export registers a closure in
+    /// its linker that reaches back to the component map, which holds that
+    /// linker. The map must still be freed once the workload drops.
+    #[tokio::test]
+    async fn a_linked_async_export_does_not_keep_the_components_alive() -> anyhow::Result<()> {
+        let engine = crate::engine::Engine::builder().build()?;
+        let engine = engine.inner();
+        let component = |id: &str, wat: &str| -> anyhow::Result<WorkloadComponent> {
+            Ok(WorkloadComponent::new(
+                "linked-cycle",
+                "linked-cycle",
+                "test",
+                id,
+                Component::new(engine, wat::parse_str(wat)?)?,
+                Linker::new(engine),
+                Vec::new(),
+                LocalResources::default(),
+                Arc::default(),
+                InstancePolicy::Ephemeral,
+            ))
+        };
+        let exporter = component(
+            "exporter",
+            r#"(component
+                (core module $m
+                    (func (export "f") (result i32) (i32.const 0))
+                    (func (export "cb") (param i32 i32 i32) (result i32) (i32.const 0)))
+                (core instance $i (instantiate $m))
+                (type $f (func async))
+                (func $f (type $f)
+                    (canon lift (core func $i "f") async (callback (core func $i "cb"))))
+                (instance $inst (export "f" (func $f)))
+                (export "test:probe/linked@0.1.0" (instance $inst))
+            )"#,
+        )?;
+        let importer = component(
+            "importer",
+            r#"(component
+                (import "test:probe/linked@0.1.0" (instance (export "f" (func async))))
+            )"#,
+        )?;
+
+        let resolved = UnresolvedWorkload::new(
+            "linked-cycle",
+            "linked-cycle",
+            "test",
+            None,
+            [exporter, importer],
+            vec![],
+        )
+        .resolve(
+            None,
+            &crate::plugin::PluginBindings::default(),
+            &crate::host::HostRef::detached(),
+            &crate::observability::Meters::default(),
+        )
+        .await?;
+        let importer_links = resolved
+            .components
+            .read()
+            .await
+            .values()
+            .find(|c| c.name() == "importer")
+            .map(|c| c.linked_components.len());
+        assert_eq!(importer_links, Some(1), "the importer should be linked");
+
+        let components = Arc::downgrade(&resolved.components);
+        drop(resolved);
+        assert!(
+            components.upgrade().is_none(),
+            "the component map outlived its workload"
+        );
+        Ok(())
     }
 }
