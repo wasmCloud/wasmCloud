@@ -81,11 +81,6 @@ func (h *daemonSetHost) readyCurrent() int32 {
 }
 
 func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, daemonSet *runtimev1alpha1.WorkloadDaemonSet) error {
-	// The garbage collector is removing or orphaning this DaemonSet's Workloads.
-	if !daemonSet.DeletionTimestamp.IsZero() {
-		return condition.ErrNoop()
-	}
-
 	if !daemonSet.Status.AllTrue(runtimev1alpha1.WorkloadDaemonSetConditionArtifact) {
 		return condition.ErrStatusUnknown(fmt.Errorf("artifacts not ready"))
 	}
@@ -116,13 +111,18 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	// Names still in use, including by Workloads being deleted.
 	taken := make(map[string]bool, len(workloads.Items))
 
-	orphans, held, err := r.adoptOrphans(ctx, daemonSet)
-	if err != nil {
-		return err
-	}
-	workloads.Items = append(workloads.Items, orphans...)
-	for _, name := range held {
-		taken[name] = true
+	// The garbage collector is removing or orphaning this DaemonSet's Workloads,
+	// so the pass only reports what is left.
+	deleting := !daemonSet.DeletionTimestamp.IsZero()
+	if !deleting {
+		orphans, held, err := r.adoptOrphans(ctx, daemonSet)
+		if err != nil {
+			return err
+		}
+		workloads.Items = append(workloads.Items, orphans...)
+		for _, name := range held {
+			taken[name] = true
+		}
 	}
 
 	hosts := make(map[string]*daemonSetHost, len(desired))
@@ -137,7 +137,7 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 		}
 		host, ok := hosts[workload.Spec.HostID]
 		if !ok {
-			if retained[workload.Spec.HostID] {
+			if deleting || retained[workload.Spec.HostID] {
 				continue
 			}
 			// The host left or stopped matching. Its instances go with it and
@@ -159,14 +159,32 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 		perHost = *daemonSet.Spec.ReplicasPerHost
 	}
 
+	// Report what this pass leaves behind, not what it started from.
+	defer r.setScheduleStatus(ctx, daemonSet, desired, hosts, perHost)
+
+	if deleting {
+		return condition.ErrNoop()
+	}
+	return r.syncHosts(ctx, daemonSet, template, templateHash, desired, hosts, perHost, taken)
+}
+
+// syncHosts brings every desired Host to the current template, respecting the
+// DaemonSet's deploy policy and how many hosts may update at once.
+func (r *WorkloadDaemonSetReconciler) syncHosts(
+	ctx context.Context,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+	template *runtimev1alpha1.WorkloadReplicaTemplate,
+	templateHash string,
+	desired []string,
+	hosts map[string]*daemonSetHost,
+	perHost int32,
+	taken map[string]bool,
+) error {
 	maxConcurrentHosts := 1
 	if daemonSet.Spec.MaxConcurrentHosts != nil {
 		maxConcurrentHosts = int(*daemonSet.Spec.MaxConcurrentHosts)
 	}
 	recreate := daemonSet.Spec.DeployPolicy == runtimev1alpha1.WorkloadDeployPolicyRecreate
-
-	// Report what this pass leaves behind, not what it started from.
-	defer r.setScheduleStatus(ctx, daemonSet, desired, hosts, perHost)
 
 	// A host is mid-update while it runs both templates and the new
 	// instances are not all up yet; one finishing this pass frees its slot.
@@ -532,6 +550,9 @@ func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads [
 }
 
 func (r *WorkloadDaemonSetReconciler) reconcileReady(_ context.Context, daemonSet *runtimev1alpha1.WorkloadDaemonSet) error {
+	if !daemonSet.DeletionTimestamp.IsZero() {
+		return condition.ErrStatusUnknown(fmt.Errorf("daemonset is being deleted"))
+	}
 	if !daemonSet.Status.AllTrue(
 		runtimev1alpha1.WorkloadDaemonSetConditionArtifact,
 		runtimev1alpha1.WorkloadDaemonSetConditionSchedule) {

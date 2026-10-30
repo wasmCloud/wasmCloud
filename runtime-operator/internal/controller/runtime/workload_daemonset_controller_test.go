@@ -403,6 +403,51 @@ func TestDaemonSetSchedule_CollisionWithUnseenInstanceRetries(t *testing.T) {
 	}
 }
 
+// During a delete the counts follow the Workloads as they go, Ready drops, and
+// nothing is cleaned up on the garbage collector's behalf.
+func TestDaemonSetSchedule_StatusFollowsADelete(t *testing.T) {
+	ds := testDaemonSet(1)
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), defaultGroupHost(dsHostB))
+	schedule(t, r, ds)
+	markAllAvailable(t, r)
+	schedule(t, r, ds)
+	ds.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDaemonSetConditionSchedule))
+	if err := r.reconcileReady(context.Background(), ds); err != nil {
+		t.Fatalf("expected Ready before the delete, got %v", err)
+	}
+	if ds.Status.ReadyHosts != 2 {
+		t.Fatalf("expected 2 ready hosts before the delete, got %d", ds.Status.ReadyHosts)
+	}
+
+	now := metav1.Now()
+	ds.DeletionTimestamp = &now
+	ds.Finalizers = []string{"foregroundDeletion"}
+	if err := r.reconcileReady(context.Background(), ds); !condition.IsStatusUnknown(err) {
+		t.Fatalf("expected Ready to drop as the delete starts, got %v", err)
+	}
+
+	onA := workloadsByHost(t, r)[dsHostA][0]
+	if err := r.Delete(context.Background(), &onA); err != nil {
+		t.Fatalf("delete workload: %v", err)
+	}
+	departed := &runtimev1alpha1.Host{}
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: dsHostB}, departed); err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if err := r.Delete(context.Background(), departed); err != nil {
+		t.Fatalf("delete host: %v", err)
+	}
+
+	if err := r.reconcileSchedule(context.Background(), ds); !errors.Is(err, condition.ErrNoop()) {
+		t.Fatalf("expected a no-op, got %v", err)
+	}
+	if ds.Status.ReadyHosts != 0 || ds.Status.Replicas.Current != 0 {
+		t.Fatalf("expected the counts to follow the delete, got %d ready hosts, %d current",
+			ds.Status.ReadyHosts, ds.Status.Replicas.Current)
+	}
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostB: 1})
+}
+
 // Deleting with --cascade=orphan orphans the Workloads while the DaemonSet is
 // still there, and the cached copy may not show the delete yet. Adopting them
 // back, or starting more, would undo what the delete asked for.
