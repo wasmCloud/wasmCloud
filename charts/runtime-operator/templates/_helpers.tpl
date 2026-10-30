@@ -202,9 +202,10 @@ host-plugin-config.yaml (which needs only `fileBacked`, to render the
 `wash host` config file).
 
 A `secretFrom` name the host group declares under `pluginSecrets` is served by
-a host plugin at bind, not by a Kubernetes Secret: it goes to
-`pluginSecrets` (rendered into the `secrets:` catalog as is) instead of
-`secretFromNames`, so it gets no volume and no Reloader annotation.
+a host plugin at bind, not by a Kubernetes Secret: it gets no volume and no
+Reloader annotation. Every `pluginSecrets` entry is rendered into the
+`secrets:` catalog as is, named by a plugin or not, since a Workload's host
+interface may name one through `pluginSecretFrom`.
 
 Takes the host group dict directly (e.g. `.` inside
 `range .Values.runtime.hostGroups`). Returns a JSON object
@@ -249,17 +250,14 @@ and parses the result with `fromJson`.
 {{- end }}
 {{- end }}
 {{- end }}
-{{- $declared := default dict .pluginSecrets }}
-{{- $pluginSecrets := dict }}
+{{- $pluginSecrets := default dict .pluginSecrets }}
 {{- $mountedSecretNames := list }}
 {{- range ($secretFromNames | uniq) }}
-{{- if hasKey $declared . }}
-{{- $_ := set $pluginSecrets . (index $declared .) }}
-{{- else }}
+{{- if not (hasKey $pluginSecrets .) }}
 {{- $mountedSecretNames = append $mountedSecretNames . }}
 {{- end }}
 {{- end }}
-{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" $mountedSecretNames "pluginSecrets" $pluginSecrets "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
+{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" $mountedSecretNames "pluginSecrets" $pluginSecrets "needsConfigFile" (or (gt (len $fileBacked) 0) (gt (len $pluginSecrets) 0)) | toJson }}
 {{- end }}
 
 {{/*
@@ -314,8 +312,8 @@ secrets:
       {{- required (printf "pluginSecrets.%s needs `workloads`: the namespaces (and optionally workload names) that may use it, or `all`" $name) $source.workloads | toYaml | nindent 6 }}
   {{- end }}
 {{- end }}
+{{- if $partition.fileBacked }}
 host:
-  {{- if $partition.fileBacked }}
   plugins:
     {{- range $partition.fileBacked }}
     - id: {{ .id }}
@@ -373,7 +371,7 @@ host:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     {{- end }}
-  {{- end }}
+{{- end }}
 {{- end }}
 
 {{/*

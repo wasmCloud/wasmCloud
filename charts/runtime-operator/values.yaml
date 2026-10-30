@@ -885,9 +885,26 @@ runtime:
       # A workload outside the grant fails to deploy. On `wasmcloud-secrets`,
       # whose keys each stand alone, an entry its own `secretFrom` names is
       # instead left out of that workload's config.
-      # Only `plugins` entries and bindings can name one, and while an entry's
-      # own `secretFrom` names one, no other plugin may serve the same
-      # interface, or a workload's plain import would bypass the grant.
+      # A `plugins` entry or binding can name one, and so can a Workload's
+      # host interface, through `pluginSecretFrom`, as its own config: the
+      # plugin binding that interface judges it under its `workloadConfig`,
+      # so `deny` refuses a key the host owns. While an entry's own
+      # `secretFrom` names one, no other plugin may serve the same interface,
+      # or a workload's plain import would bypass the grant. Every entry is
+      # rendered whether a plugin names it or not, and changing one restarts
+      # the host group's hosts. An entry whose plugin is not registered is
+      # logged at host start, and fails only the Workloads that name it.
+      #
+      #   # In a Workload's (or a template's) hostInterfaces:
+      #   - namespace: wasi
+      #     package: config
+      #     interfaces: [store]
+      #     pluginSecretFrom:
+      #       - name: billing-db               # every key, under its own name
+      #       - name: billing-api
+      #         keys:
+      #           - key: token                 # just this key,
+      #             as: api-token              # delivered as `api-token`
       #
       #   pluginSecrets:
       #     # Each workload's own secrets, under the key names it imports.
