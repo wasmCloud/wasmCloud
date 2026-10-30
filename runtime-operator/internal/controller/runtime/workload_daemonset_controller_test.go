@@ -18,6 +18,7 @@ import (
 
 const (
 	testDaemonSetName      = "echo-everywhere"
+	testDaemonSetUID       = "ds-uid"
 	testDaemonSetNamespace = "default"
 	dsHostA                = "ds-host-a"
 	dsHostB                = "ds-host-b"
@@ -49,7 +50,7 @@ func testDaemonSet(replicas int32) *runtimev1alpha1.WorkloadDaemonSet {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: testDaemonSetNamespace,
 			Name:      testDaemonSetName,
-			UID:       "ds-uid",
+			UID:       testDaemonSetUID,
 		},
 		Spec: runtimev1alpha1.WorkloadDaemonSetSpec{
 			ReplicasPerHost: &replicas,
@@ -79,10 +80,10 @@ func newDaemonSetReconciler(t *testing.T, objs ...client.Object) *WorkloadDaemon
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadDaemonSetNameIndex,
+		WithIndex(&runtimev1alpha1.Workload{}, workloadDaemonSetOwnerIndex,
 			func(obj client.Object) []string {
-				if name, ok := isOwnedByController(obj, daemonSetGvk); ok {
-					return []string{name}
+				if ownerUID, ok := isOwnedByController(obj, daemonSetGvk); ok {
+					return []string{ownerUID}
 				}
 				return nil
 			}).
@@ -103,7 +104,7 @@ func workloadsByHost(t *testing.T, r *WorkloadDaemonSetReconciler) map[string][]
 	workloads := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(context.Background(), workloads,
 		client.InNamespace(testDaemonSetNamespace),
-		client.MatchingFields{workloadDaemonSetNameIndex: testDaemonSetName},
+		client.MatchingFields{workloadDaemonSetOwnerIndex: testDaemonSetUID},
 	); err != nil {
 		t.Fatalf("list workloads: %v", err)
 	}
@@ -327,6 +328,81 @@ func TestDaemonSetSchedule_TerminatingOrphanHoldsItsSlot(t *testing.T) {
 	}
 }
 
+// predecessorInstance is what a deleted DaemonSet of the same name leaves until
+// the garbage collector reaches it: running, and still pointing at the old UID.
+func predecessorInstance(name, hostID, generation string) *runtimev1alpha1.Workload {
+	workload := orphanedWorkload(name, hostID, generation)
+	controller := true
+	workload.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: runtimev1alpha1.GroupVersion.String(),
+		Kind:       workloadDaemonSetKind,
+		Name:       testDaemonSetName,
+		UID:        "deleted-ds-uid",
+		Controller: &controller,
+	}}
+	workload.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+	return workload
+}
+
+// Deleting and re-applying a DaemonSet reuses its name. The old Workloads are
+// on their way out, so the new one starts its own without waiting and isn't
+// Ready on the strength of theirs.
+func TestDaemonSetSchedule_PredecessorInstancesDoNotCount(t *testing.T) {
+	ds := testDaemonSet(1)
+	hash := ds.Spec.Template.Hash()
+	old := predecessorInstance(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), old)
+
+	schedule(t, r, ds)
+
+	byHost := workloadsByHost(t, r)
+	assertPerHost(t, byHost, map[string]int{dsHostA: 1})
+	if byHost[dsHostA][0].Name != daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 1) {
+		t.Fatalf("expected the next slot used, got %s", byHost[dsHostA][0].Name)
+	}
+	if ds.Status.ReadyHosts != 0 {
+		t.Fatalf("expected the old instance not counted as ready, got %d ready hosts", ds.Status.ReadyHosts)
+	}
+
+	got := &runtimev1alpha1.Workload{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(old), got); err != nil {
+		t.Fatalf("expected the garbage collector left to remove the old instance: %v", err)
+	}
+	if owner := metav1.GetControllerOf(got); owner == nil || owner.UID != "deleted-ds-uid" {
+		t.Fatalf("expected the old owner kept, got %v", owner)
+	}
+
+	ds.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDaemonSetConditionSchedule))
+	if err := r.reconcileReady(context.Background(), ds); !condition.IsStatusUnknown(err) {
+		t.Fatalf("expected Ready to wait for the new instance, got %v", err)
+	}
+}
+
+// An instance the cache hasn't shown yet is one the next pass handles, so the
+// collision with it is a retry rather than an error, and starts nothing.
+func TestDaemonSetSchedule_CollisionWithUnseenInstanceRetries(t *testing.T) {
+	ds := testDaemonSet(1)
+	template := ds.Spec.Template.DeepCopy()
+	hash := template.Hash()
+	name := daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0)
+	for _, tc := range []struct {
+		name     string
+		existing *runtimev1alpha1.Workload
+	}{
+		{name: "predecessor", existing: predecessorInstance(name, dsHostA, hash)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), tc.existing)
+
+			err := r.syncHost(context.Background(), ds, template, hash, dsHostA, &daemonSetHost{}, 1, map[string]bool{})
+			if !errors.Is(err, condition.ErrNoop()) {
+				t.Fatalf("expected a no-op, got %v", err)
+			}
+			assertPerHost(t, workloadsByHost(t, r), map[string]int{})
+		})
+	}
+}
+
 // Deleting with --cascade=orphan orphans the Workloads while the DaemonSet is
 // still there, and the cached copy may not show the delete yet. Adopting them
 // back, or starting more, would undo what the delete asked for.
@@ -491,8 +567,9 @@ func TestDaemonSetSchedule_SlotOwnedByAnotherControllerFails(t *testing.T) {
 	}
 	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), foreign)
 
-	if err := r.reconcileSchedule(context.Background(), ds); err == nil {
-		t.Fatal("expected an error for a slot another controller owns")
+	err := r.reconcileSchedule(context.Background(), ds)
+	if err == nil || errors.Is(err, condition.ErrNoop()) {
+		t.Fatalf("expected an error for a slot another controller owns, got %v", err)
 	}
 }
 

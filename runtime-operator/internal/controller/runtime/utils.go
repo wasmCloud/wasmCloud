@@ -53,12 +53,16 @@ func ownerLabelValue(name string) string {
 	return name[:maxLabelValue-len(hash)-1] + "-" + hash
 }
 
+// isOwnedByController returns the UID of rawObj's controller if it is a gvk.
+// Owner indexes key on the UID because a delete and re-apply reuses the name:
+// what the old object controlled is still there until the garbage collector
+// reaches it, and none of it belongs to the new one.
 func isOwnedByController(rawObj client.Object, gvk schema.GroupVersionKind) (string, bool) {
 	for _, ref := range rawObj.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller {
 			if ref.APIVersion == gvk.GroupVersion().String() {
 				if ref.Kind == gvk.Kind {
-					return ref.Name, true
+					return string(ref.UID), true
 				}
 			}
 		}

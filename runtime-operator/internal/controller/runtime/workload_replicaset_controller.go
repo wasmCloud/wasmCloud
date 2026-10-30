@@ -21,7 +21,7 @@ import (
 const (
 	workloadReplicaSetReconcileInterval    = 1 * time.Minute
 	workloadReplicaSetReplicaGracePeriod   = 1 * time.Minute
-	workloadReplicaSetNameIndex            = "workload.replicaset.name"
+	workloadReplicaSetOwnerIndex           = "workload.replicaset.owner"
 	workloadReplicaSetHashIndex            = "workload.replicaset.hash"
 	workloadReplicaSetGenerationAnnotation = "runtime.wasmcloud.dev/workload-replica-set-generation"
 	workloadReplicaSetNameAnnotation       = "runtime.wasmcloud.dev/workload-replicaset-name"
@@ -54,8 +54,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -119,8 +119,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -151,8 +151,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -213,7 +213,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx con
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
 		},
 	); err != nil {
 		return err
@@ -248,8 +248,8 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -326,9 +326,9 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetNameIndex, func(rawObj client.Object) []string {
-		if ownerName, ok := isOwnedByController(rawObj, replicaSetGvk); ok {
-			return []string{ownerName}
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, func(rawObj client.Object) []string {
+		if ownerUID, ok := isOwnedByController(rawObj, replicaSetGvk); ok {
+			return []string{ownerUID}
 		}
 
 		return []string{}

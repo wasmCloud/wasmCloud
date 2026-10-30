@@ -48,9 +48,9 @@ func testReplicaSetScaleStatus(t *testing.T, replicaSetName string) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rs).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetNameIndex, func(obj client.Object) []string {
-			if name, ok := isOwnedByController(obj, replicaSetGvk); ok {
-				return []string{name}
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, func(obj client.Object) []string {
+			if ownerUID, ok := isOwnedByController(obj, replicaSetGvk); ok {
+				return []string{ownerUID}
 			}
 			return nil
 		}).
@@ -93,5 +93,74 @@ func testReplicaSetScaleStatus(t *testing.T, replicaSetName string) {
 	}
 	if rs.Spec.Template.Labels[workloadReplicaSetNameLabel] != "" {
 		t.Fatalf("template labels were mutated: %v", rs.Spec.Template.Labels)
+	}
+}
+
+// Deleting and re-applying a ReplicaSet reuses its name. The old Workloads are
+// on their way out, so the new one starts its own and doesn't report them.
+func TestReplicaSet_PredecessorWorkloadsDoNotCount(t *testing.T) {
+	s := newScaleTestScheme(t)
+	replicaSetGvk, err := gvkForType(&runtimev1alpha1.WorkloadReplicaSet{}, s)
+	if err != nil {
+		t.Fatalf("gvk: %v", err)
+	}
+
+	replicas := int32(1)
+	rs := &runtimev1alpha1.WorkloadReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testReplicaSetName, UID: "rs-uid"},
+		Spec:       runtimev1alpha1.WorkloadReplicaSetSpec{Replicas: &replicas},
+	}
+	controller := true
+	old := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   testNamespace,
+			Name:        testReplicaSetName + "-old",
+			Annotations: map[string]string{workloadReplicaSetGenerationAnnotation: rs.Spec.Template.Hash()},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: runtimev1alpha1.GroupVersion.String(),
+				Kind:       replicaSetGvk.Kind,
+				Name:       testReplicaSetName,
+				UID:        "deleted-rs-uid",
+				Controller: &controller,
+			}},
+		},
+	}
+	old.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rs, old).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, func(obj client.Object) []string {
+			if ownerUID, ok := isOwnedByController(obj, replicaSetGvk); ok {
+				return []string{ownerUID}
+			}
+			return nil
+		}).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, func(obj client.Object) []string {
+			return []string{obj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]}
+		}).
+		Build()
+	r := &WorkloadReplicaSetReconciler{Client: c, Scheme: s}
+	ctx := context.Background()
+
+	if err := r.reconcileScaleUp(ctx, rs); err != nil {
+		t.Fatalf("reconcileScaleUp: %v", err)
+	}
+	rs.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp),
+		condition.ReadyCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleDown),
+	)
+	if err := r.reconcileReady(ctx, rs); err == nil {
+		t.Fatal("expected Ready to wait for the new Workload")
+	}
+	if rs.Status.Replicas.Current != 1 || rs.Status.Replicas.Ready != 0 {
+		t.Fatalf("expected only the new Workload counted, got %+v", rs.Status.Replicas)
+	}
+
+	workloads := &runtimev1alpha1.WorkloadList{}
+	if err := c.List(ctx, workloads); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(workloads.Items) != 2 {
+		t.Fatalf("expected the old Workload left for the garbage collector and one new, got %d", len(workloads.Items))
 	}
 }
