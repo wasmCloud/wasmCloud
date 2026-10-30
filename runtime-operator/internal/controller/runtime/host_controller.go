@@ -361,10 +361,8 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 		}
 	}
 
-	// Patching the status subresource to update the LastSeen timestamp in case
-	// the other fields reported are not yet available (such as system/OS information).
-	// Built from the stored status: hostStatusPatch supplies the CRD's required
-	// fields only where they are still empty, and `host` carries a zero status.
+	// Patch only LastSeen on the status subresource. The measured system/OS
+	// fields are written by reconcileReporting and must not be touched here.
 	statusPatch, err := hostStatusPatch(&existing.Status)
 	if err != nil {
 		log.Error(err, "failed to build Host status patch", "host", req.FriendlyName, "hostID", req.Id)
