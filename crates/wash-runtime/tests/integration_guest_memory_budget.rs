@@ -249,6 +249,67 @@ async fn enforce_mode_refuses_the_growth_that_crosses_the_budget() -> Result<()>
     Ok(())
 }
 
+/// Growth mode, end to end: the memory each warm instance is born with is
+/// admitted without a charge, and growth past it is enforced exactly as in
+/// `Enforce`. This is the path the unit tests cannot see: the engine's
+/// budget and the limiter installed on the stores the host builds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn growth_mode_leaves_initial_memory_uncharged_and_enforces_growth() -> Result<()> {
+    init_tracing();
+    let (addr, host, budget) = start_host(GuestMemoryMode::Growth).await?;
+    let client = reqwest::Client::new();
+
+    for name in ["grow-a", "grow-b"] {
+        host.workload_start(grow_workload(name))
+            .await
+            .with_context(|| format!("failed to start {name}"))?;
+    }
+
+    let first = grow(&client, addr, "grow-a", REQUEST_MIB).await?;
+    assert_eq!(
+        first,
+        GrowReport {
+            granted_mib: REQUEST_MIB,
+            refused: false
+        },
+        "the first guest is comfortably inside the budget"
+    );
+    // A warm instance now exists, born with the fixture's declared memory:
+    // that birth is what growth mode leaves to the process guard.
+    assert!(
+        budget.initial_uncharged() > 0,
+        "the instance's initial memory must be admitted uncharged"
+    );
+    // Charged: the growth, and not the memory the instance started with. Had
+    // that been charged too, `in_use` would carry it on top of the request.
+    assert!(
+        budget.in_use() >= REQUEST_MIB * MIB,
+        "the growth itself is charged: {}",
+        budget.in_use()
+    );
+    assert!(
+        budget.in_use() - REQUEST_MIB * MIB < budget.initial_uncharged(),
+        "the memory the instance started with is not charged: in_use {}, initial {}",
+        budget.in_use(),
+        budget.initial_uncharged()
+    );
+
+    let second = grow(&client, addr, "grow-b", REQUEST_MIB).await?;
+    assert!(
+        second.refused,
+        "growth past the budget is still refused, got {second:?}"
+    );
+    assert!(budget.refused() > 0, "the budget must record the refusal");
+    assert!(
+        budget.in_use() <= budget.cap(),
+        "the budget must never admit past its cap: {} > {}",
+        budget.in_use(),
+        budget.cap()
+    );
+
+    Ok(())
+}
+
 /// The leak the release-on-drop path exists to prevent. A workload that has
 /// filled the budget and is then stopped must give every byte back — otherwise
 /// the budget ratchets down until the host refuses everything, which is a worse

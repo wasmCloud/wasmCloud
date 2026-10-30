@@ -1443,6 +1443,12 @@ impl EngineBuilder {
     /// the budget is refused. `max_guest_memory` is derived when an operator
     /// sets nothing, so every engine has a ceiling unless it opts into
     /// [`guest_memory::GuestMemoryMode::Count`].
+    ///
+    /// [`guest_memory::GuestMemoryMode::Growth`] keeps the ceiling for growth
+    /// but leaves the memory an instance is born with to the process guard,
+    /// for hosts packing many small instances. It needs that guard: built
+    /// with [`Self::without_max_process_memory`] as well, nothing bounds
+    /// initial memory, and the engine warns.
     #[must_use]
     pub fn with_guest_memory_mode(mut self, mode: guest_memory::GuestMemoryMode) -> Self {
         self.guest_memory_mode = mode;
@@ -1696,7 +1702,7 @@ impl EngineBuilder {
         }
         // Only when the budget is a real ceiling: an over-large budget the host
         // merely counts against costs nothing.
-        if self.guest_memory_mode == guest_memory::GuestMemoryMode::Enforce
+        if self.guest_memory_mode.enforces()
             && let Some(advisory) = host_memory.enforcement_advisory_within(memory_limit)
         {
             tracing::warn!("{advisory}");
@@ -1931,6 +1937,18 @@ impl EngineBuilder {
             }
             None => None,
         };
+        // Growth mode hands initial memory to the process guard; without one
+        // it is bounded by nothing, which an operator choosing the mode for
+        // density on a sized host did not mean.
+        if self.guest_memory_mode == guest_memory::GuestMemoryMode::Growth
+            && process_memory.is_none()
+        {
+            tracing::warn!(
+                "guest-memory-mode is growth and max-process-memory is off: the memory an \
+                 instance starts with is charged to neither, so nothing bounds it. Set \
+                 max-process-memory, or use enforce."
+            );
+        }
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
             .time_to_idle(
