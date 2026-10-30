@@ -79,6 +79,36 @@ struct Fixture {
     scope: Scope,
 }
 
+/// Deletes the scope's stream and bucket from a `NATS_URL` server, failed
+/// assertions included. Drop cannot await and the test's runtime may be
+/// unwinding, so the deletes run on a thread with a runtime of their own.
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if !self.server.is_external() {
+            return;
+        }
+        let url = self.server.url.clone();
+        let stream = self.scope.stream.clone();
+        let bucket = self.scope.bucket.clone();
+        let _ = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    let client = async_nats::connect(&url).await?;
+                    let jetstream = async_nats::jetstream::new(client);
+                    let _ = jetstream.delete_stream(&stream).await;
+                    let _ = jetstream.delete_key_value(&bucket).await;
+                    anyhow::Ok(())
+                })
+                .await?
+            })
+        })
+        .join();
+    }
+}
+
 async fn fixture() -> anyhow::Result<Fixture> {
     #[cfg(feature = "wasi-tls")]
     crate::init_crypto();
