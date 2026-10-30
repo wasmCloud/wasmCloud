@@ -241,27 +241,11 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                 addr,
                 loopback,
             } => {
-                let required = data.len().max(1) as u32;
-
                 let mut lo = loopback
                     .lock()
                     .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
                 if let Some(endpoint) = lo.connect_udp(&local_address, &addr).map_err(se)? {
-                    // A receiver that is not reading fills its own buffer, not
-                    // the sender's: like a full kernel receive queue, the
-                    // datagram is dropped and the send still succeeds.
-                    let Ok(permit) =
-                        Arc::clone(&endpoint.receive_permits).try_acquire_many_owned(required)
-                    else {
-                        return Ok(());
-                    };
-                    _ = endpoint.tx.send((
-                        super::loopback::UdpDatagram {
-                            source_address: local_address,
-                            data,
-                        },
-                        permit,
-                    ));
+                    endpoint.send(local_address, data, None);
                 }
             }
         }

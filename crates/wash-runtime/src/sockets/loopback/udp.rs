@@ -9,16 +9,46 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use wasmtime::error::Context as _;
 
 pub struct UdpEndpoint {
-    pub tx: mpsc::UnboundedSender<(UdpDatagram, OwnedSemaphorePermit)>,
+    pub(super) tx: mpsc::UnboundedSender<(UdpDatagram, OwnedSemaphorePermit)>,
     pub connected_address: Option<SocketAddr>,
     /// Bytes this endpoint will queue before dropping datagrams, sized by
     /// its socket's receive buffer.
-    pub receive_permits: Arc<Semaphore>,
+    pub(super) receive_permits: Arc<Semaphore>,
 }
 
 pub struct UdpDatagram {
     pub source_address: SocketAddr,
     pub data: Vec<u8>,
+    // P2 send capacity is returned when the queued datagram is consumed or
+    // dropped. This is separate from the destination's receive capacity.
+    _send_permit: Option<OwnedSemaphorePermit>,
+}
+
+impl UdpEndpoint {
+    /// Queue a datagram if the receiver has space. UDP silently drops it on
+    /// overflow, releasing any sender reservation immediately.
+    pub fn send(
+        &self,
+        source_address: SocketAddr,
+        data: Vec<u8>,
+        send_permit: Option<OwnedSemaphorePermit>,
+    ) {
+        let Ok(required) = u32::try_from(data.len().max(1)) else {
+            return;
+        };
+        let Ok(receive_permit) = Arc::clone(&self.receive_permits).try_acquire_many_owned(required)
+        else {
+            return;
+        };
+        _ = self.tx.send((
+            UdpDatagram {
+                source_address,
+                data,
+                _send_permit: send_permit,
+            },
+            receive_permit,
+        ));
+    }
 }
 
 pub enum UdpState {

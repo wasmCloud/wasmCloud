@@ -590,3 +590,55 @@ async fn outgoing_readiness_tracks_send_buffer_capacity() {
         assert_eq!(h.check(tx), 1);
     }
 }
+
+#[tokio::test]
+async fn p2_send_respects_receiver_buffer_limit() {
+    let mut h = Harness::default();
+    let (receiver, peer) = h.bind("127.0.0.1:0").await;
+    let (sender, _) = h.bind("127.0.0.1:0").await;
+    Socket::set_receive_buffer_size(&mut h.view(), Resource::new_borrow(receiver), 2).unwrap();
+    let (rx, _) = h.streams(receiver, None).await;
+    let (_, tx) = h.streams(sender, None).await;
+    assert_eq!(h.check(tx), 1);
+    assert_eq!(h.send(tx, vec![1; 2], Some(peer)).unwrap(), 1);
+    assert_eq!(h.check(tx), 1);
+    assert_eq!(h.send(tx, vec![2], Some(peer)).unwrap(), 1);
+    let got = h.receive(rx, 10);
+    assert_eq!(
+        got.len(),
+        1,
+        "P2 sends must respect the receiver queue capacity"
+    );
+    assert_eq!(got[0].data, [1, 1]);
+    // Reading returns receiver capacity, and dropping an overflowing datagram
+    // must return its sender reservation too.
+    Socket::set_send_buffer_size(&mut h.view(), Resource::new_borrow(sender), 1).unwrap();
+    assert_eq!(h.check(tx), 1);
+    assert_eq!(h.send(tx, vec![3], Some(peer)).unwrap(), 1);
+    assert_eq!(h.check(tx), 0);
+    assert_eq!(h.receive(rx, 10)[0].data, [3]);
+    assert_eq!(h.check(tx), 1);
+}
+
+#[tokio::test]
+async fn full_receiver_releases_dropped_p2_sender_permits() {
+    let mut h = Harness::default();
+    let (receiver, peer) = h.bind("127.0.0.1:0").await;
+    let (sender, _) = h.bind("127.0.0.1:0").await;
+    Socket::set_receive_buffer_size(&mut h.view(), Resource::new_borrow(receiver), 1).unwrap();
+    Socket::set_send_buffer_size(&mut h.view(), Resource::new_borrow(sender), 2).unwrap();
+    let (rx, _) = h.streams(receiver, None).await;
+    let (_, tx) = h.streams(sender, None).await;
+    for byte in [1, 2, 3] {
+        assert_eq!(h.check(tx), 1);
+        assert_eq!(h.send(tx, vec![byte], Some(peer)).unwrap(), 1);
+    }
+    let got = h.receive(rx, 10);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].data, [1]);
+    assert_eq!(h.check(tx), 1);
+    // Both bytes of the sender budget are available after consuming its only
+    // queued datagram. This oversized-for-the-receiver send is dropped too.
+    assert_eq!(h.send(tx, vec![4; 2], Some(peer)).unwrap(), 1);
+    assert!(h.receive(rx, 10).is_empty());
+}
