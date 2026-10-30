@@ -8,6 +8,7 @@ pub mod engine;
 mod env_guard;
 pub mod host;
 #[cfg(any(feature = "washlet", feature = "wasmcloud-nats"))]
+#[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
 mod nats_credentials;
 pub mod observability;
 pub mod plugin;

@@ -400,9 +400,8 @@ pub(crate) async fn new_store_from_templates(
         store.data_mut().set_active_ctx(&active_id)?;
         // Context rather than a new error, so the pool refusal and its remedy
         // stay in the chain underneath.
-        let instance = instantiate_result.with_context(|| {
-            format!("failed to instantiate linked component '{linked_id}' in ephemeral store")
-        })?;
+        let instance = instantiate_result
+            .with_context(|| format!("failed to instantiate linked component '{linked_id}'"))?;
         store
             .data_mut()
             .exporter_instances

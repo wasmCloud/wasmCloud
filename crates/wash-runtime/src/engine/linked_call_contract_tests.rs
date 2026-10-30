@@ -451,8 +451,7 @@ async fn linked_store_instantiation_failures_name_the_callee() -> anyhow::Result
     .err()
     .expect("a trapping start must fail instantiation");
     assert!(
-        format!("{error:#}")
-            .contains("failed to instantiate linked component 'callee' in ephemeral store"),
+        format!("{error:#}").contains("failed to instantiate linked component 'callee'"),
         "{error:#}"
     );
     Ok(())
