@@ -76,6 +76,9 @@ pub struct NetworkUdpSocket {
     /// When the decision that permitted the connected peer lapses, if it does.
     connected_until: Option<std::time::Instant>,
 
+    /// Wake pending P3 receives when their peer or transport plane changes.
+    connection_changed: Arc<tokio::sync::Notify>,
+
     /// Peers this socket has sent to, when it is bound to the unspecified
     /// address and therefore reachable on every interface.
     ///
@@ -109,6 +112,7 @@ impl NetworkUdpSocket {
             quota_slot: None,
             connected_plane: None,
             connected_until: None,
+            connection_changed: Arc::default(),
             egress_peers: None,
         })
     }
@@ -308,6 +312,7 @@ impl super::loopback::UdpSocket {
             hop_limit,
             receive_buffer_size,
             receive_permits,
+            connection_changed: Arc::clone(&socket.connection_changed),
             send_buffer_size,
             family: socket.family,
             socket_addr_check: socket.socket_addr_check.clone(),
@@ -433,6 +438,9 @@ impl UdpSocket {
         &mut self,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
+        // This transition is synchronous: receivers wake after the new state
+        // is installed, including failures that disconnect the native half.
+        self.connection_changed().notify_waiters();
         match self {
             Self::Network(socket) => socket.disconnect(),
             Self::Loopback(socket) => socket.disconnect(loopback),
@@ -456,6 +464,9 @@ impl UdpSocket {
         valid_until: Option<std::time::Instant>,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
+        // This transition is synchronous: receivers wake after the new state
+        // is installed, including failures that disconnect the native half.
+        self.connection_changed().notify_waiters();
         match self {
             Self::Network(socket) => socket.connect_on(addr, plane, valid_until),
             Self::Loopback(socket) => socket.connect(addr, loopback),
@@ -467,6 +478,13 @@ impl UdpSocket {
                 net.connect_on(addr, plane, valid_until)?;
                 lo.connect(addr, loopback)
             }
+        }
+    }
+
+    pub(crate) fn connection_changed(&self) -> &Arc<tokio::sync::Notify> {
+        match self {
+            Self::Network(net) | Self::Unspecified { net, .. } => &net.connection_changed,
+            Self::Loopback(lo) => &lo.connection_changed,
         }
     }
 
