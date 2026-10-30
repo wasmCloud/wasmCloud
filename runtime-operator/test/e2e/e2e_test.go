@@ -415,6 +415,8 @@ var _ = Describe("Manager", Ordered, func() {
 			sampleDaemonSet = "config/samples/daemonset.yaml"
 			daemonSetName   = "hello-everywhere"
 			hostGroupLabel  = "wasmcloud.com/hostgroup=default"
+			sampleHTTPHost  = "hello.localhost.direct"
+			rolledHTTPHost  = "rolled.localhost.direct"
 		)
 		var initialHosts int
 
@@ -468,6 +470,42 @@ var _ = Describe("Manager", Ordered, func() {
 			return byName
 		}
 
+		// controllerUIDs maps each of the DaemonSet's Workloads to its controller's
+		// UID, empty for an orphan.
+		controllerUIDs := func(g Gomega) map[string]string {
+			out, err := utils.Run(exec.Command("kubectl", "get", "workloads.runtime.wasmcloud.dev",
+				"-n", namespace, "-l", "runtime.wasmcloud.dev/workload-daemonset="+daemonSetName,
+				"-o", `jsonpath={range .items[*]}{.metadata.name}{"\t"}`+
+					`{.metadata.ownerReferences[?(@.controller==true)].uid}{"\n"}{end}`))
+			g.Expect(err).NotTo(HaveOccurred())
+			byName := map[string]string{}
+			for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+				if name, uid, ok := strings.Cut(line, "\t"); ok {
+					byName[name] = uid
+				}
+			}
+			return byName
+		}
+
+		daemonSetUID := func(g Gomega) string {
+			out, err := utils.Run(exec.Command("kubectl", "get", "workloaddaemonset", daemonSetName,
+				"-n", namespace, "-o", "jsonpath={.metadata.uid}"))
+			g.Expect(err).NotTo(HaveOccurred())
+			return out
+		}
+
+		// applyDaemonSet applies the sample with httpHost in its template, so a
+		// different value is a different template.
+		applyDaemonSet := func(httpHost string) {
+			manifest, err := os.ReadFile(sampleDaemonSet)
+			Expect(err).NotTo(HaveOccurred())
+			rendered := strings.ReplaceAll(rewriteWorkloadImages(string(manifest)), sampleHTTPHost, httpHost)
+			cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", "-")
+			cmd.Stdin = strings.NewReader(rendered)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
 		BeforeAll(func() {
 			Eventually(func(g Gomega) {
 				initialHosts = len(readyHostIDs(g))
@@ -482,12 +520,7 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("runs an instance on every host in the group", func() {
-			manifest, err := os.ReadFile(sampleDaemonSet)
-			Expect(err).NotTo(HaveOccurred())
-			cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", "-")
-			cmd.Stdin = strings.NewReader(rewriteWorkloadImages(string(manifest)))
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
+			applyDaemonSet(sampleHTTPHost)
 
 			Eventually(func(g Gomega) { expectOnePerHost(g, initialHosts) }).
 				WithTimeout(3 * time.Minute).Should(Succeed())
@@ -517,6 +550,106 @@ var _ = Describe("Manager", Ordered, func() {
 				after := expectOnePerHost(g, initialHosts)
 				for name, hostID := range after {
 					g.Expect(before).To(HaveKeyWithValue(name, hostID), "no instance may be started elsewhere")
+				}
+			}).WithTimeout(3 * time.Minute).Should(Succeed())
+		})
+
+		It("adopts what an orphaning delete leaves, then rolls it to a changed template", func() {
+			var before map[string]string
+			Eventually(func(g Gomega) { before = expectOnePerHost(g, initialHosts) }).Should(Succeed())
+
+			By("deleting the DaemonSet with --cascade=orphan")
+			_, err := utils.Run(exec.Command("kubectl", "delete", "workloaddaemonset", daemonSetName,
+				"-n", namespace, "--cascade=orphan"))
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				owners := controllerUIDs(g)
+				g.Expect(owners).To(HaveLen(len(before)))
+				for name, uid := range owners {
+					g.Expect(uid).To(BeEmpty(), "%s should be orphaned", name)
+				}
+			}).WithTimeout(1 * time.Minute).Should(Succeed())
+
+			By("re-applying the same template")
+			applyDaemonSet(sampleHTTPHost)
+			Eventually(func(g Gomega) {
+				g.Expect(expectOnePerHost(g, initialHosts)).To(Equal(before), "orphans must be adopted, not replaced")
+				uid := daemonSetUID(g)
+				for name, owner := range controllerUIDs(g) {
+					g.Expect(owner).To(Equal(uid), "%s should be adopted", name)
+				}
+			}).WithTimeout(3 * time.Minute).Should(Succeed())
+
+			By("re-applying a changed template")
+			applyDaemonSet(rolledHTTPHost)
+			Eventually(func(g Gomega) {
+				for name := range expectOnePerHost(g, initialHosts) {
+					g.Expect(before).NotTo(HaveKey(name), "adopted instances must roll")
+				}
+			}).WithTimeout(3 * time.Minute).Should(Succeed())
+		})
+
+		It("runs its own instances when deleted and re-applied straight away", func() {
+			var old map[string]string
+			var oldUID string
+			Eventually(func(g Gomega) {
+				old = expectOnePerHost(g, initialHosts)
+				oldUID = daemonSetUID(g)
+			}).Should(Succeed())
+
+			// The garbage collector otherwise removes the old instances before the
+			// re-apply lands. Stopping the controller manager leaves them running.
+			const (
+				enabledManifest = "/etc/kubernetes/manifests/kube-controller-manager.yaml"
+				stoppedManifest = "/etc/kubernetes/kube-controller-manager.yaml"
+			)
+			controlPlane := envOrDefault("KIND_CLUSTER_NAME", "kind") + "-control-plane"
+			startControllerManager := func() error {
+				return exec.Command("docker", "exec", controlPlane, "mv", stoppedManifest, enabledManifest).Run()
+			}
+			_, err := utils.Run(exec.Command("docker", "exec", controlPlane, "mv", enabledManifest, stoppedManifest))
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { _ = startControllerManager() })
+			Eventually(func(g Gomega) {
+				out, err := utils.Run(exec.Command("kubectl", "get", "pods", "-n", "kube-system",
+					"-l", "component=kube-controller-manager", "-o", "name"))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(out)).To(BeEmpty())
+			}).WithTimeout(1 * time.Minute).Should(Succeed())
+
+			_, err = utils.Run(exec.Command("kubectl", "delete", "workloaddaemonset", daemonSetName,
+				"-n", namespace, "--wait=false"))
+			Expect(err).NotTo(HaveOccurred())
+			applyDaemonSet(rolledHTTPHost)
+
+			Eventually(func(g Gomega) {
+				uid := daemonSetUID(g)
+				g.Expect(uid).NotTo(Equal(oldUID))
+				owners := controllerUIDs(g)
+				owned := 0
+				for name, owner := range owners {
+					if _, isOld := old[name]; !isOld {
+						g.Expect(owner).To(Equal(uid), "%s should belong to the new DaemonSet", name)
+						owned++
+					}
+				}
+				for name := range old {
+					g.Expect(owners).To(HaveKeyWithValue(name, oldUID), "the old instances should still be there")
+				}
+				g.Expect(owned).To(Equal(initialHosts), "the new DaemonSet should run its own instances")
+				out, err := utils.Run(exec.Command("kubectl", "get", "workloaddaemonset", daemonSetName,
+					"-n", namespace, "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal(conditionTrue))
+			}).WithTimeout(3 * time.Minute).Should(Succeed())
+
+			By("starting the controller manager again")
+			Expect(startControllerManager()).To(Succeed())
+			Eventually(func(g Gomega) {
+				uid := daemonSetUID(g)
+				expectOnePerHost(g, initialHosts)
+				for name, owner := range controllerUIDs(g) {
+					g.Expect(owner).To(Equal(uid), "%s should be gone or belong to the new DaemonSet", name)
 				}
 			}).WithTimeout(3 * time.Minute).Should(Succeed())
 		})
