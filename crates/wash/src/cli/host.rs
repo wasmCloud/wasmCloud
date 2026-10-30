@@ -498,23 +498,41 @@ pub struct HostCommand {
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
-    /// Address space reserved for each guest linear memory (e.g. `1GiB`),
-    /// below wasmtime's default of 4 GiB. For hosts that need more warm
-    /// instances than the address space holds at 4 GiB each (about 16,000),
-    /// and accept what it costs.
+    /// Address space reserved for each guest linear memory (e.g. `1GiB`):
+    /// the memory itself, plus the room it may grow into.
+    /// Defaults to wasmtime's 4 GiB.
     ///
-    /// Below 4 GiB, wasmtime bounds-checks every guest load and store, which
-    /// makes guest memory access slower, and isolation rests on those checks
-    /// without the guard region behind them. No memory may grow past the
-    /// reservation, so `--default-heap-memory` is lowered to it. The host
-    /// warns at startup while it is set.
+    /// Each memory's pool slot is this reservation,
+    /// followed by `--memory-guard-size` of unmapped guard.
+    /// A memory never grows past its reservation,
+    /// so `--default-heap-memory` is lowered to it.
+    ///
+    /// At 4 GiB, a 32-bit memory cannot form an address past its own reservation:
+    /// a stray access faults in its own unused room, and wasmtime skips bounds checks.
+    /// Smaller fits more memories in the address space
+    /// (about 16,000 fit at 4 GiB), and costs:
+    ///
+    /// SECURITY: it moves an isolation boundary. A sibling component's memory
+    /// comes within reach of a 32-bit address, and only wasmtime's bounds check
+    /// on every load and store keeps each guest out. A bug in those checks,
+    /// unlikely as it is, would expose another guest's memory:
+    /// less defence in depth, not none.
+    ///
+    /// Speed: every guest load and store is checked. The host warns at startup
+    /// while it is set.
     #[arg(long = "memory-reservation", env = "WASH_HOST_MEMORY_RESERVATION")]
     pub memory_reservation: Option<String>,
 
-    /// Unmapped address space after each guest linear memory (e.g. `64KiB`),
-    /// below wasmtime's default of 32 MiB. Shrinks each slot further beside
-    /// `--memory-reservation`, at the same costs; set to `0`, wasmtime folds
-    /// no offsets into the guard and checks each access in full.
+    /// Unmapped guard after each guest memory's reservation (e.g. `64KiB`),
+    /// never accessible to a guest. Defaults to wasmtime's 32 MiB.
+    ///
+    /// It separates one memory's reservation from the next, and is not part of
+    /// either: a slot is `--memory-reservation` plus this. It catches an access
+    /// whose constant offset carries it past the reservation, so wasmtime can
+    /// skip checking those offsets.
+    ///
+    /// Smaller shrinks each slot, and moves the same isolation boundary as
+    /// `--memory-reservation` (see there); at `0`, every access is checked in full.
     #[arg(long = "memory-guard-size", env = "WASH_HOST_MEMORY_GUARD_SIZE")]
     pub memory_guard_size: Option<String>,
 

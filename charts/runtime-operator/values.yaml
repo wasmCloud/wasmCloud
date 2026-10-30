@@ -436,18 +436,29 @@ runtime:
     # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
     # default of 4GiB.
     defaultHeapMemory: ""
-    # -- Address space reserved for each guest linear memory, below wasmtime's
-    # default of 4GiB (empty).
+    # -- Address space reserved for each guest linear memory:
+    # the memory itself, plus the room it may grow into.
+    # Empty is wasmtime's 4GiB.
     #
-    # - Raises how many warm instances fit in the node's address space:
-    #   about 16,000 at 4GiB each.
-    # - Costs: every guest load and store is bounds-checked, which is slower,
-    #   and isolation rests on those checks without the guard region behind them.
-    # - `defaultHeapMemory` is lowered to it.
+    # - Each memory's pool slot is this reservation,
+    #   followed by `memoryGuardSize` of unmapped guard.
+    # - No memory grows past it, so `defaultHeapMemory` is lowered to it.
+    # - Smaller fits more warm instances in the node's address space
+    #   (about 16,000 at 4GiB each).
+    # - SECURITY: smaller moves an isolation boundary.
+    #   At 4GiB, a 32-bit guest memory cannot address
+    #   a sibling component's memory at all.
+    #   Below it, only wasmtime's bounds checks keep each guest out;
+    #   a bug in them, unlikely as it is, would expose another guest's memory.
+    #   Less defence in depth, not none.
+    # - Smaller also bounds-checks every guest load and store, which is slower.
     memoryReservation: ""
-    # -- Unmapped address space after each guest linear memory, below
-    # wasmtime's default of 32MiB (empty). Shrinks each slot further, at the
-    # same costs as `memoryReservation`.
+    # -- Unmapped guard after each guest memory's reservation,
+    # between it and the next slot; never accessible to a guest.
+    # Empty is wasmtime's 32MiB.
+    # It catches accesses whose constant offset carries them past the reservation.
+    # Smaller shrinks each slot, and moves the same isolation boundary
+    # as `memoryReservation`.
     memoryGuardSize: ""
     # -- Linear memories the pooling allocator keeps room for, the count that
     # sizes the pool: each reserves 4 GiB of address space plus a guard, and

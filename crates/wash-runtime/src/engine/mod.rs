@@ -1625,10 +1625,15 @@ impl EngineBuilder {
     /// Unset, it is wasmtime's default: a 4 GiB reservation and a 32 MiB guard
     /// on 64-bit hosts. A smaller layout fits more pooled memories in the
     /// address space, which is what caps warm instances on a large host
-    /// (about 16,000 at the default), and costs:
+    /// (about 16,000 at the default). Below the default it:
     ///
-    /// - every guest load and store is bounds-checked, which is slower;
-    /// - isolation rests on those checks, without the guard region behind them;
+    /// - **moves a security boundary.** At the default, a 32-bit memory cannot
+    ///   form an address outside its own slot and guard, so a guest cannot
+    ///   reach a sibling component's memory by construction. Below it, that
+    ///   rests on wasmtime emitting a correct bounds check on every access;
+    ///   a bug there, unlikely as it is, would expose a sibling's memory.
+    ///   Less defence in depth, not none.
+    /// - makes every guest load and store bounds-checked, which is slower;
     /// - no memory may grow past the reservation, so `default_heap_memory`
     ///   is lowered to it.
     ///
@@ -1816,9 +1821,10 @@ impl EngineBuilder {
                 memory_reservation = %host_memory::render_bytes(layout.reservation),
                 memory_guard = %host_memory::render_bytes(layout.guard),
                 default_heap_memory = %host_memory::render_bytes(heap_ceiling),
-                "guest memory layout is below wasmtime's default: every guest load and store is \
-                 bounds-checked, which is slower, and isolation rests on those checks without \
-                 the guard region behind them"
+                "guest memory layout is below wasmtime's default, which moves a security \
+                 boundary: sibling components' memories are now within reach of a 32-bit \
+                 address, and only wasmtime's bounds checks keep each guest out of the others'. \
+                 Every guest load and store is checked, which is slower"
             );
         }
         let mut installed_pool: Option<InstalledPool> = None;
