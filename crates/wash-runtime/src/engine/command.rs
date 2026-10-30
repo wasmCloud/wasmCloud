@@ -125,13 +125,14 @@ impl ResolvedWorkload {
             cli.stderr(stderr);
         }
 
-        let mut store = self.new_store(component_id).await?;
-        // Only replace CLI state; keep the resolved filesystem and network
-        // contexts and their retained directory handles intact.
-        *store.data_mut().active_ctx.ctx.cli() = std::mem::take(cli.build().cli());
         // A core start function can call wasi:cli/exit while the component
-        // is being instantiated. Classify that exit just like one from run.
-        let result = async {
+        // or one of its linked siblings is being instantiated. Classify that
+        // exit just like one from run, including siblings built by new_store.
+        let result: anyhow::Result<Result<(), ()>> = async {
+            let mut store = self.new_store(component_id).await?;
+            // Only replace CLI state; keep the resolved filesystem and network
+            // contexts and their retained directory handles intact.
+            *store.data_mut().active_ctx.ctx.cli() = std::mem::take(cli.build().cli());
             if p3 {
                 let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
                     .instantiate_async(&mut store)
@@ -145,6 +146,7 @@ impl ResolvedWorkload {
                     })
                     .await
                     .and_then(|result| result)
+                    .map_err(anyhow::Error::from)
             } else {
                 let command = wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
                     .instantiate_async(&mut store)
@@ -152,7 +154,11 @@ impl ResolvedWorkload {
                     .map_err(|e| {
                         crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
                     })?;
-                command.wasi_cli_run().call_run(&mut store).await
+                command
+                    .wasi_cli_run()
+                    .call_run(&mut store)
+                    .await
+                    .map_err(anyhow::Error::from)
             }
         }
         .await;
@@ -161,7 +167,7 @@ impl ResolvedWorkload {
             Ok(Err(())) => Ok(CommandOutcome { exit_code: 1 }),
             Err(error) => match error.downcast_ref::<wasmtime_wasi::I32Exit>() {
                 Some(exit) => Ok(CommandOutcome { exit_code: exit.0 }),
-                None => Err(anyhow::Error::from(error).context("command trapped")),
+                None => Err(error.context("command trapped")),
             },
         }
     }
