@@ -334,6 +334,9 @@ pub struct Ctx {
     /// for a known guest toolchain trap. Shared by every component of one
     /// deploy (see [`crate::engine::trap_remediation`]).
     pub(crate) trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
+    /// The cumulative metric totals this guest instance has reported.
+    #[cfg(feature = "wasi-otel")]
+    pub(crate) cumulative_totals: crate::plugin::wasi_otel::CumulativeTotals,
 }
 
 impl Ctx {
@@ -642,6 +645,8 @@ impl CtxBuilder {
             plugins,
             http_hooks,
             trap_hint_logged: Arc::default(),
+            #[cfg(feature = "wasi-otel")]
+            cumulative_totals: Default::default(),
         }
     }
 }
