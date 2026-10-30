@@ -13,4 +13,18 @@ message WitInterface {
   // use this name as the identifier in resource-opening functions (e.g.,
   // store::open(name) for keyvalue, create-container(name) for blobstore).
   string name = 6;
+  // Entries of the host's plugin-backed `secrets:` catalog whose values this
+  // interface's config takes. The host resolves them when it binds the
+  // workload; a request never carries the values.
+  repeated PluginSecretRef plugin_secrets = 7;
+}
+
+// A workload's reference to an entry of the host's plugin-backed `secrets:`
+// catalog.
+message PluginSecretRef {
+  // The catalog entry.
+  string name = 1;
+  // Config key -> the entry's key it takes. Empty takes every key of the
+  // entry under its own name.
+  map<string, string> keys = 2;
 }
