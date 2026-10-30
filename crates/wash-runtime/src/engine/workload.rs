@@ -150,10 +150,11 @@ pub struct WorkloadMetadata {
     pub(crate) may_use_gc: bool,
     /// The component's linker and the link built from it; see [`LinkState`].
     link: LinkState,
-    /// Where a write after sealing lands (see [`Self::linker`]): replaced by
-    /// an empty linker on each such call, so writes neither accumulate nor
-    /// reach the component.
-    late_writes: Option<Linker<SharedCtx>>,
+    /// Where a write after sealing lands in a release build (see [`Self::linker`]):
+    /// replaced by an empty linker on each such call,
+    /// so writes neither accumulate nor reach the component.
+    /// Boxed, so a component that never needs it pays for a pointer.
+    late_writes: Option<Box<Linker<SharedCtx>>>,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
     /// Pinned directory handles with guest mount names and permissions.
@@ -190,38 +191,48 @@ pub struct WorkloadMetadata {
     pub(crate) compiled: Option<Arc<super::LiveCompile>>,
 }
 
-/// Where a component is in being linked, one state at a time, so the linker,
-/// the link and whether writes still reach it cannot disagree.
+/// Where a component is in being linked, one state at a time,
+/// so the linker, the link, and whether writes still reach it cannot disagree.
 #[derive(Clone)]
 enum LinkState {
-    /// Binding and linking are under way. Writes reach `linker`, shared with
-    /// every component that started from the same base until one writes to
-    /// it, and forget `pre`, the link kept once a caller asked for it.
+    /// Binding and linking are under way.
+    ///
+    /// - `linker` is the engine's shared base until something writes to it,
+    ///   and a copy of its own from then on (`written`).
+    /// - `pre` is the link, kept once a caller asks for it; a write forgets it.
     Open {
         linker: Arc<Linker<SharedCtx>>,
         pre: std::sync::OnceLock<InstancePre<SharedCtx>>,
+        written: bool,
     },
-    /// Resolved and linked: the linker is gone and the link stands.
+    /// Resolved, and nothing ever wrote to the linker:
+    /// it is still the engine's shared base, so dropping it would free nothing.
+    /// The link is made on first use, as before sealing.
+    Shared {
+        linker: Arc<Linker<SharedCtx>>,
+        pre: std::sync::OnceLock<InstancePre<SharedCtx>>,
+    },
+    /// Resolved and linked: the linker copy is gone, and the link stands.
     Linked(InstancePre<SharedCtx>),
-    /// Resolved without a link (an import nothing satisfied). The linker is
-    /// kept, and nothing can write to it now, so each use repeats wasmtime's
-    /// own error for it, typed and with its chain. A component in this state
-    /// never runs, so what it keeps is not what sealing is for.
-    Unlinked(Arc<Linker<SharedCtx>>),
+    /// Resolved without a link (an import nothing satisfied).
+    /// Only wasmtime's error is kept, rendered, so each use repeats it.
+    Unlinked(Arc<str>),
 }
 
-/// A new, empty linker in `late_writes` for a write after sealing, which
-/// reaches no instance. Shadowing is allowed, so a late caller that defines
-/// the same names twice gets the no-op it was promised, not a "defined twice"
-/// error. Takes the one field it fills, so a caller can still hold a borrow
-/// of the component's link state.
+/// A new, empty linker in `late_writes`, for a write after sealing.
+///
+/// - The write reaches no instance.
+/// - Shadowing is allowed, so a caller that defines the same names twice
+///   gets the no-op it was promised, not a "defined twice" error.
+/// - Takes the one field it fills,
+///   so a caller can still hold a borrow of the component's link state.
 fn scratch_linker<'a>(
-    late_writes: &'a mut Option<Linker<SharedCtx>>,
+    late_writes: &'a mut Option<Box<Linker<SharedCtx>>>,
     engine: &wasmtime::Engine,
 ) -> &'a mut Linker<SharedCtx> {
     let mut scratch = Linker::new(engine);
     scratch.allow_shadowing(true);
-    late_writes.insert(scratch)
+    late_writes.insert(Box::new(scratch))
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
@@ -298,27 +309,29 @@ impl WorkloadMetadata {
         self.component.engine()
     }
 
-    /// Returns a mutable reference to the component's linker.
+    /// Returns a mutable reference to the component's linker, to write to it.
     ///
-    /// Copies the linker first if it is still the engine's shared one, so ask
-    /// for it only to write to it: a component nothing writes to never pays
-    /// for a linker of its own.
+    /// - Before the workload is resolved:
+    ///   copies the linker first if it is still the engine's shared one,
+    ///   so a component nothing writes to never pays for a linker of its own;
+    ///   and forgets the link [`WorkloadComponent::pre_instantiate_ref`] keeps,
+    ///   since a write may change what it links.
+    /// - Once the workload is resolved the linker is sealed (see [`Self::is_sealed`]),
+    ///   and a write reaches no instance.
+    ///   A debug build panics;
+    ///   a release build hands out an empty linker of its own and logs an error.
+    ///   [`Self::try_linker`] refuses instead.
     ///
-    /// Before the workload is resolved, forgets the linked component
-    /// [`WorkloadComponent::pre_instantiate_ref`] keeps, since a caller
-    /// holding the linker mutably may change what it links.
-    ///
-    /// Once the workload is resolved the linker is sealed (see
-    /// [`Self::is_sealed`]) and a write reaches no instance: what is
-    /// returned then is an empty linker of its own, new on every call, and
-    /// the write is reported as an error in the log. This is a change from
-    /// before sealing existed, when a write after resolution took effect at
-    /// the next instantiation; [`Self::is_sealed`] says which applies, and
-    /// [`Self::try_linker`] refuses instead of handing out a scratch linker.
-    /// Plugins bind in [`HostPlugin::on_workload_item_bind`], before
-    /// resolution, which is where every plugin in this crate writes.
+    /// Plugins bind in [`HostPlugin::on_workload_item_bind`], before resolution,
+    /// which is where every plugin in this crate writes.
     pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
-        if self.is_sealed() {
+        let sealed = self.is_sealed();
+        debug_assert!(
+            !sealed,
+            "linker for component {} taken for writing after the workload was resolved",
+            self.id
+        );
+        if sealed {
             tracing::error!(
                 workload_id = %self.workload_id,
                 component_id = %self.id,
@@ -330,13 +343,11 @@ impl WorkloadMetadata {
         self.open_linker()
     }
 
-    /// [`Self::linker`], refusing once the linker is sealed instead of handing
-    /// out a scratch one.
+    /// [`Self::linker`], refusing once the linker is sealed.
     ///
     /// # Errors
     ///
-    /// The workload is resolved and the linker sealed; see
-    /// [`Self::is_sealed`].
+    /// The workload is resolved and the linker sealed; see [`Self::is_sealed`].
     pub fn try_linker(&mut self) -> anyhow::Result<&mut Linker<SharedCtx>> {
         ensure!(
             !self.is_sealed(),
@@ -354,27 +365,32 @@ impl WorkloadMetadata {
         !matches!(self.link, LinkState::Open { .. })
     }
 
-    /// The open linker, copied from the shared base if need be, with the kept
-    /// link forgotten. Both callers check for a sealed component first; one
-    /// that slipped through gets a [`scratch_linker`], never the sealed link
-    /// reopened.
+    /// The open linker, copied from the shared base if need be,
+    /// with the kept link forgotten.
+    /// Both callers check for a sealed component first;
+    /// one that slipped through gets a [`scratch_linker`], never the sealed link reopened.
     fn open_linker(&mut self) -> &mut Linker<SharedCtx> {
         match &mut self.link {
-            LinkState::Open { linker, pre } => {
+            LinkState::Open {
+                linker,
+                pre,
+                written,
+            } => {
                 *pre = std::sync::OnceLock::new();
+                *written = true;
                 Arc::make_mut(linker)
             }
-            LinkState::Linked(_) | LinkState::Unlinked(_) => {
+            LinkState::Shared { .. } | LinkState::Linked(_) | LinkState::Unlinked(_) => {
                 scratch_linker(&mut self.late_writes, self.component.engine())
             }
         }
     }
 
-    /// Reuse the linked component for both component invocations and service
-    /// starts. Mutable linker access invalidates it until the linker is sealed.
+    /// The link, for both component invocations and service starts:
+    /// kept once made, and forgotten by a write before sealing.
     fn linked_pre(&self) -> wasmtime::Result<InstancePre<SharedCtx>> {
         match &self.link {
-            LinkState::Open { linker, pre } => {
+            LinkState::Open { linker, pre, .. } | LinkState::Shared { linker, pre } => {
                 if let Some(kept) = pre.get() {
                     return Ok(kept.clone());
                 }
@@ -384,46 +400,53 @@ impl WorkloadMetadata {
                 Ok(linked)
             }
             LinkState::Linked(kept) => Ok(kept.clone()),
-            // Fails as it did when sealed, with wasmtime's own error.
-            LinkState::Unlinked(linker) => linker.instantiate_pre(&self.component),
+            LinkState::Unlinked(error) => Err(wasmtime::format_err!("{error}")),
         }
     }
 
-    /// Keep the linked component and let the linker go.
+    /// Seal the linker: writes no longer reach the component.
     ///
-    /// A component something wrote to holds a copy of the engine's base
-    /// linker, every WASI and `wasi:http` definition included — about 140 KiB,
-    /// against the ~10 KiB the rest of an idle workload costs — of which the
-    /// [`InstancePre`] keeps only what this component imports. Once binding
-    /// and linking are over nothing reads the linker but `instantiate_pre`,
-    /// so the `pre` is built here and the linker let go.
+    /// - **Nothing wrote to the linker:** it is still the engine's shared base,
+    ///   so it is kept, and the link is made on first use, as before.
+    ///   Dropping it would free nothing.
+    /// - **Something wrote to it:** the component holds a copy of the base,
+    ///   every WASI and `wasi:http` definition included: about 140 KiB,
+    ///   against the ~10 KiB the rest of an idle workload costs.
+    ///   The [`InstancePre`] keeps only what this component imports,
+    ///   so the link is made here and the copy let go.
+    /// - **It does not link** (an import nothing satisfied):
+    ///   only the error is kept, so each use repeats it,
+    ///   and the workload still runs, as it did before sealing.
     ///
-    /// A component that does not link (an import nothing satisfied) is sealed
-    /// all the same, keeping its linker to repeat the error: it would have
-    /// failed at its first use before, and it still does, with the same
-    /// error, and a late write is refused for it exactly as for its linked
-    /// siblings. Returns whether the link was kept.
-    ///
-    /// Every component is linked here, at each workload start, used or not.
-    /// That is the price of the saving: a component left to link on first
-    /// use would keep its linker copy for as long as it sat idle, which is
-    /// the scale-to-zero case sealing exists for. One `instantiate_pre` is a
-    /// type check of the component's imports, small beside its compile.
+    /// Returns whether a linker copy was let go for a kept link.
     pub(crate) fn seal_linker(&mut self) -> bool {
-        if let LinkState::Open { linker, .. } = &self.link {
-            self.link = match self.linked_pre() {
-                Ok(linked) => LinkState::Linked(linked),
-                Err(error) => {
-                    tracing::debug!(
-                        workload_id = %self.workload_id,
-                        component_id = %self.id,
-                        %error,
-                        "component does not link; sealing it with its linker to repeat the error"
-                    );
-                    LinkState::Unlinked(Arc::clone(linker))
-                }
+        let LinkState::Open {
+            linker,
+            pre,
+            written,
+        } = &self.link
+        else {
+            return matches!(self.link, LinkState::Linked(_));
+        };
+        if !written {
+            self.link = LinkState::Shared {
+                linker: Arc::clone(linker),
+                pre: pre.clone(),
             };
+            return false;
         }
+        self.link = match self.linked_pre() {
+            Ok(linked) => LinkState::Linked(linked),
+            Err(error) => {
+                tracing::warn!(
+                    workload_id = %self.workload_id,
+                    component_id = %self.id,
+                    error = format!("{error:#}"),
+                    "component does not link; every call to it will fail with this error"
+                );
+                LinkState::Unlinked(format!("{error:#}").into())
+            }
+        };
         matches!(self.link, LinkState::Linked(_))
     }
 
@@ -644,6 +667,7 @@ impl WorkloadService {
                 link: LinkState::Open {
                     linker: linker.into(),
                     pre: std::sync::OnceLock::new(),
+                    written: false,
                 },
                 late_writes: None,
                 volume_mounts,
@@ -767,6 +791,7 @@ impl WorkloadComponent {
                 link: LinkState::Open {
                     linker: linker.into(),
                     pre: std::sync::OnceLock::new(),
+                    written: false,
                 },
                 late_writes: None,
                 volume_mounts,
@@ -1500,7 +1525,10 @@ impl ResolvedWorkload {
 
     /// Access the resolved components and their metadata.
     ///
-    /// The map remains writable for updates to existing component metadata.
+    /// The map remains writable for updates to existing component metadata,
+    /// but not to a component's linker: resolution seals it,
+    /// and a write after that reaches no instance
+    /// (see [`WorkloadMetadata::is_sealed`]).
     /// Adding or removing components after resolution is unsupported: the
     /// component count and bindings are settled when the workload is resolved.
     pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
@@ -2585,8 +2613,8 @@ impl ResolvedWorkload {
         &self,
         component_id: &str,
     ) -> anyhow::Result<wasmtime::component::InstancePre<SharedCtx>> {
-        // A read lock: linking needs only `&Linker`, and a write lock here
-        // would serialize every request and dispatch on this workload.
+        // A read lock: the link is kept, so reading it needs only `&self`,
+        // and a write lock here would serialize every request and dispatch.
         let components = self.components.read().await;
         let component = components
             .get(component_id)
@@ -5139,9 +5167,8 @@ mod tests {
     }
 
     /// Sealing keeps the linked component, frees the linker copy the binding
-    /// made, and turns a late write into a refusal (`try_linker`) or a no-op
-    /// (`linker`) rather than an unlink; a component that does not link is
-    /// sealed the same way, with its error.
+    /// made, and turns a late write into a refusal; a component that does not
+    /// link is sealed the same way, keeping only its error.
     #[test]
     fn sealing_frees_the_linker_copy_and_keeps_the_link() {
         let mut a = component_from_wat(
@@ -5206,27 +5233,22 @@ mod tests {
         assert!(kept_link(&a));
         assert_eq!(call(&a), 3, "a rejected write preserves the kept link");
 
-        // The infallible accessor hands out a scratch linker: the write lands,
-        // the kept link stands, and the component is still sealed.
-        a.metadata
-            .linker()
-            .instance("test:cow/iface")
-            .unwrap()
-            .func_wrap("f", |_, (): ()| Ok((4_u32,)))
-            .unwrap();
-        assert!(a.metadata.is_sealed());
-        assert!(kept_link(&a));
-        assert_eq!(call(&a), 3, "a write after sealing reaches no instance");
         assert!(a.metadata.seal_linker(), "sealing again is a no-op");
 
         // A component that does not link is sealed all the same, keeps the
         // error it failed with, and refuses late writes like its siblings.
+        // Something wrote to its linker, so there is a copy to let go.
         let mut unlinked = component_from_wat(
             "unlinked",
             r#"(component
                  (import "test:pre/iface" (instance (export "f" (func))))
                )"#,
         );
+        unlinked
+            .metadata
+            .linker()
+            .instance("test:other/iface")
+            .unwrap();
         let before = unlinked
             .pre_instantiate_ref()
             .err()
@@ -5250,6 +5272,32 @@ mod tests {
         );
     }
 
+    /// A component nothing wrote to still shares the engine's linker, so
+    /// sealing keeps it, makes no link, and frees nothing; the link is made on
+    /// first use, as before sealing.
+    #[test]
+    fn sealing_an_untouched_component_keeps_the_shared_linker_and_links_lazily() {
+        let mut untouched = component_from_wat(
+            "untouched",
+            r#"(component
+                (core module $m (func (export "f")))
+                (core instance (instantiate $m)))"#,
+        );
+        let shared = Arc::clone(linker_of(&untouched));
+        assert!(!untouched.metadata.seal_linker(), "no copy to let go");
+        assert!(untouched.metadata.is_sealed());
+        match &untouched.metadata.link {
+            LinkState::Shared { linker, pre } => {
+                assert!(Arc::ptr_eq(linker, &shared), "the shared linker is kept");
+                assert!(pre.get().is_none(), "sealing made no link");
+            }
+            _ => panic!("an untouched component seals as shared"),
+        }
+        untouched.pre_instantiate_ref().unwrap();
+        assert!(kept_link(&untouched), "the first use links it");
+        assert!(untouched.metadata.try_linker().is_err());
+    }
+
     /// The linker a component holds, for the tests that watch it being
     /// shared, copied and let go.
     fn linker_of(component: &WorkloadComponent) -> &Arc<Linker<SharedCtx>> {
@@ -5259,7 +5307,7 @@ mod tests {
     fn open_linker_of(metadata: &WorkloadMetadata) -> &Arc<Linker<SharedCtx>> {
         match &metadata.link {
             LinkState::Open { linker, .. } => linker,
-            LinkState::Linked(_) | LinkState::Unlinked(_) => {
+            LinkState::Shared { .. } | LinkState::Linked(_) | LinkState::Unlinked(_) => {
                 panic!("an unsealed component keeps its linker")
             }
         }
@@ -5268,7 +5316,7 @@ mod tests {
     /// Whether a link is kept: cached while open, or standing once sealed.
     fn kept_link(component: &WorkloadComponent) -> bool {
         match &component.metadata.link {
-            LinkState::Open { pre, .. } => pre.get().is_some(),
+            LinkState::Open { pre, .. } | LinkState::Shared { pre, .. } => pre.get().is_some(),
             LinkState::Linked(_) => true,
             LinkState::Unlinked(_) => false,
         }
@@ -5319,13 +5367,45 @@ mod tests {
                 InstancePolicy::Ephemeral,
             );
             let callee_id = Arc::clone(&callee.metadata.id);
+            // Linking writes the callee's export into the importer's linker, so
+            // it holds a copy that sealing lets go; `broken` also imports
+            // something nothing provides, so it seals without a link.
+            let sibling = |id: &str, extra: &str| -> anyhow::Result<WorkloadComponent> {
+                Ok(WorkloadComponent::new(
+                    "sealed-service",
+                    "sealed-service",
+                    "test",
+                    id,
+                    Component::new(
+                        &engine,
+                        wat::parse_str(format!(
+                            r#"(component
+                                (import "test:service/probe" (instance (export "probe" (func))))
+                                {extra})"#
+                        ))?,
+                    )?,
+                    Linker::new(&engine),
+                    vec![],
+                    LocalResources::default(),
+                    Arc::default(),
+                    InstancePolicy::Ephemeral,
+                ))
+            };
+            let importer = sibling("importer", "")?;
+            let importer_linker = Arc::downgrade(open_linker_of(&importer.metadata));
+            let importer_id = Arc::clone(&importer.metadata.id);
+            let broken = sibling(
+                "broken",
+                r#"(import "test:missing/iface" (instance (export "f" (func))))"#,
+            )?;
+            let broken_id = Arc::clone(&broken.metadata.id);
             let cleanup = with_cleanup.then(WorkloadResources::default);
             let resolved = UnresolvedWorkload::new(
                 "sealed-service",
                 "sealed-service",
                 "test",
                 Some(service),
-                [callee],
+                [callee, importer, broken],
                 vec![],
             )
             .resolve_for_start(
@@ -5340,10 +5420,33 @@ mod tests {
             assert!(service.metadata.is_sealed());
             assert_eq!(
                 service.metadata.linked_components,
-                HashSet::from([callee_id])
+                HashSet::from([Arc::clone(&callee_id)])
             );
             service.pre_instantiate_raw()?;
             assert!(original_linker.upgrade().is_none());
+            {
+                let components = resolved.components();
+                let components = components.read().await;
+                assert!(
+                    matches!(
+                        components[&callee_id].metadata.link,
+                        LinkState::Shared { .. }
+                    ),
+                    "nothing wrote to the callee's linker"
+                );
+                assert!(
+                    matches!(components[&importer_id].metadata.link, LinkState::Linked(_)),
+                    "the importer's link is kept"
+                );
+                assert!(
+                    importer_linker.upgrade().is_none(),
+                    "and its linker copy freed"
+                );
+                assert!(
+                    matches!(components[&broken_id].metadata.link, LinkState::Unlinked(_)),
+                    "a component that does not link still resolves, keeping its error"
+                );
+            }
             if let Some(cleanup) = cleanup {
                 let state = cleanup.state.lock().unwrap();
                 let saved = state.resolved.as_ref().unwrap().service.as_ref().unwrap();
