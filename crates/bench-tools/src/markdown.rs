@@ -147,6 +147,82 @@ pub fn fmt_thousands(n: u64) -> String {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod metric_tests {
+    use super::*;
+    use crate::criterion::{ConfidenceInterval, Estimate, Estimates};
+
+    fn row(throughput: Option<Throughput>) -> Row {
+        let estimate = |value, lower, upper| Estimate {
+            point_estimate: value,
+            confidence_interval: ConfidenceInterval {
+                lower_bound: lower,
+                upper_bound: upper,
+            },
+        };
+        Row {
+            group: "group".into(),
+            param: "param".into(),
+            throughput,
+            estimates: Estimates {
+                mean: estimate(1e9, 8e8, 1.2e9),
+                median: estimate(5e8, 4e8, 6e8),
+                std_dev: estimate(1e8, 9e7, 1.1e8),
+            },
+        }
+    }
+
+    #[test]
+    fn batched_elements_become_rates_and_invert_the_time_interval() {
+        let (unit, values) = metric(&row(Some(Throughput::Elements(2))));
+        assert!(matches!(unit, Unit::Rps));
+        assert_eq!(unit.label(), "req/s");
+        assert_eq!(values.mean, 2.0);
+        assert_eq!(values.median, 4.0);
+        assert!((values.std_dev * 11.0 - 2.0).abs() < 1e-12);
+        assert!((values.ci_low - 5.0 / 3.0).abs() < 1e-12);
+        assert_eq!(values.ci_high, 2.5);
+        assert_eq!(fmt(values.mean, unit), "2 req/s");
+    }
+
+    #[test]
+    fn binary_and_decimal_byte_counts_share_the_same_rate_conversion() {
+        for throughput in [Throughput::Bytes(10), Throughput::BytesDecimal(10)] {
+            let (unit, values) = metric(&row(Some(throughput)));
+            assert!(matches!(unit, Unit::Bps));
+            assert_eq!(unit.label(), "B/s");
+            assert_eq!(values.mean, 10.0);
+            assert_eq!(values.median, 20.0);
+            assert!((values.std_dev * 11.0 - 10.0).abs() < 1e-12);
+            assert!((values.ci_low - 25.0 / 3.0).abs() < 1e-12);
+            assert_eq!(values.ci_high, 12.5);
+            assert_eq!(fmt(values.mean, unit), "10 B/s");
+        }
+    }
+
+    #[test]
+    fn absent_or_non_batch_throughput_keeps_time_estimates() {
+        for throughput in [
+            None,
+            Some(Throughput::Elements(0)),
+            Some(Throughput::Elements(1)),
+            Some(Throughput::Bytes(0)),
+            Some(Throughput::BytesDecimal(0)),
+        ] {
+            let (unit, values) = metric(&row(throughput));
+            assert!(matches!(unit, Unit::Time));
+            assert_eq!(unit.label(), "time");
+            assert_eq!(values.mean, 1e9);
+            assert_eq!(values.median, 5e8);
+            assert_eq!(values.std_dev, 1e8);
+            assert_eq!(values.ci_low, 8e8);
+            assert_eq!(values.ci_high, 1.2e9);
+            assert_eq!(fmt(values.mean, unit), "1.00 s");
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

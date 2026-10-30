@@ -41,7 +41,7 @@ func readyDeployment(prevSetName string) *runtimev1alpha1.WorkloadDeployment {
 	replicas := int32(1)
 	wd := &runtimev1alpha1.WorkloadDeployment{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "runtime.wasmcloud.dev/v1alpha1",
+			APIVersion: runtimev1alpha1.GroupVersion.String(),
 			Kind:       "WorkloadDeployment",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -79,14 +79,14 @@ func baseReplicaSet(name string) *runtimev1alpha1.WorkloadReplicaSet {
 	r := testReplicas
 	return &runtimev1alpha1.WorkloadReplicaSet{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "runtime.wasmcloud.dev/v1alpha1",
+			APIVersion: runtimev1alpha1.GroupVersion.String(),
 			Kind:       "WorkloadReplicaSet",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: testNamespace,
 			Name:      name,
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: "runtime.wasmcloud.dev/v1alpha1",
+				APIVersion: runtimev1alpha1.GroupVersion.String(),
 				Kind:       "WorkloadDeployment",
 				Name:       testDeploymentName,
 				Controller: ptrTrue(),

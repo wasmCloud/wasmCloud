@@ -2,8 +2,10 @@
 
 use super::WasiSocketsCtxView;
 use super::tcp::{NonInheritedOptions, TcpSocket};
+use crate::host::quota::ConnectionSlot;
 use crate::sockets::{
-    SocketAddrUse, SocketAddressFamily, WasiSockets, p3_socket_error_from_util as se,
+    SocketAddrCheck, SocketAddrUse, SocketAddressFamily, WasiSockets,
+    p3_socket_error_from_util as se,
 };
 use bytes::BytesMut;
 use core::pin::Pin;
@@ -28,8 +30,58 @@ use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 /// Type aliases for the upstream resource type (used in generated bindings)
 type UpstreamTcpSocket = types::TcpSocket;
 
+struct ConnectGuard<'a, T: Send + 'static> {
+    store: &'a Accessor<T, WasiSockets>,
+    socket_rep: u32,
+    armed: bool,
+}
+
+impl<T: Send + 'static> Drop for ConnectGuard<'_, T> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.store.with(|mut store| {
+            let view = store.get();
+            let socket = Resource::<TcpSocket>::new_borrow(self.socket_rep);
+            let Ok(socket) = view.table.get_mut(&socket) else {
+                return;
+            };
+            let Ok(mut loopback) = view.ctx.loopback.lock() else {
+                return;
+            };
+            socket.cancel_connect(&mut loopback);
+        });
+    }
+}
+
 /// Default buffer capacity for reads.
 const DEFAULT_BUFFER_CAPACITY: usize = 8192;
+
+/// How many connections the policy may refuse in one `poll_produce` before the
+/// task yields.
+///
+/// A peer flooding connections from a refused address would otherwise keep one
+/// poll accepting, checking and dropping for as long as they arrive, with the
+/// guest waiting behind it.
+const MAX_REFUSED_ACCEPTS_PER_POLL: usize = 32;
+
+fn refusal_limit_result(cx: &Context<'_>, finish: bool) -> Poll<wasmtime::Result<StreamResult>> {
+    if finish {
+        Poll::Ready(Ok(StreamResult::Cancelled))
+    } else {
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+/// Refuse an accepted connection with a reset rather than an orderly close, so
+/// the peer learns it was refused instead of seeing a successful, empty
+/// exchange. Mirrors wasmtime-wasi's own accept filter.
+fn refuse_accepted(stream: TcpStream) {
+    _ = stream.set_zero_linger();
+    drop(stream);
+}
 
 fn get_socket<'a>(
     table: &'a ResourceTable,
@@ -57,6 +109,8 @@ struct ListenStreamProducer<T> {
     listener: Arc<TcpListener>,
     family: SocketAddressFamily,
     options: NonInheritedOptions,
+    permissions: SocketAddrCheck,
+    pending: Option<(std::io::Result<TcpStream>, Option<ConnectionSlot>)>,
     getter: for<'a> fn(&'a mut T) -> WasiSocketsCtxView<'a>,
 }
 
@@ -68,25 +122,48 @@ where
     type Buffer = Option<Self::Item>;
 
     fn poll_produce<'a>(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         mut store: StoreContextMut<'a, D>,
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
+        let mut refused = 0;
+        while self.pending.is_none() {
+            let pending = match self.listener.poll_accept(cx) {
+                Poll::Ready(Ok((stream, addr))) => {
+                    let Ok(allowed) = self.permissions.check(addr, SocketAddrUse::TcpAccept) else {
+                        refuse_accepted(stream);
+                        refused += 1;
+                        if refused >= MAX_REFUSED_ACCEPTS_PER_POLL {
+                            return refusal_limit_result(cx, finish);
+                        }
+                        continue;
+                    };
+                    (Ok(stream), allowed.permit)
+                }
+                Poll::Ready(Err(err)) => (Err(err), None),
+                Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
+                Poll::Pending => return Poll::Pending,
+            };
+            self.pending = Some(pending);
+        }
         if dst.remaining(&mut store) == Some(0) {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
-        let res = match self.listener.poll_accept(cx) {
-            Poll::Ready(res) => res.map(|(stream, _)| stream),
-            Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
-            Poll::Pending => return Poll::Pending,
+        // The loop above leaves `pending` set, so this only returns early if
+        // that ever stops holding.
+        let Some((res, permit)) = self.pending.take() else {
+            return Poll::Pending;
         };
-        let socket = TcpSocket::new_accept(res, &self.options, self.family).unwrap_or_else(|err| {
-            // Create a Network socket in error state - wrap in Connected with a dummy
-            // For simplicity, just create a closed socket on error
-            TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(err, self.family))
-        });
+        let socket = TcpSocket::new_accept(res, &self.options, self.family)
+            .map(|mut socket| {
+                socket.hold_quota_slot(permit);
+                socket
+            })
+            .unwrap_or_else(|err| {
+                TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(err, self.family))
+            });
         let WasiSocketsCtxView { table, .. } = (self.getter)(store.data_mut());
         let socket = table
             .push(socket)
@@ -258,7 +335,6 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
         // Check if address is allowed
         let check = store.with(|mut view| view.get().ctx.socket_addr_check.clone());
         let allowed = check(remote_address, SocketAddrUse::TcpConnect)
-            .await
             .into_allowed()
             .map_err(se)?;
         let remote_address = allowed.addr;
@@ -283,11 +359,17 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
             SocketResult::Ok(connecting)
         })?;
 
+        let mut guard = ConnectGuard {
+            store,
+            socket_rep: socket.rep(),
+            armed: true,
+        };
+
         // Perform the actual connect
         let res = connecting.connect(remote_address).await;
 
         // Finish connect
-        store.with(|mut store| {
+        let result = store.with(|mut store| {
             let view = store.get();
             let socket_ref = get_socket_mut(view.table, &socket)?;
             let mut loopback = view
@@ -297,7 +379,9 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                 .map_err(|e| SocketError::trap(wasmtime::format_err!("{e}")))?;
             socket_ref.finish_connect(res, &mut loopback).map_err(se)?;
             Ok(())
-        })
+        });
+        guard.armed = false;
+        result
     }
 
     async fn listen(
@@ -311,20 +395,27 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
         // against that implicit bind address first — the same check `bind`
         // performs — so `listen` cannot be used to bind to an address the
         // network policy would otherwise deny. (bytecodealliance/wasmtime#13677)
-        let implicit_addr = {
+        let (implicit_addr, listen_addr) = {
             let view = store.get();
             let socket_ref = get_socket_mut(view.table, &socket)?;
-            socket_ref
+            let implicit = socket_ref
                 .needs_implicit_bind()
-                .then(|| crate::sockets::util::implicit_bind_addr(socket_ref.address_family()))
+                .then(|| crate::sockets::util::implicit_bind_addr(socket_ref.address_family()));
+            let listen = match implicit {
+                Some(addr) => addr,
+                None => socket_ref.local_address().map_err(se)?,
+            };
+            (implicit, listen)
         };
+        let check = store.get().ctx.socket_addr_check.clone();
         if let Some(addr) = implicit_addr {
-            let check = store.get().ctx.socket_addr_check.clone();
             check(addr, SocketAddrUse::TcpBind)
-                .await
                 .into_allowed()
                 .map_err(se)?;
         }
+        check(listen_addr, SocketAddrUse::TcpListen)
+            .into_allowed()
+            .map_err(se)?;
 
         // Scope: do the listen and extract info
         enum ListenKind {
@@ -390,6 +481,8 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                     listener,
                     family,
                     options,
+                    permissions: check.clone(),
+                    pending: None,
                     getter,
                 },
             )
@@ -399,6 +492,8 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                 LoopbackListenStreamProducer {
                     rx: info.rx,
                     socket_props: info.socket_props,
+                    permissions: check.clone(),
+                    pending: None,
                     getter,
                 },
             )
@@ -415,6 +510,9 @@ impl<T: Send> HostTcpSocketWithStore<T> for WasiSockets {
                     options,
                     loopback_rx: loopback.rx,
                     loopback_props: loopback.socket_props,
+                    permissions: check,
+                    pending: None,
+                    loopback_closed: false,
                     getter,
                 },
             )
@@ -518,7 +616,6 @@ impl HostTcpSocket for WasiSocketsCtxView<'_> {
     ) -> SocketResult<()> {
         let local_address = SocketAddr::from(local_address);
         let local_address = (self.ctx.socket_addr_check)(local_address, SocketAddrUse::TcpBind)
-            .await
             .into_allowed()
             .map_err(se)?
             .addr;
@@ -543,7 +640,17 @@ impl HostTcpSocket for WasiSocketsCtxView<'_> {
             IpAddressFamily::Ipv4 => SocketAddressFamily::Ipv4,
             IpAddressFamily::Ipv6 => SocketAddressFamily::Ipv6,
         };
-        let socket = TcpSocket::new(self.ctx, family).map_err(se)?;
+        let permit = self
+            .ctx
+            .socket_addr_check
+            .check(
+                crate::sockets::util::implicit_bind_addr(family),
+                SocketAddrUse::TcpCreate,
+            )
+            .map_err(se)?
+            .permit;
+        let mut socket = TcpSocket::new(self.ctx, family).map_err(se)?;
+        socket.hold_quota_slot(permit);
         let resource = self
             .table
             .push(socket)
@@ -727,6 +834,8 @@ impl HostTcpSocket for WasiSocketsCtxView<'_> {
 struct LoopbackListenStreamProducer<T> {
     rx: tokio::sync::mpsc::Receiver<super::loopback::TcpConn>,
     socket_props: super::tcp::LoopbackSocketProps,
+    permissions: SocketAddrCheck,
+    pending: Option<super::loopback::TcpConn>,
     getter: for<'a> fn(&'a mut T) -> WasiSocketsCtxView<'a>,
 }
 
@@ -744,28 +853,44 @@ where
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
+        let this = self.get_mut();
+        let mut refused = 0;
+        while this.pending.is_none() {
+            match this.rx.poll_recv(cx) {
+                Poll::Ready(Some(conn)) => {
+                    if this
+                        .permissions
+                        .check(conn.remote_address, SocketAddrUse::TcpAcceptVirtual)
+                        .is_ok()
+                    {
+                        this.pending = Some(conn);
+                    } else {
+                        refused += 1;
+                        if refused >= MAX_REFUSED_ACCEPTS_PER_POLL {
+                            return refusal_limit_result(cx, finish);
+                        }
+                    }
+                }
+                Poll::Ready(None) => return Poll::Ready(Ok(StreamResult::Dropped)),
+                Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
         if dst.remaining(&mut store) == Some(0) {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
-        let this = self.get_mut();
-        match this.rx.poll_recv(cx) {
-            Poll::Ready(Some(conn)) => {
-                let tcp_socket = TcpSocket::Loopback(this.socket_props.to_accepted_socket(conn));
-                let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
-                let resource = table
-                    .push(tcp_socket)
-                    .context("failed to push loopback socket resource to table")?;
-                let resource = Resource::new_own(resource.rep());
-                dst.set_buffer(Some(resource));
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            Poll::Ready(None) => {
-                // Channel closed — listener was dropped
-                Poll::Ready(Ok(StreamResult::Dropped))
-            }
-            Poll::Pending if finish => Poll::Ready(Ok(StreamResult::Cancelled)),
-            Poll::Pending => Poll::Pending,
-        }
+        // The loop above leaves `pending` set, so this only returns early if
+        // that ever stops holding.
+        let Some(conn) = this.pending.take() else {
+            return Poll::Pending;
+        };
+        let tcp_socket = TcpSocket::Loopback(this.socket_props.to_accepted_socket(conn));
+        let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
+        let resource = table
+            .push(tcp_socket)
+            .context("failed to push loopback socket resource to table")?;
+        dst.set_buffer(Some(Resource::new_own(resource.rep())));
+        Poll::Ready(Ok(StreamResult::Completed))
     }
 }
 
@@ -954,7 +1079,17 @@ struct MergedListenStreamProducer<T> {
     options: NonInheritedOptions,
     loopback_rx: tokio::sync::mpsc::Receiver<super::loopback::TcpConn>,
     loopback_props: super::tcp::LoopbackSocketProps,
+    permissions: SocketAddrCheck,
+    pending: Option<MergedAccept>,
+    /// Set once the loopback channel has closed, so a channel that answers
+    /// `Ready(None)` forever is not polled forever.
+    loopback_closed: bool,
     getter: for<'a> fn(&'a mut T) -> WasiSocketsCtxView<'a>,
+}
+
+enum MergedAccept {
+    Network(std::io::Result<TcpStream>, Option<ConnectionSlot>),
+    Loopback(super::loopback::TcpConn),
 }
 
 impl<D> StreamProducer<D> for MergedListenStreamProducer<D>
@@ -971,54 +1106,656 @@ where
         mut dst: Destination<'a, Self::Item, Self::Buffer>,
         finish: bool,
     ) -> Poll<wasmtime::Result<StreamResult>> {
+        let this = self.get_mut();
+
+        let mut refused = 0;
+        while this.pending.is_none() {
+            // `ready` tracks whether either source produced something this
+            // round. Only when neither did is it safe to park: a source that
+            // answered `Ready` has registered no waker, so returning `Pending`
+            // on the strength of the *other* source's waker would strand every
+            // connection this one goes on to queue.
+            let mut ready = false;
+
+            match this.listener.poll_accept(cx) {
+                Poll::Ready(Ok((stream, addr))) => {
+                    ready = true;
+                    if let Ok(allowed) = this.permissions.check(addr, SocketAddrUse::TcpAccept) {
+                        this.pending = Some(MergedAccept::Network(Ok(stream), allowed.permit));
+                    } else {
+                        refuse_accepted(stream);
+                        refused += 1;
+                    }
+                }
+                Poll::Ready(Err(err)) => {
+                    ready = true;
+                    this.pending = Some(MergedAccept::Network(Err(err), None));
+                }
+                Poll::Pending => {}
+            }
+
+            if this.pending.is_none() && !this.loopback_closed {
+                match this.loopback_rx.poll_recv(cx) {
+                    Poll::Ready(Some(conn)) => {
+                        ready = true;
+                        if this
+                            .permissions
+                            .check(conn.remote_address, SocketAddrUse::TcpAcceptVirtual)
+                            .is_ok()
+                        {
+                            this.pending = Some(MergedAccept::Loopback(conn));
+                        } else {
+                            refused += 1;
+                        }
+                    }
+                    // The loopback half is finished, but the network half is
+                    // not: stop polling a closed channel — it reports `Ready`
+                    // forever — and keep serving the listener.
+                    Poll::Ready(None) => this.loopback_closed = true,
+                    Poll::Pending => {}
+                }
+            }
+
+            if this.pending.is_some() {
+                break;
+            }
+            if refused >= MAX_REFUSED_ACCEPTS_PER_POLL {
+                return refusal_limit_result(cx, finish);
+            }
+            if !ready {
+                return if finish {
+                    Poll::Ready(Ok(StreamResult::Cancelled))
+                } else {
+                    Poll::Pending
+                };
+            }
+        }
+
         if dst.remaining(&mut store) == Some(0) {
             return Poll::Ready(Ok(StreamResult::Completed));
         }
 
-        let this = self.get_mut();
-
-        // Poll network listener
-        match this.listener.poll_accept(cx) {
-            Poll::Ready(res) => {
-                let res = res.map(|(stream, _)| stream);
-                let socket = TcpSocket::new_accept(res, &this.options, this.loopback_props.family)
+        // The loop above leaves `pending` set, so this only returns early if
+        // that ever stops holding.
+        let Some(pending) = this.pending.take() else {
+            return Poll::Pending;
+        };
+        let socket = match pending {
+            MergedAccept::Network(res, permit) => {
+                TcpSocket::new_accept(res, &this.options, this.loopback_props.family)
+                    .map(|mut socket| {
+                        socket.hold_quota_slot(permit);
+                        socket
+                    })
                     .unwrap_or_else(|err| {
                         TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(
                             err,
                             this.loopback_props.family,
                         ))
-                    });
-                let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
-                let resource = table
-                    .push(socket)
-                    .context("failed to push socket resource to table")?;
-                dst.set_buffer(Some(Resource::new_own(resource.rep())));
-                return Poll::Ready(Ok(StreamResult::Completed));
+                    })
             }
-            Poll::Pending => {}
-        }
+            MergedAccept::Loopback(conn) => {
+                TcpSocket::Loopback(this.loopback_props.to_accepted_socket(conn))
+            }
+        };
+        let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
+        let resource = table
+            .push(socket)
+            .context("failed to push socket resource to table")?;
+        dst.set_buffer(Some(Resource::new_own(resource.rep())));
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
 
-        // Poll loopback channel
-        match this.loopback_rx.poll_recv(cx) {
-            Poll::Ready(Some(conn)) => {
-                let tcp_socket = TcpSocket::Loopback(this.loopback_props.to_accepted_socket(conn));
-                let WasiSocketsCtxView { table, .. } = (this.getter)(store.data_mut());
-                let resource = table
-                    .push(tcp_socket)
-                    .context("failed to push loopback socket resource to table")?;
-                dst.set_buffer(Some(Resource::new_own(resource.rep())));
-                return Poll::Ready(Ok(StreamResult::Completed));
-            }
-            Poll::Ready(None) => {
-                // Loopback channel closed — not fatal, network listener may still be active
-            }
-            Poll::Pending => {}
-        }
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::engine::store::stream_pump::future_channel;
+    use crate::sockets::{AddrDecision, DenyReason, Plane, WasiSocketsCtx};
+    use std::time::Duration as Timeout;
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
+    use wasmtime::component::Lift;
 
-        if finish {
+    struct Data {
+        ctx: WasiSocketsCtx,
+        table: ResourceTable,
+    }
+
+    fn view(data: &mut Data) -> WasiSocketsCtxView<'_> {
+        WasiSocketsCtxView {
+            ctx: &mut data.ctx,
+            table: &mut data.table,
+        }
+    }
+
+    fn store(check: SocketAddrCheck) -> wasmtime::Store<Data> {
+        let mut config = wasmtime::Config::new();
+        config.wasm_component_model_async(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        wasmtime::Store::new(
+            &engine,
+            Data {
+                ctx: WasiSocketsCtx {
+                    socket_addr_check: check,
+                    ..Default::default()
+                },
+                table: ResourceTable::new(),
+            },
+        )
+    }
+
+    struct Chunks<T>(mpsc::UnboundedSender<Vec<T>>);
+
+    impl<T: Lift + Send + Sync + 'static> StreamConsumer<Data> for Chunks<T> {
+        type Item = T;
+
+        fn poll_consume(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            mut store: StoreContextMut<Data>,
+            mut src: Source<'_, T>,
+            _finish: bool,
+        ) -> Poll<wasmtime::Result<StreamResult>> {
+            let mut values = Vec::with_capacity(src.remaining(&mut store));
+            src.read(&mut store, &mut values)?;
+            Poll::Ready(Ok(if self.0.send(values).is_ok() {
+                StreamResult::Completed
+            } else {
+                StreamResult::Dropped
+            }))
+        }
+    }
+
+    fn chunks<T: Lift + Send + Sync + 'static>(
+        store: impl wasmtime::AsContextMut<Data = Data>,
+        stream: StreamReader<T>,
+    ) -> mpsc::UnboundedReceiver<Vec<T>> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        stream.pipe(store, Chunks(tx)).unwrap();
+        rx
+    }
+
+    fn completion<T: Lift + Send + Sync + 'static>(
+        store: impl wasmtime::AsContextMut<Data = Data>,
+        future: FutureReader<T>,
+    ) -> futures::channel::oneshot::Receiver<T> {
+        let (sink, rx, _) = future_channel();
+        future.pipe(store, sink).unwrap();
+        rx
+    }
+
+    async fn drain(mut rx: mpsc::UnboundedReceiver<Vec<u8>>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            bytes.extend(chunk);
+        }
+        bytes
+    }
+
+    async fn round_trip(bind: Option<&str>, plane: Plane) {
+        let mut store = store(SocketAddrCheck::new(move |addr, _| {
+            AddrDecision::allow_on(addr, plane)
+        }));
+        let listener = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        HostTcpSocket::set_listen_backlog_size(
+            &mut view(store.data_mut()),
+            Resource::new_borrow(listener),
+            2,
+        )
+        .unwrap();
+        if let Some(addr) = bind {
+            HostTcpSocket::bind(
+                &mut view(store.data_mut()),
+                Resource::new_borrow(listener),
+                addr.parse::<SocketAddr>().unwrap().into(),
+            )
+            .await
+            .unwrap();
+        }
+        let accepts = <WasiSockets as HostTcpSocketWithStore<Data>>::listen(
+            Access::<Data, WasiSockets>::new(store.as_context_mut(), view),
+            Resource::new_borrow(listener),
+        )
+        .await
+        .unwrap();
+        let mut accepted = chunks(&mut store, accepts);
+        let mut address = SocketAddr::from(
+            HostTcpSocket::get_local_address(
+                &mut view(store.data_mut()),
+                Resource::new_borrow(listener),
+            )
+            .unwrap(),
+        );
+        if address.ip().is_unspecified() {
+            address.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+        }
+        let client = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+
+        let server = timeout(
+            Timeout::from_secs(5),
+            store.run_concurrent(async |accessor| {
+                let accessor = accessor.with_getter::<WasiSockets>(view);
+                <WasiSockets as HostTcpSocketWithStore<Data>>::connect(
+                    &accessor,
+                    Resource::new_borrow(client),
+                    address.into(),
+                )
+                .await
+                .unwrap();
+                let server = accepted.recv().await.unwrap().pop().unwrap().rep();
+                accessor.with(|mut access| {
+                    let remote = HostTcpSocket::get_remote_address(
+                        &mut access.get(),
+                        Resource::new_borrow(client),
+                    )
+                    .unwrap();
+                    assert_eq!(SocketAddr::from(remote), address);
+                    assert!(
+                        matches!(
+                            access
+                                .get()
+                                .table
+                                .get(&Resource::<TcpSocket>::new_borrow(server))
+                                .unwrap(),
+                            TcpSocket::Network(_)
+                        ) == matches!(plane, Plane::Host)
+                    );
+                });
+                let (request, request_sent, request_received) = accessor.with(|mut access| {
+                    let bytes = StreamReader::new(&mut access, b"request".to_vec()).unwrap();
+                    let sent = <WasiSockets as HostTcpSocketWithStore<Data>>::send(
+                        Access::<Data, WasiSockets>::new(access.as_context_mut(), view),
+                        Resource::new_borrow(client),
+                        bytes,
+                    )
+                    .unwrap();
+                    let (bytes, received) = <WasiSockets as HostTcpSocketWithStore<Data>>::receive(
+                        Access::<Data, WasiSockets>::new(access.as_context_mut(), view),
+                        Resource::new_borrow(server),
+                    )
+                    .unwrap();
+                    (
+                        chunks(&mut access, bytes),
+                        completion(&mut access, sent),
+                        completion(&mut access, received),
+                    )
+                });
+                assert_eq!(drain(request).await, b"request");
+                assert!(request_sent.await.unwrap().is_ok());
+                assert!(request_received.await.unwrap().is_ok());
+                let (reply, reply_sent, reply_received, duplicate) = accessor.with(|mut access| {
+                    let bytes = StreamReader::new(&mut access, b"reply".to_vec()).unwrap();
+                    let sent = <WasiSockets as HostTcpSocketWithStore<Data>>::send(
+                        Access::<Data, WasiSockets>::new(access.as_context_mut(), view),
+                        Resource::new_borrow(server),
+                        bytes,
+                    )
+                    .unwrap();
+                    let (bytes, received) = <WasiSockets as HostTcpSocketWithStore<Data>>::receive(
+                        Access::<Data, WasiSockets>::new(access.as_context_mut(), view),
+                        Resource::new_borrow(client),
+                    )
+                    .unwrap();
+                    let reply = chunks(&mut access, bytes);
+                    let (mut duplicate, error) =
+                        <WasiSockets as HostTcpSocketWithStore<Data>>::receive(
+                            Access::<Data, WasiSockets>::new(access.as_context_mut(), view),
+                            Resource::new_borrow(client),
+                        )
+                        .unwrap();
+                    duplicate.close(&mut access).unwrap();
+                    (
+                        reply,
+                        completion(&mut access, sent),
+                        completion(&mut access, received),
+                        completion(&mut access, error),
+                    )
+                });
+                assert_eq!(drain(reply).await, b"reply");
+                assert!(reply_sent.await.unwrap().is_ok());
+                assert!(reply_received.await.unwrap().is_ok());
+                assert!(matches!(
+                    duplicate.await.unwrap(),
+                    Err(types::ErrorCode::InvalidState)
+                ));
+                server
+            }),
+        )
+        .await
+        .expect("P3 TCP round trip timed out")
+        .unwrap();
+
+        for rep in [client, server, listener] {
+            HostTcpSocket::drop(&mut view(store.data_mut()), Resource::new_own(rep)).unwrap();
+        }
+        assert!(
+            store
+                .data()
+                .ctx
+                .loopback
+                .lock()
+                .unwrap()
+                .tcp_ipv4
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn virtual_streams_exchange_data_and_close_each_direction() {
+        round_trip(Some("127.0.0.1:0"), Plane::Virtual).await;
+    }
+
+    #[tokio::test]
+    async fn native_streams_exchange_data_and_close_each_direction() {
+        round_trip(None, Plane::Host).await;
+    }
+
+    #[tokio::test]
+    async fn unspecified_listener_accepts_virtual_connections() {
+        round_trip(Some("0.0.0.0:0"), Plane::Virtual).await;
+    }
+
+    #[tokio::test]
+    async fn unspecified_listener_accepts_native_connections() {
+        round_trip(Some("0.0.0.0:0"), Plane::Host).await;
+    }
+
+    #[tokio::test]
+    async fn implicit_listen_cannot_bypass_a_bind_denial() {
+        let mut store = store(SocketAddrCheck::new(|addr, reason| {
+            if matches!(reason, SocketAddrUse::TcpBind) {
+                AddrDecision::Deny(DenyReason::BindNotPermitted)
+            } else {
+                AddrDecision::allow_by_address(addr)
+            }
+        }));
+        let rep = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        let result = <WasiSockets as HostTcpSocketWithStore<Data>>::listen(
+            Access::<Data, WasiSockets>::new(store.as_context_mut(), view),
+            Resource::new_borrow(rep),
+        )
+        .await;
+        assert!(matches!(
+            result.unwrap_err().downcast().unwrap(),
+            types::ErrorCode::AccessDenied
+        ));
+        assert!(
+            store
+                .data()
+                .table
+                .get(&Resource::<TcpSocket>::new_borrow(rep))
+                .unwrap()
+                .needs_implicit_bind()
+        );
+        HostTcpSocket::drop(&mut view(store.data_mut()), Resource::new_own(rep)).unwrap();
+    }
+
+    #[test]
+    fn refusal_limit_cancels_finished_read() {
+        let cx = Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            refusal_limit_result(&cx, true),
             Poll::Ready(Ok(StreamResult::Cancelled))
-        } else {
-            Poll::Pending
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_backlogged_connect_releases_its_virtual_port() {
+        let mut store = store(SocketAddrCheck::new(|addr, _| {
+            AddrDecision::allow_by_address(addr)
+        }));
+        let listener = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        HostTcpSocket::set_listen_backlog_size(
+            &mut view(store.data_mut()),
+            Resource::new_borrow(listener),
+            1,
+        )
+        .unwrap();
+        HostTcpSocket::bind(
+            &mut view(store.data_mut()),
+            Resource::new_borrow(listener),
+            "127.0.0.1:0".parse::<SocketAddr>().unwrap().into(),
+        )
+        .await
+        .unwrap();
+        let mut accepts = <WasiSockets as HostTcpSocketWithStore<Data>>::listen(
+            Access::<Data, WasiSockets>::new(store.as_context_mut(), view),
+            Resource::new_borrow(listener),
+        )
+        .await
+        .unwrap();
+        let addr = HostTcpSocket::get_local_address(
+            &mut view(store.data_mut()),
+            Resource::new_borrow(listener),
+        )
+        .unwrap();
+        let first = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        let second = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        timeout(
+            Timeout::from_secs(5),
+            store.run_concurrent(async |accessor| {
+                let accessor = accessor.with_getter::<WasiSockets>(view);
+                <WasiSockets as HostTcpSocketWithStore<Data>>::connect(
+                    &accessor,
+                    Resource::new_borrow(first),
+                    addr,
+                )
+                .await
+                .unwrap();
+                let before = accessor
+                    .with(|mut access| access.get().ctx.loopback.lock().unwrap().tcp_ipv4.len());
+                {
+                    let mut connecting =
+                        Box::pin(<WasiSockets as HostTcpSocketWithStore<Data>>::connect(
+                            &accessor,
+                            Resource::new_borrow(second),
+                            addr,
+                        ));
+                    assert!(futures::poll!(connecting.as_mut()).is_pending());
+                    assert_eq!(
+                        accessor.with(|mut access| access
+                            .get()
+                            .ctx
+                            .loopback
+                            .lock()
+                            .unwrap()
+                            .tcp_ipv4
+                            .len()),
+                        before + 1
+                    );
+                }
+                assert_eq!(
+                    accessor.with(|mut access| access
+                        .get()
+                        .ctx
+                        .loopback
+                        .lock()
+                        .unwrap()
+                        .tcp_ipv4
+                        .len()),
+                    before
+                );
+                accessor.with(|mut access| {
+                    let error = HostTcpSocket::get_remote_address(
+                        &mut access.get(),
+                        Resource::new_borrow(second),
+                    )
+                    .unwrap_err();
+                    assert!(matches!(
+                        error.downcast().unwrap(),
+                        types::ErrorCode::InvalidState
+                    ));
+                });
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        accepts.close(&mut store).unwrap();
+        for rep in [first, second, listener] {
+            HostTcpSocket::drop(&mut view(store.data_mut()), Resource::new_own(rep)).unwrap();
+        }
+        assert!(
+            store
+                .data()
+                .ctx
+                .loopback
+                .lock()
+                .unwrap()
+                .tcp_ipv4
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn options_and_invalid_values_reach_native_virtual_and_unspecified_sockets() {
+        let mut store = store(SocketAddrCheck::new(|addr, _| {
+            AddrDecision::allow_by_address(addr)
+        }));
+        for bind in [None, Some("127.0.0.1:0"), Some("0.0.0.0:0")] {
+            let rep = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+                .unwrap()
+                .rep();
+            if let Some(addr) = bind {
+                HostTcpSocket::bind(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep),
+                    addr.parse::<SocketAddr>().unwrap().into(),
+                )
+                .await
+                .unwrap();
+            }
+            assert!(matches!(
+                HostTcpSocket::get_address_family(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep)
+                )
+                .unwrap(),
+                IpAddressFamily::Ipv4
+            ));
+            assert!(
+                !HostTcpSocket::get_is_listening(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep)
+                )
+                .unwrap()
+            );
+            HostTcpSocket::set_keep_alive_enabled(
+                &mut view(store.data_mut()),
+                Resource::new_borrow(rep),
+                true,
+            )
+            .unwrap();
+            assert!(
+                HostTcpSocket::get_keep_alive_enabled(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep)
+                )
+                .unwrap()
+            );
+            macro_rules! option {
+                ($set:ident, $get:ident, $value:expr) => {
+                    HostTcpSocket::$set(
+                        &mut view(store.data_mut()),
+                        Resource::new_borrow(rep),
+                        $value,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        HostTcpSocket::$get(&mut view(store.data_mut()), Resource::new_borrow(rep))
+                            .unwrap(),
+                        $value
+                    );
+                };
+            }
+            option!(
+                set_keep_alive_idle_time,
+                get_keep_alive_idle_time,
+                10_000_000_000
+            );
+            option!(
+                set_keep_alive_interval,
+                get_keep_alive_interval,
+                2_000_000_000
+            );
+            option!(set_keep_alive_count, get_keep_alive_count, 3);
+            option!(set_hop_limit, get_hop_limit, 42);
+            HostTcpSocket::set_receive_buffer_size(
+                &mut view(store.data_mut()),
+                Resource::new_borrow(rep),
+                8192,
+            )
+            .unwrap();
+            HostTcpSocket::set_send_buffer_size(
+                &mut view(store.data_mut()),
+                Resource::new_borrow(rep),
+                8192,
+            )
+            .unwrap();
+            assert!(
+                HostTcpSocket::get_receive_buffer_size(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep)
+                )
+                .unwrap()
+                    >= 8192
+            );
+            assert!(
+                HostTcpSocket::get_send_buffer_size(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep)
+                )
+                .unwrap()
+                    >= 8192
+            );
+            for result in [
+                HostTcpSocket::set_hop_limit(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep),
+                    0,
+                ),
+                HostTcpSocket::set_keep_alive_count(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep),
+                    0,
+                ),
+                HostTcpSocket::set_keep_alive_idle_time(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep),
+                    0,
+                ),
+                HostTcpSocket::set_keep_alive_interval(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep),
+                    0,
+                ),
+                HostTcpSocket::set_listen_backlog_size(
+                    &mut view(store.data_mut()),
+                    Resource::new_borrow(rep),
+                    0,
+                ),
+            ] {
+                assert!(matches!(
+                    result.unwrap_err().downcast().unwrap(),
+                    types::ErrorCode::InvalidArgument
+                ));
+            }
+            HostTcpSocket::drop(&mut view(store.data_mut()), Resource::new_own(rep)).unwrap();
         }
     }
 }

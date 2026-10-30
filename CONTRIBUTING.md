@@ -7,6 +7,21 @@ Thank you for your interest in contributing to wash! This document provides guid
 If you have feature suggestions, find bugs, or have questions, please submit an issue [here][0].
 Pull requests are welcome! The [good first issue][1] label is a great way to find a starting point for new contributors.
 
+## Reporting Bugs
+
+Report bugs as [GitHub issues][2] using the **Bug report** template. Search the [open issues][3] first, and add to an existing report if one matches.
+
+A useful report includes:
+
+- What you ran and what happened, with the full error message or logs.
+- What you expected to happen instead.
+- The smallest set of steps or commands that reproduces it. If it needs files, link a public
+  repository with a minimal reproduction instead of attaching zip files or other archives.
+- Your versions: the output of `wash --version`, and for Kubernetes deployments the runtime-operator chart version.
+- Your operating system and architecture, and your Kubernetes version if one is involved.
+
+Don't report security vulnerabilities as issues. Follow [SECURITY.md](SECURITY.md) to report them privately.
+
 ## Development Environment
 
 ### Prerequisites
@@ -88,6 +103,26 @@ crates/
         ├── types.rs        # Shared runtime types
         └── wit.rs          # WIT interface bindings
 ```
+
+## Dependencies
+
+### Selecting
+
+Before adding a dependency, check whether a crate already in the workspace, or the standard library, does the job. A new dependency must be actively maintained, with recent releases and a maintainer who answers issues. Prefer projects hosted by an open source foundation, such as the Bytecode Alliance (`wasmtime`, `wit-bindgen`, `wasm-tools`), over alternatives.
+
+Every dependency must use a license on the allowlist in [`deny.toml`](deny.toml). A crate outside it needs a per-crate exception in `deny.toml`, agreed in review. Changes to the root `Cargo.toml` and `Cargo.lock` need approval from `@wasmCloud/wash-maintainers`, as set in [`CODEOWNERS`](.github/CODEOWNERS).
+
+### Obtaining
+
+- **Rust** crates come from crates.io. Shared versions are declared once under `[workspace.dependencies]` in the root `Cargo.toml`, and `Cargo.lock` is committed.
+- **Go** modules for `runtime-operator` and `runtime-gateway` come from the Go module proxy, and are pinned in each module's `go.sum`.
+- **GitHub Actions** are pinned to a full commit SHA, with the version in a trailing comment. `zizmor` lints the workflows.
+
+### Tracking
+
+- **Dependabot** opens weekly grouped update PRs for Cargo, Go modules, GitHub Actions and Docker images. It waits a week after a release before proposing it. For Cargo and Go, the wait is 3 days for a patch release and 14 for a major one. Security updates arrive as their own group, without waiting.
+- **`cargo audit`** checks `Cargo.lock` against the RustSec advisory database daily, on every push to `main`, and on pull requests that change a manifest, the lockfile or `deny.toml`. An advisory that doesn't affect wasmCloud can be ignored in [`.cargo/audit.toml`](.cargo/audit.toml), with a comment saying why it doesn't apply.
+- **`cargo deny check licenses`** runs on the same triggers and fails on any license outside the allowlist.
 
 ## Code Style and Conventions
 
@@ -210,3 +245,5 @@ that release. See [RELEASE_RUNBOOK.md](./RELEASE_RUNBOOK.md#release-cadence) for
 
 [0]: https://github.com/wasmcloud/wasmCloud/issues/new/choose
 [1]: https://github.com/wasmcloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22
+[2]: https://github.com/wasmCloud/wasmCloud/issues/new?template=bug_report.yml
+[3]: https://github.com/wasmCloud/wasmCloud/issues?q=is%3Aissue+is%3Aopen

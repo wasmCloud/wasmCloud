@@ -243,15 +243,27 @@ impl TcpSocket {
             }
             Err(err) => {
                 self.state = TcpState::Closed;
-                let net = loopback.get_tcp_net_mut(local_address.ip());
-                let Some(port) = NonZeroU16::new(local_address.port()) else {
-                    return Err(ErrorCode::InvalidState);
-                };
-                let Some(TcpEndpoint::Bound) = net.remove(&port) else {
+                let Some(TcpEndpoint::Bound) = loopback.unbind_tcp(local_address) else {
                     return Err(ErrorCode::InvalidState);
                 };
                 Err(ErrorCode::from(err))
             }
+        }
+    }
+
+    pub fn cancel_connect(&mut self, loopback: &mut Network) {
+        let TcpState::Connecting { local_address, .. } =
+            mem::replace(&mut self.state, TcpState::Closed)
+        else {
+            return;
+        };
+        // Endpoint keys are nonzero ports; zero has no reservation to release.
+        let Some(port) = NonZeroU16::new(local_address.port()) else {
+            return;
+        };
+        let net = loopback.get_tcp_net_mut(local_address.ip());
+        if matches!(net.get(&port), Some(TcpEndpoint::Bound)) {
+            net.remove(&port);
         }
     }
 
@@ -372,6 +384,9 @@ impl TcpSocket {
     }
 
     pub fn set_listen_backlog_size(&mut self, value: u64) -> Result<(), ErrorCode> {
+        if value == 0 {
+            return Err(ErrorCode::InvalidArgument);
+        }
         let value = value.try_into().unwrap_or(u32::MAX);
         match &self.state {
             TcpState::Bound(..) => {

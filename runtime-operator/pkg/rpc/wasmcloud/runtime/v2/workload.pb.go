@@ -416,9 +416,11 @@ type Component struct {
 	//
 	// Unset or below 1 lets a fully idle pool empty out, so the next call after
 	// a quiet spell starts cold. Raise it to keep a floor of instances warm
-	// through the quiet. Capped at pool_size, and only meaningful alongside
-	// reclaim_window_seconds. Note this is a floor under the pool, not a target
-	// to grow to: instances are still only built when a call needs one.
+	// through the quiet. A value at or above pool_size disables reclaim
+	// entirely, since a sweep could never find a surplus to retire. Only
+	// meaningful alongside reclaim_window_seconds. Note this is a floor under
+	// the pool, not a target to grow to: instances are still only built when a
+	// call needs one.
 	ReclaimMinInstances int32 `protobuf:"zigzag32,10,opt,name=reclaim_min_instances,json=reclaimMinInstances,proto3" json:"reclaim_min_instances,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
@@ -536,15 +538,19 @@ type LocalResources struct {
 	Environment map[string]string `protobuf:"bytes,4,rep,name=environment,proto3" json:"environment,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Volume mounts from the parent Workload
 	VolumeMounts []*VolumeMount `protobuf:"bytes,5,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
-	// Allowed Hosts for TCP Outbound connections. "localhost" is always allowed.
-	// Can contain wildcards "*" as any part of the hostname.Ex: "*.wasmcloud.io" but not "som*thing.wasmcloud.io"
-	// Note this controls socket connections but not DNS lookups.
-	// Upon a successful lookup, the host will allow outbound connections to the specified hosts.
+	// Outbound egress allowlist, for wasi:http and wasi:sockets alike. Accepts
+	// "*", "host[:port]", "scheme://host[:port]" and "*.suffix[:port]"; a
+	// wildcard must be a leading "*." label, so "*.wasmcloud.io" but not
+	// "som*thing.wasmcloud.io". Empty or absent denies all egress.
+	// An entry naming a host also lets the component resolve that name, and
+	// permits a socket to an address it resolved the name into, on the entry's
+	// port. "*" permits connections but opens no lookup.
 	AllowedHosts []string `protobuf:"bytes,6,rep,name=allowed_hosts,json=allowedHosts,proto3" json:"allowed_hosts,omitempty"`
 	// Names the component may resolve through wasi:sockets/ip-name-lookup
-	// (resolve-addresses). Accepts "*" for any name, a wildcard such as
-	// "*.wasmcloud.io", an exact name, or a literal IP address.
-	// Empty or absent denies every lookup with permanent-resolver-failure.
+	// (resolve-addresses), beyond the hosts allowed_hosts names. Accepts "*"
+	// for any name, a wildcard such as "*.wasmcloud.io", an exact name, or a
+	// literal IP address. With neither list naming it, a lookup is denied with
+	// permanent-resolver-failure.
 	AllowedIpNameLookups []string `protobuf:"bytes,7,rep,name=allowed_ip_name_lookups,json=allowedIpNameLookups,proto3" json:"allowed_ip_name_lookups,omitempty"`
 	// Ports on the machine's own loopback this component may reach through
 	// `host.wasmcloud.internal`. Each entry is a port with an optional

@@ -56,8 +56,20 @@ use crate::engine::workload::{UnresolvedWorkload, WorkloadComponent, WorkloadSer
 use crate::types::{EmptyDirVolume, HostPathVolume, VolumeType, Workload};
 use std::env;
 use std::str::FromStr;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 use wasmtime_wasi::WasiView;
+
+// Exact instance versions registered by the Wasmtime bindings below. Keep
+// these aligned when upgrading Wasmtime: partial overrides must reopen those
+// instances, since Linker::instance does not apply semver matching. The override
+// integration tests check both exact and compatible guest imports.
+pub(crate) const WASI_LINKER_VERSIONS: [semver::Version; 2] = [
+    semver::Version::new(0, 2, 12),
+    semver::Version::new(0, 3, 0),
+];
 
 /// Add all WASI interfaces to the linker, using upstream for non-socket interfaces
 /// and our custom socket implementation (with loopback support) for socket interfaces.
@@ -73,10 +85,7 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
         linker,
         <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
     )?;
-    filesystem::preopens::add_to_linker::<SharedCtx, wasmtime_wasi::filesystem::WasiFilesystem>(
-        linker,
-        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
-    )?;
+    filesystem::preopens::add_to_linker::<SharedCtx, SharedCtx>(linker, ctx::extract_active_ctx)?;
 
     // Clocks
     clocks::wall_clock::add_to_linker::<SharedCtx, wasmtime_wasi::clocks::WasiClocks>(
@@ -177,7 +186,17 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
     // CLI, clocks, filesystem, random — upstream P3 add_to_linker
     wasmtime_wasi::p3::cli::add_to_linker(linker)?;
     wasmtime_wasi::p3::clocks::add_to_linker(linker)?;
-    wasmtime_wasi::p3::filesystem::add_to_linker(linker)?;
+    wasmtime_wasi::p3::bindings::filesystem::types::add_to_linker::<
+        SharedCtx,
+        wasmtime_wasi::filesystem::WasiFilesystem,
+    >(
+        linker,
+        <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
+    )?;
+    wasmtime_wasi::p3::bindings::filesystem::preopens::add_to_linker::<SharedCtx, SharedCtx>(
+        linker,
+        ctx::extract_active_ctx,
+    )?;
     wasmtime_wasi::p3::random::add_to_linker(linker)?;
 
     // Sockets with our custom P3 implementation (with loopback)
@@ -218,15 +237,23 @@ pub fn targets_wasip3_http(component: &Component) -> bool {
 }
 
 pub mod abandon;
+pub mod command;
 pub mod ctx;
 pub mod dispatch;
 pub mod guest_memory;
 pub(crate) mod instance_driver;
 pub(crate) mod instance_pool;
+pub mod stream_payload;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
 pub mod host_memory;
 pub(crate) mod linked_call;
+mod pool_gc;
+pub mod pool_share;
+pub mod pool_usage;
+pub mod process_memory;
+mod scratch;
 pub(crate) mod store;
+pub(crate) mod trap_remediation;
 mod value;
 mod volumes;
 pub mod workload;
@@ -243,20 +270,21 @@ pub(crate) const EPOCH_TICK: Duration = Duration::from_millis(10);
 /// [`PoolingAllocationConfig`].
 ///
 /// [`host_memory::HostMemoryBudgets`] holds what was asked for. The environment
-/// moves each of these three independently, so the two can disagree.
+/// moves every total and the heap ceiling independently, so the two can
+/// disagree.
 #[derive(Debug, Clone, Copy)]
 struct InstalledPool {
-    core_instances: u32,
-    memories: u32,
     max_memory_size: u64,
+    /// Elements each pooled table has room for, which sizes the table pool.
+    table_elements: usize,
+    totals: pool_usage::PoolTotals,
 }
 
 impl InstalledPool {
     /// Address space the pool reserves. Keyed on the memory count, not the
-    /// instance count.
+    /// instance count, and never less than wasmtime's reservation per slot.
     fn reservation(&self) -> u64 {
-        self.max_memory_size
-            .saturating_mul(u64::from(self.memories))
+        host_memory::pool_slab_bytes(self.max_memory_size, self.totals.memories)
     }
 }
 
@@ -285,6 +313,54 @@ fn spawn_epoch_ticker(engine: &wasmtime::Engine) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Runs `f`, which builds a `wasmtime::Engine`, where the process-wide trap
+/// handler that the first engine installs cannot be killed by a signal.
+///
+/// On macOS wasmtime handles traps with Mach ports: building the first
+/// engine spawns a thread that blocks in `mach_msg` for exceptions, and in
+/// wasmtime 48 that receive aborts the process on any result it does not
+/// expect, which a signal delivered to that thread produces (`SIGCHLD` from
+/// a child this host spawned, say). The abort prints nothing a test harness
+/// shows (<https://github.com/bytecodealliance/wasmtime/issues/14393>;
+/// wasmtime 50 drops the interruptible receive). A thread inherits the
+/// signal mask of the thread that spawns it, and wasmtime spawns the
+/// handler from the thread building the first engine, so every engine here
+/// is built on a thread with every signal blocked: the handler never takes
+/// a process-directed signal, and the kernel delivers it elsewhere.
+/// Elsewhere `f` runs inline. Remove once the workspace is on wasmtime 50.
+// The signal mask is set with libc, as the process footprint is read.
+#[allow(unsafe_code)]
+fn on_signal_quiet_thread<T: Send>(
+    f: impl FnOnce() -> anyhow::Result<T> + Send,
+) -> anyhow::Result<T> {
+    #[cfg(target_os = "macos")]
+    {
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("wasmtime-engine-build".to_string())
+                .spawn_scoped(scope, || {
+                    // SAFETY: `sigfillset` and `pthread_sigmask` only read
+                    // and write the set on this thread's stack, and the
+                    // mask applies to this thread alone, plus whatever it
+                    // spawns.
+                    unsafe {
+                        let mut all: libc::sigset_t = std::mem::zeroed();
+                        libc::sigfillset(&mut all);
+                        libc::pthread_sigmask(libc::SIG_BLOCK, &all, std::ptr::null_mut());
+                    }
+                    f()
+                })
+                .context("failed to spawn the engine build thread")?
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        f()
+    }
+}
+
 /// The core WebAssembly engine for executing components and workloads.
 ///
 /// The `Engine` is responsible for compiling WebAssembly components, managing
@@ -292,9 +368,13 @@ fn spawn_epoch_ticker(engine: &wasmtime::Engine) -> anyhow::Result<()> {
 /// It wraps a wasmtime engine with additional functionality for workload management.
 #[derive(Clone)]
 pub struct Engine {
+    stream_payloads: Arc<stream_payload::StreamPayloads>,
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
     pub(crate) cache: Cache<CacheKey, CacheValue>,
+    /// Compiles running workloads hold, consulted before the cache so a live
+    /// compile can be reused after cache eviction. See [`LiveCompiles`].
+    live_compiles: Arc<LiveCompiles>,
     /// Compiles that actually ran on this engine.
     ///
     /// Test-only, and there is no way to do without it: what the digest-keyed
@@ -308,34 +388,60 @@ pub struct Engine {
     /// the host's port table, and the connection budget. The workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) is layered over it per component.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// Which host paths a workload's `hostPath` volume may name.
+    host_paths: volumes::HostPathPolicy,
+    /// Where `emptyDir` volumes live. An error when the root could not be
+    /// claimed, reported to the first workload that asks for one.
+    scratch: Result<Arc<scratch::ScratchRoot>, Arc<str>>,
     pub(crate) host_memory: host_memory::HostMemoryBudgets,
     /// The host-wide counter of guest linear-memory bytes that
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
     /// Every store this engine builds carries a limiter drawing on it.
     pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
+    /// The whole process's footprint against `max_process_memory`, sampled on
+    /// its own thread. The guest budget refuses growth while it is over.
+    /// `None` when the guard was switched off.
+    process_memory: Option<Arc<process_memory::ProcessMemoryGuard>>,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
-    /// Core instances the pooling allocator was configured to admit, captured
-    /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
-    /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
-    /// caller-supplied pooling config alike. `None` when pooling is off or
-    /// unsupported, i.e. when there is no pool budget to divide.
-    ///
-    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
-    /// somewhere else would miss the env override (applied inside
-    /// [`new_pooling_config`]) and drift the moment either side changed.
-    total_core_instances: Option<u32>,
     /// Linear memory the pooling allocator actually admits per memory, read
     /// back from the installed [`PoolingAllocationConfig`]. `None` when
     /// pooling is off, i.e. when no ceiling is enforced.
     ///
-    /// Captured for the same reason as `total_core_instances`:
+    /// Captured for the same reason as `pool_totals`:
     /// `--default-heap-memory` is only the *requested* size, and
     /// `WASMTIME_POOLING_MAX_MEMORY_SIZE` or a caller-supplied pooling config
     /// replaces it outright. Quoting the flag in a refusal that the installed
     /// ceiling caused produces advice that cannot work.
     installed_heap_memory: Option<u64>,
+    /// Every total the installed pool was built with, read back from the
+    /// [`PoolingAllocationConfig`] actually installed so it reflects the
+    /// `WASMTIME_POOLING_TOTAL_*` overrides and a caller-supplied pooling
+    /// config alike. `None` when pooling is off or unsupported.
+    ///
+    /// Recorded rather than recomputed: re-deriving `max_memories.unwrap_or(…)`
+    /// somewhere else would miss the env override (applied inside
+    /// [`new_pooling_config`]) and drift the moment either side changed.
+    pool_totals: Option<pool_usage::PoolTotals>,
+    /// The linkers every workload component starts from, built once and
+    /// shared (see [`BaseLinkers`]).
+    base_linkers: Arc<BaseLinkers>,
+}
+
+/// The WASI linker, with and without `wasi:http`, that every workload
+/// component starts from.
+///
+/// Building one is the largest part of what an idle workload costs the host:
+/// about 140 KiB for WASI and 180 KiB with `wasi:http`, most of a
+/// scale-to-zero workload. What goes into them depends on nothing about the
+/// workload, so each is built once per engine and shared; a component's
+/// [`workload::WorkloadMetadata::linker`] copies its own only when a plugin
+/// or a link writes to it.
+#[derive(Default)]
+struct BaseLinkers {
+    wasi: OnceLock<Arc<Linker<SharedCtx>>>,
+    wasi_http: OnceLock<Arc<Linker<SharedCtx>>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -350,12 +456,56 @@ impl std::fmt::Debug for Engine {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CacheKey(String);
 
+/// One compile, and whether a store of it may need a GC heap: read off the
+/// source the first time a workload asks, and kept with the compile so it is
+/// never read again. Services never ask.
 #[derive(Clone)]
-pub struct CacheValue(Component);
+pub struct CacheValue {
+    component: Component,
+    may_use_gc: Arc<std::sync::OnceLock<bool>>,
+}
 
 impl std::fmt::Debug for CacheValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CacheValue").finish()
+    }
+}
+
+/// Compiles that running workloads still hold, by digest.
+///
+/// The compile cache is bounded and forgets idle entries, but a workload
+/// keeps its `Component` for as long as it runs. Without this, a digest the
+/// cache let go of would be compiled again by the next workload to start
+/// from it, holding a second copy of the machine code beside the first.
+/// Consulting the live set first keeps one copy per digest while any
+/// workload holds it, however small the cache.
+type LiveCompiles =
+    std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<LiveCompile>>>;
+
+/// One digest's compile, held by every workload loaded from it. The entry in
+/// [`LiveCompiles`] lives exactly as long as some workload holds this.
+pub(crate) struct LiveCompile {
+    digest: String,
+    compiled: CacheValue,
+    live: std::sync::Weak<LiveCompiles>,
+}
+
+impl Drop for LiveCompile {
+    fn drop(&mut self) {
+        let Some(live) = self.live.upgrade() else {
+            return;
+        };
+        let mut live = live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A workload that started after this one's last holder let go has
+        // recorded a fresh compile under the same digest; leave that one.
+        if live
+            .get(&self.digest)
+            .is_some_and(|entry| entry.strong_count() == 0)
+        {
+            live.remove(&self.digest);
+        }
     }
 }
 
@@ -373,7 +523,7 @@ impl std::fmt::Debug for CacheValue {
 /// straight into the original error, since `anyhow::Error` derefs to
 /// `dyn StdError`.
 #[derive(Debug)]
-struct SharedError(Arc<anyhow::Error>);
+pub(crate) struct SharedError(pub(crate) Arc<anyhow::Error>);
 
 impl std::fmt::Display for SharedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -440,10 +590,15 @@ fn parse_pooling_minimum(text: &str) -> Option<u64> {
 }
 
 impl Engine {
+    /// Register application-defined stream/future payloads before resolving workloads.
+    pub fn stream_payloads(&self) -> &Arc<stream_payload::StreamPayloads> {
+        &self.stream_payloads
+    }
+
     /// host_memory has the memory budgets this engine was built with including max host
     /// memory available, default component heap limit, and number of core instances available.
-    /// Read back rather than recomputed, so what a caller reports is what the engine actually
-    /// installed — including an embedder's `max_instances` winning over the flag-driven count.
+    /// With a pool, `max_memories` and `core_instances` are the installed totals, so what a
+    /// caller reports is what the engine runs with, however the count was set or derived.
     pub fn host_memory(&self) -> host_memory::HostMemoryBudgets {
         self.host_memory
     }
@@ -454,17 +609,73 @@ impl Engine {
         &self.guest_memory
     }
 
+    /// The process's memory footprint against `max_process_memory`, for an
+    /// embedder to report, or to stop taking on work while
+    /// [`process_memory::ProcessMemoryGuard::is_over`].
+    /// `None` when the engine was built
+    /// [`without_max_process_memory`](EngineBuilder::without_max_process_memory).
+    pub fn process_memory(&self) -> Option<&Arc<process_memory::ProcessMemoryGuard>> {
+        self.process_memory.as_ref()
+    }
+
+    /// Inject admission state without the process sampler overwriting it.
+    #[cfg(all(test, feature = "washlet"))]
+    pub(crate) fn with_unsampled_admission_guard(
+        mut self,
+        guard: Arc<process_memory::ProcessMemoryGuard>,
+    ) -> Self {
+        self.process_memory = Some(guard);
+        self
+    }
+
     /// Core instances the pooling allocator was configured to admit, captured
     /// from the [`PoolingAllocationConfig`] actually installed — so it reflects
     /// the `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` override and a
     /// caller-supplied pooling config alike. `None` when pooling is off or
-    /// unsupported, i.e. when there is no pool budget to divide.
+    /// unsupported.
     ///
-    /// Recorded rather than recomputed: re-deriving `max_instances.unwrap_or(…)`
-    /// somewhere else would miss the env override (applied inside
-    /// [`new_pooling_config`]) and drift the moment either side changed.
+    /// This is a count of live core modules, several per component, and it is
+    /// sized not to bind before the linear memories do; what the pool holds in
+    /// components depends on their resource requirements and all the installed
+    /// limits reported by [`Self::pool_usage`], including independent overrides.
+    ///
+    /// Deprecated because its meaning moved under the same name: until the
+    /// pool totals were derived from the memory count this was also the
+    /// number of instances the pool held, and a caller still sizing work from
+    /// it now reads sixteen times that. [`Self::total_memories`] is the count
+    /// that reserves the pool and bounds instances of the usual shape.
+    #[deprecated(
+        since = "2.12.0",
+        note = "a counter sixteen times the memory count, not the pool's instance capacity; \
+                use `total_memories` for the count that sizes the pool"
+    )]
     pub fn total_core_instances(&self) -> Option<u32> {
-        self.total_core_instances
+        Some(self.pool_totals.as_ref()?.core_instances)
+    }
+
+    /// Linear memories the pool can hold at once: the count `--max-memories`
+    /// sizes, and the one that reserves address space. A component can contain
+    /// several memories, and other pool totals can be overridden independently;
+    /// this is not a count of component instances. `None` when pooling is off
+    /// or unsupported.
+    pub fn total_memories(&self) -> Option<u32> {
+        Some(self.pool_totals.as_ref()?.memories)
+    }
+
+    /// All installed pooling limits, including environment and caller-supplied
+    /// overrides. `None` when pooling is off or unsupported.
+    pub(crate) fn pool_totals(&self) -> Option<pool_usage::PoolTotals> {
+        self.pool_totals
+    }
+
+    /// Every pooling allocator total against what is in use now, so an
+    /// embedder can report a host whose pool is full: its workloads still say
+    /// running while every instantiation is refused. `None` when pooling is
+    /// off. See [`pool_usage::pool_refusals`] for refusals between readings.
+    pub fn pool_usage(&self) -> Option<pool_usage::PoolUsage> {
+        let totals = self.pool_totals.as_ref()?;
+        let metrics = self.inner.pooling_allocator_metrics()?;
+        Some(pool_usage::PoolUsage::read(&metrics, totals))
     }
 
     /// Creates a new [`EngineBuilder`] for configuring an engine.
@@ -522,11 +733,16 @@ impl Engine {
             service,
             volumes,
             host_interfaces,
+            annotations,
             ..
         } = workload;
+        let annotations_arc = Arc::new(annotations);
 
         // Process and validate volumes - create a lookup map from volume name to validated host path
         let mut validated_volumes = std::collections::HashMap::new();
+        // Created on the first `emptyDir`, and removed when the workload is
+        // released or, for a start that fails before then, when this drops.
+        let mut workload_scratch: Option<Arc<scratch::ScratchDir>> = None;
 
         for v in volumes {
             let host_path = match v.volume_type {
@@ -537,14 +753,26 @@ impl Engine {
                             "HostPath volume '{local_path}' does not exist or is not a directory",
                         );
                     }
-                    path
+                    self.host_paths.open(&path)?
                 }
                 VolumeType::EmptyDir(EmptyDirVolume {}) => {
-                    // Create a temporary directory for the empty dir volume
-                    let temp_dir = tempfile::tempdir()
-                        .context("failed to create temp dir for empty dir volume")?;
-                    tracing::debug!(path = ?temp_dir.path(), "created temp dir for empty dir volume");
-                    temp_dir.keep()
+                    let workload_scratch = match &mut workload_scratch {
+                        Some(dir) => dir,
+                        None => {
+                            let root = self.scratch.as_ref().map_err(|e| {
+                                anyhow::anyhow!("emptyDir volumes are unavailable: {e}")
+                            })?;
+                            workload_scratch.insert(root.workload_dir()?)
+                        }
+                    };
+                    // Kept on disk: the workload's scratch directory owns it.
+                    let volume_dir = tempfile::Builder::new()
+                        .prefix("volume-")
+                        .tempdir_in(workload_scratch.path())
+                        .context("failed to create an emptyDir volume")?
+                        .keep();
+                    tracing::debug!(path = ?volume_dir, "created emptyDir volume");
+                    volumes::ReservedHostPaths::default().open(&volume_dir)?
                 }
             };
 
@@ -553,6 +781,8 @@ impl Engine {
         }
 
         let loopback = Arc::default();
+        // One per deploy, shared by every component in it.
+        let trap_hint_logged = Arc::default();
 
         // Iniitalize service
         let service = if let Some(svc) = service {
@@ -566,7 +796,11 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized service component");
-                    Some(handle)
+                    Some(
+                        handle
+                            .with_annotations(Arc::clone(&annotations_arc))
+                            .with_trap_hint_flag(&trap_hint_logged),
+                    )
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize service component");
@@ -590,7 +824,11 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized workload component");
-                    workload_components.push(handle);
+                    workload_components.push(
+                        handle
+                            .with_annotations(Arc::clone(&annotations_arc))
+                            .with_trap_hint_flag(&trap_hint_logged),
+                    );
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize component");
@@ -606,7 +844,9 @@ impl Engine {
             service,
             workload_components,
             host_interfaces,
-        );
+        )
+        .with_scratch(workload_scratch)
+        .with_stream_payloads(Arc::clone(&self.stream_payloads));
 
         #[cfg(feature = "wasi-tls")]
         let workload = workload.maybe_with_tls_provider(self.tls_provider.clone());
@@ -621,12 +861,18 @@ impl Engine {
         workload_name: impl AsRef<str>,
         workload_namespace: impl AsRef<str>,
         service: crate::types::Service,
-        validated_volumes: &std::collections::HashMap<String, PathBuf>,
+        validated_volumes: &std::collections::HashMap<String, volumes::OpenedVolume>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadService> {
         // Create a wasmtime component from the bytes
-        let wasmtime_component = self
-            .load_component_bytes(service.bytes, service.digest)
+        let (
+            CacheValue {
+                component: wasmtime_component,
+                ..
+            },
+            compiled,
+        ) = self
+            .load_live_component(service.bytes, service.digest)
             .context("failed to create component from bytes")?;
 
         // Create a linker for this component
@@ -646,9 +892,12 @@ impl Engine {
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
+        let mut resolved_volume_mounts = Vec::new();
         for vm in &service.local_resources.volume_mounts {
             if let Some(host_path) = validated_volumes.get(&vm.name) {
-                component_volume_mounts.push((host_path.clone(), vm.clone()));
+                component_volume_mounts.push((host_path.path.clone(), vm.clone()));
+                resolved_volume_mounts
+                    .push(volumes::ResolvedVolumeMount::from_opened(host_path, vm)?);
             } else {
                 tracing::warn!(
                     volume = %vm.name,
@@ -668,8 +917,10 @@ impl Engine {
             service.max_restarts,
             loopback,
         );
+        service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        service.metadata.compiled = compiled;
 
         let world = service.world();
 
@@ -697,26 +948,88 @@ impl Engine {
             .unwrap_or(self.host_memory.default_heap_memory)
     }
 
+    /// Whether a store of the component in `bytes` may need a GC heap, read
+    /// off its source ([`pool_gc::may_use_gc`]). Only pool admission asks,
+    /// so an engine with no pool skips the walk over every function body and
+    /// answers `false`, which nothing reads.
+    fn may_use_gc(&self, bytes: &[u8]) -> bool {
+        self.pool_totals.is_some() && pool_gc::may_use_gc(bytes)
+    }
+
+    fn compile(&self, bytes: &[u8]) -> anyhow::Result<CacheValue> {
+        let component = Component::new(&self.inner, bytes)
+            .map_err(|e| self.explain_compile_failure(e))
+            .context("failed to compile component from bytes")?;
+        Ok(CacheValue {
+            component,
+            may_use_gc: Arc::default(),
+        })
+    }
+
+    /// [`Self::may_use_gc`] for `compiled`, read off `bytes`, its source,
+    /// only the first time any workload of that compile asks.
+    fn compiled_may_use_gc(&self, compiled: &CacheValue, bytes: &[u8]) -> bool {
+        *compiled.may_use_gc.get_or_init(|| self.may_use_gc(bytes))
+    }
+
+    /// [`Self::load_component_bytes`] for a workload, which holds the returned
+    /// [`LiveCompile`] while it runs: a digest some running workload was
+    /// loaded from is served from that workload's compile, whether or not the
+    /// cache still has it.
+    fn load_live_component(
+        &self,
+        bytes: impl AsRef<[u8]>,
+        digest: Option<impl AsRef<str>>,
+    ) -> anyhow::Result<(CacheValue, Option<Arc<LiveCompile>>)> {
+        let Some(digest) = digest else {
+            return Ok((self.load_component_bytes(bytes, None::<&str>)?, None));
+        };
+        let digest = digest.as_ref();
+        if let Some(live) = self.live_compile(digest) {
+            return Ok((live.compiled.clone(), Some(live)));
+        }
+        let compiled = self.load_component_bytes(&bytes, Some(digest))?;
+        let mut live = self
+            .live_compiles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Another start may have recorded this digest since the check above;
+        // share its compile rather than keep a second.
+        if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
+            return Ok((existing.compiled.clone(), Some(existing)));
+        }
+        let entry = Arc::new(LiveCompile {
+            digest: digest.to_string(),
+            compiled: compiled.clone(),
+            live: Arc::downgrade(&self.live_compiles),
+        });
+        live.insert(digest.to_string(), Arc::downgrade(&entry));
+        Ok((compiled, Some(entry)))
+    }
+
+    fn live_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
+        self.live_compiles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(digest)
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     /// Load a WebAssembly component from raw bytes or yields a previously compiled one.
     #[instrument(name = "load_component_bytes", skip_all, fields(digest = %digest.as_ref().map(|d| d.as_ref()).unwrap_or("none")))]
     fn load_component_bytes(
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
-    ) -> anyhow::Result<Component> {
+    ) -> anyhow::Result<CacheValue> {
         match digest {
             None => {
                 tracing::debug!("no digest provided, compiling component without caching");
-                let compiled = Component::new(&self.inner, bytes.as_ref())
-                    .map_err(|e| self.explain_compile_failure(e))
-                    .context("failed to compile component from bytes")?;
-                Ok(compiled)
+                self.compile(bytes.as_ref())
             }
             Some(digest) => {
                 let key = CacheKey(digest.as_ref().to_string());
-                let inner = &self.inner;
                 let bytes_ref = bytes.as_ref();
-                let heap = self.effective_heap_memory();
 
                 #[cfg(test)]
                 let compiles = Arc::clone(&self.compiles);
@@ -724,15 +1037,11 @@ impl Engine {
                     .try_get_with(key, || {
                         #[cfg(test)]
                         compiles.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        Component::new(inner, bytes_ref)
-                            .map_err(|e| explain_compile_failure(e, heap))
-                            .context("failed to compile component from bytes")
-                            .map(CacheValue)
+                        self.compile(bytes_ref)
                     })
                     .map_err(|e: Arc<anyhow::Error>| {
                         anyhow::Error::new(SharedError(e)).context("compilation cache error")
                     })
-                    .map(|v| v.0)
             }
         }
     }
@@ -746,37 +1055,29 @@ impl Engine {
         workload_name: impl AsRef<str>,
         workload_namespace: impl AsRef<str>,
         component: crate::types::Component,
-        validated_volumes: &std::collections::HashMap<String, PathBuf>,
+        validated_volumes: &std::collections::HashMap<String, volumes::OpenedVolume>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> anyhow::Result<WorkloadComponent> {
         // Read before the component's fields are moved out below.
         let instances = InstancePolicy::from_component(&component);
 
         // Create a wasmtime component from the bytes
-        let wasmtime_component = self
-            .load_component_bytes(component.bytes, component.digest)
+        let (cached, compiled) = self
+            .load_live_component(&component.bytes, component.digest)
             .context("failed to create component from bytes")?;
+        let may_use_gc = self.compiled_may_use_gc(&cached, &component.bytes);
+        let wasmtime_component = cached.component;
 
-        // Create a linker for this component
-        let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
-
-        // Add WASI interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
-
-        // Add HTTP interfaces to the linker
-        if uses_wasi_http(&wasmtime_component) {
-            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
-                .map_err(anyhow::Error::from)
-                .context("failed to add wasi:http/types to linker")?;
-            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
-                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
-        }
+        let linker = self.base_linker(uses_wasi_http(&wasmtime_component))?;
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
+        let mut resolved_volume_mounts = Vec::new();
         for vm in &component.local_resources.volume_mounts {
             if let Some(host_path) = validated_volumes.get(&vm.name) {
-                component_volume_mounts.push((host_path.clone(), vm.clone()));
+                component_volume_mounts.push((host_path.path.clone(), vm.clone()));
+                resolved_volume_mounts
+                    .push(volumes::ResolvedVolumeMount::from_opened(host_path, vm)?);
             } else {
                 tracing::warn!(
                     volume = %vm.name,
@@ -798,9 +1099,40 @@ impl Engine {
             loopback,
             instances,
         );
+        workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        workload_component.metadata.compiled = compiled;
+        // From the source alone. A component wasmtime cannot cost
+        // (`resources_required` is `None`) imports a core module, which no
+        // linker here provides, so it never instantiates to need a heap.
+        workload_component.metadata.may_use_gc = may_use_gc;
         Ok(workload_component)
+    }
+
+    /// The shared linker a workload component starts from: WASI (with our
+    /// socket implementation), plus `wasi:http` when the component uses it.
+    /// See [`BaseLinkers`].
+    fn base_linker(&self, with_http: bool) -> anyhow::Result<Arc<Linker<SharedCtx>>> {
+        let slot = if with_http {
+            &self.base_linkers.wasi_http
+        } else {
+            &self.base_linkers.wasi
+        };
+        if let Some(linker) = slot.get() {
+            return Ok(Arc::clone(linker));
+        }
+        let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
+        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
+        if with_http {
+            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
+                .map_err(anyhow::Error::from)
+                .context("failed to add wasi:http/types to linker")?;
+            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
+                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
+        }
+        // Concurrent first starts may each build one; all but one are dropped.
+        Ok(Arc::clone(slot.get_or_init(|| Arc::new(linker))))
     }
 
     /// Compile a host component plugin and build a linker with WASI (and
@@ -976,22 +1308,86 @@ impl FromStr for WasmProposal {
 pub struct EngineBuilder {
     config: Option<wasmtime::Config>,
     use_pooling_allocator: Option<bool>,
-    max_instances: Option<u32>,
+    max_memories: Option<MaxMemories>,
+    max_core_instances: Option<u32>,
     pooling_config: Option<PoolingAllocationConfig>,
     proposals: std::collections::BTreeSet<WasmProposal>,
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
     parallel_compilation: Option<bool>,
+    native_unwind_info: Option<bool>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
+    reserved_host_paths: Vec<PathBuf>,
+    allowed_host_paths: Vec<PathBuf>,
+    scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
+    max_process_memory_bytes: Option<u64>,
+    max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
 
+/// The memory count [`EngineBuilder`] was given, and how.
+#[derive(Debug, Clone, Copy)]
+enum MaxMemories {
+    /// [`EngineBuilder::with_max_memories`].
+    Named(u32),
+    /// [`EngineBuilder::with_derived_max_memories`].
+    Derived {
+        count: u32,
+        sized_to_commit_limit: bool,
+    },
+}
+
+impl MaxMemories {
+    fn count(self) -> u32 {
+        match self {
+            Self::Named(count) | Self::Derived { count, .. } => count,
+        }
+    }
+}
+
 impl EngineBuilder {
+    /// Reserve paths that no workload volume may equal, contain, or lie
+    /// inside. The scratch root (see [`Self::with_scratch_root`]) is always
+    /// reserved.
+    #[must_use]
+    pub fn with_reserved_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.reserved_host_paths.extend(paths);
+        self
+    }
+
+    /// Permit `hostPath` volumes within these directories. Adds to any
+    /// permitted before; with none, no `hostPath` volume is permitted.
+    ///
+    /// This is a host-wide guardrail for a trusted embedder, and for migrating
+    /// hosts whose workloads already mount host directories. It is not a
+    /// multi-tenant storage policy: any workload on the engine may mount any
+    /// directory permitted here. Where tenants author workloads, disable their
+    /// raw `hostPath` volumes in the control plane, and have it give each
+    /// workload a directory of its own instead.
+    #[must_use]
+    pub fn with_allowed_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.allowed_host_paths.extend(paths);
+        self
+    }
+
+    /// Where `emptyDir` volumes live. Unset, `wasmcloud-scratch` under the
+    /// system temporary directory.
+    ///
+    /// The engine claims a directory of its own here, and removes what hosts
+    /// that are no longer running left behind. The root is reserved: no
+    /// `hostPath` volume may equal it, contain it, or lie inside it, whatever
+    /// [`Self::with_allowed_host_paths`] permits.
+    #[must_use]
+    pub fn with_scratch_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.scratch_root = Some(root.into());
+        self
+    }
+
     /// Install the host-level socket policy every workload on this engine
     /// inherits.
     ///
@@ -1004,8 +1400,38 @@ impl EngineBuilder {
         self
     }
 
+    /// Cap the whole process's memory footprint, guests and host together.
+    ///
+    /// Past it, guest memory growth and new instances are refused until the
+    /// footprint falls back (see [`process_memory`]). Unset, it is derived:
+    /// 90% of the cgroup limit, or of physical memory where there is none, so
+    /// a host never sets out to use more memory than the machine has.
+    ///
+    /// Overrides an earlier [`Self::without_max_process_memory`].
+    #[must_use]
+    pub fn with_max_process_memory_bytes(mut self, bytes: u64) -> Self {
+        self.max_process_memory_bytes = Some(bytes);
+        self.max_process_memory_off = false;
+        self
+    }
+
+    /// Hold the process to no footprint at all: no sampler runs, and only the
+    /// guest budget and the kernel limit memory. For an embedder that bounds
+    /// the process some other way, or a host whose footprint reading cannot
+    /// be trusted.
+    ///
+    /// Overrides an earlier [`Self::with_max_process_memory_bytes`].
+    #[must_use]
+    pub fn without_max_process_memory(mut self) -> Self {
+        self.max_process_memory_bytes = None;
+        self.max_process_memory_off = true;
+        self
+    }
+
     /// Set the host's memory budget, per-memory ceiling and instance count.
-    /// Unset, the engine uses wasmtime's default memory limits.
+    /// Unset, the pool knobs are wasmtime's defaults and the budget is derived
+    /// from this process's memory limit — and enforced, unless
+    /// [`Self::with_guest_memory_mode`] says otherwise.
     pub fn with_host_memory(mut self, host_memory: host_memory::HostMemoryBudgets) -> Self {
         self.host_memory = Some(host_memory);
         self
@@ -1013,11 +1439,10 @@ impl EngineBuilder {
 
     /// Whether `max_guest_memory` is enforced or only accounted.
     ///
-    /// Unset, it is [`guest_memory::GuestMemoryMode::Count`]: the budget is
-    /// charged and reported but never refuses a growth. That is deliberate —
-    /// `max_guest_memory` is derived when an operator sets nothing, so
-    /// enforcing by default would give every host a ceiling on upgrade that
-    /// nobody chose.
+    /// Unset, it is [`guest_memory::GuestMemoryMode::Enforce`]: growth past
+    /// the budget is refused. `max_guest_memory` is derived when an operator
+    /// sets nothing, so every engine has a ceiling unless it opts into
+    /// [`guest_memory::GuestMemoryMode::Count`].
     #[must_use]
     pub fn with_guest_memory_mode(mut self, mode: guest_memory::GuestMemoryMode) -> Self {
         self.guest_memory_mode = mode;
@@ -1038,13 +1463,59 @@ impl EngineBuilder {
         self
     }
 
-    /// Sets the maximum number of instances for the pooling allocator.
-    /// This is a 'hint' and can be overridden by environment variables.
-    ///
-    /// Ignored when a full [`PoolingAllocationConfig`] is supplied via
+    /// Linear memories the pooling allocator keeps room for, and with them
+    /// every total derived from that count ([`derived_pool_totals`]); the
+    /// core-instance total follows at [`CORE_INSTANCES_PER_MEMORY`] per
+    /// memory unless [`with_max_core_instances`](Self::with_max_core_instances)
+    /// sets it. A hint the `WASMTIME_POOLING_TOTAL_*` environment can
+    /// override. Wins over the count in
+    /// [`with_host_memory`](Self::with_host_memory), and is ignored when a
+    /// full [`PoolingAllocationConfig`] is supplied via
     /// [`with_pooling_config`](Self::with_pooling_config).
-    pub fn with_max_instances(mut self, max: u32) -> Self {
-        self.max_instances = Some(max);
+    pub fn with_max_memories(mut self, memories: u32) -> Self {
+        self.max_memories = Some(MaxMemories::Named(memories));
+        self
+    }
+
+    /// [`with_max_memories`](Self::with_max_memories) at the count
+    /// [`host_memory::derive_max_memories_with`] sizes to this machine now.
+    /// A count derived against the commit limit lets the stack and table
+    /// advisories allow that limit's share, unless a full
+    /// [`PoolingAllocationConfig`] replaces it. The later of the two calls
+    /// wins.
+    ///
+    /// For a host process that runs one engine: each engine in a process
+    /// reserves address space for its whole pool. Stacks are costed at
+    /// wasmtime's default size, which a base [`Self::with_config`] can raise.
+    pub fn with_derived_max_memories(
+        mut self,
+        derivation: host_memory::MaxMemoriesDerivation,
+    ) -> Self {
+        self.max_memories = Some(MaxMemories::Derived {
+            count: host_memory::derive_max_memories_with(derivation),
+            sized_to_commit_limit: derivation.from_memory_precommit_limit,
+        });
+        self
+    }
+
+    /// The old name for [`with_max_memories`](Self::with_max_memories), from
+    /// when one count sized every pool total.
+    #[deprecated(since = "2.12.0", note = "use with_max_memories")]
+    pub fn with_max_instances(self, max: u32) -> Self {
+        self.with_max_memories(max)
+    }
+
+    /// Core instances the pooling allocator admits at once, in place of the
+    /// [`CORE_INSTANCES_PER_MEMORY`] per memory it would derive. A counter,
+    /// not a reservation: a core instance costs the pool nothing but a count,
+    /// so this bounds how many core modules may be live without moving the
+    /// memories, stacks or component instances. The environment's
+    /// `WASMTIME_POOLING_TOTAL_CORE_INSTANCES` still overrides it, as it does
+    /// every total. Wins over the total in
+    /// [`with_host_memory`](Self::with_host_memory), and is ignored when a
+    /// full [`PoolingAllocationConfig`] is supplied.
+    pub fn with_max_core_instances(mut self, core_instances: u32) -> Self {
+        self.max_core_instances = Some(core_instances);
         self
     }
 
@@ -1053,12 +1524,25 @@ impl EngineBuilder {
     /// only the `WASMTIME_POOLING_*` environment variables.
     ///
     /// Supplying a pooling config implies the pooling allocator is enabled and
-    /// takes precedence over [`with_max_instances`](Self::with_max_instances).
+    /// takes precedence over [`with_max_memories`](Self::with_max_memories).
     /// It is still only applied when the host supports the pooling allocator.
     pub fn with_pooling_config(mut self, config: PoolingAllocationConfig) -> Self {
         self.pooling_config = Some(config);
         self.use_pooling_allocator = Some(true);
         self
+    }
+
+    /// Whether the pool keeps a count derived against the commit limit: a
+    /// caller's own pooling config replaces it.
+    fn sized_to_commit_limit(&self) -> bool {
+        let derived = match self.max_memories {
+            Some(MaxMemories::Derived {
+                sized_to_commit_limit,
+                ..
+            }) => sized_to_commit_limit,
+            Some(MaxMemories::Named(_)) | None => false,
+        };
+        derived && self.pooling_config.is_none()
     }
 
     /// Enables an additional WebAssembly proposal on the engine.
@@ -1096,13 +1580,25 @@ impl EngineBuilder {
         self
     }
 
+    /// Whether compiled code registers unwind tables with the system unwinder,
+    /// which only native debuggers and profilers that unwind by DWARF read.
+    ///
+    /// On, as in wasmtime, unless this or `WASMTIME_NATIVE_UNWIND_INFO` turns
+    /// it off. Under LLVM's libunwind (macOS; musl and zig-built Linux
+    /// binaries) every component drop scans a process-wide table of them, so
+    /// a host holding many components wants it off. Windows requires them.
+    pub fn with_native_unwind_info(mut self, enable: bool) -> Self {
+        self.native_unwind_info = Some(enable);
+        self
+    }
+
     /// Sets a custom wasmtime configuration to use as the *base* for the engine.
     ///
     /// This config is used as the starting point, and any other builder
     /// settings — pooling allocator, fuel consumption, and
     /// [`WasmProposal`]s — are layered on top of it. This means a custom config
     /// can be combined with [`with_pooling_allocator`](Self::with_pooling_allocator),
-    /// [`with_max_instances`](Self::with_max_instances), and
+    /// [`with_max_memories`](Self::with_max_memories), and
     /// [`with_wasm_proposal`](Self::with_wasm_proposal) rather than being
     /// mutually exclusive with them.
     ///
@@ -1169,6 +1665,9 @@ impl EngineBuilder {
 
         // Start from the caller-supplied base config (or wasmtime's default) and
         // layer the builder-managed settings on top of it.
+        // A caller's base config may also set what the builder otherwise
+        // leaves at wasmtime's defaults (the fiber stack size among them); the
+        // pool advisories can only assume the defaults when there is none.
         let has_custom_config = self.config.is_some();
         let mut config = self.config.take().unwrap_or_default();
 
@@ -1182,59 +1681,132 @@ impl EngineBuilder {
             .or_else(|| getenv::<bool>("WASMTIME_POOLING"))
             .unwrap_or(!has_custom_config);
 
+        // Read once: each of the derivations and checks below needs it, and
+        // where there is no cgroup it means asking the OS for physical memory.
+        let memory_limit = host_memory::detected_memory_limit();
         // Resolved before the pooling config, which both of its knobs feed.
-        let host_memory = self.host_memory.unwrap_or_default();
+        let host_memory = self
+            .host_memory
+            .unwrap_or_else(|| host_memory::HostMemoryBudgets::derived_within(memory_limit));
         // Reads the resolved budgets, not the installed pool: it advises on the
-        // knobs as configured.
+        // knobs as configured. What the pool reserves is judged below, once
+        // the pool that is actually installed is known.
         if let Some(advisory) = host_memory.advisory() {
             tracing::warn!("{advisory}");
         }
         // Only when the budget is a real ceiling: an over-large budget the host
         // merely counts against costs nothing.
         if self.guest_memory_mode == guest_memory::GuestMemoryMode::Enforce
-            && let Some(advisory) = host_memory.enforcement_advisory()
+            && let Some(advisory) = host_memory.enforcement_advisory_within(memory_limit)
         {
             tracing::warn!("{advisory}");
         }
+        let max_process_memory_bytes = (!self.max_process_memory_off).then(|| {
+            self.max_process_memory_bytes.unwrap_or_else(|| {
+                host_memory::derive_max_process_memory_bytes_within(memory_limit)
+            })
+        });
+        // Only for a limit the operator named: a derived one is a share of the
+        // very limit this checks against.
+        if !self.max_process_memory_off
+            && let Some(bytes) = self.max_process_memory_bytes
+            && let Some(advisory) = host_memory::process_memory_advisory_within(bytes, memory_limit)
+        {
+            tracing::warn!("{advisory}");
+        }
+        // What the startup line says the process is held to.
+        let max_process_memory =
+            max_process_memory_bytes.map_or_else(|| "off".to_string(), host_memory::render_bytes);
 
         // The pooling allocator can be more efficient for workloads with many short-lived instances.
         // Read back from the installed pool: the environment and a
         // caller-supplied config both override what was asked for.
         let mut installed_pool: Option<InstalledPool> = None;
-        if use_pooling_allocator && let Ok(true) = is_pooling_allocator_supported() {
+        let sized_to_commit_limit = self.sized_to_commit_limit();
+        if use_pooling_allocator
+            && let Ok(true) = on_signal_quiet_thread(is_pooling_allocator_supported)
+        {
             tracing::debug!("using pooling allocator by default");
             let pooling = self.pooling_config.take().unwrap_or_else(|| {
-                new_pooling_config(
-                    self.max_instances.unwrap_or(host_memory.core_instances),
-                    host_memory.default_heap_memory,
-                )
+                // The builder's own knobs win over the budgets'. A memory
+                // count set here re-derives the core total, since the
+                // budgets' was derived beside a different memory count.
+                let builder_memories = self.max_memories.map(MaxMemories::count);
+                let memories = builder_memories.unwrap_or(host_memory.max_memories);
+                let core_instances = self.max_core_instances.unwrap_or_else(|| {
+                    if builder_memories.is_some() {
+                        derived_pool_totals(memories).core_instances
+                    } else {
+                        host_memory.core_instances
+                    }
+                });
+                if let Some(advisory) =
+                    host_memory::core_instance_mismatch(memories, core_instances)
+                {
+                    tracing::warn!("{advisory}");
+                }
+                new_pooling_config(memories, core_instances, host_memory.default_heap_memory)
             });
             installed_pool = Some(InstalledPool {
-                core_instances: pooling.get_total_core_instances(),
-                memories: pooling.get_total_memories(),
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
+                table_elements: pooling.get_table_elements(),
+                totals: pool_usage::PoolTotals::of(&pooling),
             });
             config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pooling));
         } else if use_pooling_allocator {
             tracing::warn!("pooling allocator requested but not supported");
         }
-        let total_core_instances = installed_pool.map(|pool| pool.core_instances);
         let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
-
+        let pool_totals = installed_pool.map(|pool| pool.totals);
+        // The counts the pool installed, which the builder's own knobs, the
+        // environment or a caller's pooling config may have moved.
+        let host_memory = match pool_totals {
+            Some(totals) => host_memory::HostMemoryBudgets {
+                max_memories: totals.memories,
+                core_instances: totals.core_instances,
+                ..host_memory
+            },
+            None => host_memory,
+        };
+        // Before the engine is built, so a pool that makes the build fail is
+        // explained on the very start that fails. Against the pool that was
+        // installed, not the knobs: the environment or a caller's own pooling
+        // config can move its memory count and slot size, and with no pool
+        // there is no reservation to warn about. The builder never sets the
+        // fiber stack size, so it is wasmtime's default unless a base config
+        // was given; that one case is checked once the engine can say.
+        let assumed_stack_size =
+            (!has_custom_config).then_some(host_memory::WASMTIME_DEFAULT_ASYNC_STACK_SIZE);
+        if let Some(pool) = installed_pool {
+            for advisory in host_memory::pool_advisories(
+                &pool.totals,
+                pool.max_memory_size,
+                pool.table_elements,
+                assumed_stack_size,
+                sized_to_commit_limit,
+                memory_limit,
+            ) {
+                tracing::warn!("{advisory}");
+            }
+        }
         // Reported here so every embedder says what it built. The reservation
-        // is `total_memories x max_memory_size`, not the instance count.
+        // is `total_memories x slot_size`, not the instance count, and the slot
+        // does not shrink with the heap ceiling.
         match installed_pool {
             Some(pool) => tracing::info!(
+                %max_process_memory,
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
-                core_instances = pool.core_instances,
-                memories = pool.memories,
+                core_instances = pool.totals.core_instances,
+                memories = pool.totals.memories,
+                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
                 pool_reservation = %host_memory::render_bytes(pool.reservation()),
                 "host memory resolved"
             ),
             // No pool, so no reservation and no installed ceiling to name.
             None => tracing::info!(
+                %max_process_memory,
                 max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
                 guest_memory_mode = self.guest_memory_mode.as_str(),
                 pooling = false,
@@ -1286,12 +1858,79 @@ impl EngineBuilder {
         // which is what decides when one is acted on.
         config.epoch_interruption(true);
 
+        // Unwind tables are wasmtime's own default, so this only carries an
+        // explicit choice through. Windows refuses to drop them, so an "off"
+        // is ignored there instead of failing `build`.
+        if let Some(unwind) = self
+            .native_unwind_info
+            .or_else(|| getenv::<bool>("WASMTIME_NATIVE_UNWIND_INFO"))
+        {
+            config.native_unwind_info(unwind || cfg!(windows));
+        }
+
         for proposal in &self.proposals {
             proposal.apply(&mut config);
         }
 
-        let inner = wasmtime::Engine::new(&config)?;
+        // The pool maps its whole slab here, so a pool too large for the
+        // address space fails now, with wasmtime naming only the mapping. Say
+        // which numbers produced it. A heap ceiling past the reservation is
+        // refused here too, whatever the slot count, so that is named instead.
+        // Where mappings are committed the table pool is charged here as
+        // well, and it is a multiple of the memory count, so a build that
+        // fails there must not send the operator to the reservation alone.
+        let inner = on_signal_quiet_thread(|| Ok(wasmtime::Engine::new(&config)?));
+        let inner = inner.map_err(|e| match installed_pool {
+            Some(pool) if pool.max_memory_size > host_memory::WASMTIME_MEMORY_RESERVATION => e
+                .context(format!(
+                    "building the engine failed with a pooling allocator whose heap ceiling \
+                     (default-heap-memory) of {} is past wasmtime's {} memory reservation, \
+                     which the pooling allocator refuses; set default-heap-memory to {} or less",
+                    host_memory::render_bytes(pool.max_memory_size),
+                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
+                    host_memory::render_bytes(host_memory::WASMTIME_MEMORY_RESERVATION),
+                )),
+            Some(pool) => e.context(format!(
+                "building the engine failed with a pooling allocator reserving {} of address \
+                 space ({} memories of {} each) out of the {} this process can map, and {}",
+                host_memory::render_bytes(pool.reservation()),
+                pool.totals.memories,
+                host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size)),
+                host_memory::render_bytes(host_memory::usable_address_space()),
+                host_memory::pool_startup_commit(
+                    &pool.totals,
+                    pool.table_elements,
+                    assumed_stack_size,
+                ),
+            )),
+            None => e,
+        })?;
+        // The stack advisory deferred above: with a base config only the
+        // engine knows its stack size.
+        if let Some(pool) = installed_pool
+            && assumed_stack_size.is_none()
+            && let Some(advisory) = host_memory::pool_stack_advisory(
+                pool.totals.stacks,
+                inner.get_async_stack_size(),
+                sized_to_commit_limit,
+                memory_limit,
+            )
+        {
+            tracing::warn!("{advisory}");
+        }
+
         spawn_epoch_ticker(&inner)?;
+        let process_memory = match max_process_memory_bytes {
+            Some(limit) => {
+                let guard = Arc::new(process_memory::ProcessMemoryGuard::new(limit));
+                guard.spawn_sampler()?;
+                process_memory::ProcessMemoryGuard::register_metrics(
+                    &opentelemetry::global::meter("wash-runtime"),
+                );
+                Some(guard)
+            }
+            None => None,
+        };
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
             .time_to_idle(
@@ -1299,12 +1938,32 @@ impl EngineBuilder {
                     .unwrap_or(Duration::from_secs(600)),
             )
             .build();
+        let socket_policy = self.socket_policy.unwrap_or_default();
+        let scratch_root = self
+            .scratch_root
+            .unwrap_or_else(|| std::env::temp_dir().join("wasmcloud-scratch"));
+        let scratch = scratch::ScratchRoot::open(&scratch_root).map_err(|e| {
+            tracing::warn!(root = %scratch_root.display(), err = %e, "cannot claim the scratch root; emptyDir volumes will be refused");
+            Arc::from(format!("{e:#}"))
+        });
         Ok(Engine {
+            stream_payloads: Arc::default(),
+            base_linkers: Arc::default(),
             inner,
             cache,
+            live_compiles: Arc::default(),
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            socket_policy: self.socket_policy.unwrap_or_default(),
+            host_paths: volumes::HostPathPolicy::new(
+                self.reserved_host_paths,
+                self.allowed_host_paths,
+                Some(scratch_root.clone()),
+                // The socket policy's counters, so an operator reads every
+                // policy figure in one place.
+                socket_policy.meters.clone(),
+            ),
+            socket_policy,
+            scratch,
             host_memory,
             guest_memory: {
                 let budget = guest_memory::GuestMemoryBudget::from_budgets(
@@ -1315,16 +1974,21 @@ impl EngineBuilder {
                 // asked for it: the budget must not charge for growth the pool
                 // is going to refuse. The same figure `explain_compile_failure`
                 // measures against, so they cannot drift apart.
-                match installed_heap_memory {
+                let budget = match installed_heap_memory {
                     Some(ceiling) => budget.with_heap_ceiling(ceiling),
+                    None => budget,
+                };
+                match &process_memory {
+                    Some(guard) => budget.with_process_guard(Arc::clone(guard)),
                     None => budget,
                 }
                 .into_metered()
             },
+            process_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,
-            total_core_instances,
             installed_heap_memory,
+            pool_totals,
         })
     }
 }
@@ -1437,15 +2101,104 @@ where
     Some(value)
 }
 
+/// A `WASMTIME_POOLING_*` value as [`new_pooling_config`] will apply it,
+/// read without the warnings it gives, so sizing can follow the pool the
+/// engine installs: unset or unparseable is `None`.
+fn pooling_env_quiet<T: FromStr>(key: &str) -> Option<T> {
+    env::var(key).ok()?.parse().ok()
+}
+
+/// [`pooling_env_quiet`] for a total, which [`pooling_env_override`] ignores
+/// at zero.
+fn pooling_env_total_quiet(key: &str) -> Option<u32> {
+    pooling_env_quiet(key).filter(|&total| total != 0)
+}
+
 /// [`pooling_env_override`] for the knobs that are plain instance counts.
 ///
-/// All of them default to the same resolved `--core-instances` and all of them
+/// All of them derive from the resolved `--max-memories` and all of them
 /// mean "this host runs nothing" at zero, so all of them want the same guard.
 fn pooling_env_instances(key: &str, resolved: u32) -> u32 {
     pooling_env_override(key, resolved, |v| v.to_string()).unwrap_or(resolved)
 }
 
-fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAllocationConfig {
+/// Core instances the pool admits per linear memory it holds, and the ratio
+/// `--max-memories` alone derives the core-instance total by.
+///
+/// Why 16. A component instance is one linear memory but several core
+/// instances, one per core module wasmtime instantiates for it: a Rust p2
+/// HTTP handler is four (the main module, the `wasi_snapshot_preview1`
+/// adapter and two wit-component glue modules), a Componentize-Go component
+/// five (the same with three glue modules), and a composition adds every
+/// member's ([`pool_share::PoolCost::USUAL`] carries the measured shape).
+/// With every total set to the memory count, the core-instance total was
+/// what a warm pool filled first, at a quarter of the memories the pool had
+/// reserved address space for.
+///
+/// Nothing is reserved for a core instance: wasmtime counts live ones against
+/// this total and allocates each VMContext on the heap at its own size, which
+/// the process memory guard accounts for. So the ratio costs nothing to set
+/// high, and the only thing it must do is stand clear of any shape a host
+/// runs, so that the memories, which do reserve, are what a full pool runs
+/// out of. Sixteen is the largest measured shape, five, with three shapes'
+/// worth of headroom for compositions and toolchains not measured here; a
+/// composition of four Componentize-Go members fits one memory's worth of
+/// core instances only if it shares memories, so a host running such
+/// compositions sets `--core-instances` itself. Should the ratio become
+/// configurable, it is this one number.
+pub(crate) const CORE_INSTANCES_PER_MEMORY: u32 = 16;
+
+/// Tables the pool admits per linear memory it holds. The same shapes hold one
+/// or two tables (the main module's function table and the wit-component
+/// shim's), so a total equal to the linear-memory count bound a warm pool at
+/// half its memories.
+///
+/// Each pooled table is `table_elements` pointers of address space (160 KiB at
+/// the default 20,000) in one mapping that is never split, so this costs no
+/// `vm.max_map_count`. Where the mapping is committed at startup (Windows,
+/// `vm.overcommit_memory=2`, a finite `RLIMIT_DATA`), the table pool's commit
+/// charge grows with it; elsewhere it costs nothing until a table is used.
+const TABLES_PER_MEMORY: u32 = 4;
+
+/// The pool totals `instances` linear memories resolve to, before the
+/// environment is consulted.
+///
+/// `instances` is the resolved `--max-memories`. It is the number of linear
+/// memories, which reserve the pool's address space, and also of the fiber
+/// stacks, component instances and GC heaps, which a component instance of
+/// the usual shape ([`pool_share::PoolCost::USUAL`]) takes one of each
+/// alongside its memory. The core instance and table totals, which reserve
+/// nothing, are multiples of it ([`CORE_INSTANCES_PER_MEMORY`],
+/// [`TABLES_PER_MEMORY`]) so that a component made of several core modules
+/// does not spend several memories' worth of them.
+///
+/// Apart from [`new_pooling_config`] so the derivation can be pinned by a test
+/// that no exported `WASMTIME_POOLING_TOTAL_*` override can disturb, and so
+/// a test that needs a stock pool's shape takes it from here rather than
+/// hard-coding the multiples.
+pub(crate) fn derived_pool_totals(instances: u32) -> pool_usage::PoolTotals {
+    pool_usage::PoolTotals {
+        memories: instances,
+        stacks: instances,
+        component_instances: instances,
+        gc_heaps: instances,
+        core_instances: instances.saturating_mul(CORE_INSTANCES_PER_MEMORY),
+        tables: instances.saturating_mul(TABLES_PER_MEMORY),
+    }
+}
+
+/// The pooling allocator for `instances` linear memories: the totals of
+/// [`derived_pool_totals`], with `core_instances` in place of the derived
+/// core-instance total, each of which can still be set on its own through
+/// its `WASMTIME_POOLING_TOTAL_*` variable, and the per-slot limits the
+/// environment names.
+fn new_pooling_config(
+    instances: u32,
+    core_instances: u32,
+    default_heap_memory: u64,
+) -> PoolingAllocationConfig {
+    let mut derived = derived_pool_totals(instances);
+    derived.core_instances = core_instances;
     let mut config = PoolingAllocationConfig::default();
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_UNUSED_WASM_SLOTS") {
         config.max_unused_warm_slots(v);
@@ -1464,7 +2217,7 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     }
     config.total_component_instances(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_COMPONENT_INSTANCES",
-        instances,
+        derived.component_instances,
     ));
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_COMPONENT_INSTANCE_SIZE") {
         config.max_component_instance_size(v);
@@ -1480,21 +2233,21 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     }
     config.total_memories(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_MEMORIES",
-        instances,
+        derived.memories,
     ));
     config.total_tables(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_TABLES",
-        instances,
+        derived.tables,
     ));
     config.total_stacks(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_STACKS",
-        instances,
+        derived.stacks,
     ));
-    // `--core-instances` is what `host memory resolved` reports, and this is
-    // what actually sizes the pool.
+    // A counter, not a reservation: `host memory resolved` reports it beside
+    // the memory count that actually sizes the pool.
     config.total_core_instances(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_CORE_INSTANCES",
-        instances,
+        derived.core_instances,
     ));
     if let Some(v) = getenv("WASMTIME_POOLING_MAX_CORE_INSTANCE_SIZE") {
         config.max_core_instance_size(v);
@@ -1525,7 +2278,7 @@ fn new_pooling_config(instances: u32, default_heap_memory: u64) -> PoolingAlloca
     #[cfg(not(windows))]
     config.total_gc_heaps(pooling_env_instances(
         "WASMTIME_POOLING_TOTAL_GC_HEAPS",
-        instances,
+        derived.gc_heaps,
     ));
     config
 }
@@ -1594,6 +2347,176 @@ mod tests {
         assert_eq!(explained, "expected a WebAssembly component");
     }
 
+    fn volume_only_workload(volumes: Vec<crate::types::Volume>) -> Workload {
+        Workload {
+            namespace: "ns".into(),
+            name: "volumes".into(),
+            annotations: Default::default(),
+            service: None,
+            components: vec![],
+            host_interfaces: vec![],
+            volumes,
+        }
+    }
+
+    fn host_path(path: &std::path::Path) -> crate::types::Volume {
+        crate::types::Volume {
+            name: "data".into(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: path.to_string_lossy().into_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn an_engine_refuses_a_host_path_outside_its_allowlist() {
+        let root = tempfile::tempdir().unwrap();
+        let allowed = root.path().join("allowed");
+        let other = root.path().join("other");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .with_allowed_host_paths([allowed.clone()])
+            .build()
+            .unwrap();
+
+        let Err(err) =
+            engine.initialize_workload("w", volume_only_workload(vec![host_path(&other)]))
+        else {
+            panic!("a host path outside the allowlist should be refused");
+        };
+        assert!(
+            format!("{err:#}").contains("--allowed-host-path"),
+            "{err:#}"
+        );
+        assert_eq!(meters.host_path_denied(), 1);
+        engine
+            .initialize_workload("w", volume_only_workload(vec![host_path(&allowed)]))
+            .unwrap();
+        // An empty directory is the host's own, never a path a workload named.
+        engine
+            .initialize_workload(
+                "w",
+                volume_only_workload(vec![crate::types::Volume {
+                    name: "scratch".into(),
+                    volume_type: VolumeType::EmptyDir(EmptyDirVolume {}),
+                }]),
+            )
+            .unwrap();
+    }
+
+    fn empty_dir(name: &str) -> crate::types::Volume {
+        crate::types::Volume {
+            name: name.into(),
+            volume_type: VolumeType::EmptyDir(EmptyDirVolume {}),
+        }
+    }
+
+    /// Scratch lives under the root the engine owns, and a workload that goes
+    /// away takes its scratch with it.
+    #[test]
+    fn empty_dir_scratch_lives_under_the_root_and_leaves_with_its_workload() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::builder()
+            .with_scratch_root(root.path())
+            .build()
+            .unwrap();
+        let scratch_files = || {
+            walkdir(root.path())
+                .into_iter()
+                .filter(|p| !p.ends_with(".lock"))
+                .count()
+        };
+        let before = scratch_files();
+        let Ok(workload) = engine.initialize_workload(
+            "w",
+            volume_only_workload(vec![empty_dir("a"), empty_dir("b")]),
+        ) else {
+            panic!("a workload with emptyDir volumes should initialize");
+        };
+        // One workload directory holding a directory per volume.
+        assert_eq!(scratch_files(), before + 3);
+        drop(workload);
+        assert_eq!(scratch_files(), before);
+    }
+
+    /// A volume around the scratch root, as `/tmp` is around the default one,
+    /// the root itself, or a workload's scratch inside it would expose other
+    /// workloads' scratch, so each is refused even when the allowlist names it.
+    #[test]
+    fn a_host_path_exposing_scratch_is_refused_even_when_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let scratch = root.path().join("scratch");
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .with_scratch_root(&scratch)
+            .with_allowed_host_paths([root.path().to_path_buf(), scratch.clone()])
+            .build()
+            .unwrap();
+        let workload = engine
+            .initialize_workload("w", volume_only_workload(vec![empty_dir("a")]))
+            .unwrap();
+        let inside = walkdir(&scratch)
+            .into_iter()
+            .find(|p| p.is_dir())
+            .expect("the workload's scratch directory");
+        for (what, path) in [
+            ("around", root.path()),
+            ("equal to", scratch.as_path()),
+            ("inside", inside.as_path()),
+        ] {
+            assert!(
+                engine
+                    .initialize_workload("w2", volume_only_workload(vec![host_path(path)]))
+                    .is_err(),
+                "{what} the scratch root"
+            );
+        }
+        assert_eq!(meters.host_path_denied(), 3);
+        drop(workload);
+    }
+
+    fn walkdir(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(walkdir(&path));
+            }
+            found.push(path);
+        }
+        found
+    }
+
+    /// With no allowed host paths configured, no `hostPath` volume is permitted.
+    #[test]
+    fn a_default_engine_refuses_every_host_path() {
+        let root = tempfile::tempdir().unwrap();
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let engine = Engine::builder()
+            .with_socket_policy(Arc::new(crate::sockets::policy::SocketPolicy {
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            }))
+            .build()
+            .unwrap();
+        assert!(
+            engine
+                .initialize_workload("w", volume_only_workload(vec![host_path(root.path())]))
+                .is_err()
+        );
+        assert_eq!(meters.host_path_denied(), 1);
+    }
+
     // Compiling is parallel unless a host says otherwise, and saying so
     // reaches the engine rather than being dropped on the builder.
     #[test]
@@ -1608,6 +2531,20 @@ mod tests {
         assert!(!engine.inner().get_parallel_compilation());
     }
 
+    // Unwind tables are on unless a host turns them off, and turning them off
+    // reaches the engine everywhere but Windows, which requires them.
+    #[test]
+    fn native_unwind_info_is_on_and_can_be_turned_off() {
+        let engine = Engine::builder().build().expect("default should build");
+        assert_eq!(engine.inner().get_native_unwind_info(), Some(true));
+
+        let engine = Engine::builder()
+            .with_native_unwind_info(false)
+            .build()
+            .expect("turning unwind info off should build");
+        assert_eq!(engine.inner().get_native_unwind_info(), Some(cfg!(windows)));
+    }
+
     // A custom base config can now be combined with the pooling allocator and
     // instance limits, which previously errored out of `build()`.
     #[test]
@@ -1618,7 +2555,7 @@ mod tests {
         Engine::builder()
             .with_config(cfg)
             .with_pooling_allocator(true)
-            .with_max_instances(64)
+            .with_max_memories(64)
             .build()
             .expect("custom config + pooling should build");
     }
@@ -1634,6 +2571,101 @@ mod tests {
             .expect("custom config + GC proposal should build");
     }
 
+    /// Linear memories, fiber stacks and component instances share one count;
+    /// core instances and tables, which a component spends several of and
+    /// which reserve nothing, stand clear so the linear memories are what a
+    /// warm pool fills first.
+    #[test]
+    #[allow(deprecated)]
+    fn pool_counters_do_not_bind_before_the_memories() {
+        // The derivation, before the environment has its say.
+        let derived = derived_pool_totals(1000);
+        assert_eq!(derived.memories, 1000);
+        assert_eq!(derived.stacks, 1000);
+        assert_eq!(derived.component_instances, 1000);
+        assert_eq!(derived.gc_heaps, 1000);
+        assert_eq!(derived.core_instances, 16_000);
+        assert_eq!(derived.tables, 4000);
+        assert_eq!(derived_pool_totals(u32::MAX).core_instances, u32::MAX);
+
+        // What the config and then the engine install is the derivation with
+        // the environment applied, so this half holds in a shell that exports
+        // a `WASMTIME_POOLING_TOTAL_*` override too: the expectation is read
+        // through the same override the code is.
+        let installed = |key, resolved| pooling_env_instances(key, resolved);
+        let derived = derived_pool_totals(64);
+        let config = new_pooling_config(
+            64,
+            derived.core_instances,
+            host_memory::WASMTIME_DEFAULT_HEAP_MEMORY,
+        );
+        assert_eq!(
+            config.get_total_memories(),
+            installed("WASMTIME_POOLING_TOTAL_MEMORIES", derived.memories)
+        );
+        assert_eq!(
+            config.get_total_core_instances(),
+            installed(
+                "WASMTIME_POOLING_TOTAL_CORE_INSTANCES",
+                derived.core_instances
+            )
+        );
+        assert_eq!(
+            config.get_total_tables(),
+            installed("WASMTIME_POOLING_TOTAL_TABLES", derived.tables)
+        );
+
+        let engine = Engine::builder()
+            .with_max_memories(64)
+            .build()
+            .expect("pooling engine should build");
+        if let Some(totals) = engine.pool_totals() {
+            assert_eq!(totals, pool_usage::PoolTotals::of(&config));
+            assert_eq!(engine.total_memories(), Some(config.get_total_memories()));
+            assert_eq!(
+                engine.total_core_instances(),
+                Some(config.get_total_core_instances())
+            );
+        }
+    }
+
+    /// `--core-instances` beside `--max-memories` moves the core-instance
+    /// total alone, leaving the memories and the other totals derived from
+    /// the memory count, and the environment still has the last word over it.
+    #[test]
+    #[allow(deprecated)]
+    fn an_explicit_core_instance_total_moves_only_that_total() {
+        let installed = |key, resolved| pooling_env_instances(key, resolved);
+        let derived = derived_pool_totals(64);
+        let config = new_pooling_config(64, 100, host_memory::WASMTIME_DEFAULT_HEAP_MEMORY);
+        assert_eq!(
+            config.get_total_core_instances(),
+            installed("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", 100)
+        );
+        assert_eq!(
+            config.get_total_memories(),
+            installed("WASMTIME_POOLING_TOTAL_MEMORIES", derived.memories)
+        );
+        assert_eq!(
+            config.get_total_tables(),
+            installed("WASMTIME_POOLING_TOTAL_TABLES", derived.tables)
+        );
+
+        let engine = Engine::builder()
+            .with_max_memories(64)
+            .with_max_core_instances(100)
+            .without_max_process_memory()
+            .build()
+            .expect("pooling engine should build");
+        if engine.pool_totals().is_some() {
+            assert_eq!(
+                engine.total_core_instances(),
+                Some(installed("WASMTIME_POOLING_TOTAL_CORE_INSTANCES", 100))
+            );
+            assert_eq!(engine.total_memories(), Some(config.get_total_memories()));
+        }
+    }
+
     // An externally-supplied pooling config is accepted and applied.
     #[test]
     fn external_pooling_config_builds() {
@@ -1644,6 +2676,106 @@ mod tests {
             .with_pooling_config(pool)
             .build()
             .expect("external pooling config should build");
+    }
+
+    /// Only a count derived against the commit limit is allowed that limit's
+    /// share; a later named count or a caller's pooling config replaces it.
+    #[test]
+    fn only_a_count_derived_to_the_commit_limit_takes_its_share() {
+        let precommit =
+            host_memory::MaxMemoriesDerivation::default().with_memory_precommit_limit(true);
+        let derived = || Engine::builder().with_derived_max_memories(precommit);
+        assert!(derived().sized_to_commit_limit());
+        assert!(
+            !Engine::builder()
+                .with_derived_max_memories(host_memory::MaxMemoriesDerivation::default())
+                .sized_to_commit_limit()
+        );
+        assert!(!derived().with_max_memories(64).sized_to_commit_limit());
+        assert!(
+            !derived()
+                .with_pooling_config(PoolingAllocationConfig::default())
+                .sized_to_commit_limit()
+        );
+        assert!(
+            !Engine::builder()
+                .with_max_memories(64)
+                .sized_to_commit_limit()
+        );
+    }
+
+    /// The budgets an engine reports carry the counts its pool installed,
+    /// not the ones its budgets asked for.
+    #[test]
+    fn host_memory_reports_the_installed_pool_counts() -> anyhow::Result<()> {
+        let engine = Engine::builder()
+            .with_host_memory(
+                host_memory::HostMemoryBudgets::resolve(None, None, None, None)
+                    .map_err(anyhow::Error::msg)?,
+            )
+            .with_max_memories(64)
+            .build()?;
+        let Some(totals) = engine.pool_totals() else {
+            return Ok(());
+        };
+        let reported = engine.host_memory();
+        assert_eq!(reported.max_memories, totals.memories);
+        assert_eq!(reported.core_instances, totals.core_instances);
+        Ok(())
+    }
+
+    /// GC use is read the first time a workload asks and kept with the
+    /// compile, so a workload served from the cache, after the last one
+    /// holding the compile let go, still has its answer without a second
+    /// compile or a second read of the source.
+    #[test]
+    fn a_cached_compile_carries_its_gc_answer() -> anyhow::Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let engine = pool_share::test_support::engine(pool_share::test_support::config());
+        if engine.pool_totals().is_none() {
+            return Ok(());
+        }
+        let cases = [
+            (
+                "sha256:numeric",
+                "(component (core module (memory 1)))",
+                false,
+            ),
+            (
+                "sha256:gc",
+                "(component (core module (type (struct))))",
+                true,
+            ),
+        ];
+        for (compiles, (digest, wat, uses_gc)) in (1..).zip(cases) {
+            let bytes = wat::parse_str(wat)?;
+            let (first, live) = engine.load_live_component(&bytes, Some(digest))?;
+            assert_eq!(
+                first.may_use_gc.get(),
+                None,
+                "{digest}: read only on asking"
+            );
+            assert_eq!(
+                engine.compiled_may_use_gc(&first, &bytes),
+                uses_gc,
+                "{digest}"
+            );
+            drop((first, live));
+            assert!(engine.live_compiles.lock().unwrap().is_empty());
+
+            let (cached, _) = engine.load_live_component(&bytes, Some(digest))?;
+            assert_eq!(engine.compiles.load(Ordering::SeqCst), compiles);
+            assert_eq!(cached.may_use_gc.get(), Some(&uses_gc), "{digest}");
+        }
+
+        let unpooled = Engine::builder().with_pooling_allocator(false).build()?;
+        let gc = wat::parse_str("(component (core module (type (struct))))")?;
+        assert!(
+            !unpooled.may_use_gc(&gc),
+            "an engine with no pool admits nothing"
+        );
+        Ok(())
     }
 
     // Proposal names parse case-insensitively and accept `_`/`-` interchangeably;
@@ -1685,6 +2817,70 @@ mod tests {
 
         let engine = Engine::builder().build().expect("engine should build");
         Component::new(&engine.inner, &bytes).expect("map component should compile");
+    }
+
+    /// A component built against a newer WASI patch than the host links still
+    /// resolves, provided it only uses what the host's version defines.
+    #[test]
+    fn a_newer_compatible_wasi_import_links_against_the_host() {
+        let engine = Engine::builder().build().expect("engine should build");
+        let mut linker: Linker<SharedCtx> = Linker::new(&engine.inner);
+        add_wasi_to_linker(&mut linker).expect("WASI should link");
+        let importing = |version: &str| {
+            let wat = format!(
+                r#"(component (import "wasi:random/random@{version}"
+                    (instance (export "get-random-u64" (func (result u64))))))"#
+            );
+            let bytes = wat::parse_str(wat).expect("component should assemble");
+            Component::new(&engine.inner, &bytes).expect("component should compile")
+        };
+
+        for version in ["0.2.0", "0.2.99", "0.3.0", "0.3.3"] {
+            linker
+                .instantiate_pre(&importing(version))
+                .unwrap_or_else(|e| panic!("wasi:random@{version} should link: {e:#}"));
+        }
+        assert!(linker.instantiate_pre(&importing("0.4.0")).is_err());
+    }
+
+    /// A digest a running workload holds is never compiled again, even once
+    /// the cache has let it go; once nothing holds it, it is forgotten.
+    #[test]
+    fn a_digest_in_use_is_not_recompiled_after_cache_eviction() {
+        use std::sync::atomic::Ordering;
+        const DIGEST: &str = "sha256:held-image";
+
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        let engine = Engine::builder().build().expect("engine should build");
+
+        let (_, first) = engine
+            .load_live_component(&bytes, Some(DIGEST))
+            .expect("first load");
+        engine.cache.invalidate_all();
+        engine.cache.run_pending_tasks();
+        let (_, second) = engine
+            .load_live_component(&bytes, Some(DIGEST))
+            .expect("second load");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(
+            first.as_ref().expect("a digest is tracked"),
+            second.as_ref().expect("a digest is tracked"),
+        ));
+
+        drop((first, second));
+        assert!(engine.live_compiles.lock().unwrap().is_empty());
+        engine.cache.invalidate_all();
+        engine.cache.run_pending_tasks();
+        let (_, third) = engine
+            .load_live_component(&bytes, Some(DIGEST))
+            .expect("third load");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
+        assert!(third.is_some());
+
+        let (_, untracked) = engine
+            .load_live_component(&bytes, None::<&str>)
+            .expect("load without a digest");
+        assert!(untracked.is_none(), "nothing to share without a digest");
     }
 
     // A scheduler placing N replicas of one image sends N starts carrying one
@@ -1765,3 +2961,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod contract_tests;

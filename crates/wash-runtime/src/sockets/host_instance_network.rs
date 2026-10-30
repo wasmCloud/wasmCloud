@@ -11,6 +11,8 @@ impl instance_network::Host for WasiSocketsCtxView<'_> {
         let network = Network {
             socket_addr_check: self.ctx.socket_addr_check.clone(),
             allowed_ip_name_lookups: Arc::clone(&self.ctx.allowed_ip_name_lookups),
+            allowed_hosts: Arc::clone(&self.ctx.allowed_hosts),
+            resolved_names: Arc::clone(&self.ctx.resolved_names),
         };
         let network = self.table.push(network)?;
         Ok(Resource::new_own(network.rep()))

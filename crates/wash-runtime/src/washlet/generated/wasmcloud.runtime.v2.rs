@@ -491,9 +491,11 @@ pub struct Component {
     ///
     /// Unset or below 1 lets a fully idle pool empty out, so the next call after
     /// a quiet spell starts cold. Raise it to keep a floor of instances warm
-    /// through the quiet. Capped at pool_size, and only meaningful alongside
-    /// reclaim_window_seconds. Note this is a floor under the pool, not a target
-    /// to grow to: instances are still only built when a call needs one.
+    /// through the quiet. A value at or above pool_size disables reclaim
+    /// entirely, since a sweep could never find a surplus to retire. Only
+    /// meaningful alongside reclaim_window_seconds. Note this is a floor under
+    /// the pool, not a target to grow to: instances are still only built when a
+    /// call needs one.
     #[prost(sint32, tag = "10")]
     pub reclaim_min_instances: i32,
 }
@@ -520,16 +522,20 @@ pub struct LocalResources {
     /// Volume mounts from the parent Workload
     #[prost(message, repeated, tag = "5")]
     pub volume_mounts: ::prost::alloc::vec::Vec<VolumeMount>,
-    /// Allowed Hosts for TCP Outbound connections. "localhost" is always allowed.
-    /// Can contain wildcards "*" as any part of the hostname.Ex: "*.wasmcloud.io" but not "som\*thing.wasmcloud.io"
-    /// Note this controls socket connections but not DNS lookups.
-    /// Upon a successful lookup, the host will allow outbound connections to the specified hosts.
+    /// Outbound egress allowlist, for wasi:http and wasi:sockets alike. Accepts
+    /// "*", "host\[:port\]", "scheme://host\[:port\]" and "*.suffix\[:port\]"; a
+    /// wildcard must be a leading "*." label, so "*.wasmcloud.io" but not
+    /// "som*thing.wasmcloud.io". Empty or absent denies all egress.
+    /// An entry naming a host also lets the component resolve that name, and
+    /// permits a socket to an address it resolved the name into, on the entry's
+    /// port. "*" permits connections but opens no lookup.
     #[prost(string, repeated, tag = "6")]
     pub allowed_hosts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Names the component may resolve through wasi:sockets/ip-name-lookup
-    /// (resolve-addresses). Accepts "*" for any name, a wildcard such as
-    /// "*.wasmcloud.io", an exact name, or a literal IP address.
-    /// Empty or absent denies every lookup with permanent-resolver-failure.
+    /// (resolve-addresses), beyond the hosts allowed_hosts names. Accepts "*"
+    /// for any name, a wildcard such as "*.wasmcloud.io", an exact name, or a
+    /// literal IP address. With neither list naming it, a lookup is denied with
+    /// permanent-resolver-failure.
     #[prost(string, repeated, tag = "7")]
     pub allowed_ip_name_lookups: ::prost::alloc::vec::Vec<
         ::prost::alloc::string::String,

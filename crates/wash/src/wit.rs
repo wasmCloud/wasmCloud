@@ -5,16 +5,20 @@
 //! fetching dependencies from registries and manages lock files for reproducible builds.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
+    io::ErrorKind,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
+use oci_client::errors::{OciDistributionError, OciErrorCode};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument};
+use sha2::{Digest as _, Sha256};
+use tracing::{debug, instrument, warn};
 use url::Url;
 use wasm_pkg_client::{
-    CustomConfig, PackageRef, Registry, RegistryMapping, RegistryMetadata,
+    ContentDigest, CustomConfig, PackageRef, Registry, RegistryMapping, RegistryMetadata,
     caching::{CachingClient, FileCache},
     oci::{BasicCredentials, OciRegistryConfig},
 };
@@ -221,6 +225,125 @@ pub struct WkgFetcher {
     wkg_config: wasm_pkg_core::manifest::Manifest,
     wkg_client_config: wasm_pkg_client::Config,
     cache: FileCache,
+    cache_dir: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct CachedRelease {
+    #[serde(rename = "version")]
+    _version: semver::Version,
+    content_digest: ContentDigest,
+}
+
+async fn cached_blob_matches_digest(path: &Path, digest: &str) -> Result<bool> {
+    let Some(expected) = digest.strip_prefix("sha256:") else {
+        return Ok(false);
+    };
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
+    let contents = tokio::fs::read(path).await.with_context(|| {
+        format!(
+            "failed to read WIT package cache entry [{}]",
+            path.display()
+        )
+    })?;
+    Ok(format!("{:x}", Sha256::digest(contents)) == expected)
+}
+
+async fn discard_cache_entry(path: &Path) -> Result<()> {
+    warn!(path = %path.display(), "discarding incomplete WIT package cache entry");
+    tokio::fs::remove_file(path).await.with_context(|| {
+        format!(
+            "failed to remove invalid WIT package cache entry [{}]",
+            path.display()
+        )
+    })
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+// Colons in FileCache names become NTFS alternate data streams.
+fn windows_cache_streams(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    use std::{
+        ffi::OsString,
+        os::windows::ffi::{OsStrExt as _, OsStringExt as _},
+    };
+    use windows_sys::Win32::{
+        Foundation::{ERROR_HANDLE_EOF, HANDLE, INVALID_HANDLE_VALUE},
+        Storage::FileSystem::{
+            FindClose, FindFirstStreamW, FindNextStreamW, FindStreamInfoStandard,
+            WIN32_FIND_STREAM_DATA,
+        },
+    };
+
+    struct FindHandle(HANDLE);
+
+    impl Drop for FindHandle {
+        fn drop(&mut self) {
+            // SAFETY: FindFirstStreamW returned this handle.
+            let _ = unsafe { FindClose(self.0) };
+        }
+    }
+
+    let mut wide_path: Vec<_> = path.as_os_str().encode_wide().collect();
+    wide_path.push(0);
+    let mut data = WIN32_FIND_STREAM_DATA::default();
+    // SAFETY: wide_path is NUL-terminated, and data is valid for writes.
+    let handle = unsafe {
+        FindFirstStreamW(
+            wide_path.as_ptr(),
+            FindStreamInfoStandard,
+            (&raw mut data).cast(),
+            0,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(ERROR_HANDLE_EOF as i32) {
+            Ok(Vec::new())
+        } else {
+            Err(error)
+        };
+    }
+    let handle = FindHandle(handle);
+    let mut paths = Vec::new();
+    const DATA_SUFFIX: &[u16] = &[
+        b':' as u16,
+        b'$' as u16,
+        b'D' as u16,
+        b'A' as u16,
+        b'T' as u16,
+        b'A' as u16,
+    ];
+
+    loop {
+        let length = data
+            .cStreamName
+            .iter()
+            .position(|character| *character == 0)
+            .unwrap_or(data.cStreamName.len());
+        let stream = &data.cStreamName[..length];
+        if let Some(name) = stream.strip_suffix(DATA_SUFFIX)
+            && name != [b':' as u16]
+        {
+            let mut full_name: Vec<_> = path.as_os_str().encode_wide().collect();
+            full_name.extend_from_slice(name);
+            paths.push(PathBuf::from(OsString::from_wide(&full_name)));
+        }
+
+        data = WIN32_FIND_STREAM_DATA::default();
+        // SAFETY: handle and data remain valid for the enumeration.
+        if unsafe { FindNextStreamW(handle.0, (&raw mut data).cast()) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_HANDLE_EOF as i32) {
+                break;
+            }
+            return Err(error);
+        }
+    }
+
+    Ok(paths)
 }
 
 /// Common arguments for Wasm package tooling.
@@ -233,6 +356,14 @@ pub struct CommonPackageArgs {
 }
 
 impl CommonPackageArgs {
+    fn cache_dir(&self) -> PathBuf {
+        match (self.cache.as_ref(), std::env::var_os("WKG_CACHE_DIR")) {
+            (Some(path), _) => path.to_owned(),
+            (None, Some(path)) => PathBuf::from(path),
+            _ => todo!("use common dir"),
+        }
+    }
+
     /// Helper to load the config from the given path or other default paths
     pub async fn load_config(&self) -> anyhow::Result<wasm_pkg_client::Config> {
         // Get the default config so we have the default fallbacks
@@ -300,6 +431,17 @@ impl CommonPackageArgs {
                 ),
             );
         }
+        // And cosmonic, which is published under the cosmonic-labs GHCR org
+        let cosmonic_label = "cosmonic"
+            .parse()
+            .context("failed to parse cosmonic label")?;
+        if conf.namespace_registry(&cosmonic_label).is_none() {
+            conf.set_namespace_registry(
+                cosmonic_label,
+                oci_registry_mapping("ghcr.io/cosmonic-labs/cosmonic", "cosmonic", None)
+                    .context("failed to build cosmonic registry mapping")?,
+            );
+        }
         Ok(conf)
     }
 
@@ -310,16 +452,7 @@ impl CommonPackageArgs {
         // 2. Path provided by the user via `WASH` prefixed environment variable
         // 3. Path provided by the users via `WKG` prefixed environment variable
         // 4. Default path to cache in wash dir
-        let dir = match (self.cache.as_ref(), std::env::var_os("WKG_CACHE_DIR")) {
-            // We have a cache dir provided by the user flag or WASH env var
-            (Some(path), _) => path.to_owned(),
-            // We have a cache dir provided by the user via `WKG` env var
-            (None, Some(path)) => PathBuf::from(path),
-            // Otherwise we got nothing and attempt to load the default cache dir
-            // (None, None) => cfg_dir()?.join("package_cache"),
-            _ => todo!("use common dir"),
-        };
-        FileCache::new(dir).await
+        FileCache::new(self.cache_dir()).await
     }
 }
 
@@ -328,11 +461,13 @@ impl WkgFetcher {
         wkg_config: wasm_pkg_core::manifest::Manifest,
         wkg_client_config: wasm_pkg_client::Config,
         cache: FileCache,
+        cache_dir: PathBuf,
     ) -> Self {
         Self {
             wkg_config,
             wkg_client_config,
             cache,
+            cache_dir,
         }
     }
 
@@ -341,6 +476,7 @@ impl WkgFetcher {
         common: &CommonPackageArgs,
         wkg_config: wasm_pkg_core::manifest::Manifest,
     ) -> Result<Self> {
+        let cache_dir = common.cache_dir();
         let cache = common
             .load_cache()
             .await
@@ -349,7 +485,7 @@ impl WkgFetcher {
             .load_config()
             .await
             .context("failed to load wkg config")?;
-        Ok(Self::new(wkg_config, wkg_client_config, cache))
+        Ok(Self::new(wkg_config, wkg_client_config, cache, cache_dir))
     }
 
     /// Build a fetcher for a project: reads the project's `wkg.toml` overrides and the resolved
@@ -480,23 +616,107 @@ impl WkgFetcher {
         )
     }
 
+    async fn discard_invalid_cache_entries(&self) -> Result<()> {
+        let cache_dir = &self.cache_dir;
+        let mut entries = tokio::fs::read_dir(cache_dir).await.with_context(|| {
+            format!("failed to read WIT package cache [{}]", cache_dir.display())
+        })?;
+        let mut referenced = Vec::new();
+        let mut checked = HashSet::new();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if !entry.file_type().await?.is_file() {
+                continue;
+            }
+
+            let paths = vec![path.clone()];
+            #[cfg(windows)]
+            let paths = {
+                let mut paths = paths;
+                paths.extend(windows_cache_streams(&path)?);
+                paths
+            };
+
+            for path in paths {
+                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+
+                let valid = if name.starts_with("sha256:") {
+                    checked.insert(path.clone());
+                    cached_blob_matches_digest(&path, name).await?
+                } else if path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+                {
+                    match serde_json::from_slice::<CachedRelease>(&tokio::fs::read(&path).await?) {
+                        Ok(release) => {
+                            referenced.push(release.content_digest);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                } else {
+                    true
+                };
+
+                if !valid {
+                    discard_cache_entry(&path).await?;
+                }
+            }
+        }
+
+        for digest in referenced {
+            let digest = digest.to_string();
+            let path = cache_dir.join(&digest);
+            if !checked.insert(path.clone()) {
+                continue;
+            }
+            if !tokio::fs::try_exists(&path).await.with_context(|| {
+                format!(
+                    "failed to inspect WIT package cache entry [{}]",
+                    path.display()
+                )
+            })? {
+                continue;
+            }
+            if !cached_blob_matches_digest(&path, &digest).await? {
+                discard_cache_entry(&path).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn fetch_wit_dependencies(
         &self,
         wit_dir: impl AsRef<Path>,
         lock: &mut LockFile,
     ) -> Result<()> {
-        let client = self.client();
-
-        wasm_pkg_core::wit::fetch_dependencies(
-            &self.wkg_config,
-            wit_dir.as_ref(),
-            lock,
-            client,
-            OutputType::Wit,
-        )
-        .await?;
-
-        Ok(())
+        let wit_dir = wit_dir.as_ref();
+        let mut attempt = 1;
+        loop {
+            self.discard_invalid_cache_entries().await?;
+            match wasm_pkg_core::wit::fetch_dependencies(
+                &self.wkg_config,
+                wit_dir,
+                lock,
+                self.client(),
+                OutputType::Wit,
+            )
+            .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if attempt < WIT_FETCH_MAX_ATTEMPTS
+                        && is_transient_registry_fetch_error(&error) =>
+                {
+                    wait_to_retry_wit_fetch(&error, attempt).await;
+                    attempt += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Build a WIT package into a Wasm binary
@@ -509,9 +729,24 @@ impl WkgFetcher {
         Option<semver::Version>,
         Vec<u8>,
     )> {
-        let client = self.client();
-
-        wasm_pkg_core::wit::build_package(&self.wkg_config, wit_dir.as_ref(), lock, client).await
+        let wit_dir = wit_dir.as_ref();
+        let mut attempt = 1;
+        loop {
+            self.discard_invalid_cache_entries().await?;
+            match wasm_pkg_core::wit::build_package(&self.wkg_config, wit_dir, lock, self.client())
+                .await
+            {
+                Ok(package) => return Ok(package),
+                Err(error)
+                    if attempt < WIT_FETCH_MAX_ATTEMPTS
+                        && is_transient_registry_fetch_error(&error) =>
+                {
+                    wait_to_retry_wit_fetch(&error, attempt).await;
+                    attempt += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Work out what is wrong with a WIT directory that failed to fetch. Resolution reports only
@@ -690,6 +925,84 @@ impl WkgFetcher {
             worlds: resolved.worlds.keys().cloned().collect(),
         }))
     }
+}
+
+const WIT_FETCH_MAX_ATTEMPTS: u32 = 3;
+const WIT_FETCH_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
+
+async fn wait_to_retry_wit_fetch(error: &anyhow::Error, attempt: u32) {
+    let delay = wit_fetch_retry_delay(attempt);
+    warn!(
+        attempt,
+        max_attempts = WIT_FETCH_MAX_ATTEMPTS,
+        delay_ms = delay.as_millis(),
+        error = %error,
+        "transient registry fetch failed; retrying"
+    );
+    tokio::time::sleep(delay).await;
+}
+
+fn wit_fetch_retry_delay(failed_attempt: u32) -> Duration {
+    let exponent = failed_attempt.saturating_sub(1).min(3);
+    let base = WIT_FETCH_INITIAL_BACKOFF.saturating_mul(1 << exponent);
+    base + Duration::from_millis(fastrand::u64(0..base.as_millis() as u64))
+}
+
+// Downcasts require the same dependency versions used by wasm-pkg-client and oci-client.
+const _: () = {
+    use wasm_pkg_client::oci::client::{Client, ClientConfig};
+    let _: fn(<Client as TryFrom<ClientConfig>>::Error) -> OciDistributionError = |error| error;
+    let _: fn(reqwest_oci::Error) -> OciDistributionError = OciDistributionError::RequestError;
+};
+
+fn is_transient_registry_fetch_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        if let Some(error) = cause.downcast_ref::<OciDistributionError>() {
+            return match error {
+                OciDistributionError::ServerError { code, .. } => {
+                    *code == 429 || (500..=599).contains(code)
+                }
+                OciDistributionError::RequestError(error) => is_transient_reqwest_error(error),
+                OciDistributionError::IoError(error) => is_transient_io_error(error),
+                OciDistributionError::RegistryError { envelope, .. } => {
+                    !envelope.errors.is_empty()
+                        && envelope
+                            .errors
+                            .iter()
+                            .all(|error| error.code == OciErrorCode::Toomanyrequests)
+                }
+                _ => false,
+            };
+        }
+
+        if let Some(error) = cause.downcast_ref::<reqwest_oci::Error>() {
+            return is_transient_reqwest_error(error);
+        }
+
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(is_transient_io_error)
+    })
+}
+
+fn is_transient_reqwest_error(error: &reqwest_oci::Error) -> bool {
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_body()
+        || error
+            .status()
+            .is_some_and(|status| status.as_u16() == 429 || status.is_server_error())
+}
+
+fn is_transient_io_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::Interrupted
+            | ErrorKind::TimedOut
+            | ErrorKind::UnexpectedEof
+    )
 }
 
 /// The outcome of loading one package, which separates a package the source does not have from a
@@ -1177,19 +1490,176 @@ pub async fn load_wkg_config(
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use oci_client::errors::{OciEnvelope, OciError};
     use std::collections::HashMap;
 
     /// A `WkgFetcher` backed by a cache under `dir` and empty configs, for exercising the
     /// config-application methods.
     async fn test_fetcher(dir: &Path) -> WkgFetcher {
         let cache = FileCache::new(dir.to_path_buf()).await.unwrap();
-        WkgFetcher::new(
-            wasm_pkg_core::manifest::Manifest::default(),
-            wasm_pkg_client::Config::default(),
+        WkgFetcher {
+            wkg_config: wasm_pkg_core::manifest::Manifest::default(),
+            wkg_client_config: wasm_pkg_client::Config::default(),
             cache,
+            cache_dir: dir.to_path_buf(),
+        }
+    }
+
+    fn registry_fetch_error(error: OciDistributionError) -> anyhow::Error {
+        wasm_pkg_client::Error::RegistryError(anyhow::Error::new(error)).into()
+    }
+
+    fn registry_envelope_error(codes: Vec<OciErrorCode>) -> anyhow::Error {
+        registry_fetch_error(OciDistributionError::RegistryError {
+            envelope: OciEnvelope {
+                errors: codes
+                    .into_iter()
+                    .map(|code| OciError {
+                        code,
+                        message: String::new(),
+                        detail: serde_json::Value::Null,
+                    })
+                    .collect(),
+            },
+            url: "https://registry.example.test".to_string(),
+        })
+    }
+
+    #[test]
+    fn wit_fetch_retries_only_transient_registry_statuses() {
+        for code in [429, 500, 503] {
+            let error = registry_fetch_error(OciDistributionError::ServerError {
+                code,
+                url: "https://registry.example.test".to_string(),
+                message: String::new(),
+            });
+            assert!(is_transient_registry_fetch_error(&error), "status {code}");
+        }
+
+        for code in [400, 401, 403, 404] {
+            let error = registry_fetch_error(OciDistributionError::ServerError {
+                code,
+                url: "https://registry.example.test".to_string(),
+                message: String::new(),
+            });
+            assert!(!is_transient_registry_fetch_error(&error), "status {code}");
+        }
+    }
+
+    #[test]
+    fn wit_fetch_retries_rate_limit_envelopes_but_not_authentication_errors() {
+        assert!(is_transient_registry_fetch_error(&registry_envelope_error(
+            vec![OciErrorCode::Toomanyrequests]
+        )));
+        assert!(!is_transient_registry_fetch_error(
+            &registry_envelope_error(vec![OciErrorCode::Unauthorized])
+        ));
+        assert!(!is_transient_registry_fetch_error(
+            &registry_envelope_error(vec![
+                OciErrorCode::Toomanyrequests,
+                OciErrorCode::Unauthorized,
+            ])
+        ));
+    }
+
+    #[test]
+    fn wit_fetch_retries_transient_io_errors() {
+        let reset = registry_fetch_error(OciDistributionError::IoError(std::io::Error::from(
+            ErrorKind::ConnectionReset,
+        )));
+        assert!(is_transient_registry_fetch_error(&reset));
+
+        let denied = registry_fetch_error(OciDistributionError::IoError(std::io::Error::from(
+            ErrorKind::PermissionDenied,
+        )));
+        assert!(!is_transient_registry_fetch_error(&denied));
+    }
+
+    #[tokio::test]
+    async fn wit_fetch_retries_truncated_response_bodies() {
+        let body = reqwest_oci::Body::wrap_stream(futures::stream::iter([
+            Ok(bytes::Bytes::from_static(b"partial")),
+            Err(std::io::Error::from(ErrorKind::ConnectionReset)),
+        ]));
+        let response = reqwest_oci::Response::from(http::Response::new(body));
+        let error = response.bytes().await.unwrap_err();
+
+        let error = anyhow::Error::new(std::io::Error::other(error));
+        assert!(is_transient_registry_fetch_error(&error));
+    }
+
+    #[test]
+    fn wit_fetch_retry_delay_is_exponential_with_bounded_jitter() {
+        for (failed_attempt, lower_ms, upper_ms) in [(1, 100, 200), (2, 200, 400), (3, 400, 800)] {
+            let delay = wit_fetch_retry_delay(failed_attempt);
+            assert!(delay >= Duration::from_millis(lower_ms));
+            assert!(delay < Duration::from_millis(upper_ms));
+        }
+    }
+
+    #[tokio::test]
+    async fn wit_fetch_discards_incomplete_cache_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let fetcher = test_fetcher(temp.path()).await;
+        let valid_digest = temp
+            .path()
+            .join("sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3");
+        let truncated_digest = temp
+            .path()
+            .join("sha256:eebbf6457e46a7f63acdf9b97390f790ba443d60cfa44b607da7e5c40aa1cc1d");
+        let valid_release = temp.path().join("example:valid-1.0.0.json");
+        let truncated_release = temp.path().join("example:truncated-1.0.0.json");
+        let invalid_release = temp.path().join("example:invalid-1.0.0.json");
+        let missing_release = temp.path().join("example:missing-1.0.0.json");
+        tokio::fs::write(&valid_digest, b"valid").await.unwrap();
+        tokio::fs::write(&truncated_digest, b"partial")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            &valid_release,
+            br#"{"version":"1.0.0","content_digest":"sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3"}"#,
         )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            &truncated_release,
+            br#"{"version":"1.0.0","content_digest":"sha256:eebbf6457e46a7f63acdf9b97390f790ba443d60cfa44b607da7e5c40aa1cc1d"}"#,
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(&invalid_release, b"{").await.unwrap();
+        tokio::fs::write(
+            &missing_release,
+            br#"{"version":"1.0.0","content_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        )
+        .await
+        .unwrap();
+
+        fetcher.discard_invalid_cache_entries().await.unwrap();
+
+        assert!(valid_digest.exists());
+        assert!(valid_release.exists());
+        assert!(!truncated_digest.exists());
+        assert!(truncated_release.exists());
+        assert!(!invalid_release.exists());
+        assert!(missing_release.exists());
+    }
+
+    #[tokio::test]
+    async fn wit_fetch_discards_unreferenced_incomplete_blobs() {
+        let temp = tempfile::tempdir().unwrap();
+        let fetcher = test_fetcher(temp.path()).await;
+        let orphan_digest = temp
+            .path()
+            .join("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        tokio::fs::write(&orphan_digest, b"partial").await.unwrap();
+
+        fetcher.discard_invalid_cache_entries().await.unwrap();
+
+        assert!(!orphan_digest.exists());
     }
 
     #[test]
@@ -1699,4 +2169,95 @@ mod tests {
         let config = load_wkg_config(tmp.path()).await.unwrap();
         assert!(config.overrides.is_none());
     }
+
+    #[tokio::test]
+    async fn wit_discovery_prefers_the_root_and_handles_nested_and_empty_sources() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        tokio::fs::create_dir_all(root.join("package/wit")).await?;
+        tokio::fs::create_dir(root.join("wit")).await?;
+        assert_eq!(find_wit_folder_in_path(root).await?, root.join("wit"));
+        tokio::fs::remove_dir(root.join("wit")).await?;
+        assert_eq!(
+            find_wit_folder_in_path(root).await?,
+            root.join("package/wit")
+        );
+        tokio::fs::remove_dir_all(root.join("package")).await?;
+        tokio::fs::write(root.join("package.wit"), "package acme:example;").await?;
+        assert_eq!(find_wit_folder_in_path(root).await?, root);
+        assert_eq!(find_wit_folder_in_path_internal(root, 11).await?, root);
+        assert!(
+            find_wit_folder_in_path(&root.join("missing"))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lock_files_are_created_recovered_and_validated() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join(WKG_LOCK_FILE_NAME);
+        let mut lock = load_lock_file(temp.path()).await?;
+        lock.write().await?;
+        drop(lock);
+        let contents = tokio::fs::read_to_string(&path).await?;
+        assert!(contents.contains("version = 1"));
+        drop(load_lock_file(temp.path()).await?);
+        tokio::fs::write(&path, "").await?;
+        let mut recovered = load_lock_file(temp.path()).await?;
+        recovered.write().await?;
+        drop(recovered);
+        assert_eq!(tokio::fs::read_to_string(&path).await?, contents);
+        for invalid in ["[", "version = 999\npackages = []\n"] {
+            tokio::fs::write(&path, invalid).await?;
+            assert!(load_lock_file(temp.path()).await.is_err());
+            assert_eq!(tokio::fs::read_to_string(&path).await?, invalid);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_sources_extract_wit_from_a_package_archive() -> Result<()> {
+        use crate::cli::test_support::{HttpFixture, Response};
+        use std::io::Write as _;
+
+        wash_runtime::init_crypto();
+        let contents = b"package acme:example;";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        let mut archive = tar::Builder::new(Vec::new());
+        archive.append_data(&mut header, "package/wit/example.wit", contents.as_slice())?;
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(&archive.into_inner()?)?;
+        let body = gzip.finish()?;
+        let mut server = HttpFixture::start(vec![Response::new(200, body)]).await?;
+        let wit = tokio::time::timeout(
+            Duration::from_secs(10),
+            download_and_extract_http(&format!("http://{}/source.tar.gz", server.address)),
+        )
+        .await??;
+        let requests = server.finish().await?;
+        assert_eq!(requests[0].target, "GET /source.tar.gz HTTP/1.1");
+        assert_eq!(tokio::fs::read(wit.join("example.wit")).await?, contents);
+        let unpacked = wit
+            .parent()
+            .and_then(Path::parent)
+            .context("missing archive root")?;
+        assert_eq!(
+            unpacked.file_name().and_then(|n| n.to_str()),
+            Some("unpacked")
+        );
+        let temporary = unpacked.parent().context("missing temporary directory")?;
+        tokio::fs::remove_dir_all(temporary).await?;
+        assert!(download_and_extract_http("invalid URL").await.is_err());
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "wit_contract_tests.rs"]
+mod contract_tests;

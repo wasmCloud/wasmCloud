@@ -88,6 +88,7 @@ wash -V
 ```
 
 For details and options, see the [Installation guide](https://wasmcloud.com/docs/installation).
+Verify downloaded binaries, images, and SBOMs with the [Release verification guide](https://wasmcloud.com/docs/verify-releases).
 
 ### wasmCloud on Kubernetes
 
@@ -206,7 +207,7 @@ wash completion powershell > $env:UserProfile\Documents\WindowsPowerShell\Script
 
 ## Building from source
 
-This is a Cargo workspace targeting Rust `1.91.0+` (edition 2024) for the Rust crates and Go `1.26.0` for the operator and gateway.
+This is a Cargo workspace targeting Rust `1.91.0+` (edition 2024) for the Rust crates and Go `1.27.0` for the operator and gateway.
 
 ```bash
 # Build the default workspace members (wash CLI by default)

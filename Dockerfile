@@ -6,7 +6,17 @@ ENV RUST_BACKTRACE=1
 
 # tools
 USER root
-RUN apk --no-cache add protoc protobuf protobuf-dev
+RUN attempt=1; delay=2; \
+    until apk update && apk add --no-cache protoc protobuf protobuf-dev; do \
+        if [ "$attempt" -ge 5 ]; then \
+            echo "APK installation failed after $attempt attempts" >&2; \
+            exit 1; \
+        fi; \
+        echo "APK installation attempt $attempt failed; retrying in ${delay}s" >&2; \
+        sleep "$delay"; \
+        attempt=$((attempt + 1)); \
+        delay=$((delay * 2)); \
+    done
 USER nonroot
 
 # copy source code
@@ -22,7 +32,17 @@ RUN cargo build --release --bin wash ${CARGO_FEATURES:+--features ${CARGO_FEATUR
 
 # Release image
 FROM cgr.dev/chainguard/wolfi-base
-RUN apk add --no-cache git
+RUN attempt=1; delay=2; \
+    until apk update && apk add --no-cache git; do \
+        if [ "$attempt" -ge 5 ]; then \
+            echo "APK installation failed after $attempt attempts" >&2; \
+            exit 1; \
+        fi; \
+        echo "APK installation attempt $attempt failed; retrying in ${delay}s" >&2; \
+        sleep "$delay"; \
+        attempt=$((attempt + 1)); \
+        delay=$((delay * 2)); \
+    done
 COPY --from=builder /src/target/release/wash /usr/local/bin/wash
 
 # Smoke test the binary against THIS stage's libc. The builder and the runtime

@@ -15,6 +15,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	testNamespace               = "infra"
+	testName                    = "test-cluster"
+	testCondition ConditionType = "TestReconcile"
+)
+
 // conditionedResource is a sample resource that has a ConditionedStatus.
 type conditionedResource struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -77,8 +83,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "acquisition",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
 			},
 			hasChanges:   true,
@@ -88,8 +94,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "acquisition failure",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
 			},
 			emitClientError: true,
@@ -99,8 +105,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "reconciliation",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
@@ -111,8 +117,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "reconciliation failure",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
@@ -123,8 +129,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "deletion",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -138,8 +144,8 @@ func TestHandleFinalizer(t *testing.T) {
 			name: "deletion failure",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -256,17 +262,34 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "finalizer setup",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
+			},
+		},
+		{
+			name: "finalizer setup reconciles conditions in the same pass",
+			obj: conditionedResource{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: testNamespace,
+					Name:      testName,
+				},
+			},
+			condType: testCondition,
+			condFunc: okCallback,
+			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
+				cond := cs.GetCondition(testCondition)
+				if cond.Status != ConditionTrue {
+					t.Fatalf("condition status: want %v, got %v", ConditionTrue, cond.Status)
+				}
 			},
 		},
 		{
 			name: "finalizer setup error",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace: "infra",
-					Name:      "test-cluster",
+					Namespace: testNamespace,
+					Name:      testName,
 				},
 			},
 			emitClientError: true,
@@ -276,8 +299,8 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "finalizer removal",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -289,8 +312,8 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "finalizer removal error",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 					DeletionTimestamp: &metav1.Time{
 						Time: time.Now(),
@@ -306,15 +329,15 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "condition true",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
-			condType: "TestReconcile",
+			condType: testCondition,
 			condFunc: okCallback,
 			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
-				cond := cs.GetCondition("TestReconcile")
+				cond := cs.GetCondition(testCondition)
 				if cond.Status != ConditionTrue {
 					t.Fatalf("condition status: want %v, got %v", ConditionTrue, cond.Status)
 				}
@@ -324,15 +347,15 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "condition false",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
-			condType: "TestReconcile",
+			condType: testCondition,
 			condFunc: errCallback,
 			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
-				cond := cs.GetCondition("TestReconcile")
+				cond := cs.GetCondition(testCondition)
 				if cond.Status != ConditionFalse {
 					t.Fatalf("condition status: want %v, got %v", ConditionFalse, cond.Status)
 				}
@@ -342,15 +365,15 @@ func TestConditionedReconciler(t *testing.T) {
 			name: "condition unknown",
 			obj: conditionedResource{
 				ObjectMeta: metav1.ObjectMeta{
-					Namespace:  "infra",
-					Name:       "test-cluster",
+					Namespace:  testNamespace,
+					Name:       testName,
 					Finalizers: []string{finalizerName},
 				},
 			},
-			condType: "TestReconcile",
+			condType: testCondition,
 			condFunc: unknownCallback,
 			checkFunc: func(t *testing.T, cs *ConditionedStatus) {
-				cond := cs.GetCondition("TestReconcile")
+				cond := cs.GetCondition(testCondition)
 				if cond.Status != ConditionUnknown {
 					t.Fatalf("condition status: want %v, got %v", ConditionUnknown, cond.Status)
 				}
@@ -446,5 +469,63 @@ func TestConditionedReconciler(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+// A write that lands between the reconcile's read and its status patch must
+// win under the optimistic lock, and is overwritten without it.
+func TestConditionedReconcilerOptimisticLock(t *testing.T) {
+	const concurrentCondition ConditionType = "Concurrent"
+	const finalizerName = "lock-test-finalizer"
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 to scheme: %v", err)
+	}
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+
+	for _, locked := range []bool{true, false} {
+		obj := &conditionedResource{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:  testNamespace,
+				Name:       testName,
+				Finalizers: []string{finalizerName},
+			},
+		}
+		kubeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(obj).
+			WithStatusSubresource(obj).
+			Build()
+
+		r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+		r.SetFinalizer(finalizerName, func(context.Context, *conditionedResource) error { return nil })
+		r.SetCondition(testCondition, func(ctx context.Context, _ *conditionedResource) error {
+			if locked {
+				RequireOptimisticLock(ctx)
+			}
+			newer := &conditionedResource{}
+			if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(obj), newer); err != nil {
+				return err
+			}
+			newer.Status.SetConditions(ReadyCondition(concurrentCondition))
+			return kubeClient.Status().Update(ctx, newer)
+		})
+
+		result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+		if err != nil {
+			t.Fatalf("locked=%v: reconcile: %v", locked, err)
+		}
+
+		stored := &conditionedResource{}
+		if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), stored); err != nil {
+			t.Fatalf("locked=%v: get: %v", locked, err)
+		}
+		keptConcurrent := stored.Status.GetCondition(concurrentCondition).Status == ConditionTrue
+		if keptConcurrent != locked {
+			t.Errorf("locked=%v: concurrent write kept = %v", locked, keptConcurrent)
+		}
+		if locked && result.RequeueAfter == 0 {
+			t.Errorf("a conflicting patch was not requeued")
+		}
 	}
 }

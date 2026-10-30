@@ -9,6 +9,12 @@ import (
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus/wasmbustest"
 )
 
+const (
+	testSubject = "test"
+	testName    = "test"
+	requestName = "request"
+)
+
 type testMessage struct {
 	Name       string `json:"name"`
 	NotDecoded string `json:"-"`
@@ -28,12 +34,12 @@ func (t *testMessageErr) UnmarshalJSON([]byte) error {
 }
 
 func TestEncode(t *testing.T) {
-	req := &testMessage{Name: "test"}
-	reqMsg, err := Encode("test", req)
+	req := &testMessage{Name: testName}
+	reqMsg, err := Encode(testSubject, req)
 	if err != nil {
 		t.Errorf("Encode failed: %s", err)
 	}
-	if want, got := "test", reqMsg.Subject; want != got {
+	if want, got := testSubject, reqMsg.Subject; want != got {
 		t.Errorf("Encode failed: subject: want %s, got %s", want, got)
 	}
 	if want, got := "application/json", reqMsg.Header.Get("Content-Type"); want != got {
@@ -43,7 +49,7 @@ func TestEncode(t *testing.T) {
 		t.Errorf("Encode failed: data: want %s, got %s", want, got)
 	}
 
-	reqMsg, err = Encode("test", &testMessageErr{Name: "test"})
+	reqMsg, err = Encode(testSubject, &testMessageErr{Name: testName})
 	if err == nil {
 		t.Errorf("expected error for nil payload, got '%s'", string(reqMsg.Data))
 	}
@@ -53,7 +59,7 @@ func TestDecode(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		resp := &testMessage{}
 		respMsg := &Message{
-			Subject: "test",
+			Subject: testSubject,
 			Header:  make(Header),
 			Data:    []byte(`{"name":"test"}`),
 		}
@@ -61,7 +67,7 @@ func TestDecode(t *testing.T) {
 		if err := Decode(respMsg, resp); err != nil {
 			t.Errorf("Decode failed: %s", err)
 		}
-		if want, got := "test", resp.Name; want != got {
+		if want, got := testName, resp.Name; want != got {
 			t.Errorf("Decode failed: name: want %s, got %s", want, got)
 		}
 
@@ -75,7 +81,7 @@ func TestDecode(t *testing.T) {
 	t.Run("yaml", func(t *testing.T) {
 		resp := &testMessage{}
 		respMsg := &Message{
-			Subject: "test",
+			Subject: testSubject,
 			Header:  make(Header),
 			Data:    []byte(`name: test`),
 		}
@@ -94,7 +100,7 @@ func TestDecode(t *testing.T) {
 	t.Run("invalid content type", func(t *testing.T) {
 		resp := &testMessage{}
 		respMsg := &Message{
-			Subject: "test",
+			Subject: testSubject,
 			Header:  make(Header),
 			Data:    []byte(`<name>test</name>`),
 		}
@@ -115,7 +121,7 @@ func TestLatticeRequest(t *testing.T) {
 
 	bus := NewNatsBus(nc)
 	t.Run("success", func(t *testing.T) {
-		sub, err := bus.Subscribe("test", NoBackLog)
+		sub, err := bus.Subscribe(testSubject, NoBackLog)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -145,7 +151,7 @@ func TestLatticeRequest(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		req := NewLatticeRequest(bus, "test", &testMessage{Name: "request"}, testMessage{})
+		req := NewLatticeRequest(bus, testSubject, &testMessage{Name: requestName}, testMessage{})
 		resp, err := req.Execute(ctx)
 		if err != nil {
 			t.Errorf("Execute failed: %s", err)
@@ -164,7 +170,7 @@ func TestLatticeRequest(t *testing.T) {
 	t.Run("encode error", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		req := NewLatticeRequest(bus, "test", &testMessageErr{Name: "request"}, testMessage{})
+		req := NewLatticeRequest(bus, testSubject, &testMessageErr{Name: requestName}, testMessage{})
 		_, err := req.Execute(ctx)
 		if err == nil {
 			t.Errorf("expected error for invalid payload")
@@ -172,7 +178,7 @@ func TestLatticeRequest(t *testing.T) {
 	})
 
 	t.Run("decode error", func(t *testing.T) {
-		sub, err := bus.Subscribe("test", NoBackLog)
+		sub, err := bus.Subscribe(testSubject, NoBackLog)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +196,7 @@ func TestLatticeRequest(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		req := NewLatticeRequest(bus, "test", &testMessage{Name: "request"}, testMessage{})
+		req := NewLatticeRequest(bus, testSubject, &testMessage{Name: requestName}, testMessage{})
 		_, err = req.Execute(ctx)
 		if err == nil {
 			t.Errorf("expected error for invalid payload")
@@ -198,7 +204,7 @@ func TestLatticeRequest(t *testing.T) {
 	})
 
 	t.Run("timeout error", func(t *testing.T) {
-		req := NewLatticeRequest(bus, "test", &testMessage{Name: "request"}, testMessage{})
+		req := NewLatticeRequest(bus, testSubject, &testMessage{Name: requestName}, testMessage{})
 		ctx, cancel := context.WithTimeout(context.Background(), 1)
 		defer cancel()
 		_, err = req.Execute(ctx)
@@ -208,7 +214,7 @@ func TestLatticeRequest(t *testing.T) {
 	})
 
 	t.Run("pre-request", func(t *testing.T) {
-		sub, err := bus.Subscribe("test", NoBackLog)
+		sub, err := bus.Subscribe(testSubject, NoBackLog)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -233,7 +239,7 @@ func TestLatticeRequest(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		req := NewLatticeRequest(bus, "test", &testMessage{Name: "request"}, testMessage{})
+		req := NewLatticeRequest(bus, testSubject, &testMessage{Name: requestName}, testMessage{})
 		req.PreRequest = func(ctx context.Context, t *testMessage, m *Message) error {
 			m.Data = []byte(`{"name":"pre-request"}`)
 			return nil
@@ -261,7 +267,7 @@ func TestLatticeRequest(t *testing.T) {
 	})
 
 	t.Run("post-request", func(t *testing.T) {
-		sub, err := bus.Subscribe("test", NoBackLog)
+		sub, err := bus.Subscribe(testSubject, NoBackLog)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -291,7 +297,7 @@ func TestLatticeRequest(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		req := NewLatticeRequest(bus, "test", &testMessage{Name: "request"}, testMessage{})
+		req := NewLatticeRequest(bus, testSubject, &testMessage{Name: requestName}, testMessage{})
 		req.PostRequest = func(ctx context.Context, t *testMessage, m *Message) error {
 			t.Name = "post-request"
 			return nil

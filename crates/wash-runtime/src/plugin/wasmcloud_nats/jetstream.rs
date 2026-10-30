@@ -57,6 +57,7 @@ pub struct MessageHandle {
     pub(super) message: async_nats::Message,
     pub(super) sequence: u64,
     pub(super) delivery_count: u32,
+    pub(super) stored_at_unix_nanos: u64,
     /// The binding budget this delivery is charged against, and what it was
     /// charged, released when the handle is dropped.
     ///
@@ -172,7 +173,7 @@ impl FetchBudget {
         // hand the binding an unbounded budget for the rest of its life.
         let _ = self
             .outstanding
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
                 Some(held.saturating_sub(bytes))
             });
     }

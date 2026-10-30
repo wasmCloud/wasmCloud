@@ -86,7 +86,9 @@ pub struct StreamObjectNamesHandle {
 /// Memory-based blobstore plugin
 #[derive(Clone)]
 pub struct InMemoryBlobstore {
-    /// Storage for all containers, keyed by store context ID
+    /// Storage for all containers, keyed by workload ID, then container name.
+    /// Only bind adds a workload; a call still running after its workload
+    /// unbound writes to a scratch map instead of recreating the entry.
     storage: Arc<RwLock<HashMap<String, HashMap<String, ContainerData>>>>,
     /// The maximum size for objects stored in the blobstore
     max_object_size: usize,
@@ -124,7 +126,10 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         if workload_storage.contains_key(&name) {
             return Ok(Err(format!("container '{name}' already exists")));
@@ -170,7 +175,10 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         workload_storage.remove(&name);
         Ok(Ok(()))
@@ -201,7 +209,10 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         // Get source object data (clone to avoid borrow conflicts)
         let src_object_data = {
@@ -259,7 +270,10 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
 
         // Then delete the source
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         if let Some(src_container) = workload_storage.get_mut(&src.container) {
             src_container.objects.remove(&src.object);
@@ -462,7 +476,10 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(container_name) {
             Some(container_data) => {
@@ -484,7 +501,10 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(container_name) {
             Some(container_data) => {
@@ -559,7 +579,10 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<InMemoryBlobstore>(WASI_BLOBSTORE_ID)?;
 
         let mut storage = plugin.storage.write().await;
-        let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+        let mut scratch = HashMap::new();
+        let workload_storage = storage
+            .get_mut(self.workload_id.as_ref())
+            .unwrap_or(&mut scratch);
 
         match workload_storage.get_mut(container_name) {
             Some(container_data) => {
@@ -783,7 +806,10 @@ impl<'a> bindings::wasi::blobstore::types::HostOutgoingValue for ActiveCtx<'a> {
             );
 
             let mut storage = plugin.storage.write().await;
-            let workload_storage = storage.entry(self.workload_id.to_string()).or_default();
+            let mut scratch = HashMap::new();
+            let workload_storage = storage
+                .get_mut(self.workload_id.as_ref())
+                .unwrap_or(&mut scratch);
 
             match workload_storage.get_mut(container_name) {
                 Some(container_data) => {
@@ -1116,5 +1142,37 @@ mod tests {
             let storage = blobstore.storage.read().await;
             assert!(!storage[&workload].contains_key("my-container"));
         }
+    }
+
+    /// A call still running when its workload unbinds cannot bring the
+    /// workload's storage back, since nothing would ever remove it again.
+    #[tokio::test]
+    async fn a_write_after_unbind_does_not_recreate_storage() {
+        use bindings::wasi::blobstore::blobstore::Host;
+
+        let blobstore = Arc::new(InMemoryBlobstore::new(None));
+        blobstore
+            .storage
+            .write()
+            .await
+            .insert("workload".to_string(), HashMap::new());
+        let plugin: Arc<dyn HostPlugin + Send + Sync> = blobstore.clone();
+        let ctx = crate::engine::ctx::Ctx::builder("workload", "component")
+            .with_plugins(HashMap::from([(WASI_BLOBSTORE_ID, plugin)]))
+            .build();
+        let mut shared = SharedCtx::new(ctx);
+        let mut active = extract_active_ctx(&mut shared);
+
+        let empty = HashSet::new();
+        blobstore
+            .on_workload_unbind("workload", WitInterfaces::new(&empty))
+            .await
+            .unwrap();
+
+        Host::create_container(&mut active, "container".to_string())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(blobstore.storage.read().await.is_empty());
     }
 }

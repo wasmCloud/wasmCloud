@@ -91,6 +91,12 @@ type LocalResources struct {
 	// path (beyond bare `/`), query string, or fragment. The wildcard must
 	// be `*.<rest>` (leading dot required); a bare `*foo` is rejected.
 	//
+	// A raw socket carries no name, so an entry naming a host permits a
+	// wasi:sockets connection only to an address the component resolved
+	// that name into, on the entry's port, for a short time after the
+	// lookup. The entry also permits the lookup itself. An entry with a
+	// scheme and no port permits that scheme's default port.
+	//
 	// Empty or absent allowedHosts denies all outgoing requests
 	// (fail-closed). To opt into unrestricted egress, set `allowedHosts:
 	// ["*"]` explicitly. Final validation runs in the runtime. This regex
@@ -111,11 +117,12 @@ type LocalResources struct {
 	// query string, or fragment. The wildcard must be "*.<rest>" with a
 	// leading dot; a bare "*foo" is rejected.
 	//
-	// Empty or absent allowedIpNameLookups denies every lookup, reported to
-	// the component as permanent-resolver-failure. To resolve any name,
-	// set allowedIpNameLookups: ["*"] explicitly. Resolution is granted
-	// separately from allowedHosts, which governs outbound connections
-	// rather than name lookups. Final validation runs in the runtime.
+	// A host named in allowedHosts may be resolved without being listed
+	// here: this list is for names beyond those. With neither naming it, a
+	// lookup is denied and reported to the component as
+	// permanent-resolver-failure. To resolve any name, set
+	// allowedIpNameLookups: ["*"] explicitly; `*` in allowedHosts permits
+	// connections but opens no lookup. Final validation runs in the runtime.
 	// This regex is an admission-time guard, not the source of truth.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:items:Pattern=`^\*$|^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$|^[0-9A-Fa-f:.]+$`
@@ -192,9 +199,11 @@ type WorkloadComponent struct {
 	ReclaimWindowSeconds int32 `json:"reclaimWindowSeconds,omitempty"`
 	// ReclaimMinInstances is how many warm instances an idle sweep never
 	// retires below. Unset lets a fully idle pool empty out, so the next call
-	// after a quiet spell starts cold. Capped at PoolSize. This is a floor on
-	// reclaim, not a target to grow to: instances are still only built when a
-	// call needs one. Only meaningful alongside ReclaimWindowSeconds.
+	// after a quiet spell starts cold. A value at or above PoolSize disables
+	// reclaim entirely, since a sweep could never find a surplus to retire.
+	// This is a floor on reclaim, not a target to grow to: instances are
+	// still only built when a call needs one. Only meaningful alongside
+	// ReclaimWindowSeconds.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=0
 	ReclaimMinInstances int32 `json:"reclaimMinInstances,omitempty"`
@@ -231,6 +240,9 @@ type HostInterface struct {
 	// so two imports of the same namespace:package can resolve to different
 	// backends.
 	// Required when multiple entries of the same namespace:package exist.
+	// A name declared here takes precedence over a component of the same
+	// name in the same Workload: the host serves the label, and the
+	// component's export is not linked for it.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
 	// +kubebuilder:validation:MaxLength=64
@@ -319,6 +331,18 @@ type WorkloadSpec struct {
 	//      distinct `name`s to route multiple imports of the same package to
 	//      different backends. Semver-incompatible versions of the same package
 	//      may coexist (they are distinct interfaces).
+	//
+	// Declaring an interface here does not by itself guarantee the host serves
+	// it. A Workload serves itself first: where exactly one component in the
+	// Workload exports a declared interface, that component answers its
+	// siblings' unlabelled imports of it, and the host binds only the
+	// exporting component (an export is how the host reaches into a Workload).
+	// Two or more exporters are ambiguous and fall back to the host.
+	//
+	// Both routes can be stated explicitly, and an explicit route always wins.
+	// Give the entry a `name` and import under that `(implements <name>)`
+	// label to reach the host; import under a label naming a component to
+	// reach that component.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.__namespace__ == x.__namespace__ && y.__package__ == x.__package__ && (has(y.name) ? y.name : '') == (has(x.name) ? x.name : '') && (has(y.version) ? y.version : '') == (has(x.version) ? x.version : '')))",message="hostInterfaces must not contain duplicate entries with the same namespace, package, name, and version"
@@ -369,8 +393,9 @@ func (s *WorkloadSpec) EnsureHostInterface(iface HostInterface) {
 // canonVersion returns the canonical version prefix that determines whether two
 // interface versions are compatible for deduplication, per the component-model
 // `canonversion` rules:
+//   - with a prerelease    -> the whole version         (0.2.6-rc.1 -> "0.2.6-rc.1")
 //   - major > 0            -> "<major>"                 (1.2.3      -> "1")
-//   - major == 0, minor>0  -> "<major>.<minor>"         (0.2.6-rc.1 -> "0.2")
+//   - major == 0, minor>0  -> "<major>.<minor>"         (0.2.6      -> "0.2")
 //   - otherwise            -> "<major>.<minor>.<patch>" (0.0.1      -> "0.0.1")
 //
 // Compatible versions share a canonical prefix and so link by trivial string
@@ -386,6 +411,8 @@ func canonVersion(v string) string {
 		return v
 	}
 	switch {
+	case parsed.Prerelease() != "":
+		return fmt.Sprintf("%d.%d.%d-%s", parsed.Major(), parsed.Minor(), parsed.Patch(), parsed.Prerelease())
 	case parsed.Major() > 0:
 		return fmt.Sprintf("%d", parsed.Major())
 	case parsed.Minor() > 0:

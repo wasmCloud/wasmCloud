@@ -18,6 +18,10 @@ async fn main(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
         "/example" => fetch("http://example.com").await,
         "/org" => fetch("http://example.org").await,
         "/www" => fetch("http://www.example.com").await,
+        // Egress with a non-root path, used by the local-routing tests to
+        // check the path rides along with a locally dispatched request. The
+        // authority is deliberately not one of the hosts above.
+        "/path" => fetch("http://gateway.test/functiona/items").await,
         _ => not_found().await,
     }
 }

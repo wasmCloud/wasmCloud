@@ -33,9 +33,9 @@ workspace = true
 
 [features]
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements", "wasmcloud-nats"]
-oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:sha2", "dep:wit-component"]
+oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:hmac", "dep:sha2", "dep:wit-component"]
 wasi-otel = []
-washlet = ["oci"]
+washlet = ["oci", "dep:nkeys"]
 wasi-config = []
 wasi-logging = []
 wasi-blobstore = []
@@ -63,6 +63,7 @@ wasi-tls = ["dep:wasmtime-wasi-tls"]
 [dependencies]
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
+x509-parser = { workspace = true }
 async-nats = { workspace = true, features = ["server_2_10", "server_2_11", "server_2_12"] }
 async-trait = { workspace = true }
 bon = { workspace = true }
@@ -71,6 +72,7 @@ chrono = { workspace = true }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
 futures = { workspace = true }
+hmac = { workspace = true, optional = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
@@ -78,6 +80,7 @@ humantime = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }
+imbl = { workspace = true }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
 redis = { workspace = true }
@@ -99,14 +102,15 @@ zeroize = { workspace = true }
 # anything only it supplies is absent from those two release binaries.
 # `.github/scripts/wasmtime-features.mjs` holds this list to that rule.
 wasmtime = { workspace = true, features = ["addr2line", "anyhow", "backtrace", "component-model", "component-model-async", "cranelift", "demangle", "gc", "gc-copying", "gc-drc", "gc-null", "parallel-compilation", "pooling-allocator", "threads"] }
+# Match Wasmtime's parser; source inspection accounts for GC pool allocations.
+wasmparser = { workspace = true, features = ["std", "component-model", "simd"] }
 wasmtime-wasi = { workspace = true, features = ["p3"] }
 wasmtime-wasi-io = { workspace = true }
 wasmtime-wasi-http = { workspace = true, features = ["default-send-request", "p2", "p3", "component-model-async"] }
 wasmtime-wasi-tls = { workspace = true, optional = true, features = ["p3", "rustls"] }
-cap-net-ext = { workspace = true }
-cap-std = { workspace = true }
 io-lifetimes = { workspace = true }
-rustix = { workspace = true }
+cap-primitives = { workspace = true }
+rustix = { workspace = true, features = ["param"] }
 rustls = { workspace = true, features = ["std", "tls12"] }
 rustls-native-certs = { workspace = true }
 tower-service = { workspace = true }
@@ -134,7 +138,7 @@ opentelemetry_sdk = { workspace = true, features = ["logs"] }
 opentelemetry-http = { workspace = true }
 
 # Otel dependencies (optional, behind 'wasi-otel' feature)
-opentelemetry-otlp = { workspace = true, features = ["grpc-tonic","http-proto", "trace", "metrics", "logs"] }
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic","http-proto", "tls-aws-lc", "trace", "metrics", "logs"] }
 opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_experimental"] }
 
 # OCI dependencies (optional, behind 'oci' feature)
@@ -159,15 +163,21 @@ ulid = { optional = true, workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { workspace = true }
 
+# `proc_pid_rusage`, for the process footprint `max-process-memory` is held
+# against: RSS understates a macOS process whose pages were compressed.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 # wasi-webgpu dependencies (optional, behind 'wasi-webgpu' feature). Pulled in
 # only on platforms where the `wasi_webgpu` plugin module compiles: wgpu-hal
 # fails to build on Windows and s390x, so the deps are gated to match the
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
-wasi-webgpu-wasmtime = { version = "0.2", optional = true }
+wasi-webgpu-wasmtime = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
+bench-tools = { path = "../bench-tools" }
+tokio = { workspace = true, features = ["full", "test-util"] }
 # `testing` brings in `InMemoryMetricExporter`, which is how the guest memory
 # budget's OTel instruments are asserted against a real collection rather than
 # by calling their getters.
@@ -181,7 +191,7 @@ reqwest = { workspace = true, features = ["stream"] }
 wat = { workspace = true, features = ["component-model"] }
 bytes = { workspace = true }
 http-body-util = { workspace = true }
-hyper = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1"] }
 wasmtime-wasi-http = { workspace = true, features = ["p2"] }
 gag = "1.0"
 rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
@@ -191,11 +201,14 @@ redis = { workspace = true }
 # postgres client for admin setup (create roles/tables) in tests
 tokio-postgres = { workspace = true, features = ["runtime"] }
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
-# Pinned to match the gungraun-runner version the bench host's Ansible
-# playbook installs (scripts/bench/ansible/provision.yml). gungraun
-# enforces equality between this crate version and the runner binary at
-# run time.
-gungraun = "0.19.1"
+# gungraun requires a gungraun-runner of exactly the version resolved in
+# Cargo.lock. The bench host's provision.yml installs it, and
+# scripts/bench/run-bench.sh installs a matching one when the lock moves.
+gungraun = "0.20.0"
+
+# The scale_density bench pins itself to its CPU limit and reads CPU time.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true, features = ["thread", "time"] }
 
 # Integration tests that build a host through `tests/common`'s standard
 # plugin set (in-memory blobstore + keyvalue, tracing logger, dynamic
@@ -355,9 +368,14 @@ harness = false
 name = "wasmtime_serve"
 harness = false
 
+# Ramps warm and scale-to-zero HTTP workloads to max-process-memory; see the
+# module docs for the knobs.
+[[bench]]
+name = "scale_density"
+harness = false
+
 # Requires `--features host-component-plugins`, plus valgrind and a
 # version-matched gungraun-runner on PATH.
 [[bench]]
 name = "gungraun_plugin"
 harness = false
-

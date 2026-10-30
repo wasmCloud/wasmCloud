@@ -2,8 +2,9 @@
 
 use super::WasiSocketsCtxView;
 use crate::sockets::WasiSockets;
-use crate::sockets::util::{from_ipv4_addr, from_ipv6_addr, parse_host};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use crate::sockets::resolved_names::lookup_blocking;
+use crate::sockets::util::parse_host;
+use std::sync::Arc;
 
 use wasmtime::component::Accessor;
 use wasmtime_wasi::p3::bindings::sockets::ip_name_lookup::{Host, HostWithStore};
@@ -31,43 +32,44 @@ impl<U> HostWithStore<U> for WasiSockets {
         let Ok(host) = parse_host(&name) else {
             return Ok(Err(ErrorCode::InvalidArgument));
         };
-        let allowed = store.with(|mut view| {
-            crate::host::allowed_ip_name::check_allowed_ip_name(
-                &view.get().ctx.allowed_ip_name_lookups,
+        let (allowed, names) = store.with(|mut view| {
+            let ctx = &view.get().ctx;
+            let allowed = crate::host::allowed_ip_name::check_allowed_lookup(
+                &ctx.allowed_ip_name_lookups,
+                &ctx.allowed_hosts,
                 &host,
-            )
+            );
+            if !allowed {
+                tracing::warn!(
+                    "{}",
+                    crate::host::allowed_ip_name::lookup_denial(&ctx.allowed_hosts, &host)
+                );
+            }
+            (allowed, Arc::clone(&ctx.resolved_names))
         });
         if !allowed {
             return Ok(Err(ErrorCode::PermanentResolverFailure));
         }
-        Ok(resolve(host).await)
+
+        // The same lookup p2 runs, on the blocking pool.
+        let lookup = tokio::task::spawn_blocking(move || lookup_blocking(&host)).await;
+        let Ok(Ok(lookup)) = lookup else {
+            return Ok(Err(ErrorCode::NameUnresolvable));
+        };
+        // Recorded as the batch is returned, dated when resolution completed.
+        if let Some(observation) = &lookup.observation {
+            names.record(
+                &observation.name,
+                lookup.addresses.iter().copied(),
+                observation.observed,
+            );
+        }
+        Ok(Ok(lookup
+            .addresses
+            .into_iter()
+            .map(types::IpAddress::from)
+            .collect()))
     }
 }
 
 impl Host for WasiSocketsCtxView<'_> {}
-
-/// Resolve a host to a list of IP addresses.
-///
-/// Literal IPv4/IPv6 hosts are returned directly. Domains are resolved with
-/// [`tokio::net::lookup_host`], which performs the blocking `getaddrinfo` call
-/// on a dedicated blocking task internally, so we don't wrap it ourselves.
-async fn resolve(host: url::Host) -> Result<Vec<types::IpAddress>, ErrorCode> {
-    match host {
-        url::Host::Ipv4(addr) => Ok(vec![types::IpAddress::Ipv4(from_ipv4_addr(addr))]),
-        url::Host::Ipv6(addr) => Ok(vec![types::IpAddress::Ipv6(from_ipv6_addr(addr))]),
-        url::Host::Domain(domain) => {
-            if domain.ends_with(".localhost") && domain != "localhost" {
-                return Ok(vec![
-                    types::IpAddress::Ipv4(from_ipv4_addr(Ipv4Addr::LOCALHOST)),
-                    types::IpAddress::Ipv6(from_ipv6_addr(Ipv6Addr::LOCALHOST)),
-                ]);
-            }
-            // Only names are resolved here, not ports, so force the port to 0.
-            let addrs = tokio::net::lookup_host((domain.as_str(), 0))
-                .await
-                .map_err(|_| ErrorCode::NameUnresolvable)?;
-            // `IpAddr` -> `types::IpAddress` via the conversion wasmtime defines.
-            Ok(addrs.map(|addr| addr.ip().to_canonical().into()).collect())
-        }
-    }
-}

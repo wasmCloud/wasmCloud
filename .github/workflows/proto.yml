@@ -8,6 +8,7 @@ on:
       - "v*"
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -64,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
         with:
           setup_only: false
 
@@ -79,14 +80,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
         with:
           setup_only: true
       - name: Generate protobuf definitions
         run: |
           buf generate
       - name: "Verify no protobuf changes"
-        uses: ./.github/actions/no-diff
+        uses: $/.github/actions/no-diff
         with:
           fixup-command: "buf generate"
 
@@ -111,17 +112,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup protoc
-        uses: ./.github/actions/setup-protoc
+        uses: $/.github/actions/setup-protoc
       - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        uses: $/.github/actions/setup-rust
       - name: Regenerate protobuf bindings
         run: cargo xtask generate-protos
       - name: "Verify no protobuf changes"
-        uses: ./.github/actions/no-diff
+        uses: $/.github/actions/no-diff
         with:
           fixup-command: "cargo xtask generate-protos"
 
   gate:
+    name: gate-proto
     needs:
       - lint
       - check-generated

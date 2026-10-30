@@ -32,6 +32,10 @@ const (
 	// hostnameFieldIndex is the field indexer key for Host.Hostname,
 	// enabling O(1) lookup of a Host by its pod IP without listing all hosts.
 	hostnameFieldIndex = ".hostname"
+
+	// hostPodIPFieldIndex indexes host Pods by their IP, the Hostname their
+	// host heartbeats with.
+	hostPodIPFieldIndex = ".status.podIP"
 )
 
 // HostPodReconciler bridges Pod lifecycle to Host CRD lifecycle.
@@ -54,6 +58,8 @@ type HostPodReconciler struct {
 	Scheme *runtime.Scheme
 	// OperatorNamespace is the namespace where Host CRDs live.
 	OperatorNamespace string
+	// RetiredHosts records Host IDs and Pod IPs during removal.
+	RetiredHosts *RetiredHosts
 }
 
 // Reconcile is called whenever a Pod with HostPodLabel changes.
@@ -126,7 +132,9 @@ func (r *HostPodReconciler) deleteHostForPod(ctx context.Context, pod *corev1.Po
 		if err := r.Delete(ctx, host); client.IgnoreNotFound(err) != nil {
 			return err
 		}
+		r.RetiredHosts.retire(host.HostID)
 	}
+	r.RetiredHosts.retirePod(podIP, condemnedAt)
 	return nil
 }
 
@@ -171,6 +179,15 @@ func (r *HostPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&corev1.Pod{},
+		hostPodIPFieldIndex,
+		hostPodIPIndexValue,
+	); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}, builder.WithPredicates(
 			// Only enqueue Pods that carry the HostPodLabel — avoids processing
@@ -183,4 +200,35 @@ func (r *HostPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		)).
 		Named("host-pod").
 		Complete(r)
+}
+
+func hostPodIPIndexValue(obj client.Object) []string {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok || pod.Status.PodIP == "" {
+		return nil
+	}
+	if _, isHost := pod.GetLabels()[HostPodLabel]; !isHost {
+		return nil
+	}
+	return []string{pod.Status.PodIP}
+}
+
+// hostPodDraining reports whether the host Pod at podIP is going away: some
+// host Pod holds that IP and every one that does is terminating. Such a host
+// heartbeats while it drains, after deleteHostForPod removed its Host. A live
+// Pod holding a recycled IP keeps this false.
+func hostPodDraining(ctx context.Context, c client.Reader, podIP string) (bool, error) {
+	if podIP == "" {
+		return false, nil
+	}
+	var pods corev1.PodList
+	if err := c.List(ctx, &pods, client.MatchingFields{hostPodIPFieldIndex: podIP}); err != nil {
+		return false, err
+	}
+	for i := range pods.Items {
+		if pods.Items[i].DeletionTimestamp.IsZero() {
+			return false, nil
+		}
+	}
+	return len(pods.Items) > 0, nil
 }

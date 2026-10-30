@@ -7,9 +7,7 @@ use super::util::{
 };
 use super::{SocketAddrCheck, SocketAddressFamily, WasiSocketsCtx};
 
-use cap_net_ext::AddressFamily;
 use io_lifetimes::AsSocketlike as _;
-use io_lifetimes::raw::{FromRawSocketlike as _, IntoRawSocketlike as _};
 use rustix::io::Errno;
 use std::collections::BTreeSet;
 use std::net::SocketAddr;
@@ -63,11 +61,8 @@ pub struct NetworkUdpSocket {
 
     /// The guest's quota slot, held for as long as this socket exists.
     ///
-    /// A datagram socket is one descriptor however many peers it addresses, so
-    /// the slot is taken once — when the socket binds for egress or connects —
-    /// rather than per datagram. `Arc` because an unspecified-bound socket is
-    /// one socket with two halves: they share the slot and release it when
-    /// both are gone.
+    /// Taken before the OS socket is opened. `Arc` lets an unspecified socket's
+    /// real and virtual halves share ownership.
     quota_slot: Option<Arc<crate::host::quota::ConnectionSlot>>,
 
     /// Which plane this socket's connected peer was resolved onto.
@@ -77,6 +72,9 @@ pub struct NetworkUdpSocket {
     /// through the host-loopback sentinel is indistinguishable from the
     /// guest's own virtual loopback by address alone.
     connected_plane: Option<super::Plane>,
+
+    /// When the decision that permitted the connected peer lapses, if it does.
+    connected_until: Option<std::time::Instant>,
 
     /// Peers this socket has sent to, when it is bound to the unspecified
     /// address and therefore reachable on every interface.
@@ -94,37 +92,23 @@ pub struct NetworkUdpSocket {
 
 impl NetworkUdpSocket {
     /// Create a new socket in the given family.
-    fn new(cx: &WasiSocketsCtx, family: AddressFamily) -> Result<Self, ErrorCode> {
+    async fn new(cx: &WasiSocketsCtx, family: SocketAddressFamily) -> Result<Self, ErrorCode> {
         cx.allowed_network_uses.check_allowed_udp()?;
+        let socket = with_ambient_tokio_runtime(|| udp_socket(family))?;
 
-        // Delegate socket creation to cap_net_ext. They handle a couple of things for us:
-        // - On Windows: call WSAStartup if not done before.
-        // - Set the NONBLOCK and CLOEXEC flags. Either immediately during socket creation,
-        //   or afterwards using ioctl or fcntl. Exact method depends on the platform.
-
-        let fd = udp_socket(family)?;
-
-        let socket_address_family = match family {
-            AddressFamily::Ipv4 => SocketAddressFamily::Ipv4,
-            AddressFamily::Ipv6 => {
-                rustix::net::sockopt::set_ipv6_v6only(&fd, true)?;
-                SocketAddressFamily::Ipv6
-            }
-        };
-
-        let socket = with_ambient_tokio_runtime(|| {
-            tokio::net::UdpSocket::try_from(unsafe {
-                std::net::UdpSocket::from_raw_socketlike(fd.into_raw_socketlike())
-            })
-        })?;
+        // A native UDP socket is writable at once, but tokio marks a new one
+        // writable only after its reactor registers it, so a guest's first
+        // `check-send` could see 0 (wasmtime#12612). Wait out that window.
+        socket.writable().await?;
 
         Ok(Self {
             socket: Arc::new(socket),
             udp_state: UdpState::Default,
-            family: socket_address_family,
+            family,
             socket_addr_check: None,
             quota_slot: None,
             connected_plane: None,
+            connected_until: None,
             egress_peers: None,
         })
     }
@@ -205,6 +189,34 @@ impl NetworkUdpSocket {
         }
     }
 
+    /// [`Self::connect`], recording the policy's plane and deadline for the
+    /// peer only once it is the peer.
+    ///
+    /// A refused connect can leave the previous peer connected, and that peer
+    /// keeps the decision it connected under — taking the new one early would
+    /// hand it a deadline it was never given. One that failed at the OS leaves
+    /// no peer, so nothing is kept.
+    fn connect_on(
+        &mut self,
+        addr: SocketAddr,
+        plane: super::Plane,
+        valid_until: Option<std::time::Instant>,
+    ) -> Result<(), ErrorCode> {
+        let connected = self.connect(addr);
+        match (&connected, self.is_connected()) {
+            (Ok(()), _) => {
+                self.connected_plane = Some(plane);
+                self.connected_until = valid_until;
+            }
+            (Err(_), true) => {}
+            (Err(_), false) => {
+                self.connected_plane = None;
+                self.connected_until = None;
+            }
+        }
+        connected
+    }
+
     fn local_address(&self) -> Result<SocketAddr, ErrorCode> {
         if matches!(self.udp_state, UdpState::Default | UdpState::BindStarted) {
             return Err(ErrorCode::InvalidState);
@@ -278,10 +290,13 @@ impl super::loopback::UdpSocket {
     pub fn new(
         socket: &NetworkUdpSocket,
         state: super::loopback::UdpState,
+        receive_permits: Arc<tokio::sync::Semaphore>,
     ) -> Result<Self, ErrorCode> {
         let hop_limit = get_unicast_hop_limit(&socket.socket, socket.family)?;
 
-        let receive_buffer_size = receive_buffer_size(&socket.socket)?;
+        let receive_buffer_size =
+            receive_buffer_size(&socket.socket)?.min(Self::MAX_RECEIVE_BUFFER_SIZE);
+        receive_permits.add_permits(receive_buffer_size as usize);
 
         let send_buffer_size = send_buffer_size(&socket.socket)?;
         let send_buffer_size = send_buffer_size
@@ -292,6 +307,7 @@ impl super::loopback::UdpSocket {
             state,
             hop_limit,
             receive_buffer_size,
+            receive_permits,
             send_buffer_size,
             family: socket.family,
             socket_addr_check: socket.socket_addr_check.clone(),
@@ -309,8 +325,11 @@ pub enum UdpSocket {
 }
 
 impl UdpSocket {
-    pub(crate) fn new(cx: &WasiSocketsCtx, family: AddressFamily) -> Result<Self, ErrorCode> {
-        NetworkUdpSocket::new(cx, family).map(Self::Network)
+    pub(crate) async fn new(
+        cx: &WasiSocketsCtx,
+        family: SocketAddressFamily,
+    ) -> Result<Self, ErrorCode> {
+        NetworkUdpSocket::new(cx, family).await.map(Self::Network)
     }
 
     pub(crate) fn bind(
@@ -353,13 +372,15 @@ impl UdpSocket {
             }
         };
 
-        let (addr, rx) = loopback.bind_udp(addr)?;
+        let receive_permits = Arc::new(tokio::sync::Semaphore::new(0));
+        let (addr, rx) = loopback.bind_udp(addr, Arc::clone(&receive_permits))?;
         let lo = super::loopback::UdpSocket::new(
             socket,
             super::loopback::UdpState::BindStarted {
                 local_address: addr,
                 rx,
             },
+            receive_permits,
         )?;
 
         if ip.is_unspecified() {
@@ -426,25 +447,24 @@ impl UdpSocket {
     ///
     /// `plane` comes from the socket policy rather than from the address; see
     /// [`TcpSocket::start_connect`](super::tcp::TcpSocket::start_connect).
+    /// `valid_until` is the policy's deadline for that decision, which a send
+    /// with no explicit destination holds itself to.
     pub(crate) fn connect(
         &mut self,
         addr: SocketAddr,
         plane: super::Plane,
+        valid_until: Option<std::time::Instant>,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
         match self {
-            Self::Network(socket) => {
-                socket.connected_plane = Some(plane);
-                socket.connect(addr)
-            }
+            Self::Network(socket) => socket.connect_on(addr, plane, valid_until),
             Self::Loopback(socket) => socket.connect(addr, loopback),
             // An unspecified-bound socket is simultaneously a real socket and a
             // virtual endpoint, so both sides record the peer, and the plane
             // recorded here is what later decides which half carries a datagram
             // sent with no explicit destination.
             Self::Unspecified { net, lo } => {
-                net.connected_plane = Some(plane);
-                net.connect(addr)?;
+                net.connect_on(addr, plane, valid_until)?;
                 lo.connect(addr, loopback)
             }
         }
@@ -459,6 +479,15 @@ impl UdpSocket {
             Self::Network(net) | Self::Unspecified { net, .. } => net.connected_plane,
             // A purely virtual endpoint has no other half to choose.
             Self::Loopback(_) => Some(super::Plane::Virtual),
+        }
+    }
+
+    /// The connected peer's deadline, for a send to check and extend. `None`
+    /// for a purely virtual endpoint, whose decision does not lapse.
+    pub(crate) fn connected_until_mut(&mut self) -> Option<&mut Option<std::time::Instant>> {
+        match self {
+            Self::Network(net) | Self::Unspecified { net, .. } => Some(&mut net.connected_until),
+            Self::Loopback(_) => None,
         }
     }
 
@@ -558,8 +587,7 @@ impl UdpSocket {
 
     /// Hold a quota slot for this socket's lifetime.
     ///
-    /// Only a socket that reaches a real interface takes one; a purely virtual
-    /// endpoint costs no descriptor.
+    /// Called before exposing a newly opened OS socket to the guest.
     pub(crate) fn hold_quota_slot(&mut self, slot: Option<crate::host::quota::ConnectionSlot>) {
         let Some(slot) = slot else { return };
         let slot = Arc::new(slot);
@@ -602,11 +630,11 @@ impl UdpSocket {
 mod tests {
     use super::*;
     use crate::sockets::WasiSocketsCtx;
-    use cap_net_ext::AddressFamily;
-
-    fn make_ipv4_socket() -> NetworkUdpSocket {
+    async fn make_ipv4_socket() -> NetworkUdpSocket {
         let ctx = WasiSocketsCtx::default();
-        NetworkUdpSocket::new(&ctx, AddressFamily::Ipv4).unwrap()
+        NetworkUdpSocket::new(&ctx, SocketAddressFamily::Ipv4)
+            .await
+            .unwrap()
     }
 
     fn bind_socket(socket: &mut NetworkUdpSocket) {
@@ -617,7 +645,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_new_socket_default_state() {
-        let socket = make_ipv4_socket();
+        let socket = make_ipv4_socket().await;
         assert!(!socket.is_bound());
         assert!(!socket.is_connected());
     }
@@ -629,11 +657,11 @@ mod tests {
     #[tokio::test]
     async fn unspecified_bind_never_serves_unsolicited_traffic() {
         for (family, unspecified) in [
-            (AddressFamily::Ipv4, "0.0.0.0:0"),
-            (AddressFamily::Ipv6, "[::]:0"),
+            (SocketAddressFamily::Ipv4, "0.0.0.0:0"),
+            (SocketAddressFamily::Ipv6, "[::]:0"),
         ] {
             let ctx = WasiSocketsCtx::default();
-            let mut socket = UdpSocket::new(&ctx, family).unwrap();
+            let mut socket = UdpSocket::new(&ctx, family).await.unwrap();
             let mut loopback = crate::sockets::loopback::Network::default();
 
             socket
@@ -673,7 +701,9 @@ mod tests {
     #[tokio::test]
     async fn a_reply_is_admitted_and_a_stranger_is_not() {
         let ctx = WasiSocketsCtx::default();
-        let mut socket = UdpSocket::new(&ctx, AddressFamily::Ipv4).unwrap();
+        let mut socket = UdpSocket::new(&ctx, SocketAddressFamily::Ipv4)
+            .await
+            .unwrap();
         let mut loopback = crate::sockets::loopback::Network::default();
         socket
             .bind("0.0.0.0:0".parse().unwrap(), &mut loopback)
@@ -731,7 +761,9 @@ mod tests {
     #[tokio::test]
     async fn only_an_unspecified_bind_filters_its_peers() {
         let ctx = WasiSocketsCtx::default();
-        let mut socket = UdpSocket::new(&ctx, AddressFamily::Ipv4).unwrap();
+        let mut socket = UdpSocket::new(&ctx, SocketAddressFamily::Ipv4)
+            .await
+            .unwrap();
         let mut loopback = crate::sockets::loopback::Network::default();
         socket
             .bind("127.0.0.1:0".parse().unwrap(), &mut loopback)
@@ -745,7 +777,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bind_and_finish_bind() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
 
         socket.bind(addr).unwrap();
@@ -759,14 +791,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_finish_bind_without_bind_errors() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         let result = socket.finish_bind();
         assert!(matches!(result, Err(ErrorCode::NotInProgress)));
     }
 
     #[tokio::test]
     async fn test_connect_from_bound() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -777,7 +809,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_from_default_errors() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
         let result = socket.connect(remote);
         assert!(matches!(result, Err(ErrorCode::InvalidState)));
@@ -785,7 +817,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_rejects_unspecified_addr() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let remote: std::net::SocketAddr = "0.0.0.0:9999".parse().unwrap();
@@ -795,7 +827,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_rejects_port_zero() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let remote: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -805,7 +837,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connect_rejects_wrong_family() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let remote: std::net::SocketAddr = "[::1]:9999".parse().unwrap();
@@ -816,7 +848,7 @@ mod tests {
     #[tokio::test]
     async fn test_reconnect_from_connected() {
         // Key wasmtime 43 change: connect-first, disconnect-on-failure
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let remote1: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -830,7 +862,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_disconnect_from_connected() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -844,7 +876,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_disconnect_from_bound_errors() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let result = socket.disconnect();
@@ -853,7 +885,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_address_after_bind() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let addr = socket.local_address();
@@ -864,14 +896,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_local_address_before_bind_errors() {
-        let socket = make_ipv4_socket();
+        let socket = make_ipv4_socket().await;
         let result = socket.local_address();
         assert!(matches!(result, Err(ErrorCode::InvalidState)));
     }
 
     #[tokio::test]
     async fn test_remote_address_when_connected() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let remote: std::net::SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -883,7 +915,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remote_address_when_not_connected_errors() {
-        let mut socket = make_ipv4_socket();
+        let mut socket = make_ipv4_socket().await;
         bind_socket(&mut socket);
 
         let result = socket.remote_address();
@@ -892,7 +924,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hop_limit_roundtrip() {
-        let socket = make_ipv4_socket();
+        let socket = make_ipv4_socket().await;
         socket.set_unicast_hop_limit(64).unwrap();
         let hop = socket.unicast_hop_limit().unwrap();
         assert_eq!(hop, 64);
@@ -900,8 +932,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_hop_limit_zero_errors() {
-        let socket = make_ipv4_socket();
+        let socket = make_ipv4_socket().await;
         let result = socket.set_unicast_hop_limit(0);
         assert!(matches!(result, Err(ErrorCode::InvalidArgument)));
     }
 }
+
+#[cfg(test)]
+#[path = "udp_tests.rs"]
+mod behavior_tests;

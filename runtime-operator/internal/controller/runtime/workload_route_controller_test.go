@@ -118,7 +118,7 @@ func newHostPod(podName, specHostname, podIP string) *corev1.Pod {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: testNamespace,
 			Name:      podName,
-			Labels:    map[string]string{HostPodLabel: "default"},
+			Labels:    map[string]string{HostPodLabel: testHostGroup},
 		},
 		Spec:   corev1.PodSpec{Hostname: specHostname},
 		Status: corev1.PodStatus{PodIP: podIP},

@@ -396,7 +396,7 @@ func buildBaseHelmSets() []string {
 		"runtime.hostGroups[0].webgpu.enabled=false",
 		"runtime.hostGroups[0].resources.requests.memory=64Mi",
 		"runtime.hostGroups[0].resources.requests.cpu=250m",
-		"runtime.hostGroups[0].resources.limits.memory=512Mi",
+		"runtime.hostGroups[0].resources.limits.memory=768Mi",
 		"runtime.hostGroups[0].resources.limits.cpu=500m",
 		// Driven by RUNTIME_LOG_LEVEL env var; empty value leaves the
 		// chart's `{{- if .logLevel }}` guard off, so wash uses INFO.
@@ -449,7 +449,7 @@ func buildBaseHelmSets() []string {
 			"runtime.hostGroups[1].webgpu.enabled=false",
 			"runtime.hostGroups[1].resources.requests.memory=64Mi",
 			"runtime.hostGroups[1].resources.requests.cpu=250m",
-			"runtime.hostGroups[1].resources.limits.memory=512Mi",
+			"runtime.hostGroups[1].resources.limits.memory=768Mi",
 			"runtime.hostGroups[1].resources.limits.cpu=500m",
 			fmt.Sprintf("runtime.hostGroups[1].logLevel=%s", runtimeLogLevel),
 		)
@@ -487,15 +487,6 @@ func buildBaseHelmSets() []string {
 			fmt.Sprintf("runtime.image.tag=%s", runtimeImageTag),
 			"runtime.image.pull_policy=IfNotPresent",
 			"gateway.image.tag=canary",
-			// Chart features whose host flags are not in canary yet. This path
-			// runs whatever upstream last published, so it cannot enable a
-			// flag added on the branch: `wash host` exits on an argument it
-			// does not know, and the pod never starts. Drop an entry here once
-			// its flag has merged. `BUILD_RUNTIME_IMAGE=true` runs the
-			// branch's own host and exercises them.
-			"runtime.probes.endpoint.enabled=false",
-			"runtime.drainDelaySeconds=0",
-			"runtime.natsConnectTimeoutSeconds=0",
 		)
 	}
 	return sets

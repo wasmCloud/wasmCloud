@@ -14,6 +14,7 @@ pub struct NetworkIncomingDatagramStream {
     /// a real interface. `None` disables filtering — see
     /// [`NetworkUdpSocket::egress_peers`](super::udp::NetworkUdpSocket).
     pub(crate) egress_peers: Option<Arc<std::sync::Mutex<std::collections::BTreeSet<SocketAddr>>>>,
+    pub(crate) socket_addr_check: Option<SocketAddrCheck>,
 }
 
 pub struct NetworkOutgoingDatagramStream {
@@ -21,6 +22,9 @@ pub struct NetworkOutgoingDatagramStream {
 
     /// If this has a value, the stream is "connected".
     pub(crate) remote_address: Option<SocketAddr>,
+
+    /// When the decision that permitted `remote_address` lapses, if it does.
+    pub(crate) valid_until: Option<std::time::Instant>,
 
     /// Socket address family.
     pub(crate) family: SocketAddressFamily,
@@ -53,6 +57,7 @@ pub struct LoopbackIncomingDatagramStream {
         super::loopback::UdpDatagram,
         tokio::sync::OwnedSemaphorePermit,
     )>,
+    pub(crate) socket_addr_check: Option<SocketAddrCheck>,
 }
 
 impl LoopbackIncomingDatagramStream {
@@ -74,7 +79,20 @@ impl LoopbackIncomingDatagramStream {
                 break;
             };
             match self.remote_address {
-                Some(connected_addr) if connected_addr != dgram.source_address => continue,
+                Some(connected_addr)
+                    if !super::util::is_same_peer(connected_addr, dgram.source_address) =>
+                {
+                    continue;
+                }
+                _ if self.socket_addr_check.as_ref().is_some_and(|check| {
+                    check
+                        .check(dgram.source_address, super::SocketAddrUse::UdpReceive)
+                        .is_err()
+                }) =>
+                {
+                    tracing::trace!(source = %dgram.source_address, "dropping denied UDP datagram");
+                    continue;
+                }
                 _ => datagrams.push(
                     wasmtime_wasi::p2::bindings::sockets::udp::IncomingDatagram {
                         data: dgram.data,
@@ -103,9 +121,11 @@ impl LoopbackOutgoingDatagramStream {
         if self.permit.is_some() {
             return true;
         };
-        let Ok(p) =
-            Arc::clone(&self.permits).try_acquire_many_owned(self.permits.available_permits() as _)
-        else {
+        let available = self.permits.available_permits();
+        if available == 0 {
+            return false;
+        }
+        let Ok(p) = Arc::clone(&self.permits).try_acquire_many_owned(available as _) else {
             return false;
         };
         self.permit = Some(p);

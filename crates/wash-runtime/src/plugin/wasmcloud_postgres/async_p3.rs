@@ -88,7 +88,11 @@ mod conversions {
 /// Failures the database reported (with a SQLSTATE) become `query-failed` and
 /// carry the structured [`DbError`] so a guest can branch on `code`; everything
 /// else (connection loss, protocol errors) is reported as `connection-failed`.
+/// A parameter whose value does not match its type is `invalid-params`.
 fn to_wit_error(e: &tokio_postgres::Error) -> Error {
+    if let Some(msg) = super::wrong_type_message(e) {
+        return Error::InvalidParams(msg);
+    }
     match e.as_db_error() {
         Some(db) => Error::QueryFailed(DbError {
             code: db.code().code().to_string(),
@@ -192,12 +196,12 @@ async fn batch_with_client(client: deadpool_postgres::Client, q: String) -> Resu
 }
 
 /// Prepare `statement` on `client` and register it in the plugin's shared table,
-/// tagged with `component_id` so workload unbind reaps it. `database` is empty
+/// tagged with `workload_id` so workload unbind reaps it. `database` is empty
 /// for implements-routed entries (exec routes by connection, not database name).
 async fn prepare_with_client(
     client: &deadpool_postgres::Client,
     plugin: &WasmcloudPostgres,
-    component_id: String,
+    workload_id: String,
     database: String,
     statement: String,
 ) -> Result<String, Error> {
@@ -212,7 +216,7 @@ async fn prepare_with_client(
             sql: statement,
             param_types: stmt.params().to_vec(),
             database,
-            component_id,
+            workload_id,
         },
     );
     Ok(token)
@@ -296,16 +300,22 @@ impl types::Host for ActiveCtx<'_> {}
 impl query::Host for ActiveCtx<'_> {}
 impl prepared::Host for ActiveCtx<'_> {}
 
-/// Resolve `(plugin, component-id)` for the active call. The plugin is
-/// `Arc`-cloned so it outlives the synchronous store borrow.
-fn plugin_and_component<U>(
-    store: &Accessor<U, SharedCtx>,
-) -> wasmtime::Result<(std::sync::Arc<WasmcloudPostgres>, String)> {
+/// The active call's plugin and the component and workload making it. The
+/// plugin is `Arc`-cloned so it outlives the synchronous store borrow.
+struct Caller {
+    plugin: std::sync::Arc<WasmcloudPostgres>,
+    component_id: String,
+    workload_id: String,
+}
+
+fn caller<U>(store: &Accessor<U, SharedCtx>) -> wasmtime::Result<Caller> {
     store.with(|mut access| {
         let view = access.get();
-        let plugin = view.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?;
-        let component_id = view.component_id.to_string();
-        wasmtime::Result::Ok((plugin, component_id))
+        wasmtime::Result::Ok(Caller {
+            plugin: view.try_get_plugin::<WasmcloudPostgres>(PLUGIN_POSTGRES_ID)?,
+            component_id: view.component_id.to_string(),
+            workload_id: view.workload_id.to_string(),
+        })
     })
 }
 
@@ -315,7 +325,11 @@ impl<U> query::HostWithStore<U> for SharedCtx {
         q: String,
         params: Vec<PgValue>,
     ) -> wasmtime::Result<Result<(Vec<String>, StreamReader<Row>, CompletionFuture), Error>> {
-        let (plugin, component_id) = plugin_and_component(store)?;
+        let Caller {
+            plugin,
+            component_id,
+            ..
+        } = caller(store)?;
         let Some(database) = plugin.database_for_component(&component_id).await else {
             return Ok(Err(Error::Other(
                 "no database configured for this component".to_string(),
@@ -332,7 +346,11 @@ impl<U> query::HostWithStore<U> for SharedCtx {
         store: &Accessor<U, Self>,
         q: String,
     ) -> wasmtime::Result<Result<(), Error>> {
-        let (plugin, component_id) = plugin_and_component(store)?;
+        let Caller {
+            plugin,
+            component_id,
+            ..
+        } = caller(store)?;
         let Some(database) = plugin.database_for_component(&component_id).await else {
             return Ok(Err(Error::Other(
                 "no database configured for this component".to_string(),
@@ -351,7 +369,11 @@ impl<U> prepared::HostWithStore<U> for SharedCtx {
         store: &Accessor<U, Self>,
         statement: String,
     ) -> wasmtime::Result<Result<String, Error>> {
-        let (plugin, component_id) = plugin_and_component(store)?;
+        let Caller {
+            plugin,
+            component_id,
+            workload_id,
+        } = caller(store)?;
         let Some(database) = plugin.database_for_component(&component_id).await else {
             return Ok(Err(Error::Other(
                 "no database configured for this component".to_string(),
@@ -361,7 +383,7 @@ impl<U> prepared::HostWithStore<U> for SharedCtx {
             Ok(c) => c,
             Err(e) => return Ok(Err(e)),
         };
-        Ok(prepare_with_client(&client, &plugin, component_id, database, statement).await)
+        Ok(prepare_with_client(&client, &plugin, workload_id, database, statement).await)
     }
 
     async fn exec(
@@ -369,7 +391,7 @@ impl<U> prepared::HostWithStore<U> for SharedCtx {
         stmt_token: String,
         params: Vec<PgValue>,
     ) -> wasmtime::Result<Result<u64, Error>> {
-        let (plugin, _component_id) = plugin_and_component(store)?;
+        let Caller { plugin, .. } = caller(store)?;
         let Some((sql, param_types, database)) = lookup_prepared(&plugin, &stmt_token).await else {
             return Ok(Err(Error::UnknownPreparedStatement));
         };
@@ -426,14 +448,18 @@ impl<U> bindings::named_imports::wasmcloud::postgres0_2_0::prepared::HostWithSto
         id: PgId,
         statement: String,
     ) -> wasmtime::Result<Result<String, Error>> {
-        let (plugin, component_id) = plugin_and_component(store)?;
+        let Caller {
+            plugin,
+            workload_id,
+            ..
+        } = caller(store)?;
         let client = match id.client().await {
             Ok(c) => c,
             Err(e) => return Ok(Err(Error::ConnectionFailed(e))),
         };
         // Implements-routed entries carry an empty database: exec re-acquires the
         // connection from the same `PgId`, not by database name.
-        Ok(prepare_with_client(&client, &plugin, component_id, String::new(), statement).await)
+        Ok(prepare_with_client(&client, &plugin, workload_id, String::new(), statement).await)
     }
 
     async fn exec(
@@ -442,7 +468,7 @@ impl<U> bindings::named_imports::wasmcloud::postgres0_2_0::prepared::HostWithSto
         stmt_token: String,
         params: Vec<PgValue>,
     ) -> wasmtime::Result<Result<u64, Error>> {
-        let (plugin, _component_id) = plugin_and_component(store)?;
+        let Caller { plugin, .. } = caller(store)?;
         let Some((sql, param_types, _database)) = lookup_prepared(&plugin, &stmt_token).await
         else {
             return Ok(Err(Error::UnknownPreparedStatement));

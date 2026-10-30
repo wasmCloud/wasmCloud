@@ -143,19 +143,42 @@ docker run --rm -it \
 - `18888` — dashboard UI (open in browser)
 - `18889` — OTLP gRPC ingest endpoint
 
-In a second terminal, point `wash dev` at the dashboard's OTLP endpoint. wash-runtime's
-exporter activates when an OTLP endpoint variable is set — `OTEL_EXPORTER_OTLP_ENDPOINT`
-or a signal-specific `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` — and speaks
-gRPC over `http://` or `https://` by default. Other `OTEL_*` vars (e.g. `OTEL_SERVICE_NAME`)
-do not by themselves turn on export:
+This example already sets `OTEL_EXPORTER_OTLP_ENDPOINT` to the dashboard's OTLP endpoint in [`.wash/config.yaml`](.wash/config.yaml)'s
+`dev.environment`, so plain `wash dev` is enough. `wash dev` exports `dev.environment` into
+its own process before observability starts which also means it *overrides* the same
+variable from your shell. Change the value there rather than on the command line.
+See the [Configuration](#configuration) section above.
 
-```shell
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:18889 wash dev
-```
+### Telemetry configuration
 
-`OTEL_EXPORTER_OTLP_ENDPOINT` configures wash itself (it's read from wash dev's process env),
-so it stays on the command line. The Resource identity is sourced from
-[`.wash/config.yaml`](.wash/config.yaml) — see the [Configuration](#configuration) section above.
+wash reads its telemetry configuration from the environment. This is part of the OpenTelemetry
+specification. Set these wherever you already set environment variables: `dev.environment` here, `runtime.env` in the Helm chart, or your shell. Everything is read once at startup, and anything named but unusable is reported and
+skipped rather than stopping the host.
+
+| variable | effect |
+| --- | --- |
+| `OTEL_SDK_DISABLED` | `true` exports nothing at all |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | where every signal goes |
+| `OTEL_EXPORTER_OTLP_{TRACES,LOGS,METRICS}_ENDPOINT` | where one signal goes, overriding the above |
+| `OTEL_{TRACES,LOGS,METRICS}_EXPORTER` | `none` turns one signal off — useful for metrics, the only one that costs anything while idle |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` (default) or `http/protobuf`; the HTTP port is usually `4318` rather than `4317` |
+| `OTEL_EXPORTER_OTLP_{TRACES,LOGS,METRICS}_PROTOCOL` | the same, for one signal |
+| `OTEL_EXPORTER_OTLP_TIMEOUT` | how long one export may take, in milliseconds |
+| `OTEL_EXPORTER_OTLP_CERTIFICATE` | PEM bundle to trust for an `https://` collector behind a private CA, layered onto the public roots rather than replacing them |
+| `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` / `_CLIENT_KEY` | client certificate to present when the collector asks for one; both are required together |
+| `OTEL_SERVICE_NAME` | names wash itself — without it, wash reports as `wash-runtime` |
+| `OTEL_RESOURCE_ATTRIBUTES` | further resource attributes, `key=value` pairs |
+
+A signal exports when an endpoint is configured for it and nothing turned it off. At startup
+wash logs which signals are on and where they point, so a host that cannot reach its collector
+is distinguishable from one exporting happily.
+
+**Transport security is decided by the endpoint's scheme**, not by a separate switch. Use
+`https://` to encrypt. `OTEL_EXPORTER_OTLP_INSECURE` is *not* honored — the specification
+defines it for a gRPC endpoint given without a scheme, and wash requires a scheme — so setting
+it to `false` does not encrypt anything. Because that reads like a TLS switch, wash warns at
+startup if you set it to `false` while pointing at an `http://` collector, rather than shipping
+telemetry in cleartext while you believe otherwise.
 
 In a third terminal, trigger a request:
 

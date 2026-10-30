@@ -3,10 +3,9 @@ use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::str::FromStr as _;
 use core::time::Duration;
 
-use cap_net_ext::{AddressFamily, Blocking, UdpSocketExt};
 use rustix::fd::AsFd;
 use rustix::io::Errno;
-use rustix::net::{bind, connect, connect_unspec, sockopt};
+use rustix::net::{bind, connect, connect_unspec, getsockname, sockopt};
 use tracing::debug;
 
 use super::SocketAddressFamily;
@@ -61,6 +60,12 @@ pub fn is_valid_address_family(addr: IpAddr, socket_family: SocketAddressFamily)
 
 pub fn is_valid_remote_address(addr: SocketAddr) -> bool {
     !addr.ip().to_canonical().is_unspecified() && addr.port() != 0
+}
+
+/// Whether `a` and `b` name the same UDP peer. Only ip and port count: a v6
+/// address can carry a flow label or scope id the other spelling lacks.
+pub fn is_same_peer(a: SocketAddr, b: SocketAddr) -> bool {
+    a.ip() == b.ip() && a.port() == b.port()
 }
 
 pub fn is_valid_unicast_address(addr: IpAddr) -> bool {
@@ -368,14 +373,42 @@ pub fn tcp_bind(
         })
 }
 
-pub fn udp_socket(family: AddressFamily) -> std::io::Result<cap_std::net::UdpSocket> {
-    // Delegate socket creation to cap_net_ext. They handle a couple of things for us:
-    // - On Windows: call WSAStartup if not done before.
-    // - Set the NONBLOCK and CLOEXEC flags. Either immediately during socket creation,
-    //   or afterwards using ioctl or fcntl. Exact method depends on the platform.
+pub fn udp_socket(family: SocketAddressFamily) -> std::io::Result<tokio::net::UdpSocket> {
+    // Rust's TCP connect initializes Winsock before rustix creates a UDP socket.
+    #[cfg(windows)]
+    static INIT: std::sync::Once = std::sync::Once::new();
+    #[cfg(windows)]
+    INIT.call_once(|| {
+        let _ = std::net::TcpStream::connect(std::net::SocketAddrV4::new(
+            std::net::Ipv4Addr::UNSPECIFIED,
+            0,
+        ));
+    });
 
-    let socket = cap_std::net::UdpSocket::new(family, Blocking::No)?;
-    Ok(socket)
+    #[cfg(not(any(windows, target_vendor = "apple")))]
+    let flags = rustix::net::SocketFlags::CLOEXEC | rustix::net::SocketFlags::NONBLOCK;
+    #[cfg(any(windows, target_vendor = "apple"))]
+    let flags = rustix::net::SocketFlags::empty();
+
+    let socket = rustix::net::socket_with(
+        match family {
+            SocketAddressFamily::Ipv4 => rustix::net::AddressFamily::INET,
+            SocketAddressFamily::Ipv6 => rustix::net::AddressFamily::INET6,
+        },
+        rustix::net::SocketType::DGRAM,
+        flags,
+        None,
+    )?;
+    #[cfg(target_vendor = "apple")]
+    rustix::io::ioctl_fioclex(&socket)?;
+    #[cfg(any(windows, target_vendor = "apple"))]
+    rustix::io::ioctl_fionbio(&socket, true)?;
+
+    if family == SocketAddressFamily::Ipv6 {
+        rustix::net::sockopt::set_ipv6_v6only(&socket, true)?;
+    }
+
+    tokio::net::UdpSocket::try_from(std::net::UdpSocket::from(socket))
 }
 
 pub fn udp_bind(sockfd: impl AsFd, addr: SocketAddr) -> Result<(), ErrorCode> {
@@ -416,7 +449,28 @@ pub fn udp_connect(sockfd: impl AsFd, addr: SocketAddr) -> Result<(), Errno> {
     }
 }
 
+/// Dissolves the socket's association, keeping its local port.
+///
+/// Linux releases the port of a socket bound with port 0 when it
+/// disconnects, so the next send would pick a fresh one and a peer that
+/// already has the address would lose the socket. Binding the port back
+/// keeps the address stable, which an unspecified socket relies on: its
+/// loopback half is registered under this same port.
 pub fn udp_disconnect(sockfd: impl AsFd) -> Result<(), Errno> {
+    let before = local_address(&sockfd)?;
+    dissolve(&sockfd)?;
+    let after = local_address(&sockfd)?;
+    if after.port() == 0 && before.port() != 0 {
+        bind(&sockfd, &SocketAddr::new(after.ip(), before.port()))?;
+    }
+    Ok(())
+}
+
+fn local_address(sockfd: impl AsFd) -> Result<SocketAddr, Errno> {
+    SocketAddr::try_from(getsockname(sockfd)?)
+}
+
+fn dissolve(sockfd: impl AsFd) -> Result<(), Errno> {
     match connect_unspec(sockfd) {
         // BSD platforms return an error even if the UDP socket was disconnected successfully.
         //
@@ -467,41 +521,39 @@ pub fn implicit_bind_addr(family: SocketAddressFamily) -> SocketAddr {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use cap_net_ext::AddressFamily;
-
-    #[test]
-    fn test_udp_socket_ipv4() {
-        let sock = udp_socket(AddressFamily::Ipv4);
+    #[tokio::test]
+    async fn test_udp_socket_ipv4() {
+        let sock = udp_socket(SocketAddressFamily::Ipv4);
         assert!(sock.is_ok());
     }
 
-    #[test]
-    fn test_udp_socket_ipv6() {
-        let sock = udp_socket(AddressFamily::Ipv6);
+    #[tokio::test]
+    async fn test_udp_socket_ipv6() {
+        let sock = udp_socket(SocketAddressFamily::Ipv6);
         assert!(sock.is_ok());
     }
 
-    #[test]
-    fn test_udp_bind_ipv4_ephemeral() {
-        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+    #[tokio::test]
+    async fn test_udp_bind_ipv4_ephemeral() {
+        let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let result = udp_bind(&sock, addr);
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_udp_bind_ipv6_ephemeral() {
-        let sock = udp_socket(AddressFamily::Ipv6).unwrap();
+    #[tokio::test]
+    async fn test_udp_bind_ipv6_ephemeral() {
+        let sock = udp_socket(SocketAddressFamily::Ipv6).unwrap();
         let addr: SocketAddr = "[::1]:0".parse().unwrap();
         let result = udp_bind(&sock, addr);
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_udp_bind_address_in_use() {
+    #[tokio::test]
+    async fn test_udp_bind_address_in_use() {
         use io_lifetimes::AsSocketlike as _;
 
-        let sock1 = udp_socket(AddressFamily::Ipv4).unwrap();
+        let sock1 = udp_socket(SocketAddressFamily::Ipv4).unwrap();
         let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         udp_bind(&sock1, addr).unwrap();
 
@@ -513,15 +565,15 @@ mod tests {
             .port();
 
         // Second bind to same port should fail
-        let sock2 = udp_socket(AddressFamily::Ipv4).unwrap();
+        let sock2 = udp_socket(SocketAddressFamily::Ipv4).unwrap();
         let addr2: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
         let result = udp_bind(&sock2, addr2);
         assert!(matches!(result, Err(ErrorCode::AddressInUse)));
     }
 
-    #[test]
-    fn test_udp_connect_ipv4() {
-        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+    #[tokio::test]
+    async fn test_udp_connect_ipv4() {
+        let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         udp_bind(&sock, bind_addr).unwrap();
 
@@ -530,9 +582,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_udp_disconnect_ipv4() {
-        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+    #[tokio::test]
+    async fn test_udp_disconnect_ipv4() {
+        let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         udp_bind(&sock, bind_addr).unwrap();
 
@@ -543,11 +595,27 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_udp_connect_reconnect() {
+    #[tokio::test]
+    async fn disconnect_keeps_an_ephemeral_port() {
+        for bind_addr in ["0.0.0.0:0", "127.0.0.1:0"] {
+            let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
+            udp_bind(&sock, bind_addr.parse().unwrap()).unwrap();
+            let bound = sock.local_addr().unwrap();
+
+            let remote: SocketAddr = "127.0.0.1:9999".parse().unwrap();
+            udp_connect(&sock, remote).unwrap();
+            udp_disconnect(&sock).unwrap();
+
+            let after = sock.local_addr().unwrap();
+            assert_eq!(after.port(), bound.port(), "{bind_addr}: {after}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_udp_connect_reconnect() {
         // Connect to one address, then connect to another without disconnecting.
         // This exercises the Linux EINVAL retry path in udp_connect().
-        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+        let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         udp_bind(&sock, bind_addr).unwrap();
 
@@ -559,9 +627,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_udp_disconnect_then_reconnect() {
-        let sock = udp_socket(AddressFamily::Ipv4).unwrap();
+    #[tokio::test]
+    async fn test_udp_disconnect_then_reconnect() {
+        let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
         let bind_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         udp_bind(&sock, bind_addr).unwrap();
 

@@ -36,5 +36,5 @@ runtime:
           memory: "64Mi"
           cpu: "250m" # 0.25 CPU cores
         limits:
-          memory: "512Mi"
+          memory: "768Mi"
           cpu: "500m" # 0.5 CPU cores

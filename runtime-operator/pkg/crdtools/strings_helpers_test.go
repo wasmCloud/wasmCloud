@@ -14,24 +14,24 @@ func TestCoalesce(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "first",
-			args: []string{"first", "second"},
-			want: "first",
+			name: "first set wins",
+			args: []string{"a", "b"},
+			want: "a",
 		},
 		{
-			name: "second",
-			args: []string{"", "second"},
-			want: "second",
+			name: "skips one empty",
+			args: []string{"", "b"},
+			want: "b",
 		},
 		{
-			name: "third",
-			args: []string{"", "", "third"},
-			want: "third",
+			name: "skips two empty",
+			args: []string{"", "", "c"},
+			want: "c",
 		},
 		{
-			name: "fourth",
-			args: []string{"", "", "", "fourth"},
-			want: "fourth",
+			name: "skips three empty",
+			args: []string{"", "", "", "d"},
+			want: "d",
 		},
 	}
 	for _, tt := range tests {

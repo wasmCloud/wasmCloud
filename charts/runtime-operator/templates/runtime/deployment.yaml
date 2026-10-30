@@ -1,6 +1,20 @@
 {{- $top := . }}
 {{- range .Values.runtime.hostGroups }}
 {{- $ns := default $top.Release.Namespace .namespace }}
+{{- /* Group values override chart-wide client identity fields. */}}
+{{- $identity := merge (deepCopy (.clientIdentity | default dict)) $top.Values.runtime.clientIdentity }}
+{{- /* Empty group values disable identity or refresh inheritance. */}}
+{{- $groupIdentity := .clientIdentity | default dict }}
+{{- if and (hasKey $groupIdentity "secretName") (not $groupIdentity.secretName) }}
+{{- $identity = dict }}
+{{- else if and (hasKey $groupIdentity "refreshInterval") (not $groupIdentity.refreshInterval) }}
+{{- $identity = merge (dict "refreshInterval" "") (omit $identity "refreshInterval") }}
+{{- end }}
+{{- if $identity.secretName }}
+{{- if or (not $identity.mountPath) (not $identity.certKey) (not $identity.keyKey) }}
+{{- fail (printf "hostGroup %s: clientIdentity.secretName needs mountPath, certKey and keyKey" .name) }}
+{{- end }}
+{{- end }}
 {{- /* Per-hostgroup image: `.image.{registry,repository,tag}` override the
        chart-wide runtime.image, so one release can mix host versions (e.g. an
        all-features host for one group and the shipped image for another). */}}
@@ -9,13 +23,15 @@
 {{- $imgRepo := $hi.repository | default $top.Values.runtime.image.repository }}
 {{- $imgTag := $hi.tag | default $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
 {{- /* hostPlugins entries needing a `wash host` config file (--config) —
-       config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups have no
+       config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups/
+       allowedHostLoopbackPorts/ports have no
        `--host-plugin` CLI-arg equivalent (deliberately: a secret must never
        land on the command line). See host-plugin-config.yaml, which renders
        the ConfigMap this deployment mounts. */}}
 {{- /* A host group's own `resources` replaces the chart-wide block wholesale
        (no merge), and carries the host knobs `defaultHeapMemory`,
-       `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` alongside
+       `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`,
+       `guestMemoryMode` and `maxConcurrentStarts` alongside
        the Kubernetes requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- /* Probes, unlike `resources`, merge per field: a group naming one timing
@@ -149,6 +165,14 @@ spec:
             secretName: {{ if and (.http.tls.certificate) (.http.tls.certificate.secretName) }}{{ .http.tls.certificate.secretName }}{{ else }}hostgroup-{{ .name }}-http-tls{{ end }}
         {{- end }}
         {{- end }}
+        {{- /* Client identity is independent of the chart CA. */}}
+        {{- if $identity.secretName }}
+        - name: client-identity
+          secret:
+            secretName: {{ $identity.secretName }}
+            # fsGroup grants the host read access.
+            defaultMode: 0400
+        {{- end }}
         {{- /* Optional pod volumes (e.g. ConfigMap / Secret mounts). Rendered
                unconditionally — outside the global.tls.enabled guard above —
                so they survive a TLS-off install. */}}
@@ -192,15 +216,21 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- /* Host memory budgets, from the effective `resources`:
-                   `limits.memory` is the host's total guest memory budget,
-                   guestMemoryMode says whether that budget is enforced or only
-                   counted, and defaultHeapMemory/coreInstances are wasmtime
-                   knobs parked alongside them (all three stripped back out of
-                   the `resources:` block below). Unset means unset — the host
-                   then derives its budget from its cgroup, counts against it
-                   rather than enforcing it, and leaves the pool knobs at
-                   wasmtime's defaults.
+            {{- /* Host memory knobs, from the effective `resources`:
+                   guestMemoryMode says whether the guest memory budget is
+                   enforced or only counted, and defaultHeapMemory/maxMemories/
+                   coreInstances are wasmtime knobs parked alongside it (all
+                   stripped back out of the `resources:` block below). An unset
+                   maxMemories is derived by the host from the node; the other
+                   pool knobs stay at wasmtime's defaults. The mode is always
+                   rendered, `enforce` unless named, so the budget is enforced
+                   whatever the paired host image defaults to.
+
+                   The budget itself is not rendered: the host derives it from
+                   its cgroup, which is `limits.memory`, and keeps a quarter
+                   back for everything in the pod that is not a guest. Passing
+                   `limits.memory` through would enforce a budget of the whole
+                   pod, which the kernel OOM-kills before it refuses a guest.
 
                    These go through the flags' `WASH_*` env fallbacks rather
                    than `args` on purpose. The chart is routinely paired with a
@@ -208,22 +238,28 @@ spec:
                    older host aborts on an argument it does not recognise —
                    whereas it simply ignores an env var it has never heard of.
                    Keep any new host knob on this side of that line. */}}
-            {{- with $resources.limits }}
-            {{- with .memory }}
-            - name: WASH_HOST_MAX_GUEST_MEMORY
-              value: "{{ . }}"
-            {{- end }}
-            {{- end }}
             {{- with $resources.defaultHeapMemory }}
             - name: WASH_DEFAULT_HEAP_MEMORY
               value: "{{ . }}"
+            {{- end }}
+            {{- with $resources.maxMemories }}
+            - name: WASH_MAX_MEMORIES
+              value: "{{ . }}"
+            {{- end }}
+            {{- /* Compared as text: every sibling knob is a string, and a
+                   quoted "false" would be truthy to a bare `if`. */}}
+            {{- if eq (toString $resources.setMaxMemoriesFromMemoryPrecommitLimit) "true" }}
+            - name: WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT
+              value: "true"
             {{- end }}
             {{- with $resources.coreInstances }}
             - name: WASH_CORE_INSTANCES
               value: "{{ . }}"
             {{- end }}
-            {{- with $resources.guestMemoryMode }}
             - name: WASH_GUEST_MEMORY_MODE
+              value: "{{ $resources.guestMemoryMode | default "enforce" }}"
+            {{- with (.networking | default dict).ipNameLookupGrantLifetime }}
+            - name: WASH_IP_NAME_LOOKUP_GRANT_LIFETIME
               value: "{{ . }}"
             {{- end }}
             {{- /* Not `with`: Go templates treat the integer 0 as empty, and
@@ -327,11 +363,28 @@ spec:
             - "--max-inbound-socket-connections-per-workload={{ . }}"
             {{- end }}
             {{- end }}
+            {{- /* Which host directories a workload's hostPath volume may
+                   name. Rendered only when set, like `networking`. */}}
+            {{- with .hostPaths }}
+            {{- range .allowed }}
+            - "--allowed-host-path={{ . }}"
+            {{- end }}
+            {{- end }}
+            {{- with .scratchRoot }}
+            - "--scratch-root={{ . }}"
+            {{- end }}
             {{- if and (.http) (.http.enabled) }}
             - "--http-addr=0.0.0.0:{{ .http.port }}"
             {{- if and ($top.Values.global.tls.enabled) (.http.tls) (.http.tls.enabled) }}
             - "--tls-cert-path=/tls-cert/tls.crt"
             - "--tls-key-path=/tls-cert/tls.key"
+            {{- end }}
+            {{- /* Same-host local routing: outgoing requests to a hostname
+                   this host's ingress serves are answered in-memory by the
+                   co-located workload, bypassing the cluster network (and any
+                   ingress middleware on it). Off unless explicitly enabled. */}}
+            {{- if .http.localBypassRouting }}
+            - "--http-local-routing"
             {{- end }}
             {{- end }}
             {{- /* Extra CA bundles this host trusts when pulling images. The
@@ -343,13 +396,31 @@ spec:
             {{- range concat ($top.Values.runtime.ociCaPaths | default list) (.ociCaPaths | default list) }}
             - "--oci-ca-path={{ . }}"
             {{- end }}
+            {{- /* Component egress trust, which the OCI bundles above do not
+                   cover: a third trust store that reads neither the container's
+                   system roots nor the image-pull bundles. Chart-wide entries
+                   first, then per-host-group ones. */}}
+            {{- range concat ($top.Values.runtime.httpClientCaPaths | default list) (.httpClientCaPaths | default list) }}
+            - "--http-client-ca-path={{ . }}"
+            {{- end }}
+            {{- with (.httpClientTrustRoots | default $top.Values.runtime.httpClientTrustRoots) }}
+            - "--http-client-trust-roots={{ . }}"
+            {{- end }}
+            {{- /* Identity presented for component egress. */}}
+            {{- if $identity.secretName }}
+            - "--http-client-cert-path={{ $identity.mountPath }}/{{ $identity.certKey }}"
+            - "--http-client-key-path={{ $identity.mountPath }}/{{ $identity.keyKey }}"
+            {{- with $identity.refreshInterval }}
+            - "--http-client-identity-refresh={{ . }}"
+            {{- end }}
+            {{- end }}
             {{- if and (.webgpu) (.webgpu.enabled) }}
             - "--wasi-webgpu"
             {{- end }}
             {{- range .wasmProposals }}
             - "--wasm-proposal={{ . }}"
             {{- end }}
-            {{- /* Host component plugins with no config/secretFrom/allowedHosts:
+            {{- /* Host component plugins with no config/secretFrom/egress policy:
                    one --host-plugin flag per entry, rendered into the CLI's
                    `key=value` grammar (unchanged). Entries that DO set any of
                    those render into the mounted config file instead — see
@@ -387,6 +458,11 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
+            {{- if $identity.secretName }}
+            - name: client-identity
+              mountPath: {{ $identity.mountPath }}
+              readOnly: true
+            {{- end }}
             {{- /* Optional host-container volumeMounts (pair with .volumes
                    above). Rendered unconditionally so a TLS-off install still
                    mounts user volumes. */}}
@@ -408,7 +484,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with omit $resources "defaultHeapMemory" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
+          {{- with omit $resources "defaultHeapMemory" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

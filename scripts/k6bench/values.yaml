@@ -1,0 +1,33 @@
+# runtime-operator chart overrides for the k6bench kind cluster. Image tags
+# are set by run.sh (--set) from WASMCLOUD_VERSION or --build-local.
+gateway:
+  # Deprecated since 2.0.3; workloads are reached through Services.
+  enabled: false
+
+runtime:
+  hostGroups:
+    - name: default
+      replicas: 1
+      service:
+        type: ClusterIP
+      webgpu:
+        enabled: false
+      http:
+        enabled: true
+        port: 80
+        # fan-out-10 and chain-5 call co-located workloads by their
+        # `localRoute` names, served in memory by the same host. run.sh
+        # turns it off for `--routing network`.
+        localBypassRouting: true
+      # Bench components come from the plain-HTTP registry run.sh starts on
+      # the kind network. Nothing else is pulled by the hosts.
+      extraArgs:
+        - "--allow-insecure-registries"
+      resources:
+        # No CPU limit: the host may use every core its node has, which is
+        # the point of a throughput bench. The node's cpuset is the ceiling.
+        requests:
+          cpu: "500m"
+          memory: "256Mi"
+        limits:
+          memory: "2Gi"

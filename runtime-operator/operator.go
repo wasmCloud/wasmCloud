@@ -93,6 +93,7 @@ func NewEmbeddedOperator(
 		return nil, err
 	}
 	bus := wasmbus.NewNatsBus(nc)
+	retiredHosts := &runtime_controllers.RetiredHosts{}
 
 	if !cfg.DisableArtifactController {
 		if err = (&runtime_controllers.ArtifactReconciler{
@@ -111,6 +112,7 @@ func NewEmbeddedOperator(
 		CPUThreshold:       cfg.HostCPUThreshold,
 		MemoryThreshold:    cfg.HostMemoryThreshold,
 		OperatorNamespace:  cfg.Namespace,
+		RetiredHosts:       retiredHosts,
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
@@ -119,6 +121,7 @@ func NewEmbeddedOperator(
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
 		OperatorNamespace: cfg.Namespace,
+		RetiredHosts:      retiredHosts,
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

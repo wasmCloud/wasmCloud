@@ -59,7 +59,10 @@ macro_rules! handler_pre {
                 &self,
                 store: &mut crate::wasmtime::Store<SharedCtx>,
             ) -> anyhow::Result<$proxy> {
-                Ok($proxy(self.0.instantiate_async(store).await?))
+                let instance = self.0.instantiate_async(&mut *store).await.map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })?;
+                Ok($proxy(instance))
             }
         }
     };
@@ -85,7 +88,8 @@ impl JsProxy {
                     .call_handle_message(accessor, handle)
                     .await
             })
-            .await?
+            .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))?
     }
 }
 
@@ -285,12 +289,12 @@ async fn build_instance(
         created = workload.new_store(component_id) => created?,
         _ = cancel_token.cancelled() => return Ok(None),
     };
-    let instance = tokio::select! {
-        instantiated = target.pre.instantiate_async(&mut store) => {
-            instantiated.map_err(|e| anyhow::anyhow!("{e:#}"))?
-        }
+    let instantiated = tokio::select! {
+        instantiated = target.pre.instantiate_async(&mut store) => instantiated,
         _ = cancel_token.cancelled() => return Ok(None),
     };
+    let instance = instantiated
+        .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
     Ok(Some((store, instance)))
 }
 
@@ -635,7 +639,7 @@ fn sanitize_name_component(name: &str) -> String {
 /// The durable/deliver-plane scope for a workload's JetStream subscriptions.
 ///
 /// **Namespace only.** Every replica of a deployment is a separate workload
-/// with its own `uuid::Uuid::new_v4()` id *and* its own generated name —
+/// with its own workload id *and* its own generated name —
 /// `js-sink-8b6857494-69bc97f647`, `js-sink-8b6857494-6dc679c6` — so both are
 /// per-replica keys and neither can scope a durable that replicas must share.
 /// Keying by either gave each replica a durable of its own: a queue group of N
@@ -1217,8 +1221,12 @@ pub(super) async fn spawn_jetstream_subscriptions(
                             delivered_this_cycle = true;
 
                             let subject_str = raw.subject.to_string();
-                            let (sequence, delivery_count) = match raw.info() {
-                                Ok(i) => (i.stream_sequence, i.delivered as u32),
+                            let (sequence, delivery_count, stored_at_unix_nanos) = match raw.info() {
+                                Ok(i) => (
+                                    i.stream_sequence,
+                                    i.delivered as u32,
+                                    i.published.unix_timestamp_nanos().clamp(0, u64::MAX as i128) as u64,
+                                ),
                                 // Nothing about this delivery can be trusted:
                                 // without its sequence there is no position to
                                 // ack at, to resume from, or to hand the guest.
@@ -1360,6 +1368,7 @@ pub(super) async fn spawn_jetstream_subscriptions(
                                 message,
                                 sequence,
                                 delivery_count,
+                                stored_at_unix_nanos,
                                 // A push delivery is bounded by
                                 // `max-ack-pending` and dies with the store
                                 // built for it, so it charges no budget.
@@ -1725,7 +1734,7 @@ impl HostBacklogBudget {
     fn release(&self, len: usize) {
         let _ = self
             .queued_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
                 Some(held.saturating_sub(len as u64))
             });
     }
@@ -2613,3 +2622,8 @@ mod tests {
         assert!(!host.admits(4097));
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "subscriber_contract_tests.rs"]
+mod contract_tests;

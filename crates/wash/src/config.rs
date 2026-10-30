@@ -10,9 +10,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use figment::{
     Figment,
-    providers::{Env, Format, Json, Toml, Yaml},
+    providers::{Env, Format, Json, Toml},
 };
 use serde::{Deserialize, Serialize};
+use serde_saphyr::figment::Yaml;
 use tracing::info;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::host::allowed_hosts::AllowedHost;
@@ -103,6 +104,30 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The files and directories the `configs:`/`secrets:` catalogs read, with
+    /// relative paths resolved against `project_dir` — paths a host reserves
+    /// so no workload volume can expose them.
+    pub fn reserved_host_paths(&self, project_dir: &Path) -> Vec<PathBuf> {
+        let resolve = |path: &PathBuf| {
+            if path.is_relative() {
+                project_dir.join(path)
+            } else {
+                path.clone()
+            }
+        };
+        self.config_sources
+            .values()
+            .flat_map(|source| [&source.file, &source.dir])
+            .chain(
+                self.secret_sources
+                    .values()
+                    .flat_map(|source| [&source.file, &source.dir]),
+            )
+            .flatten()
+            .map(resolve)
+            .collect()
+    }
+
     /// Get the WIT directory from the configuration, defaulting to "./wit" if not set
     pub fn wit_dir(&self) -> PathBuf {
         if let Some(wit_config) = &self.wit
@@ -256,9 +281,11 @@ pub struct WorkloadConfig {
     /// strings such as `"*"`, `"*.example.com"`, `"example.com"`, or a
     /// literal IP address.
     ///
-    /// An omitted or empty list denies every lookup. Resolution is opt-in:
-    /// nothing substitutes an allow-all policy for a workload that
-    /// declared none.
+    /// A host named in `allowedHosts` may be resolved without being listed
+    /// here; this list is for names beyond those. Resolution is otherwise
+    /// opt-in: nothing substitutes an allow-all policy for a workload that
+    /// declared none, and the `*` an omitted `allowedHosts` becomes opens no
+    /// lookup.
     #[serde(default)]
     #[builder(default)]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
@@ -423,9 +450,11 @@ pub struct DevComponent {
     /// How many warm instances a reclaim sweep never retires below.
     ///
     /// Unset (or `0`) lets a fully idle pool empty out, so the next call
-    /// after a quiet spell starts cold. Capped at `poolSize`. A floor on
-    /// reclaim, not a target to grow to: instances are still only built when
-    /// a call needs one. Only meaningful alongside `reclaimWindowSeconds`.
+    /// after a quiet spell starts cold. A value at or above `poolSize`
+    /// disables reclaim entirely, since a sweep could never find a surplus to
+    /// retire. A floor on reclaim, not a target to grow to: instances are
+    /// still only built when a call needs one. Only meaningful alongside
+    /// `reclaimWindowSeconds`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reclaim_min_instances: Option<i32>,
 }
@@ -533,31 +562,29 @@ pub struct HostPluginConfig {
     /// against the same top-level `configs:`/`secrets:` catalogs.
     #[serde(flatten)]
     pub environment: EnvironmentLayer,
-    /// Hosts this plugin's own `wasi:http/outgoing-handler` calls may reach.
-    /// Unlike a workload's `allowedHosts`, an omitted list denies every
-    /// outbound host by default — a host component plugin is
-    /// operator-controlled, more privileged than a workload, and gets no
-    /// ergonomic allow-all default.
+    /// Hosts this plugin may reach. Component plugins are gated at their WASI
+    /// sockets and HTTP interfaces. Native plugins must enforce this against
+    /// their client endpoints or fail host startup. Empty denies all.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_hosts: Vec<AllowedHost>,
-    /// Names this plugin's own `wasi:sockets/ip-name-lookup` calls may
-    /// resolve. An omitted or empty list denies every lookup.
+    /// Names this plugin may resolve. Empty denies every lookup.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
+    /// Ports on the machine's loopback this plugin may reach. Component
+    /// plugins use raw `wasi:sockets` with `host.wasmcloud.internal`;
+    /// `wasi:http` does not resolve that sentinel. Native clients check their
+    /// loopback endpoint directly. The host-wide gate must also be enabled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_host_loopback_ports: Vec<AllowedLoopbackPort>,
     /// Ports this plugin listens on. An omitted or empty list means it binds
     /// nothing reachable, which is what every plugin got before ports existed.
     ///
     /// Each entry needs a `name` and the `port` the plugin's own code binds.
-    /// Optional: `protocol` (TCP or UDP, default TCP) and exactly one of
-    ///
-    ///   publish   real port the host binds, splicing accepted connections
-    ///             into the plugin's private virtual loopback. The plugin
-    ///             binds `127.0.0.1:<port>` and needs no change.
-    ///   bind      concrete address the plugin binds itself, skipping the
-    ///             splice. Rejected if unspecified (`0.0.0.0`) or loopback.
-    ///
-    /// Neither declares the port without exposing it. Requires the host to be
-    /// started with `--publish-ports`.
+    /// Optional: `protocol` (TCP or UDP, default TCP) and `bind`, a concrete
+    /// address the plugin binds itself. Unspecified (`0.0.0.0`) and loopback
+    /// addresses are rejected. Omitting `bind` declares the port without
+    /// exposing it. `publish` is rejected until host-component splicing is
+    /// implemented.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
 }
@@ -583,9 +610,9 @@ pub enum WorkloadConfigPolicy {
     Allow,
     /// Host-owned keys come only from the operator.
     ///
-    /// The default on `wash host`. It refuses nothing where nothing is declared
-    /// — a plugin that names no keys of its own, under an entry that sets none,
-    /// owns none — so it is the stricter default without being a breaking one.
+    /// The default on `wash host`. It refuses only the keys a plugin claims or
+    /// an entry sets: a plugin that names no keys of its own, under an entry
+    /// that sets none, owns none.
     #[default]
     Deny,
     /// `allow` plus diagnostics: nothing is refused, but everything `deny`
@@ -613,10 +640,11 @@ impl HostPluginConfig {
     /// Refuse fields that only mean something for a plugin this host loads.
     ///
     /// A native entry configures a plugin the host already has: there is no
-    /// driver to restart, no image to pull or pin, no sandbox to grant egress
-    /// to, and no listener to publish. Accepting them silently is the same
-    /// failure `hostPlugins` without a source has — a line an operator wrote
-    /// deliberately that does nothing, and reads as if it did.
+    /// driver to restart, no image to pull or pin, and no listener to publish.
+    /// Its egress lists are not among these — a native plugin enforces them
+    /// itself, against the endpoints it dials. Accepting a field that means
+    /// nothing is the same failure `hostPlugins` without a source has — a line
+    /// an operator wrote deliberately that does nothing, and reads as if it did.
     ///
     /// # Errors
     ///
@@ -634,12 +662,6 @@ impl HostPluginConfig {
         }
         if self.source.pull_policy.is_some() {
             set.push("pullPolicy");
-        }
-        if !self.allowed_hosts.is_empty() {
-            set.push("allowedHosts");
-        }
-        if !self.allowed_ip_name_lookups.is_empty() {
-            set.push("allowedIpNameLookups");
         }
         if !self.ports.is_empty() {
             set.push("ports");
@@ -695,6 +717,20 @@ impl HostPluginConfig {
             .with_base(resolve(&self.environment, &owner)?)
             .with_host_owned_keys(&self.host_owned_keys)
             .with_workload_config(self.workload_config.unwrap_or(default_policy).into());
+        // Declared only when the operator wrote one of the lists. An entry that
+        // sets none of them is configuring bindings, not a network ceiling, and
+        // declaring an empty policy for it would deny that plugin every
+        // endpoint it has been reaching.
+        if !self.allowed_hosts.is_empty()
+            || !self.allowed_ip_name_lookups.is_empty()
+            || !self.allowed_host_loopback_ports.is_empty()
+        {
+            set = set.with_egress_policy(
+                self.allowed_hosts.clone().into(),
+                self.allowed_ip_name_lookups.clone().into(),
+                self.allowed_host_loopback_ports.clone().into(),
+            );
+        }
         for (name, binding) in &self.bindings {
             if name.is_empty() {
                 bail!(
@@ -732,7 +768,7 @@ impl HostPluginConfig {
         let what = format!("host.plugins '{}'", self.id);
         // Catch a bad port declaration here, where the error can name the
         // config entry, rather than at plugin start.
-        wash_runtime::host::declared_port::validate_ports(&self.ports, &what)?;
+        wash_runtime::host::declared_port::validate_plugin_ports(&self.ports, &what)?;
         Ok(wash_runtime::plugin::ComponentPluginSpec {
             id: self.id.clone(),
             source: self.source.to_source(&what)?,
@@ -741,6 +777,7 @@ impl HostPluginConfig {
             config: self.environment.config.clone(),
             allowed_hosts: self.allowed_hosts.clone().into(),
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
+            allowed_host_loopback_ports: self.allowed_host_loopback_ports.clone().into(),
             ports: self.ports.clone().into(),
         })
     }
@@ -985,7 +1022,10 @@ impl From<HttpClientTrustRoots> for wash_runtime::host::http_client::TrustRoots 
 /// # Errors
 ///
 /// Rejects a zero for any ceiling or for the wait, which would silently mean
-/// "no connections" or "never wait" rather than what the operator meant.
+/// "no connections" or "never wait" rather than what the operator meant, and
+/// any ceiling above [`tokio::sync::Semaphore::MAX_PERMITS`], which would panic
+/// inside the semaphore — for per-workload ceilings, only once the first
+/// workload claims a quota.
 ///
 /// [`QuotaRegistry`]: wash_runtime::host::quota::QuotaRegistry
 pub fn connection_quotas(
@@ -995,13 +1035,14 @@ pub fn connection_quotas(
     max_inbound_per_workload: Option<usize>,
     http_connection_wait: Option<std::time::Duration>,
 ) -> anyhow::Result<std::sync::Arc<wash_runtime::host::quota::QuotaRegistry>> {
+    let checked = |value: Option<usize>, name: &str| -> anyhow::Result<Option<usize>> {
+        anyhow::ensure!(value != Some(0), "{name} must be at least 1");
+        within_max_permits(value, name)?;
+        Ok(value)
+    };
     let defaults = wash_runtime::host::quota::QuotaLimits::default();
     let resolve = |value: Option<usize>, default: usize, name: &str| -> anyhow::Result<usize> {
-        match value {
-            Some(0) => anyhow::bail!("{name} must be at least 1"),
-            Some(v) => Ok(v),
-            None => Ok(default),
-        }
+        Ok(checked(value, name)?.unwrap_or(default))
     };
     let limits = wash_runtime::host::quota::QuotaLimits {
         outbound_http: resolve(
@@ -1020,9 +1061,7 @@ pub fn connection_quotas(
             "max_inbound_socket_connections_per_workload",
         )?,
     };
-    if max_connections == Some(0) {
-        anyhow::bail!("max_connections must be at least 1");
-    }
+    let max_connections = checked(max_connections, "max_connections")?;
     if let Some(total) = max_connections
         && limits
             .outbound_http
@@ -1064,7 +1103,7 @@ pub fn connection_quotas(
 /// shape, and the same treatment of a zero.
 ///
 /// `None` for either ceiling means the operator said nothing, and the number is
-/// derived from `total_core_instances` — the engine's actual pool budget — so a
+/// derived from all installed pool totals — including independent overrides — so a
 /// host told it is larger sizes its messaging ceiling to match instead of
 /// leaving a stock default silently binding. This is why the flags must not
 /// carry a `default_value_t`: a parse-time default is indistinguishable here
@@ -1083,7 +1122,7 @@ pub fn connection_quotas(
 pub fn wasmcloud_messaging_limits(
     max_in_flight: Option<usize>,
     max_in_flight_per_component: Option<usize>,
-    total_core_instances: Option<u32>,
+    engine: &wash_runtime::engine::Engine,
 ) -> anyhow::Result<wash_runtime::plugin::wasmcloud_messaging::MessagingLimits> {
     use wash_runtime::plugin::wasmcloud_messaging::MessagingLimits;
 
@@ -1108,7 +1147,7 @@ pub fn wasmcloud_messaging_limits(
             max_in_flight_per_component,
             "wasmcloud_messaging_max_in_flight_per_component",
         )?,
-        total_core_instances,
+        engine,
     );
 
     // Both numbers vary by host — pooling on or off, the size of the pool, and
@@ -1120,7 +1159,7 @@ pub fn wasmcloud_messaging_limits(
         per_component_default = limits.per_component_default(),
         host_total_source = if max_in_flight.is_some() {
             "flag"
-        } else if total_core_instances.is_some() {
+        } else if engine.total_memories().is_some() {
             "derived from the instance pool"
         } else {
             "built-in default (pooling disabled)"
@@ -1134,6 +1173,20 @@ pub fn wasmcloud_messaging_limits(
     );
 
     Ok(limits)
+}
+
+/// Rejects a ceiling above [`tokio::sync::Semaphore::MAX_PERMITS`], where
+/// `Semaphore::new` panics, so it fails at startup instead.
+pub fn within_max_permits(value: Option<usize>, name: &str) -> anyhow::Result<()> {
+    const MAX_PERMITS: usize = tokio::sync::Semaphore::MAX_PERMITS;
+    match value {
+        Some(v) if v > MAX_PERMITS => {
+            anyhow::bail!(
+                "{name} must be at most {MAX_PERMITS} (the most a semaphore can hold), got {v}"
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1279,13 +1332,13 @@ pub struct DevConfig {
     /// `wasi_keyvalue_path`, `wasi_keyvalue_nats_url`, `wasi_blobstore_path`).
     /// Example: nats://127.0.0.1:4222
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data_nats_url: Option<String>,
+    pub data_nats_url: Option<url::Url>,
 
     /// Optional Redis connection URL for the WASI keyvalue plugin.
     /// Example: redis://127.0.0.1:6379
     /// When set, takes precedence over wasi_keyvalue_path.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasi_keyvalue_redis_url: Option<String>,
+    pub wasi_keyvalue_redis_url: Option<url::Url>,
 
     /// Optional path for WASI keyvalue filesystem storage. If not set, an in-memory store is used.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1296,7 +1349,7 @@ pub struct DevConfig {
     /// Example: nats://127.0.0.1:4222
     /// When set, takes precedence over wasi_keyvalue_path but is overridden by wasi_keyvalue_redis_url.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasi_keyvalue_nats_url: Option<String>,
+    pub wasi_keyvalue_nats_url: Option<url::Url>,
 
     /// Removed: `wasmcloud:nats` is a `dev.plugins` entry like any other. See
     /// [`HostConfig::wasmcloud_nats`] — present only so the old key is an error
@@ -1311,7 +1364,7 @@ pub struct DevConfig {
     /// Optional PostgreSQL connection URL for the wasmcloud:postgres plugin.
     /// Example: postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub postgres_url: Option<String>,
+    pub postgres_url: Option<url::Url>,
 
     /// Enable WASI OpenTelemetry support
     #[serde(default)]
@@ -1663,7 +1716,7 @@ pub async fn save_config(config: &Config, path: &Path) -> Result<()> {
     }
 
     let yaml_config =
-        serde_yaml_ng::to_string(config).context("failed to serialize configuration")?;
+        serde_saphyr::to_string(config).context("failed to serialize configuration")?;
 
     tokio::fs::write(path, yaml_config)
         .await
@@ -1737,7 +1790,7 @@ async fn generate_config(config: &Config, path: &Path, force: bool) -> Result<()
             serde_json::to_string_pretty(config).context("failed to serialize config to JSON")?
         }
         Some("toml") => toml::to_string(config).context("failed to serialize config to TOML")?,
-        _ => serde_yaml_ng::to_string(config).context("failed to serialize config to YAML")?,
+        _ => serde_saphyr::to_string(config).context("failed to serialize config to YAML")?,
     };
 
     if let Some(parent) = path.parent() {
@@ -1784,12 +1837,12 @@ pub fn example_config() -> Config {
                 config: HashMap::new(),
                 name: None,
             }],
-            data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
-            wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            data_nats_url: url::Url::parse("nats://127.0.0.1:4222").ok(),
+            wasi_keyvalue_redis_url: url::Url::parse("redis://127.0.0.1:6379").ok(),
             wasi_keyvalue_path: Some(PathBuf::from("./data/keyvalue")),
-            wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            wasi_keyvalue_nats_url: url::Url::parse("nats://127.0.0.1:4222").ok(),
             wasi_blobstore_path: Some(PathBuf::from("./data/blobstore")),
-            postgres_url: Some("postgres://user:pass@127.0.0.1:5432".to_string()),
+            postgres_url: url::Url::parse("postgres://user:pass@127.0.0.1:5432").ok(),
             ..Default::default()
         }),
         host: None,
@@ -1819,16 +1872,30 @@ pub fn example_config() -> Config {
     }
 }
 
-fn check_url_scheme(field: &str, value: &str, expected: &[&str], errors: &mut Vec<String>) {
-    match url::Url::parse(value) {
-        Ok(u) if expected.contains(&u.scheme()) => {}
-        Ok(u) => errors.push(format!(
-            "{field} '{value}' has scheme '{}', expected one of: {}",
-            u.scheme(),
-            expected.join(", ")
-        )),
-        Err(e) => errors.push(format!("{field} '{value}' is not a valid URL: {e}")),
+/// Returns `url` with its username and password masked, for logs and errors.
+pub(crate) fn redact_url(url: &url::Url) -> url::Url {
+    let mut redacted = url.clone();
+    // Both setters only fail on URLs that cannot carry credentials.
+    if !redacted.username().is_empty() {
+        let _ = redacted.set_username("REDACTED");
     }
+    if redacted.password().is_some() {
+        let _ = redacted.set_password(Some("REDACTED"));
+    }
+    redacted
+}
+
+fn check_url_scheme(field: &str, value: &url::Url, expected: &[&str], errors: &mut Vec<String>) {
+    if expected.contains(&value.scheme()) {
+        return;
+    }
+
+    errors.push(format!(
+        "{field} '{}' has scheme '{}', expected one of: {}",
+        redact_url(value),
+        value.scheme(),
+        expected.join(", ")
+    ));
 }
 
 #[cfg(test)]
@@ -1907,12 +1974,47 @@ mod tests {
         assert!(connection_quotas(None, None, None, None, Some(Duration::ZERO)).is_err());
     }
 
+    /// A ceiling above `Semaphore::MAX_PERMITS` would panic inside
+    /// `Semaphore::new`, so it must fail at startup instead.
+    #[test]
+    fn connection_quotas_reject_above_max_permits() {
+        let max = tokio::sync::Semaphore::MAX_PERMITS;
+        let over = max + 1;
+        assert!(connection_quotas(Some(over), None, None, None, None).is_err());
+        assert!(connection_quotas(None, Some(over), None, None, None).is_err());
+        assert!(connection_quotas(None, None, Some(over), None, None).is_err());
+        assert!(connection_quotas(None, None, None, Some(over), None).is_err());
+        assert!(connection_quotas(Some(usize::MAX), None, None, None, None).is_err());
+        assert!(connection_quotas(Some(max), Some(max), Some(max), Some(max), None).is_ok());
+    }
+
+    fn messaging_engine(memories: Option<u32>) -> wash_runtime::engine::Engine {
+        let mut builder = wash_runtime::engine::Engine::builder()
+            .without_max_process_memory()
+            .with_pooling_allocator(false);
+        if let Some(memories) = memories {
+            // Install explicit limits so environment overrides cannot change
+            // the test. Small table slots also keep Windows commit use low.
+            let mut pool = wasmtime::PoolingAllocationConfig::default();
+            pool.total_memories(memories)
+                .total_core_instances(memories.saturating_mul(16))
+                .total_tables(memories.saturating_mul(4))
+                .total_component_instances(memories)
+                .total_stacks(memories)
+                .table_elements(1)
+                .max_memory_size(1 << 16);
+            builder = builder.with_pooling_config(pool);
+        }
+        builder.build().expect("messaging test engine should build")
+    }
+
     #[test]
     fn wasmcloud_messaging_limits_reject_zero() {
         // Zero would silently mean "process no messages" — a host that looks
         // healthy and quietly consumes nothing. Better a startup error.
-        assert!(wasmcloud_messaging_limits(Some(0), Some(32), None).is_err());
-        assert!(wasmcloud_messaging_limits(Some(128), Some(0), None).is_err());
+        let engine = messaging_engine(None);
+        assert!(wasmcloud_messaging_limits(Some(0), Some(32), &engine).is_err());
+        assert!(wasmcloud_messaging_limits(Some(128), Some(0), &engine).is_err());
     }
 
     #[test]
@@ -1921,21 +2023,34 @@ mod tests {
         // not a large ceiling but an abort with a backtrace. `usize::MAX` is
         // what a fat-fingered "unlimited" looks like.
         let too_big = wash_runtime::plugin::wasmcloud_messaging::MessagingLimits::MAX_IN_FLIGHT + 1;
-        assert!(wasmcloud_messaging_limits(Some(too_big), None, None).is_err());
-        assert!(wasmcloud_messaging_limits(None, Some(too_big), None).is_err());
-        assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, None).is_err());
+        let engine = messaging_engine(None);
+        assert!(wasmcloud_messaging_limits(Some(too_big), None, &engine).is_err());
+        assert!(wasmcloud_messaging_limits(None, Some(too_big), &engine).is_err());
+        assert!(wasmcloud_messaging_limits(Some(usize::MAX), None, &engine).is_err());
+    }
+
+    #[test]
+    fn within_max_permits_rejects_only_what_a_semaphore_cannot_hold() {
+        let max = tokio::sync::Semaphore::MAX_PERMITS;
+        assert!(within_max_permits(None, "x").is_ok());
+        assert!(within_max_permits(Some(max), "x").is_ok());
+        assert!(within_max_permits(Some(max + 1), "x").is_err());
+        assert!(within_max_permits(Some(usize::MAX), "x").is_err());
     }
 
     #[test]
     fn wasmcloud_messaging_limits_apply_overrides() {
-        let limits = wasmcloud_messaging_limits(Some(64), Some(8), None).expect("valid ceilings");
+        let engine = messaging_engine(None);
+        let limits =
+            wasmcloud_messaging_limits(Some(64), Some(8), &engine).expect("valid ceilings");
         assert_eq!(limits.host_total(), 64);
         assert_eq!(limits.per_component_default(), 8);
 
         // An explicit ceiling wins over what the pool would have derived —
         // otherwise the flag would be advisory on a pooled host.
+        let engine = messaging_engine(Some(256));
         let limits =
-            wasmcloud_messaging_limits(Some(64), Some(8), Some(3000)).expect("valid ceilings");
+            wasmcloud_messaging_limits(Some(64), Some(8), &engine).expect("valid ceilings");
         assert_eq!(limits.host_total(), 64);
         assert_eq!(limits.per_component_default(), 8);
     }
@@ -1943,8 +2058,9 @@ mod tests {
     #[test]
     fn wasmcloud_messaging_limits_default_to_the_documented_pair() {
         // No flags and no pool to derive from: the pinned defaults stand.
-        let limits =
-            wasmcloud_messaging_limits(None, None, None).expect("the built-in defaults are valid");
+        let engine = messaging_engine(None);
+        let limits = wasmcloud_messaging_limits(None, None, &engine)
+            .expect("the built-in defaults are valid");
         assert_eq!(limits.host_total(), 128);
         assert_eq!(limits.per_component_default(), 32);
     }
@@ -1956,8 +2072,9 @@ mod tests {
         // ceiling rose, and every component stayed pinned at the pool-derived
         // default — so on any host with fewer than ~31 messaging components the
         // flag changed nothing at all.
-        let derived = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
-        let raised = wasmcloud_messaging_limits(Some(1024), None, Some(1000)).expect("valid");
+        let engine = messaging_engine(Some(256));
+        let derived = wasmcloud_messaging_limits(None, None, &engine).expect("valid");
+        let raised = wasmcloud_messaging_limits(Some(1024), None, &engine).expect("valid");
         assert_eq!(raised.host_total(), 1024);
         assert!(
             raised.per_component_default() > derived.per_component_default(),
@@ -1967,20 +2084,20 @@ mod tests {
 
         // Lowering it must not leave the per-component default stranded above
         // the total the operator just set.
-        let lowered = wasmcloud_messaging_limits(Some(4), None, Some(1000)).expect("valid");
+        let lowered = wasmcloud_messaging_limits(Some(4), None, &engine).expect("valid");
         assert!(lowered.per_component_default() <= lowered.host_total());
     }
 
     #[test]
     fn wasmcloud_messaging_limits_do_not_over_commit_a_small_pool() {
-        // A pool of 16 core instances holds 3 worst-case components. The
-        // derived ceiling must not exceed that: admitting 8 would need 40 core
-        // instances and fail at instantiation, which is the exhaustion these
-        // ceilings exist to prevent.
-        let limits = wasmcloud_messaging_limits(None, None, Some(16)).expect("valid");
+        // A pool of 4 linear memories holds 4 components. The derived ceiling must not
+        // exceed that: admitting 8 would fail at instantiation, which is the
+        // exhaustion these ceilings exist to prevent.
+        let engine = messaging_engine(Some(4));
+        let limits = wasmcloud_messaging_limits(None, None, &engine).expect("valid");
         assert!(
-            limits.host_total() <= 3,
-            "a 16-instance pool derived a ceiling of {} messages",
+            limits.host_total() <= 4,
+            "a pool of 4 linear memories derived a ceiling of {} messages",
             limits.host_total()
         );
     }
@@ -1989,11 +2106,13 @@ mod tests {
     fn wasmcloud_messaging_limits_scale_with_the_pool() {
         // The point of deriving: a host told it is larger gets a larger
         // messaging ceiling, instead of the stock default silently binding.
-        let stock = wasmcloud_messaging_limits(None, None, Some(1000)).expect("valid");
-        let big = wasmcloud_messaging_limits(None, None, Some(8000)).expect("valid");
+        let stock_engine = messaging_engine(Some(32));
+        let stock = wasmcloud_messaging_limits(None, None, &stock_engine).expect("valid");
+        let big_engine = messaging_engine(Some(128));
+        let big = wasmcloud_messaging_limits(None, None, &big_engine).expect("valid");
         assert!(
             big.host_total() > stock.host_total(),
-            "raising WASMTIME_POOLING_TOTAL_CORE_INSTANCES must raise the messaging ceiling: \
+            "raising --max-memories must raise the messaging ceiling: \
              {} vs {}",
             big.host_total(),
             stock.host_total()
@@ -2045,7 +2164,7 @@ dev:
     RUST_LOG: debug
     OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let env = config.dev().environment;
         assert_eq!(env.get("RUST_LOG").map(String::as_str), Some("debug"));
         assert_eq!(
@@ -2091,7 +2210,7 @@ workload:
   allowedIpNameLookups:
     - "*.example.com"
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let workload = config.workload.expect("workload should parse");
 
         let env = workload
@@ -2169,7 +2288,7 @@ workload:
     #[test]
     fn dev_redis_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            wasi_keyvalue_redis_url: Some("http://localhost:6379".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("http://localhost:6379").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -2179,7 +2298,7 @@ workload:
     #[test]
     fn dev_redis_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            wasi_keyvalue_redis_url: Some("redis://127.0.0.1:6379".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("redis://127.0.0.1:6379").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -2188,7 +2307,7 @@ workload:
     #[test]
     fn dev_rediss_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            wasi_keyvalue_redis_url: Some("rediss://127.0.0.1:6380".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("rediss://127.0.0.1:6380").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -2197,7 +2316,7 @@ workload:
     #[test]
     fn dev_nats_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            wasi_keyvalue_nats_url: Some("http://localhost:4222".to_string()),
+            wasi_keyvalue_nats_url: Some(url::Url::parse("http://localhost:4222").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -2207,7 +2326,7 @@ workload:
     #[test]
     fn dev_nats_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            wasi_keyvalue_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            wasi_keyvalue_nats_url: Some(url::Url::parse("nats://127.0.0.1:4222").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -2216,7 +2335,7 @@ workload:
     #[test]
     fn dev_data_nats_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            data_nats_url: Some("http://localhost:4222".to_string()),
+            data_nats_url: Some(url::Url::parse("http://localhost:4222").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -2226,7 +2345,7 @@ workload:
     #[test]
     fn dev_data_nats_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            data_nats_url: Some("nats://127.0.0.1:4222".to_string()),
+            data_nats_url: Some(url::Url::parse("nats://127.0.0.1:4222").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -2235,7 +2354,7 @@ workload:
     #[test]
     fn dev_postgres_wrong_scheme_is_err() {
         let cfg = DevConfig {
-            postgres_url: Some("mysql://localhost/db".to_string()),
+            postgres_url: Some(url::Url::parse("mysql://localhost/db").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -2243,9 +2362,34 @@ workload:
     }
 
     #[test]
+    fn dev_wrong_scheme_error_redacts_credentials() {
+        let cfg = DevConfig {
+            wasi_keyvalue_redis_url: Some(
+                url::Url::parse("http://alice:hunter2@localhost:6379").unwrap(),
+            ),
+            ..Default::default()
+        };
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(!err.contains("alice"), "{err}");
+        assert!(!err.contains("hunter2"), "{err}");
+        assert!(err.contains("REDACTED:REDACTED@localhost:6379"), "{err}");
+    }
+
+    #[test]
+    fn redact_url_masks_only_present_credentials() {
+        let url = url::Url::parse("rediss://:secret@cache:6380/0?timeout=5").unwrap();
+        assert_eq!(
+            redact_url(&url).as_str(),
+            "rediss://:REDACTED@cache:6380/0?timeout=5"
+        );
+        let url = url::Url::parse("nats://127.0.0.1:4222").unwrap();
+        assert_eq!(redact_url(&url), url);
+    }
+
+    #[test]
     fn dev_postgres_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            postgres_url: Some("postgres://user:pass@localhost/db".to_string()),
+            postgres_url: Some(url::Url::parse("postgres://user:pass@localhost/db").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -2254,7 +2398,7 @@ workload:
     #[test]
     fn dev_postgresql_valid_scheme_is_ok() {
         let cfg = DevConfig {
-            postgres_url: Some("postgresql://user:pass@localhost/db".to_string()),
+            postgres_url: Some(url::Url::parse("postgresql://user:pass@localhost/db").unwrap()),
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
@@ -2336,7 +2480,7 @@ dev:
       image: ghcr.io/acme/sidecar:1.0.0
       pullPolicy: always
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         let source = dev.components[0].source.to_source("sidecar").unwrap();
         assert_eq!(
@@ -2403,7 +2547,7 @@ dev:
       allowedHosts:
         - https://api.example.com
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         let component = &dev.components[0];
         let env = component.environment.as_ref().unwrap();
@@ -2417,7 +2561,7 @@ dev:
 
         // Omitting all three leaves the overrides empty (inherit workload).
         let yaml = "dev:\n  components:\n    - name: hello\n      file: hello.wasm\n";
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         let component = &dev.components[0];
         assert!(component.environment.is_none());
@@ -2435,11 +2579,12 @@ dev:
     - id: acme-kv
       file: ./build/kv_plugin.wasm
       maxRestarts: 3
+      allowedHostLoopbackPorts: [9000]
     - id: acme-widgets
       image: ghcr.io/acme/widgets:1.2.0
       pullPolicy: ifNotPresent
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let dev = config.dev();
         assert_eq!(dev.host_plugins.len(), 2);
 
@@ -2450,6 +2595,10 @@ dev:
             ComponentSource::File("./build/kv_plugin.wasm".into())
         );
         assert_eq!(kv.max_restarts, Some(3));
+        assert_eq!(
+            &*kv.allowed_host_loopback_ports,
+            &[AllowedLoopbackPort::tcp(9000)]
+        );
 
         let widgets = dev.host_plugins[1].to_spec_unresolved().unwrap();
         assert_eq!(
@@ -2484,7 +2633,7 @@ host:
           secretFrom:
             - orders-nats-creds
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let bindings = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2538,7 +2687,7 @@ host:
         config:
           subject-allow: orders.>
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2553,7 +2702,7 @@ dev:
     config:
       servers: nats://127.0.0.1:4222
 "#;
-        let config: Config = serde_yaml_ng::from_str(dev_yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(dev_yaml).unwrap();
         let err = config
             .dev()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2568,7 +2717,7 @@ dev:
     /// refuses exactly the self-contained manifest dev exists to run.
     #[test]
     fn dev_allows_a_plugin_it_declares_nothing_for() {
-        let config: Config = serde_yaml_ng::from_str("dev: {}").unwrap();
+        let config: Config = serde_saphyr::from_str("dev: {}").unwrap();
         let bindings = config
             .dev()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2590,7 +2739,7 @@ dev:
 
         // `wash host` is the other way round, for the same reason it always
         // was: there an operator exists, so there is a boundary to enforce.
-        let config: Config = serde_yaml_ng::from_str("host: {}").unwrap();
+        let config: Config = serde_saphyr::from_str("host: {}").unwrap();
         assert_eq!(
             config
                 .host()
@@ -2602,8 +2751,7 @@ dev:
         );
     }
 
-    /// A native entry configures a plugin the host already has, so the fields
-    /// that only mean something for one it loads are a mistake worth naming.
+    /// A native entry may declare egress, but not component lifecycle fields.
     #[test]
     fn a_native_entry_refuses_component_only_fields() {
         let yaml = r#"
@@ -2612,15 +2760,70 @@ host:
     - id: wasmcloud-nats
       maxRestarts: 3
       allowedHosts: ["nats.internal"]
+      allowedHostLoopbackPorts: [4222]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
             .expect_err("component-only fields on a native entry must be refused")
             .to_string();
         assert!(err.contains("`maxRestarts`"), "got: {err}");
-        assert!(err.contains("`allowedHosts`"), "got: {err}");
+
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      allowedHosts: ["nats://nats.internal:4222"]
+      allowedIpNameLookups: ["nats.internal"]
+      allowedHostLoopbackPorts: [4222]
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let bindings = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect("native egress policy is valid");
+        let policy = bindings
+            .for_plugin("wasmcloud-nats")
+            .egress_policy(&wash_runtime::sockets::policy::SocketPolicy {
+                host_loopback_enabled: true,
+                ..Default::default()
+            })
+            .expect("egress policy is retained");
+        policy
+            .check_url(
+                "nats://nats.internal:4222",
+                wash_runtime::host::declared_port::Protocol::Tcp,
+                4222,
+            )
+            .unwrap();
+
+        // An entry that names no list declares no ceiling, so the plugin stays
+        // unmanaged. Declaring an empty one instead would be deny-all, and
+        // would cut off every plugin an operator configured for some other
+        // reason — a binding, a `workloadConfig` — the moment they upgraded.
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      workloadConfig: allow
+      bindings:
+        primary:
+          config:
+            servers: nats://127.0.0.1:4222
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let bindings = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect("an entry with no egress list is valid");
+        assert!(
+            bindings
+                .for_plugin("wasmcloud-nats")
+                .egress_policy(&wash_runtime::sockets::policy::SocketPolicy::default())
+                .is_none(),
+            "an entry with no egress list must not declare a ceiling"
+        );
 
         // The same fields are fine once the entry names a source.
         let yaml = r#"
@@ -2630,12 +2833,37 @@ host:
       image: ghcr.io/wasmcloud/plugins/secrets:0.1.0
       maxRestarts: 3
       allowedHosts: ["vault.internal"]
+      allowedHostLoopbackPorts: [8200]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
             .expect("a component entry may set them");
+    }
+
+    #[test]
+    fn figment_loads_integer_loopback_ports() {
+        let dir = tempfile::tempdir().unwrap();
+        let wash_dir = dir.path().join(CONFIG_DIR_NAME);
+        std::fs::create_dir(&wash_dir).unwrap();
+        std::fs::write(
+            wash_dir.join("config.yaml"),
+            r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      allowedHostLoopbackPorts: [5432, 53/udp]
+"#,
+        )
+        .unwrap();
+
+        let loaded = load_config::<Config>(&dir.path().join("global.yaml"), Some(dir.path()), None)
+            .expect("Figment accepts integer loopback ports");
+        assert_eq!(
+            loaded.host().plugins[0].allowed_host_loopback_ports,
+            [AllowedLoopbackPort::tcp(5432), AllowedLoopbackPort::udp(53)]
+        );
     }
 
     /// A binding under an empty name is refused: the unnamed binding is
@@ -2652,7 +2880,7 @@ host:
           config:
             subject-allow: orders.>
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2678,7 +2906,7 @@ dev:
     - id: wasmcloud-postgres
       workloadConfig: deny
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let bindings = config
             .dev()
             .to_plugin_bindings(&config, Path::new("."), None)
@@ -2717,7 +2945,7 @@ host:
     - id: etcd-secrets
       image: ghcr.io/example/etcd-secrets:1.0.0
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let host = config.host();
         let ids: Vec<&str> = host
             .all_plugins()
@@ -2746,7 +2974,7 @@ host:
       config:
         servers: nats://nats:4222
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config.host().all_plugins().unwrap_err().to_string();
         assert!(err.contains("host.plugins"), "got: {err}");
         assert!(err.contains("deprecated"), "got: {err}");
@@ -2763,7 +2991,7 @@ host:
     - id: etcd-secrets
       image: ghcr.io/example/etcd-secrets:2.0.0
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config.host().all_plugins().unwrap_err().to_string();
         assert!(err.contains("more than once"), "got: {err}");
     }
@@ -2795,7 +3023,7 @@ host:
           configFrom: [orders-grants]
           secretFrom: [orders-nats-creds]
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let entry = &config.host().plugins[0];
         assert_eq!(entry.workload_config, Some(WorkloadConfigPolicy::Deny));
         assert!(!entry.is_component());
@@ -2836,7 +3064,7 @@ host:
     - id: relaxed
       workloadConfig: allow
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let host = config.host();
         assert_eq!(
             host.plugins[0].workload_config, None,
@@ -2869,7 +3097,7 @@ host:
       config:
         servers: nats://nats:4222
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config.host().plugins[0]
             .to_spec_unresolved()
             .unwrap_err()
@@ -2878,11 +3106,61 @@ host:
     }
 
     #[test]
+    fn saved_yaml_loads_back_unchanged() {
+        // Values that YAML would read as booleans, numbers or null unless the
+        // writer quotes them.
+        let yaml = r#"
+configs:
+  tricky:
+    inline:
+      yes-word: "yes"
+      on-word: "on"
+      null-word: "null"
+      tilde: "~"
+      octal: "0123"
+      float: "1.0"
+      empty: ""
+      colon: "a: b"
+      multiline: "line one\nline two"
+host:
+  hostPlugins:
+    - id: etcd-secrets
+      image: ghcr.io/example/etcd-secrets:1.0.0
+      allowedHosts:
+        - https://etcd.internal:2379
+      allowedHostLoopbackPorts:
+        - 2379
+        - 53/udp
+      ports:
+        - name: metrics
+          port: 9100
+          bind: 192.0.2.10
+      configFrom:
+        - tricky
+"#;
+        let parsed: Config = serde_saphyr::from_str(yaml).unwrap();
+        let saved = serde_saphyr::to_string(&parsed).unwrap();
+
+        let reparsed: Config = serde_saphyr::from_str(&saved).unwrap();
+        let loaded: Config = Figment::from(Yaml::string(&saved)).extract().unwrap();
+        let expected = serde_json::to_value(&parsed).unwrap();
+        let inline = &expected["configs"]["tricky"]["inline"];
+        assert_eq!(inline["octal"], "0123", "{expected}");
+        assert_eq!(inline["yes-word"], "yes", "{expected}");
+        assert_eq!(
+            serde_json::to_value(&reparsed).unwrap(),
+            expected,
+            "{saved}"
+        );
+        assert_eq!(serde_json::to_value(&loaded).unwrap(), expected, "{saved}");
+    }
+
+    #[test]
     fn host_plugins_parse_from_yaml_and_resolve_config_from_secret_from() {
         // `host.hostPlugins` mirrors `dev.host_plugins`'s shape but adds
         // `config`/`configFrom`/`secretFrom` (this plugin's own bind-time
         // config, resolved the same way `workload.environment` is) and
-        // `allowedHosts`/`allowedIpNameLookups`.
+        // `allowedHosts`/`allowedIpNameLookups`/`allowedHostLoopbackPorts`.
         let yaml = r#"
 configs:
   etcd-connection-settings:
@@ -2900,6 +3178,13 @@ host:
         - https://etcd.internal:2379
       allowedIpNameLookups:
         - etcd.internal
+      allowedHostLoopbackPorts:
+        - 2379
+        - 53/udp
+      ports:
+        - name: metrics
+          port: 9100
+          bind: 192.0.2.10
       config:
         literal-key: literal-value
       configFrom:
@@ -2907,13 +3192,17 @@ host:
       secretFrom:
         - etcd-client-cert
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let host = config.host();
         assert_eq!(host.host_plugins.len(), 1);
         let hp = &host.host_plugins[0];
         assert_eq!(hp.id, "etcd-secrets");
         assert_eq!(hp.allowed_hosts.len(), 1);
         assert_eq!(hp.allowed_ip_name_lookups.len(), 1);
+        assert_eq!(
+            hp.allowed_host_loopback_ports,
+            vec![AllowedLoopbackPort::tcp(2379), AllowedLoopbackPort::udp(53)]
+        );
 
         let spec = hp
             .to_spec(&config, Path::new("."), None)
@@ -2925,6 +3214,12 @@ host:
         );
         assert_eq!(spec.allowed_hosts.len(), 1);
         assert_eq!(spec.allowed_ip_name_lookups.len(), 1);
+        assert_eq!(
+            &*spec.allowed_host_loopback_ports,
+            &[AllowedLoopbackPort::tcp(2379), AllowedLoopbackPort::udp(53)]
+        );
+        assert_eq!(spec.ports.len(), 1);
+        assert_eq!(spec.ports[0].name, "metrics");
         // inline < configFrom < secretFrom precedence, all three present.
         assert_eq!(spec.config.get("literal-key").unwrap(), "literal-value");
         assert_eq!(
@@ -2944,9 +3239,25 @@ host:
       configFrom:
         - missing
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let hp = &config.host().host_plugins[0];
         assert!(hp.to_spec(&config, Path::new("."), None).is_err());
+    }
+
+    #[test]
+    fn host_plugin_rejects_a_broad_loopback_grant() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: postgres
+      image: ghcr.io/example/postgres:1.0.0
+      allowedHostLoopbackPorts:
+        - 5000-6000
+"#;
+        let err = serde_saphyr::from_str::<Config>(yaml)
+            .expect_err("loopback port ranges must be rejected")
+            .to_string();
+        assert!(err.contains("range"), "got: {err}");
     }
 
     #[test]
@@ -2995,7 +3306,7 @@ host:
         let cfg = DevConfig {
             address: Some("bad-addr".to_string()),
             tls_cert_path: Some("cert.pem".into()),
-            wasi_keyvalue_redis_url: Some("http://localhost".to_string()),
+            wasi_keyvalue_redis_url: Some(url::Url::parse("http://localhost").unwrap()),
             ..Default::default()
         };
         let err = cfg.validate().unwrap_err().to_string();
@@ -3026,7 +3337,7 @@ secrets:
     inline:
       DB_USER: alice
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
 
         let app = config
             .config_sources
@@ -3049,7 +3360,7 @@ secrets:
         // not fail to parse, and must produce an empty map (not panic on
         // the `set_var` loop reading a None).
         let yaml = "dev: {}\n";
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         assert!(config.dev().environment.is_empty());
     }
 }

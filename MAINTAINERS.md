@@ -7,7 +7,6 @@ mention _all_ maintainers of a particular aspect of the project.
 Maintainers of projects that are not in this monorepo can be found in their respective repositories,
 including:
 
-- [wadm](https://github.com/wasmCloud/wadm/blob/main/MAINTAINERS.md)
 - [wasmcloud-operator](https://github.com/wasmCloud/wasmcloud-operator/blob/main/MAINTAINERS.md)
 - [wasmcloud.com](https://github.com/wasmCloud/wasmcloud.com/blob/main/MAINTAINERS.md)
 - [typescript](https://github.com/wasmCloud/typescript) — TypeScript SDKs,
@@ -73,6 +72,10 @@ Name: Pavel Agafonov
 GitHub: @if0ne
 Organization: T-Bank
 
+Name: Jeremy Fleitz
+GitHub: @jfleitz
+Organization: Cosmonic
+
 ## @wasmCloud/go-maintainers
 
 _Covers Go SDK and Go-based tooling, including the runtime gateway, runtime operator, and proto
@@ -86,17 +89,9 @@ Name: Brooks Townsend
 GitHub: @brooksmtownsend
 Organization: Capital One
 
-Name: Roman Volosatovs
-GitHub: @rvolosatovs
-Organization: Helmet Security
-
 Name: Jordan Rash
 GitHub: @jordan-rash
 Organization: Synadia
-
-Name: Lucas Fontes
-GitHub: @lxfontes
-Organization: Independent
 
 Name: Eric Gregory
 GitHub: @ericgregory
@@ -131,10 +126,6 @@ Name: Liam Randall
 GitHub: @LiamRandall
 Organization: Cosmonic
 
-Name: Roman Volosatovs
-GitHub: @rvolosatovs
-Organization: Helmet Security
-
 Name: Victor Adossi
 GitHub: @vados-cosmonic
 Organization: Cosmonic
@@ -155,17 +146,9 @@ Name: Brooks Townsend
 GitHub: @brooksmtownsend
 Organization: Capital One
 
-Name: Roman Volosatovs
-GitHub: @rvolosatovs
-Organization: Helmet Security
-
 Name: Victor Adossi
 GitHub: @vados-cosmonic
 Organization: Cosmonic
-
-Name: Lucas Fontes
-GitHub: @lxfontes
-Organization: Independent
 
 Name: Eric Gregory
 GitHub: @ericgregory
@@ -238,3 +221,9 @@ GitHub: @mattwilkinsonn
 
 Name: Ashe Rillan
 GitHub: @asherillan
+
+Name: Lucas Fontes
+GitHub: @lxfontes
+
+Name: Roman Volosatovs
+GitHub: @rvolosatovs

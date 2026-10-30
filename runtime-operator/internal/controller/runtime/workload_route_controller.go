@@ -332,21 +332,8 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	// Index Hosts by HostID for O(1) lookup from workload.Status.HostID.
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(),
-		&runtimev1alpha1.Host{},
-		hostIDIndex,
-		func(rawObj client.Object) []string {
-			host, ok := rawObj.(*runtimev1alpha1.Host)
-			if !ok || host.HostID == "" {
-				return nil
-			}
-			return []string{host.HostID}
-		},
-	); err != nil {
-		return err
-	}
+	// The Host-by-HostID index this controller reads is registered by
+	// WorkloadReconciler, which needs it on every pass.
 
 	// workloadToServiceRequest maps a Workload event to a reconcile request
 	// keyed on the Workload's KubernetesService (namespace/service-name).

@@ -36,6 +36,23 @@ use crate::{
 #[derive(Debug, Clone, Args)]
 pub struct DevCommand {}
 
+fn dev_socket_policy(
+    quotas: &Arc<wash_runtime::host::quota::QuotaRegistry>,
+) -> Arc<wash_runtime::sockets::policy::SocketPolicy> {
+    // The guest's port list remains the per-guest gate in a dev session. The
+    // port table is the session's single record of the real ports it holds —
+    // the dev host's own ingress among them — so every guest policy derived
+    // from this one reads the same reservations. `quotas` is the session's
+    // one registry, so socket connections draw on the same allowance the
+    // HTTP pool and the published ports do.
+    Arc::new(wash_runtime::sockets::policy::SocketPolicy {
+        host_loopback_enabled: true,
+        host_owned_ports: Some(wash_runtime::host::ports::PortTable::new()),
+        quotas: Some(Arc::clone(quotas)),
+        ..Default::default()
+    })
+}
+
 impl CliCommand for DevCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
         wash_runtime::init_crypto();
@@ -87,15 +104,27 @@ impl CliCommand for DevCommand {
                 .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
             engine_builder = engine_builder.with_wasm_proposal(proposal);
         }
-        // `wash host` needs both an operator flag and the workload's
-        // `allowedHostLoopbackPorts`. In a dev session the developer is
-        // both parties, so the flag is redundant: the port list alone gates
-        // it, and an empty list still denies.
-        let socket_policy = Arc::new(wash_runtime::sockets::policy::SocketPolicy {
-            host_loopback_enabled: true,
-            ..Default::default()
-        });
-        engine_builder = engine_builder.with_socket_policy(socket_policy);
+        // Raised before any ceiling is computed from it: every allowance below
+        // is a share of the soft descriptor limit. `wash dev` applies it for
+        // the same reason `wash host` does — both own their process.
+        wash_runtime::host::quota::raise_descriptor_limit();
+
+        // One registry for every surface: HTTP pool, raw sockets, inbound
+        // published ports. Built here so the socket policy carries the
+        // operator's configured allowance rather than a private default.
+        let quotas = dev_config.connection_quotas()?;
+
+        // Dev enables the host-wide gate. Each workload or component plugin
+        // must still name its loopback ports.
+        let socket_policy = dev_socket_policy(&quotas);
+        engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
+        // The session's volumes are the developer's own declaration, so they
+        // are exactly what the session permits; nothing else can name one.
+        engine_builder = engine_builder
+            .with_allowed_host_paths(dev_config.volumes.iter().map(|v| v.host_path.clone()))
+            // Out of `$TMPDIR`: the scratch root is reserved, and a session
+            // mounting `/tmp` as a volume would otherwise be refused.
+            .with_scratch_root(ctx.cache_dir().join("scratch"));
         let engine = engine_builder.build()?;
 
         let mut host_builder = Host::builder()
@@ -143,8 +172,7 @@ impl CliCommand for DevCommand {
         // the engine above actually installed — same construction as `wash
         // host`, so a limit reproduced in dev is the limit production applies.
         // Dev takes no messaging flags, hence `None` for both knobs.
-        let messaging_limits =
-            crate::config::wasmcloud_messaging_limits(None, None, engine.total_core_instances())?;
+        let messaging_limits = crate::config::wasmcloud_messaging_limits(None, None, &engine)?;
 
         // Enable wasmcloud:messaging — NATS when data_nats_url is configured,
         // otherwise the in-memory backend.
@@ -215,25 +243,20 @@ impl CliCommand for DevCommand {
              `host-component-plugins` feature"
         );
 
+        // `localRoute` is accepted by the config schema but does nothing here.
+        // Checked anyway, so an entry a host would refuse fails in dev first.
+        check_local_routes(&dev_config.host_interfaces)?;
+
         let http_handler = wash_runtime::host::http::DevRouter::default();
-
-        // Before the ceilings below, each of which is a share of the soft
-        // descriptor limit this leaves in place. `wash dev` applies it for the
-        // same reason `wash host` does: both own their process.
-        wash_runtime::host::quota::raise_descriptor_limit();
-
-        // One registry for every surface: HTTP pool, raw sockets, inbound
-        // published ports.
-        let quotas = dev_config.connection_quotas()?;
 
         // Outbound (egress) trust roots for the component's outgoing HTTPS
         // calls. Distinct from `tls_*_path` below, which configure the ingress
         // HTTP server.
         let outgoing_handler = wash_runtime::host::http::DefaultOutgoingHandler::from_tls_options(
-            wash_runtime::host::http_client::ClientTlsOptions {
-                roots: dev_config.http_client_trust_roots.into(),
-                extra_ca_paths: dev_config.http_client_ca_paths.clone(),
-            },
+            wash_runtime::host::http_client::ClientTlsOptions::new(
+                dev_config.http_client_trust_roots.into(),
+            )
+            .with_ca_paths(dev_config.http_client_ca_paths.clone()),
         )
         .context("failed to load dev.http_client_ca_paths CA certificates")?
         // The same registry the socket policy uses, so a component's HTTP
@@ -295,7 +318,10 @@ impl CliCommand for DevCommand {
                 plugin::wasi_keyvalue::RedisKeyValue::from_url(redis_url)
                     .context("failed to configure Redis keyvalue plugin")?,
             ))?;
-            debug!(url = %redis_url, "WASI KeyValue plugin registered with Redis backend");
+            debug!(
+                url = %crate::config::redact_url(redis_url),
+                "WASI KeyValue plugin registered with Redis backend"
+            );
         } else if let Some(nats_url) = &dev_config.wasi_keyvalue_nats_url {
             let nats_client = async_nats::connect(nats_url.as_str())
                 .await
@@ -303,7 +329,10 @@ impl CliCommand for DevCommand {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::NatsKeyValue::new(&nats_client),
             ))?;
-            debug!(url = %nats_url, "WASI KeyValue plugin registered with NATS backend");
+            debug!(
+                url = %crate::config::redact_url(nats_url),
+                "WASI KeyValue plugin registered with NATS backend"
+            );
         } else if let Some(keyvalue_path) = &dev_config.wasi_keyvalue_path {
             host_builder = host_builder.with_plugin(Arc::new(
                 plugin::wasi_keyvalue::FilesystemKeyValue::new(keyvalue_path.clone()),
@@ -376,7 +405,7 @@ impl CliCommand for DevCommand {
         #[cfg(feature = "host-component-plugins")]
         {
             let native_plugins = host_builder.native_plugins();
-            let http_handler = host_builder.http_handler();
+            let host_ref = host_builder.host_ref();
             for hp in dev_config.component_plugins()? {
                 let spec = hp.to_spec(&config, project_dir, Some(project_dir))?;
                 let plugin = wash_runtime::plugin::component_host::load_component_plugin(
@@ -384,8 +413,8 @@ impl CliCommand for DevCommand {
                     &engine,
                     oci_config.clone(),
                     &native_plugins,
-                    http_handler.clone(),
-                    None,
+                    Some(host_ref.clone()),
+                    Some(Arc::clone(&socket_policy)),
                 )
                 .await
                 .with_context(|| format!("failed to load host component plugin '{}'", spec.id))?;
@@ -519,6 +548,53 @@ struct LoadedService {
     bytes: Bytes,
     digest: Option<String>,
     interfaces: HashSet<WitInterface>,
+}
+
+/// Refuse `localRoute` entries a host would refuse, and warn that valid ones
+/// are not used.
+///
+/// `wash dev` has no route table and runs one component at a time, so it does
+/// not use `localRoute`. The key is still accepted so a project's
+/// `.wash/config.yaml` can carry the config it deploys with.
+fn check_local_routes(host_interfaces: &[WitInterface]) -> anyhow::Result<()> {
+    let (valid, invalid) = partition_local_routes(host_interfaces);
+    ensure!(
+        invalid.is_empty(),
+        "invalid `localRoute` entries {invalid:?}: expected `host` or `host/path` with a valid \
+         RFC 1123 hostname, and no scheme or port. A host refuses a workload declaring one"
+    );
+    if !valid.is_empty() {
+        warn!(
+            entries = valid.len(),
+            "`localRoute` is ignored by `wash dev`: local routing needs a hostname-routing host \
+             and a co-located second workload, and a dev session has neither. To exercise the \
+             same call locally, run the callee in its own `wash dev` on another port and point \
+             the caller at it over loopback"
+        );
+    }
+    Ok(())
+}
+
+/// Split the HTTP handler interface's `localRoute` config into the entries a
+/// host would register and the ones it would refuse.
+///
+/// Empty entries are skipped rather than reported: a trailing comma is
+/// punctuation, not a mistake worth warning about. Returns two empty vectors
+/// when no handler interface declares the key at all.
+fn partition_local_routes(host_interfaces: &[WitInterface]) -> (Vec<&str>, Vec<&str>) {
+    let Some(declared) = host_interfaces
+        .iter()
+        .find(|iface| iface.is_incoming_http_handler())
+        .and_then(|iface| iface.config.get("localRoute"))
+    else {
+        return (Vec::new(), Vec::new());
+    };
+
+    declared
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .partition(|entry| wash_runtime::host::http::parse_local_route(entry).is_some())
 }
 
 /// Thin wrapper around [`build_workload`]: extracts dev-component
@@ -755,6 +831,7 @@ fn build_workload_host_interfaces(
     workload_config: &HashMap<String, String>,
 ) -> Vec<WitInterface> {
     let mut any_imports_wasi_config = false;
+    let user_declared = base.len();
     for set in component_interfaces {
         for interface in set {
             if interface.namespace == "wasi" && interface.package == "config" {
@@ -762,19 +839,29 @@ fn build_workload_host_interfaces(
             }
             // Introspection yields one `WitInterface` per imported instance
             // (e.g. `wasmcloud:secrets/store` and `.../reveal` arrive
-            // separately), so a namespace:package match against an existing
-            // entry must union interface names into it rather than drop the
-            // new one — dropping silently lost whichever of store/reveal
-            // didn't win the (HashSet-ordered, nondeterministic) race to
-            // populate `base` first.
+            // separately), so a match against an existing entry unions
+            // interface names into it rather than dropping the new one.
+            // Incompatible versions of a package are distinct interfaces and
+            // keep their own entries.
             match base
                 .iter_mut()
-                .find(|i| i.namespace == interface.namespace && i.package == interface.package)
+                .enumerate()
+                .find(|(_, i)| i.same_package(interface))
             {
-                Some(existing) => {
+                Some((index, existing)) => {
                     existing
                         .interfaces
                         .extend(interface.interfaces.iter().cloned());
+                    // A derived entry settles on the newest compatible version
+                    // rather than whichever component was introspected first.
+                    // A user's declared version is left as written.
+                    if index >= user_declared
+                        && let (Some(existing_version), Some(version)) =
+                            (&mut existing.version, &interface.version)
+                        && version > existing_version
+                    {
+                        *existing_version = version.clone();
+                    }
                 }
                 None => base.push(interface.clone()),
             }
@@ -840,10 +927,244 @@ async fn reload_component(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::config::{DevComponent, DevConfig};
+    use wash_runtime::types::WorkloadStatusRequest;
+
+    fn component() -> Bytes {
+        // Empty component with no imports or exports.
+        Bytes::from_static(b"\0asm\x0d\0\x01\0")
+    }
+
+    fn host() -> Host {
+        Host::builder()
+            .with_engine(
+                Engine::builder()
+                    .with_pooling_allocator(false)
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn loads_sidecars_and_service_with_resolved_resources() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("component.wasm");
+        std::fs::write(&path, component())?;
+        let config = Config {
+            dev: Some(DevConfig {
+                service_file: Some(path.clone()),
+                components: vec![DevComponent {
+                    config: HashMap::from([("shared".into(), "sidecar".into())]),
+                    pool_size: Some(2),
+                    max_invocations: Some(3),
+                    max_concurrency: Some(4),
+                    reclaim_window_seconds: Some(5),
+                    reclaim_min_instances: Some(1),
+                    ..DevComponent::new("sidecar", path)
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let resolved = ResolvedWorkload {
+            environment: HashMap::from([("APP".into(), "development".into())]),
+            config: HashMap::from([("shared".into(), "workload".into())]),
+            ..Default::default()
+        };
+        let workload = create_workload(
+            &host(),
+            &config,
+            dir.path(),
+            component(),
+            &resolved,
+            &OciConfig::new_with_cache(dir.path().join("cache")),
+        )
+        .await?;
+        let mut components = workload.components.iter();
+        let main = components.next().unwrap();
+        let sidecar = components.next().unwrap();
+        assert!(components.next().is_none());
+        assert_eq!(main.local_resources.config, resolved.config);
+        assert_eq!(sidecar.name, "sidecar");
+        assert_eq!(sidecar.bytes, component());
+        assert!(sidecar.digest.is_some());
+        assert_eq!(sidecar.local_resources.environment, resolved.environment);
+        assert_eq!(
+            sidecar.local_resources.config.get("shared").unwrap(),
+            "sidecar"
+        );
+        assert_eq!(
+            (
+                sidecar.pool_size,
+                sidecar.max_invocations,
+                sidecar.max_concurrency
+            ),
+            (2, 3, 4)
+        );
+        assert_eq!(
+            (
+                sidecar.reclaim_window_seconds,
+                sidecar.reclaim_min_instances
+            ),
+            (5, 1)
+        );
+        let service = workload.service.unwrap();
+        assert_eq!(service.bytes, component());
+        assert!(service.digest.is_some());
+        assert_eq!(service.local_resources.config, resolved.config);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dev_service_does_not_fetch_the_configured_service() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config = Config {
+            dev: Some(DevConfig {
+                service: true,
+                service_file: Some(dir.path().join("missing.wasm")),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let workload = create_workload(
+            &host(),
+            &config,
+            dir.path(),
+            component(),
+            &ResolvedWorkload::default(),
+            &OciConfig::new_with_cache(dir.path().join("cache")),
+        )
+        .await?;
+        assert!(workload.components.is_empty());
+        assert_eq!(workload.service.unwrap().bytes, component());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn loading_errors_identify_the_failing_component() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let host = host();
+        let oci = OciConfig::new_with_cache(dir.path().join("cache"));
+        for (dev, bytes, expected) in [
+            (
+                DevConfig::default(),
+                Bytes::from_static(b"invalid wasm"),
+                "failed to extract component interfaces",
+            ),
+            (
+                DevConfig {
+                    components: vec![DevComponent::new(
+                        "missing-sidecar",
+                        dir.path().join("missing.wasm"),
+                    )],
+                    ..Default::default()
+                },
+                component(),
+                "dev.components['missing-sidecar']",
+            ),
+            (
+                DevConfig {
+                    service_file: Some(dir.path().join("missing-service.wasm")),
+                    ..Default::default()
+                },
+                component(),
+                "failed to load the dev service component",
+            ),
+        ] {
+            let config = Config {
+                dev: Some(dev),
+                ..Default::default()
+            };
+            let error = create_workload(
+                &host,
+                &config,
+                dir.path(),
+                bytes,
+                &ResolvedWorkload::default(),
+                &oci,
+            )
+            .await
+            .unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reload_replaces_the_previous_workload() -> anyhow::Result<()> {
+        let host = host().start().await?;
+        let workload = build_workload(
+            &DevConfig::default(),
+            component(),
+            HashSet::new(),
+            vec![],
+            None,
+            &ResolvedWorkload::default(),
+        );
+        let first = reload_component(Arc::clone(&host), &workload, None).await?;
+        let second = reload_component(Arc::clone(&host), &workload, Some(first.clone())).await?;
+        assert_ne!(first, second);
+        let old = host
+            .workload_status(WorkloadStatusRequest { workload_id: first })
+            .await?;
+        assert_eq!(old.workload_status.workload_state, WorkloadState::NotFound);
+        let current = host
+            .workload_status(WorkloadStatusRequest {
+                workload_id: second,
+            })
+            .await?;
+        assert_eq!(
+            current.workload_status.workload_state,
+            WorkloadState::Running
+        );
+        host.stop().await
+    }
+
+    #[tokio::test]
+    async fn reload_reports_a_failed_workload() -> anyhow::Result<()> {
+        let host = host().start().await?;
+        let workload = build_workload(
+            &DevConfig::default(),
+            Bytes::from_static(b"invalid wasm"),
+            HashSet::new(),
+            vec![],
+            None,
+            &ResolvedWorkload::default(),
+        );
+        let error = reload_component(Arc::clone(&host), &workload, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("failed to reload component"),
+            "{error:#}"
+        );
+        host.stop().await
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::config::{DevComponent, DevConfig, DevVolume};
     use std::path::PathBuf;
+
+    #[test]
+    fn dev_enables_only_the_host_side_of_loopback_access() {
+        let policy = dev_socket_policy(&DevConfig::default().connection_quotas().unwrap());
+        assert!(policy.host_loopback_enabled);
+        assert!(policy.host_loopback.is_empty());
+        assert!(
+            policy.quotas.is_some(),
+            "a dev session's sockets draw on its one connection registry"
+        );
+    }
 
     fn iface(namespace: &str, package: &str) -> WitInterface {
         WitInterface {
@@ -862,6 +1183,81 @@ mod tests {
             i.config.insert((*k).into(), (*v).into());
         }
         i
+    }
+
+    /// A `wasi:http` handler interface carrying the given config, the shape
+    /// `partition_local_routes` looks for.
+    fn http_handler_with_config(kvs: &[(&str, &str)]) -> WitInterface {
+        let mut i = iface_with_config("wasi", "http", kvs);
+        i.interfaces.insert("incoming-handler".to_string());
+        i
+    }
+
+    /// Both `localRoute` forms survive, and empty entries left by punctuation
+    /// are dropped rather than reported as mistakes.
+    #[test]
+    fn local_routes_partition_keeps_both_valid_forms() {
+        let ifaces = vec![http_handler_with_config(&[(
+            "localRoute",
+            "svc.internal, api.internal/v1 ,",
+        )])];
+        let (valid, invalid) = partition_local_routes(&ifaces);
+        assert_eq!(valid, vec!["svc.internal", "api.internal/v1"]);
+        assert!(
+            invalid.is_empty(),
+            "unexpected invalid entries: {invalid:?}"
+        );
+    }
+
+    /// The entries a host would refuse are the ones `wash dev` refuses too.
+    #[test]
+    fn local_routes_partition_reports_entries_a_host_would_refuse() {
+        let ifaces = vec![http_handler_with_config(&[(
+            "localRoute",
+            "http://svc.internal/x, svc.internal:8080, /hello, bad_host/hello, ok.internal",
+        )])];
+        let (valid, invalid) = partition_local_routes(&ifaces);
+        assert_eq!(valid, vec!["ok.internal"]);
+        assert_eq!(
+            invalid,
+            vec![
+                "http://svc.internal/x",
+                "svc.internal:8080",
+                "/hello",
+                "bad_host/hello"
+            ]
+        );
+    }
+
+    /// No handler interface, or one without the key, is the overwhelmingly
+    /// common case — it must stay silent.
+    #[test]
+    fn local_routes_partition_is_empty_without_the_key() {
+        assert_eq!(partition_local_routes(&[]), (vec![], vec![]));
+
+        let no_key = vec![http_handler_with_config(&[("host", "svc.example.com")])];
+        assert_eq!(partition_local_routes(&no_key), (vec![], vec![]));
+
+        // `localRoute` on a non-HTTP interface is not a handler declaration.
+        let wrong_iface = vec![iface_with_config(
+            "wasi",
+            "keyvalue",
+            &[("localRoute", "svc.internal")],
+        )];
+        assert_eq!(partition_local_routes(&wrong_iface), (vec![], vec![]));
+    }
+
+    /// The example's own callee config, so the check is exercised against a
+    /// string the docs tell people to write.
+    #[test]
+    fn the_shipped_example_local_route_parses() {
+        let ifaces = vec![http_handler_with_config(&[
+            ("host", "functiona.example.com"),
+            ("localRoute", "functiona.internal/hello"),
+        ])];
+        let (valid, invalid) = partition_local_routes(&ifaces);
+        assert_eq!(valid, vec!["functiona.internal/hello"]);
+        assert!(invalid.is_empty());
     }
 
     /// Like `iface`, but with one named interface set — introspection yields
@@ -1041,7 +1437,7 @@ mod tests {
     /// entry that omits them round-trips as "unset" rather than zero.
     #[test]
     fn dev_component_warm_instance_limits_deserialize() {
-        let with: DevComponent = serde_yaml_ng::from_str(
+        let with: DevComponent = serde_saphyr::from_str(
             "name: pooled\nfile: pooled.wasm\npoolSize: 8\nmaxInvocations: 50\n\
              reclaimWindowSeconds: 60\nreclaimMinInstances: 2",
         )
@@ -1052,7 +1448,7 @@ mod tests {
         assert_eq!(with.reclaim_min_instances, Some(2));
 
         let without: DevComponent =
-            serde_yaml_ng::from_str("name: plain\nfile: plain.wasm").unwrap();
+            serde_saphyr::from_str("name: plain\nfile: plain.wasm").unwrap();
         assert_eq!(without.pool_size, None);
         assert_eq!(without.max_invocations, None);
         assert_eq!(without.reclaim_window_seconds, None);
@@ -1533,6 +1929,55 @@ mod tests {
             secrets[0].interfaces.contains("store") && secrets[0].interfaces.contains("reveal"),
             "merged entry must carry both interface names, got {:?}",
             secrets[0].interfaces
+        );
+    }
+
+    fn versions_of(result: &[WitInterface], package: &str) -> Vec<Option<String>> {
+        let mut versions: Vec<_> = result
+            .iter()
+            .filter(|i| i.package == package)
+            .map(|i| i.version.as_ref().map(ToString::to_string))
+            .collect();
+        versions.sort();
+        versions
+    }
+
+    #[test]
+    fn incompatible_versions_of_a_package_keep_their_own_entries() {
+        let comp_sync = HashSet::from([WitInterface::from("wasmcloud:messaging/consumer@0.2.0")]);
+        let comp_async = HashSet::from([WitInterface::from("wasmcloud:messaging/consumer@0.3.0")]);
+        let result =
+            build_workload_host_interfaces(Vec::new(), &[comp_sync, comp_async], &HashMap::new());
+
+        assert_eq!(
+            versions_of(&result, "messaging"),
+            vec![Some("0.2.0".to_string()), Some("0.3.0".to_string())]
+        );
+    }
+
+    #[test]
+    fn compatible_versions_settle_on_the_newest() {
+        let comp_a = HashSet::from([WitInterface::from("wasi:keyvalue/store@0.2.1")]);
+        let comp_b = HashSet::from([WitInterface::from("wasi:keyvalue/atomics@0.2.6")]);
+        let comp_c = HashSet::from([WitInterface::from("wasi:keyvalue/store@0.2.3")]);
+        let result =
+            build_workload_host_interfaces(Vec::new(), &[comp_a, comp_b, comp_c], &HashMap::new());
+
+        assert_eq!(
+            versions_of(&result, "keyvalue"),
+            vec![Some("0.2.6".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_declared_version_is_left_as_written() {
+        let declared = WitInterface::from("wasi:keyvalue/store@0.2.1");
+        let comp = HashSet::from([WitInterface::from("wasi:keyvalue/store@0.2.6")]);
+        let result = build_workload_host_interfaces(vec![declared], &[comp], &HashMap::new());
+
+        assert_eq!(
+            versions_of(&result, "keyvalue"),
+            vec![Some("0.2.1".to_string())]
         );
     }
 }

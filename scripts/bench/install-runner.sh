@@ -4,7 +4,7 @@
 #
 #   sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
 #     [--repo  wasmCloud/wasmCloud] \
-#     [--version 2.335.1]
+#     [--version 2.337.0]
 #
 # The registration token is one-shot. Get one from:
 #   GitHub Repo > Settings > Actions > Runners > New self-hosted runner
@@ -30,7 +30,7 @@
 set -euo pipefail
 
 REPO="wasmCloud/wasmCloud"
-RUNNER_VERSION="2.335.1"
+RUNNER_VERSION="2.337.0"
 # Default to the actual hostname of the box (set by installimage). Override with
 # --name if needed. No hardcoded value here — the box's identity isn't in the repo.
 RUNNER_NAME="$(hostname)"
@@ -42,7 +42,7 @@ TARGET_DIR="/var/lib/bench/target"
 # SHA256 of actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz, copied from
 # https://github.com/actions/runner/releases/tag/v${RUNNER_VERSION}. Bump
 # both `RUNNER_VERSION` and this constant together.
-RUNNER_SHA256="4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf"
+RUNNER_SHA256="70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
 
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
@@ -71,6 +71,18 @@ if ! id bench >/dev/null 2>&1; then
 fi
 mkdir -p "$WORK_DIR" "$TARGET_DIR"
 chown -R bench:bench /var/lib/bench
+# scripts/k6bench runs kind through Docker. provision.yml installs docker.io,
+# which creates the group; without it the k6bench workflow can't run here.
+# The workflow stops the socket-activated daemon after each run, so the next
+# criterion or gungraun bench doesn't share the host with it; that one command
+# is all the sudo the bench user gets.
+if getent group docker >/dev/null; then
+  usermod -aG docker bench
+  printf 'bench ALL=(root) NOPASSWD: /usr/bin/systemctl stop docker.service\n' \
+    >/etc/sudoers.d/bench-docker
+  chmod 0440 /etc/sudoers.d/bench-docker
+  visudo -cf /etc/sudoers.d/bench-docker
+fi
 
 step "install AWS CLI v2 + zstd"
 export DEBIAN_FRONTEND=noninteractive

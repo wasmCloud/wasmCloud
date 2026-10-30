@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::plugin::PluginEgressPolicy;
 use crate::plugin::lock_root;
 use crate::plugin::multiplex::BackendProvider;
 
@@ -256,10 +257,23 @@ impl BackendProvider<BlobId> for FilesystemProvider {
         "filesystem"
     }
 
-    async fn instantiate(&self, config: &HashMap<String, String>) -> anyhow::Result<BlobId> {
+    async fn instantiate(
+        &self,
+        config: &HashMap<String, String>,
+        _egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<BlobId> {
         let root = config.get("root").ok_or_else(|| {
             anyhow::anyhow!("filesystem blobstore backend requires a 'root' config")
         })?;
         Ok(Arc::new(FilesystemBackend::new(root)))
+    }
+
+    /// Does not connect out.
+    fn check_egress(
+        &self,
+        _config: &HashMap<String, String>,
+        _policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }

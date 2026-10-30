@@ -46,6 +46,7 @@ concurrency:
 
 jobs:
   gate:
+    name: gate-release-train
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.gate.outputs.run }}
@@ -80,12 +81,26 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # The wait steps poll the release PR's checks with GITHUB_TOKEN.
+      checks: read
+      statuses: read
+      # Exchanged with octo-sts for the release-train token.
+      id-token: write
     steps:
+      # An app token (not GITHUB_TOKEN) so the pushed branch and the PR
+      # trigger required CI. It expires after an hour, so only the push
+      # and the PR steps use it; the long waits below use GITHUB_TOKEN.
+      - name: Get a release-train token from octo-sts
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: ${{ github.repository }}
+          identity: release-train
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # PAT (not GITHUB_TOKEN) so the resulting PR triggers required CI.
-          token: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          token: ${{ steps.octo-sts.outputs.token }}
           persist-credentials: true
           fetch-depth: 0
 
@@ -185,7 +200,7 @@ jobs:
           fi
 
       - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        uses: $/.github/actions/setup-rust
 
       - name: Bump versions
         env:
@@ -278,7 +293,7 @@ jobs:
       - name: Open release PR and enable auto-merge
         id: pr
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ steps.octo-sts.outputs.token }}
           BRANCH: ${{ steps.bump.outputs.branch }}
           NEW: ${{ steps.bump.outputs.version }}
         run: |
@@ -324,7 +339,7 @@ jobs:
       - name: Wait for required checks on release PR
         if: steps.pr.outputs.pr_url != ''
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ steps.pr.outputs.pr_url }}
         run: |
           set -euo pipefail
@@ -358,7 +373,7 @@ jobs:
       - name: Wait for PR auto-merge to complete
         if: steps.pr.outputs.pr_url != ''
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ steps.pr.outputs.pr_url }}
         run: |
           set -euo pipefail

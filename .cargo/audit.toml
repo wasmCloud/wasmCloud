@@ -1,0 +1,14 @@
+[advisories]
+ignore = [
+    # webpki-roots 0.26.11 stays in Cargo.lock only through async-nats's
+    # `websockets` feature (tokio-websockets 0.10), which this workspace never
+    # enables, and 0.26.11 is a shim over webpki-roots 1.0.10, the patched release.
+    "RUSTSEC-2026-0381",
+    # zstd 0.13 comes only from wasmtime's `cache` feature, on through wasi-gfx's
+    # default wasmtime features; wasmtime 50.0.0 still requires zstd 0.13. wash
+    # never sets `Config::cache`, and the cache calls only `encode_all` and
+    # `decode_all`, built without zstd's `seekable` and `legacy` features.
+    "RUSTSEC-2026-0391", # `with_context` on a reused context
+    "RUSTSEC-2026-0398", # `seekable` only
+    "RUSTSEC-2026-0403", # legacy frames through `write::Decoder` only
+]

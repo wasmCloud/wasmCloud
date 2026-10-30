@@ -56,10 +56,11 @@ Wed–Thu as a buffer for any same-week follow-up patch.
    - **Re-attests** each promoted manifest digest (Sigstore-signed via Fulcio).
    - **Downloads** the canary-binaries artifacts from the wash.yml run that built them, attests
      them, and (after pushing the tag) creates the GitHub Release with those exact binaries.
-   - Pushes the annotated `vX.Y.Z` git tag at the validated merge commit. **The tag is
+   - Signs the annotated `vX.Y.Z` git tag with gitsign, verifies the workflow identity,
+     and pushes it at the validated merge commit. **The tag is
      immutable**: the workflow never force-pushes, and a re-run that finds the tag already on
      origin is a no-op.
-6. After pushing `vX.Y.Z`, `release-tag.yml` also pushes the
+6. After pushing `vX.Y.Z`, `release-tag.yml` also signs, verifies, and pushes the
    `runtime-operator/vX.Y.Z` Go module tag (so module consumers never see it before the
    matching OCI release exists), then creates the GitHub Release with the promoted binaries,
    then dispatches Homebrew and runs winget update inline. All sequenced after canary
@@ -113,19 +114,33 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
 3. Wait for canary builds on the merge commit to all succeed (`wash`, `runtime-operator`,
    `runtime-gateway`, `charts`, plus `canary-binaries` in `wash.yml`).
 4. Re-run `release-tag.yml` from the Actions tab (**Re-run failed jobs** on the failed
-   workflow_run instance) so it picks up the now-green canaries, or perform its work by hand:
+   workflow_run instance), or dispatch it from `main` with the release commit:
+   ```bash
+   gh workflow run release-tag.yml --ref main -f sha=FULL_RELEASE_COMMIT_SHA
+   ```
+   Replace `FULL_RELEASE_COMMIT_SHA` with the validated release commit.
+   Promotion only runs when the workflow ref is `refs/heads/main`, including manual dispatches.
+   If `release-tag.yml` itself is unavailable, perform its work by hand:
    - Promote the canary OCI images (bare semver, no `v`):
      ```bash
      for img in ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}; do
        docker buildx imagetools create --tag "${img}:X.Y.Z" "${img}:sha-<MERGE_SHA>"
      done
+     docker buildx imagetools create --tag ghcr.io/wasmcloud/wash:X.Y.Z-all-features \
+       ghcr.io/wasmcloud/wash:sha-<MERGE_SHA>-all-features
      ```
-   - Push the immutable annotated tag and the Go module tag:
+   - Install [gitsign](https://github.com/sigstore/gitsign#installation), then sign and push
+     the immutable annotated tag and the Go module tag:
      ```bash
-     git tag -a vX.Y.Z <MERGE_SHA> -m "Release vX.Y.Z"
-     git tag -a runtime-operator/vX.Y.Z <MERGE_SHA> -m "Release runtime-operator/vX.Y.Z"
+     git config --local gpg.format x509
+     git config --local gpg.x509.program gitsign
+     git tag -s vX.Y.Z <MERGE_SHA> -m "Release vX.Y.Z"
+     git tag -s runtime-operator/vX.Y.Z <MERGE_SHA> -m "Release runtime-operator/vX.Y.Z"
      git push origin vX.Y.Z runtime-operator/vX.Y.Z
      ```
+     Local signing uses the maintainer's OIDC identity. Publish the expected identity and
+     issuer through a trusted project channel, and document this exception in the release
+     notes so users can verify it with the flags in [Verifying release tags](#verifying-release-tags).
    - Download the canary-binaries from the merge commit's `wash.yml` run and create the
      GitHub Release with them attached
      (`gh run download <RUN_ID> --pattern 'wash-*' --dir artifacts/`, then `gh release
@@ -143,7 +158,7 @@ OCI image tags use bare semver (`X.Y.Z`); the git tag, GitHub Release, and Go mo
 
 | Component | What gets published on `vX.Y.Z` |
 |-----------|---------------------------------|
-| `wash` (CLI) | Cross-platform binaries with SLSA provenance, GitHub Release, `ghcr.io/wasmcloud/wash:X.Y.Z`, Homebrew tap update, winget |
+| `wash` (CLI) | Cross-platform binaries with SLSA provenance, GitHub Release, `ghcr.io/wasmcloud/wash:X.Y.Z` (plus `:X.Y.Z-all-features`), Homebrew tap update, winget |
 | `runtime-gateway` | `ghcr.io/wasmcloud/runtime-gateway:X.Y.Z` |
 | `runtime-operator` | `ghcr.io/wasmcloud/runtime-operator:X.Y.Z`, Go module tag `runtime-operator/vX.Y.Z` |
 | Helm chart | `ghcr.io/wasmcloud/charts/runtime-operator:X.Y.Z` |
@@ -158,6 +173,8 @@ images) but is not currently published as a standalone crate on crates.io — se
 On every merge to `main` (no tag required):
 
 - `ghcr.io/wasmcloud/wash:canary` and `ghcr.io/wasmcloud/wash:sha-<full-sha>`
+- `ghcr.io/wasmcloud/wash:canary-all-features` and `:sha-<full-sha>-all-features` (the
+  `host-component-plugins` build the operator e2e runs)
 - `ghcr.io/wasmcloud/runtime-gateway:canary` and `:sha-<full-sha>`
 - `ghcr.io/wasmcloud/runtime-operator:canary` and `:sha-<full-sha>`
 - Helm chart `runtime-operator:v2-canary`
@@ -193,17 +210,72 @@ canary digest as `X.Y.Z`, it mints a fresh SLSA provenance attestation against t
 manifest digest, signed via Fulcio, linking that digest to the workflow run, source commit,
 and runner.
 
-Verify any released image with:
+User-facing verification instructions live in the
+[release verification guide](https://wasmcloud.com/docs/verify-releases). It covers binary
+and container provenance, the expected `release-tag.yml` signer workflow, and SPDX SBOM
+verification. Keep consumer commands there.
+
+### Release SBOMs
+
+Before promoting anything, `release-tag.yml` scans the downloaded canary binaries and the
+`linux/amd64` and `linux/arm64` manifests of each image it is about to release, using
+version-pinned Syft (`.github/scripts/release-sboms.mjs`). The shared `setup-syft` action
+uses Anchore's SHA-pinned `download-syft` action to install Syft in the Actions tool cache.
+The binary builds use `cargo-auditable`, and `canary-binaries` checks each binary's embedded
+inventory at build time; the Chainguard Rust builder embeds the same metadata in wash images. No
+binaries or images are rebuilt during promotion.
+
+Each wash target gets an SPDX inventory. The Windows executable and ZIP share an inventory.
+Each image platform gets its own inventory (`<image>-image-linux-<arch>.spdx.json`) and SBOM
+attestation bound to the platform manifest digest, published to GHCR. The index keeps its
+existing build provenance. All SPDX documents and SBOM Sigstore bundles are attached to the
+GitHub Release. Documents are normalized to the release commit time and their download URL, so
+a re-run produces the same bytes.
+
+Missing Rust/Go dependency inventories or unexpected image platforms fail the release before
+any image tag, attestation, or git tag is published. Recovery against older binaries without
+embedded Rust metadata requires new canary artifacts; do not bypass the inventory check. A
+new `canary-binaries` target needs a matching `release-binary-sbom` step; the release fails
+before tagging when one is missing.
+
+Image resolution and promotion live in `.github/scripts/release-images.mjs`. Run the release
+script tests with `node --test .github/scripts/release-*.test.mjs`.
+
+### Verifying release tags
+
+`release-tag.yml` signs new `vX.Y.Z` and `runtime-operator/vX.Y.Z` annotated tags with
+[gitsign](https://github.com/sigstore/gitsign). It uses GitHub Actions OIDC to obtain a
+short-lived Fulcio certificate and records the signature in the Rekor transparency log.
+No long-lived signing-key secret is required. The workflow verifies each new tag's signature,
+certificate identity, and issuer before pushing it.
+
+Install a current gitsign release using its
+[installation instructions](https://github.com/sigstore/gitsign#installation), then fetch and
+verify both tags (replace `vX.Y.Z` with the release version):
+
 ```bash
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/wash:X.Y.Z
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-gateway:X.Y.Z
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-operator:X.Y.Z
+git fetch origin tag vX.Y.Z tag runtime-operator/vX.Y.Z
+for tag in vX.Y.Z runtime-operator/vX.Y.Z; do
+  gitsign verify-tag \
+    --certificate-identity https://github.com/wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    "${tag}" || exit 1
+done
 ```
 
-Binaries on the GitHub Release have equivalent attestations (verifiable by digest):
-```bash
-gh attestation verify --repo wasmCloud/wasmCloud ./wash
-```
+Run this in a checkout whose `origin` is `https://github.com/wasmCloud/wasmCloud.git` (or its
+SSH equivalent). Require a successful exit status for each tag. Keep the exact identity and
+issuer checks: plain `git verify-tag` does not validate the expected Sigstore certificate
+claims. GitHub currently displays gitsign signatures as **Unverified** because it does not
+support Sigstore verification; use gitsign to verify them.
+
+Existing tags are never replaced or re-signed. A rerun skips a tag already on origin, so an
+older unsigned tag remains unsigned even if its counterpart is newly signed during recovery.
+After the first release with both signatures verified, record its version here and use it as
+the starting version in the Best Practices badge justification for `version_tags_signed`.
+Confirm the certificate identity against the workflow run before publishing that evidence.
+No first signed release has been recorded yet. Tag signatures cover the source revision;
+verify binary and container attestations separately as described above.
 
 ### When canary fails post-merge
 
@@ -322,6 +394,7 @@ respond by either:
 
 - [ ] All release workflows completed successfully in GitHub Actions
 - [ ] GitHub Release is visible with correct binaries attached
+- [ ] Both release tags pass the signature and identity checks in [Verifying release tags](#verifying-release-tags)
 - [ ] Docker images are available on GHCR
 - [ ] Homebrew tap updated (check [homebrew-wasmcloud](https://github.com/wasmCloud/homebrew-wasmcloud))
 - [ ] Announce the release in [Slack](https://slack.wasmcloud.com) `#announcements`

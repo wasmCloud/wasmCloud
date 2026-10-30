@@ -51,7 +51,7 @@ use wasmtime::error::Context as _;
 use wasmtime_wasi_http::p3::bindings::Service;
 
 use crate::engine::ctx::SharedCtx;
-use crate::engine::dispatch::{GuestJob, GuestTask};
+use crate::engine::dispatch::{GuestJob, GuestTask, Placement};
 use crate::engine::instance_pool::ComponentInstance;
 use crate::host::http::ServiceHttpJob;
 use crate::host::trigger_service::HttpTask;
@@ -200,20 +200,10 @@ pub(crate) struct PoolSlot {
 }
 
 impl PoolSlot {
-    /// Stop this instance admitting: it drains what it took, ends its run loop,
-    /// and its store's teardown ends any guest work still running on it.
+    /// Stops admissions and drops the store after active calls drain.
     ///
-    /// Only as far as the last call returning, though: every path to `drained`
-    /// runs through a call's task ending, so a guest that never yields holds the
-    /// store open regardless. That one is ended by its abandoned call instead
-    /// (see [`crate::engine::abandon`]).
-    ///
-    /// TODO: retirement is a stand-in for cancelling the one bad call. The
-    /// host cannot cancel a guest `call_concurrent` subtask
-    /// (bytecodealliance/wasmtime#11833), so ending a wedged call's work means
-    /// condemning the whole instance and every warm state it held. Once that
-    /// API exists, a timed-out call should cancel just its own task and leave
-    /// the instance serving.
+    /// Wasmtime cannot cancel one `call_concurrent` task, so a wedged task
+    /// requires retiring its instance (bytecodealliance/wasmtime#11833).
     pub(crate) fn retire_instance(&self) {
         self.state.retire();
     }
@@ -530,7 +520,7 @@ impl InstanceDriver {
                             InstanceJob::Guest(job) => accessor.spawn(GuestTask {
                                 instance,
                                 job,
-                                pool_slot: Some(slot),
+                                placement: Placement::Pooled(slot),
                             }),
                         };
                         if let Err(e) = spawned {
@@ -544,6 +534,7 @@ impl InstanceDriver {
                 // died with it. The pool reaps the handle and the next call
                 // starts a fresh instance.
                 tracing::error!(err = ?e, "pooled instance faulted; its in-flight calls failed");
+                crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
             }
         });
 
@@ -594,7 +585,7 @@ impl InstanceDriver {
         let claimed = self
             .state
             .in_flight
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < self.max_concurrency).then_some(n + 1)
             })
             .is_ok();
@@ -605,14 +596,14 @@ impl InstanceDriver {
 
         // Count the call against this instance's budget. Admission past the
         // limit is refused, not just noted: racing callers can all get here
-        // before any of them marks the instance retired, and `fetch_update`
+        // before any of them marks the instance retired, and `try_update`
         // is what keeps the budget exact under that race. The instance then
         // drains what it admitted rather than being dropped mid-call the way
         // a checked-out store could be.
         if let Some(limit) = self.max_invocations {
             match self
                 .admitted
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                     (n < limit).then_some(n + 1)
                 }) {
                 Ok(previous) => {
@@ -718,7 +709,7 @@ mod tests {
         );
     }
 
-    /// The budget refuses over-admission even when callers race: `fetch_update`
+    /// The budget refuses over-admission even when callers race: `try_update`
     /// consumes the budget atomically, so exactly `max_invocations` admissions
     /// can ever succeed no matter how the threads interleave. (The sequential
     /// test above cannot distinguish this from bumping a counter after the

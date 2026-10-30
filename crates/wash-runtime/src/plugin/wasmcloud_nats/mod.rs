@@ -19,6 +19,17 @@ pub(super) mod warm;
 
 pub use plugin::{ComponentData, WasmcloudNats};
 
+/// The host files a binding's config names, which no workload volume may
+/// expose.
+#[must_use]
+pub fn host_paths(config: &std::collections::HashMap<String, String>) -> Vec<std::path::PathBuf> {
+    keys::FILES
+        .iter()
+        .filter_map(|key| keys::get(config, key))
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
 /// How this plugin classifies its config keys, built from the one table that
 /// also drives the reader — see [`keys`].
 ///
@@ -46,19 +57,19 @@ pub fn binding_schema() -> crate::plugin::BindingSchema {
 // `store.run_concurrent(..)` — see [`subscriber`].
 pub(super) mod jetstream_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/js-processor@0.1.0",
+        world: "wasmcloud:nats/js-processor@0.1.3",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/jetstream@0.1.0.message-handle": super::jetstream::MessageHandle,
-            "wasmcloud:nats/jetstream@0.1.0.pull-consumer": super::jetstream::PullConsumerHandle,
+            "wasmcloud:nats/jetstream@0.1.3.message-handle": super::jetstream::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.3.pull-consumer": super::jetstream::PullConsumerHandle,
         },
     });
 }
 
 pub(super) mod core_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/subscriber@0.1.0",
+        world: "wasmcloud:nats/subscriber@0.1.3",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
     });
@@ -66,11 +77,11 @@ pub(super) mod core_bindings {
 
 pub(super) mod kv_bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/kv-watcher@0.1.0",
+        world: "wasmcloud:nats/kv-watcher@0.1.3",
         imports: { default: async | trappable | tracing },
         exports: { default: async | tracing },
         with: {
-            "wasmcloud:nats/kv@0.1.0.bucket": super::jetstream::BucketHandle,
+            "wasmcloud:nats/kv@0.1.3.bucket": super::jetstream::BucketHandle,
         },
     });
 }
@@ -79,4 +90,4 @@ pub(super) mod kv_bindings {
 /// in `host.plugins`.
 pub const PLUGIN_NATS_ID: &str = "wasmcloud-nats";
 
-const NATS_VERSION: &str = "0.1.0";
+const NATS_VERSION: &str = "0.1.3";

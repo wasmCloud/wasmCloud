@@ -52,7 +52,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, MutexGuard, Once};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use wasmtime::component::Instance;
@@ -126,7 +127,9 @@ where
         Dispatch::Sent => Ok(Ok(())),
         Dispatch::NeedsInstance(job) => {
             let mut store = new_store().await?;
-            let instance = pre.instantiate_async(&mut store).await?;
+            let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
+                crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+            })?;
             Ok(pool.dispatch_on_new(ComponentInstance { store, instance }, job))
         }
         Dispatch::Saturated(job) => Ok(Err(Declined::without_instance(job))),
@@ -308,10 +311,37 @@ impl InstancePolicy {
 pub(crate) struct InstancePool {
     state: Mutex<PoolState>,
     policy: InstancePolicy,
-    /// Starts the sweep with the pool's first instance. There is nothing to
-    /// reclaim before that, and [`Self::dispatch_on_new`] is the one entry
-    /// point guaranteed to run inside the tokio runtime the sweep needs.
-    sweep_started: Once,
+    /// Whether a sweep task is running. An instance parked in the pool arms
+    /// it: there is nothing to reclaim before that, and
+    /// [`Self::dispatch_on_new`] is the one entry point guaranteed to run
+    /// inside the tokio runtime the sweep needs. The sweep that finds nothing
+    /// left to reclaim clears it, under the state lock, and ends, so an idle
+    /// pool costs no timer and the next instance parked arms it again.
+    sweeping: AtomicBool,
+}
+
+/// Own the armed bit even before Tokio first polls the task. Runtime shutdown
+/// drops this owner, allowing a retained pool to rearm on another runtime.
+struct SweepOwner {
+    pool: std::sync::Weak<InstancePool>,
+    armed: bool,
+}
+
+impl SweepOwner {
+    fn disarmed(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SweepOwner {
+    fn drop(&mut self) {
+        if self.armed
+            && let Some(pool) = self.pool.upgrade()
+        {
+            let _state = pool.lock_state();
+            pool.sweeping.store(false, Ordering::SeqCst);
+        }
+    }
 }
 
 /// What the pool's lock guards: the warm instances, and the measurement the
@@ -342,7 +372,7 @@ impl InstancePool {
                 closed: false,
             }),
             policy,
-            sweep_started: Once::new(),
+            sweeping: AtomicBool::new(false),
         }
     }
 
@@ -535,8 +565,9 @@ impl InstancePool {
         sent
     }
 
-    /// Start the periodic sweep that gives idle instances back, once, with
-    /// the pool's first instance.
+    /// Start the periodic sweep that gives idle instances back, with the
+    /// first instance parked in the pool and again with the first one parked
+    /// after a sweep found the pool with nothing left to reclaim.
     ///
     /// A sweep driven from [`Self::try_dispatch`] would never run for the
     /// pool that most needs it: a component whose traffic stopped altogether
@@ -544,38 +575,64 @@ impl InstancePool {
     /// until the workload stopped. The timer is the pool's own rather than
     /// one the host drives over a registry of pools, so it lives and dies
     /// with the pool it sweeps and needs nothing plumbed through the engine —
-    /// the cost is one sleeping task per pooled component that asked to be
-    /// reclaimed.
+    /// the cost is one sleeping task per pooled component that holds
+    /// instances it could still give back. A host keeping thousands of
+    /// scale-to-zero components would otherwise keep a timer waking for each
+    /// of them long after its pool emptied.
     fn start_sweeping(self: &Arc<Self>) {
         let Some(reclaim) = self.reclaim_policy() else {
             return;
         };
-        self.sweep_started.call_once(|| {
-            // Weak, so a stopped workload's pool is not kept alive by its own
-            // timer.
-            let pool = Arc::downgrade(self);
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(reclaim.window);
-                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                // `interval` yields its first tick immediately, before any
-                // window has passed to measure.
+        // Read before the swap: nearly every call finds the timer already
+        // armed, and a load leaves the cache line shared where a swap would
+        // take it exclusive on every dispatch that parks an instance. The
+        // disarm happens under the state lock the caller has since taken and
+        // released, so a load after it cannot miss it.
+        if self.sweeping.load(Ordering::Relaxed) || self.sweeping.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // The peak kept rising while nothing swept, through however long the
+        // pool sat at its floor, so the first window would measure all of it
+        // and keep instances only a long-gone burst needed. Start it from the
+        // work in flight now.
+        {
+            let mut state = self.lock_state();
+            let in_flight = in_flight_total(&state.drivers);
+            state.peak_in_flight = in_flight;
+        }
+        // Weak, so a stopped workload's pool is not kept alive by its own
+        // timer.
+        let pool = Arc::downgrade(self);
+        let mut owner = SweepOwner {
+            pool: pool.clone(),
+            armed: true,
+        };
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(reclaim.window);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // `interval` yields its first tick immediately, before any
+            // window has passed to measure.
+            ticker.tick().await;
+            loop {
                 ticker.tick().await;
-                loop {
-                    ticker.tick().await;
-                    // Nothing holds the pool any more: its workload stopped,
-                    // and its instances went with it.
-                    let Some(alive) = pool.upgrade() else { return };
-                    // Or the workload was let go while something still holds a
-                    // reference to the pool — which is the case `close` exists
-                    // for. There is nothing left to reclaim and nothing will
-                    // arrive, so stop rather than waking for the life of that
-                    // reference.
-                    if alive.is_closed() {
-                        return;
-                    }
-                    alive.sweep();
+                // Nothing holds the pool any more: its workload stopped,
+                // and its instances went with it.
+                let Some(alive) = pool.upgrade() else { return };
+                // Or the workload was let go while something still holds a
+                // reference to the pool — which is the case `close` exists
+                // for. There is nothing left to reclaim and nothing will
+                // arrive, so stop rather than waking for the life of that
+                // reference.
+                if alive.is_closed() {
+                    return;
                 }
-            });
+                if !alive.sweep() {
+                    // sweep disarmed under the state lock. A new task may now
+                    // own the bit, so this owner's Drop must leave it alone.
+                    owner.disarmed();
+                    return;
+                }
+            }
         });
     }
 
@@ -593,11 +650,14 @@ impl InstancePool {
     ///
     /// Retiring drains: an instance stops admitting, finishes what it took
     /// and only then drops its store, so a sweep never ends a call in flight.
-    fn sweep(&self) {
+    ///
+    /// Returns whether a later sweep could still find something to retire.
+    /// Once none can, this one disarms the timer (see [`Self::start_sweeping`]).
+    fn sweep(&self) -> bool {
         let (Some((pool_size, _, max_concurrency)), Some(reclaim)) =
             (self.limits(), self.reclaim_policy())
         else {
-            return;
+            return false;
         };
         let mut state = self.lock_state();
         let PoolState {
@@ -613,6 +673,20 @@ impl InstancePool {
         // that outlive a window would otherwise measure a peak of zero and
         // retire the instances running them.
         let in_flight = in_flight_total(drivers);
+
+        // At or under the floor, with nothing draining and nothing running,
+        // no sweep can retire anything until another instance is parked —
+        // which arms the timer again. Disarmed under the lock that parking
+        // takes, so an instance parked after this check always re-arms it.
+        if in_flight == 0
+            && drivers.len() <= reclaim.min_instances
+            && drivers.iter().all(|d| !d.is_retired())
+        {
+            *peak_in_flight = 0;
+            self.sweeping.store(false, Ordering::SeqCst);
+            return false;
+        }
+
         let peak = std::mem::replace(peak_in_flight, in_flight);
         // The peak counts calls the warm set could not take, which overflow
         // to stores of their own, so cap what it asks for at the pool size
@@ -629,7 +703,7 @@ impl InstancePool {
         let live = drivers.iter().filter(|d| !d.is_retired()).count();
         let surplus = live.saturating_sub(needed);
         if surplus == 0 {
-            return;
+            return true;
         }
         tracing::debug!(
             peak,
@@ -645,6 +719,7 @@ impl InstancePool {
         {
             driver.retire();
         }
+        true
     }
 
     /// Whether this component keeps instances warm at all.
@@ -1040,6 +1115,61 @@ mod tests {
             pool.lock_state().drivers.is_empty(),
             "a closed pool must stay empty"
         );
+    }
+
+    /// The sweep's timer ends once the pool has emptied, rather than waking
+    /// every window for the life of an idle workload, and the next instance
+    /// parked arms it again.
+    #[tokio::test(start_paused = true)]
+    async fn the_sweep_stops_once_the_pool_empties_and_rearms() {
+        let (pool, _channels) = warm_pool(2, &limits(4, 0, 1, 60, 0));
+
+        pool.start_sweeping();
+        assert!(pool.sweeping.load(Ordering::SeqCst));
+        // One window retires both idle instances, the next reaps them and
+        // finds nothing left to give back.
+        tokio::time::sleep(Duration::from_secs(150)).await;
+        assert!(pool.lock_state().drivers.is_empty());
+        assert!(
+            !pool.sweeping.load(Ordering::SeqCst),
+            "an empty pool keeps no timer"
+        );
+
+        pool.start_sweeping();
+        assert!(
+            pool.sweeping.load(Ordering::SeqCst),
+            "a parked instance arms it again"
+        );
+    }
+
+    #[test]
+    fn shutdown_before_first_poll_releases_the_sweep_owner() {
+        let (pool, _channels) = warm_pool(2, &limits(4, 0, 1, 60, 0));
+        for _ in 0..2 {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            {
+                let _entered = runtime.enter();
+                pool.start_sweeping();
+                assert!(pool.sweeping.load(Ordering::SeqCst));
+            }
+            drop(runtime);
+            assert!(!pool.sweeping.load(Ordering::SeqCst));
+        }
+    }
+
+    /// At its floor, with nothing running, a pool has nothing a sweep could
+    /// retire, so the sweep stops there too.
+    #[test]
+    fn a_sweep_at_the_floor_disarms() {
+        let (pool, _channels) = warm_pool(2, &limits(8, 0, 1, 60, 2));
+        pool.sweeping.store(true, Ordering::SeqCst);
+
+        assert!(!pool.sweep());
+        assert_eq!(live(&pool), 2, "the floor is kept");
+        assert!(!pool.sweeping.load(Ordering::SeqCst));
     }
 
     /// A sweep keeps the instances the window's peak concurrency needed and

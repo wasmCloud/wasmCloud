@@ -137,10 +137,8 @@ pub struct NetworkTcpSocket {
     /// The guest's connection-budget slot, held for as long as this socket
     /// exists.
     ///
-    /// Only a real outbound connection takes one — a virtual one costs no file
-    /// descriptor and no remote resource — and it is released when the guest
-    /// drops the socket, which is what makes the budget bound *concurrent*
-    /// connections rather than merely counting attempts.
+    /// Taken before the OS socket is opened and released when its real half is
+    /// dropped.
     quota_slot: Option<crate::host::quota::ConnectionSlot>,
 }
 
@@ -355,6 +353,13 @@ impl NetworkTcpSocket {
                 self.tcp_state = TcpState::Closed;
                 Err(ErrorCode::from(err))
             }
+        }
+    }
+
+    fn cancel_connect(&mut self) {
+        if matches!(self.tcp_state, TcpState::Connecting(_)) {
+            self.tcp_state = TcpState::Closed;
+            self.quota_slot = None;
         }
     }
 
@@ -918,6 +923,28 @@ impl ConnectingTcpSocket {
     }
 }
 
+/// Reserve the virtual half of a bind, releasing the reservation if it fails.
+///
+/// An `unspecified` bind takes the port the OS assigned to `socket`.
+fn bind_loopback_half(
+    socket: &NetworkTcpSocket,
+    mut addr: SocketAddr,
+    unspecified: bool,
+    loopback: &mut super::loopback::Network,
+) -> Result<super::loopback::TcpSocket, ErrorCode> {
+    if unspecified {
+        let TcpState::BindStarted(sock) = &socket.tcp_state else {
+            unreachable!();
+        };
+        addr.set_port(sock.local_addr()?.port());
+    }
+    let addr = loopback.bind_tcp(addr)?;
+    super::loopback::TcpSocket::new(socket, super::loopback::TcpState::BindStarted(addr))
+        .inspect_err(|_| {
+            loopback.unbind_tcp(addr);
+        })
+}
+
 impl TcpSocket {
     pub(crate) fn new(
         ctx: &WasiSocketsCtx,
@@ -962,18 +989,18 @@ impl TcpSocket {
             if !ip.is_unspecified() {
                 return Ok(());
             }
-            let TcpState::BindStarted(sock) = &socket.tcp_state else {
-                unreachable!();
-            };
-            addr = sock.local_addr()?;
-            match &mut addr {
-                SocketAddr::V4(addr) => addr.set_ip(Ipv4Addr::LOCALHOST),
-                SocketAddr::V6(addr) => addr.set_ip(Ipv6Addr::LOCALHOST),
-            }
         }
-        let addr = loopback.bind_tcp(addr)?;
-        let lo =
-            super::loopback::TcpSocket::new(socket, super::loopback::TcpState::BindStarted(addr))?;
+        let lo = match bind_loopback_half(socket, addr, ip.is_unspecified(), loopback) {
+            Ok(lo) => lo,
+            Err(err) => {
+                if ip.is_unspecified() {
+                    // The OS socket is already bound and cannot be unbound;
+                    // close it so the failed bind holds no port.
+                    socket.tcp_state = TcpState::Closed;
+                }
+                return Err(err);
+            }
+        };
         if ip.is_unspecified() {
             *self = Self::Unspecified {
                 net: NetworkTcpSocket {
@@ -983,7 +1010,7 @@ impl TcpSocket {
                     options: socket.options.clone(),
                     send_taken: false,
                     receive_taken: false,
-                    quota_slot: None,
+                    quota_slot: socket.quota_slot.take(),
                 },
                 lo,
             }
@@ -1085,18 +1112,18 @@ impl TcpSocket {
                     return Err(ErrorCode::InvalidState);
                 }
 
-                let mut local_address = *addr;
-                local_address.set_port(0);
-                let local_address = match loopback.bind_tcp(local_address) {
-                    Ok(addr) => addr,
+                let tx = match loopback.connect_tcp(addr) {
+                    Ok(tx) => tx.clone(),
                     Err(err) => {
                         *self = Self::Network(socket);
                         return Err(err);
                     }
                 };
 
-                let tx = match loopback.connect_tcp(addr) {
-                    Ok(tx) => tx,
+                let mut local_address = *addr;
+                local_address.set_port(0);
+                let local_address = match loopback.bind_tcp(local_address) {
+                    Ok(addr) => addr,
                     Err(err) => {
                         *self = Self::Network(socket);
                         return Err(err);
@@ -1113,9 +1140,10 @@ impl TcpSocket {
                 ) {
                     Ok(socket) => {
                         *self = Self::Loopback(socket);
-                        Ok(ConnectingTcpSocket::Loopback(tx.clone()))
+                        Ok(ConnectingTcpSocket::Loopback(tx))
                     }
                     Err(err) => {
+                        loopback.unbind_tcp(local_address);
                         *self = Self::Network(socket);
                         Err(err)
                     }
@@ -1139,11 +1167,25 @@ impl TcpSocket {
         }
     }
 
+    /// Refuse a connection the policy turned away, resetting it rather than
+    /// closing it in order.
+    ///
+    /// An orderly close looks to the peer like a successful, empty exchange; a
+    /// reset says it was refused. A virtual connection has no socket to reset,
+    /// so dropping it is the whole story. Mirrors wasmtime-wasi's own accept
+    /// filter.
+    pub(crate) fn refuse(self) {
+        if let Self::Network(socket) = &self
+            && let Ok(stream) = socket.tcp_stream_arc()
+        {
+            _ = stream.set_zero_linger();
+        }
+        drop(self);
+    }
+
     /// Hold a connection-budget slot for this socket's lifetime.
     ///
-    /// Called after the policy granted one. Only a `Plane::Host` connect
-    /// carries a permit, and only [`TcpSocket::Network`] can hold it — a
-    /// virtual connection consumes no budget.
+    /// Called before exposing a newly opened OS socket to the guest.
     pub(crate) fn hold_quota_slot(&mut self, permit: Option<crate::host::quota::ConnectionSlot>) {
         if let (Self::Network(socket), Some(permit)) = (self, permit) {
             socket.quota_slot = Some(permit);
@@ -1180,6 +1222,14 @@ impl TcpSocket {
             Self::Network(socket) => socket.finish_connect(result),
             Self::Loopback(socket) => socket.finish_connect(result, loopback),
             Self::Unspecified { .. } => Err(ErrorCode::InvalidState),
+        }
+    }
+
+    pub(crate) fn cancel_connect(&mut self, loopback: &mut super::loopback::Network) {
+        match self {
+            Self::Network(socket) => socket.cancel_connect(),
+            Self::Loopback(socket) => socket.cancel_connect(loopback),
+            Self::Unspecified { .. } => {}
         }
     }
 
@@ -1550,6 +1600,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_connect_closes_socket_and_releases_quota() {
+        let quota = crate::host::quota::GuestConnectionQuota::new(
+            crate::host::quota::QuotaLimits {
+                outbound_http: 1,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
+            },
+            None,
+        );
+        let mut socket = make_ipv4_socket();
+        socket.quota_slot = quota.try_acquire_outbound_socket();
+        assert_eq!(quota.outbound_sockets_available(), 0);
+
+        let connecting = socket.start_connect().unwrap();
+        drop(connecting);
+        socket.cancel_connect();
+
+        assert!(matches!(socket.tcp_state, TcpState::Closed));
+        assert_eq!(quota.outbound_sockets_available(), 1);
+    }
+
+    #[tokio::test]
+    async fn accepted_network_socket_releases_inbound_quota_on_drop() {
+        let quota = crate::host::quota::GuestConnectionQuota::new(
+            crate::host::quota::QuotaLimits {
+                outbound_http: 1,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
+            },
+            None,
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+
+        let mut accepted = TcpSocket::new_accept(
+            Ok(stream),
+            &NonInheritedOptions::default(),
+            SocketAddressFamily::Ipv4,
+        )
+        .unwrap();
+        accepted.hold_quota_slot(quota.try_acquire_inbound_socket());
+        assert_eq!(quota.inbound_sockets_available(), 0);
+        drop(accepted);
+        assert_eq!(quota.inbound_sockets_available(), 1);
+        drop(client);
+    }
+
+    #[tokio::test]
     async fn test_start_bind_and_finish_bind() {
         let mut socket = make_ipv4_socket();
         let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -1662,6 +1763,30 @@ mod tests {
         let mut socket = make_ipv4_socket();
         let result = socket.set_listen_backlog_size(64);
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn failed_unspecified_bind_releases_both_halves() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut loopback = crate::sockets::loopback::Network::default();
+        loopback
+            .bind_tcp(SocketAddr::from(([127, 0, 0, 1], port)))
+            .unwrap();
+        let mut socket = TcpSocket::Network(make_ipv4_socket());
+        assert!(matches!(
+            socket.start_bind(SocketAddr::from(([0, 0, 0, 0], port)), &mut loopback),
+            Err(ErrorCode::AddressInUse)
+        ));
+        assert!(matches!(
+            socket.finish_bind(),
+            Err(ErrorCode::NotInProgress)
+        ));
+        assert_eq!(loopback.tcp_ipv4.len(), 1);
+        std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
     }
 
     #[tokio::test]

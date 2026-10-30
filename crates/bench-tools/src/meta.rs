@@ -138,7 +138,8 @@ fn hostname() -> Result<String> {
 }
 
 fn num_cpus_online() -> Result<u32> {
-    let s = run(&["nproc"])?;
+    // macOS has no nproc; getconf answers the same question there.
+    let s = run(&["nproc"]).or_else(|_| run(&["getconf", "_NPROCESSORS_ONLN"]))?;
     s.parse()
         .with_context(|| format!("nproc output not a number: {s:?}"))
 }
@@ -152,4 +153,51 @@ fn read_isolated_cpu() -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "?".to_string())
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_errors_preserve_the_failed_operation() -> Result<()> {
+        assert_eq!(
+            run(&[]).expect_err("empty argv must fail").to_string(),
+            "empty argv"
+        );
+        let root = tempfile::tempdir()?;
+        let missing = root.path().join("missing-command");
+        let command = missing
+            .to_str()
+            .ok_or_else(|| anyhow!("temporary path is not UTF-8"))?;
+        assert!(
+            run(&[command])
+                .expect_err("missing executable must fail")
+                .to_string()
+                .contains("spawning ")
+        );
+        let error = run(&["git", "--not-a-real-git-option"]).expect_err("failed command must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("git --not-a-real-git-option exited")
+        );
+        assert!(error.to_string().contains("unknown option"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_output_is_trimmed_and_must_be_utf8() -> Result<()> {
+        assert_eq!(run(&["/bin/sh", "-c", "printf '  value \\n'"])?, "value");
+        assert!(
+            run(&["/bin/sh", "-c", "printf '\\377'"])
+                .expect_err("non-UTF-8 output must fail")
+                .to_string()
+                .contains("produced non-utf8")
+        );
+        Ok(())
+    }
 }

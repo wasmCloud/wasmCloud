@@ -24,7 +24,7 @@
 //! [`EphemeralLinkedCall`] for how the ephemeral path is captured at link time.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -44,7 +44,7 @@ use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
 use crate::engine::instance_driver::{InstanceJob, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
-use crate::engine::store::relocate::{self, Relocated, bridgeable_element_type};
+use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
@@ -86,6 +86,8 @@ pub(crate) struct ComponentCtxTemplate {
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// The host-wide guest memory budget this component's stores draw on.
     guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// The workload deploy's trap-hint flag.
+    trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
@@ -101,6 +103,7 @@ impl ComponentCtxTemplate {
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
             guest_memory: metadata.guest_memory.clone(),
+            trap_hint_logged: metadata.trap_hint_logged.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -123,6 +126,9 @@ pub(crate) fn component_ctx_template_from_metadata_with_tls(
     template.tls_provider = tls_provider;
     template
 }
+
+/// A workload's components, keyed by id.
+type ComponentMap = RwLock<BTreeMap<Arc<str>, WorkloadComponent>>;
 
 /// Everything needed to spin up a throwaway store for a single cross-component
 /// linked call.
@@ -159,17 +165,34 @@ pub(crate) struct EphemeralLinkedCall {
     /// this call ends up running in.
     pub(crate) pre: InstancePre<SharedCtx>,
     pub(crate) engine: wasmtime::Engine,
-    pub(crate) http_handler: Arc<dyn crate::host::http::HostHandler>,
+    pub(crate) stream_payloads: Arc<super::stream_payload::StreamPayloads>,
+    /// See [`crate::host::http::live_handler`] for why this is weak.
+    pub(crate) http_handler: crate::host::HostRef,
     /// The meter of the host this call runs on; see
     /// [`crate::engine::abandon::StoreMetering`].
     pub(crate) invocation: crate::observability::InvocationMeter,
-    pub(crate) components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
+    /// Weak because the importer's linker, which holds this call, lives in this
+    /// same map: a strong handle would keep a stopped workload's components
+    /// alive. Upgraded per call by [`Self::components`].
+    pub(crate) components: Weak<ComponentMap>,
     pub(crate) active_component_id: Arc<str>,
     pub(crate) linked_component_ids: Vec<Arc<str>>,
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
     /// How this call moves its args/results across the store boundary.
     pub(crate) mode: EphemeralCallMode,
+}
+
+impl EphemeralLinkedCall {
+    /// The workload's component map, or an error once the workload has stopped.
+    fn components(&self) -> anyhow::Result<Arc<ComponentMap>> {
+        self.components.upgrade().ok_or_else(|| {
+            anyhow::anyhow!(
+                "linked component '{}' belongs to a workload that has stopped",
+                self.active_component_id
+            )
+        })
+    }
 }
 
 /// How an ephemeral linked call transfers its args/results across the store
@@ -217,25 +240,28 @@ pub(crate) fn func_is_ephemeral_safe(func_ty: &ComponentFunc) -> bool {
 /// bridge-safe. (A `resource` crosses only the host-component-plugin bridge,
 /// where a plugin-side registry exists — see
 /// [`crate::engine::store::resource_bridge`].)
-fn type_is_bridge_safe(ty: &Type) -> bool {
+fn type_is_bridge_safe(ty: &Type, payloads: &super::stream_payload::StreamPayloads) -> bool {
     if !carries_cross_store_handle(ty) {
         return true;
     }
     match ty {
-        Type::Stream(st) => st.ty().is_some_and(|e| bridgeable_element_type(&e)),
-        Type::Future(ft) => ft.ty().is_some_and(|e| bridgeable_element_type(&e)),
-        Type::List(t) => type_is_bridge_safe(&t.ty()),
-        Type::Option(t) => type_is_bridge_safe(&t.ty()),
-        Type::Tuple(t) => t.types().all(|t| type_is_bridge_safe(&t)),
-        Type::Record(t) => t.fields().all(|f| type_is_bridge_safe(&f.ty)),
+        Type::Stream(st) => st.ty().is_some_and(|e| payloads.supports(&e)),
+        Type::Future(ft) => ft.ty().is_none_or(|e| payloads.supports(&e)),
+        Type::List(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::FixedLengthList(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::Option(t) => type_is_bridge_safe(&t.ty(), payloads),
+        Type::Tuple(t) => t.types().all(|t| type_is_bridge_safe(&t, payloads)),
+        Type::Record(t) => t.fields().all(|f| type_is_bridge_safe(&f.ty, payloads)),
         Type::Variant(t) => t
             .cases()
-            .all(|c| c.ty.is_none_or(|t| type_is_bridge_safe(&t))),
+            .all(|c| c.ty.is_none_or(|t| type_is_bridge_safe(&t, payloads))),
         Type::Result(t) => {
-            t.ok().is_none_or(|t| type_is_bridge_safe(&t))
-                && t.err().is_none_or(|t| type_is_bridge_safe(&t))
+            t.ok().is_none_or(|t| type_is_bridge_safe(&t, payloads))
+                && t.err().is_none_or(|t| type_is_bridge_safe(&t, payloads))
         }
-        Type::Map(t) => type_is_bridge_safe(&t.key()) && type_is_bridge_safe(&t.value()),
+        Type::Map(t) => {
+            type_is_bridge_safe(&t.key(), payloads) && type_is_bridge_safe(&t.value(), payloads)
+        }
         // resource (own/borrow) / error-context: not relocatable here.
         _ => false,
     }
@@ -245,38 +271,54 @@ fn type_is_bridge_safe(ty: &Type) -> bool {
 /// [`func_is_bridge_safe`], for a caller holding params and results separately
 /// rather than as one [`ComponentFunc`].
 #[cfg(feature = "host-component-plugins")]
-pub(crate) fn types_are_bridge_safe(tys: &[Type]) -> bool {
-    tys.iter().all(type_is_bridge_safe)
+pub(crate) fn types_are_bridge_safe(
+    tys: &[Type],
+    payloads: &super::stream_payload::StreamPayloads,
+) -> bool {
+    tys.iter().all(|ty| type_is_bridge_safe(ty, payloads))
 }
 
 /// Whether every param/result of `func_ty` is [`type_is_bridge_safe`], so a call
 /// carrying a `stream<T>`/`future<T>` can still run in an ephemeral store (with
 /// relocation) instead of being pinned to the shared store.
-pub(crate) fn func_is_bridge_safe(func_ty: &ComponentFunc) -> bool {
-    func_ty.params().all(|(_, ty)| type_is_bridge_safe(&ty))
-        && func_ty.results().all(|ty| type_is_bridge_safe(&ty))
+pub(crate) fn func_is_bridge_safe(
+    func_ty: &ComponentFunc,
+    payloads: &super::stream_payload::StreamPayloads,
+) -> bool {
+    func_ty
+        .params()
+        .all(|(_, ty)| type_is_bridge_safe(&ty, payloads))
+        && func_ty
+            .results()
+            .all(|ty| type_is_bridge_safe(&ty, payloads))
+}
+
+/// Copy a component's manifest environment into a WASI CLI context.
+///
+/// Shared by the store template and [`crate::engine::command`], which rebuilds
+/// the CLI context to give one invocation its own arguments and streams and
+/// must end up with the same variables.
+pub(crate) fn apply_environment(
+    builder: &mut WasiCtxBuilder,
+    environment: &std::collections::HashMap<String, String>,
+) {
+    let pairs = environment
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    builder.envs(&pairs);
 }
 
 async fn build_ctx_from_template(
     template: &ComponentCtxTemplate,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    http_handler: &crate::host::HostRef,
     all_volume_mounts: &[ResolvedVolumeMount],
     store_id: &str,
     is_service: bool,
 ) -> anyhow::Result<Ctx> {
     let mut wasi_ctx_builder = WasiCtxBuilder::new();
-    wasi_ctx_builder
-        .envs(
-            template
-                .local_resources
-                .environment
-                .iter()
-                .map(|kv| (kv.0.as_str(), kv.1.as_str()))
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .inherit_stdout()
-        .inherit_stderr();
+    apply_environment(&mut wasi_ctx_builder, &template.local_resources.environment);
+    wasi_ctx_builder.inherit_stdout().inherit_stderr();
 
     let kind = if is_service {
         sockets::policy::GuestKind::Service
@@ -285,34 +327,20 @@ async fn build_ctx_from_template(
     };
     // Keyed on the workload, not the component: a workload's components share
     // one allowance, the same way they share one virtual network.
-    let policy = Arc::new(sockets::policy::SocketPolicy {
-        allowed_hosts: Arc::clone(&template.local_resources.allowed_hosts),
-        host_loopback: Arc::clone(&template.local_resources.allowed_host_loopback_ports),
-        ..template
-            .socket_policy
-            .for_guest(kind, &template.workload_id)
-    });
-    let sockets_ctx = sockets::WasiSocketsCtx {
-        socket_addr_check: sockets::SocketAddrCheck::new(move |addr, reason| {
-            let policy = Arc::clone(&policy);
-            Box::pin(async move { policy.decide(reason, addr) })
-        }),
-        loopback: Arc::clone(&template.loopback),
-        allowed_ip_name_lookups: Arc::clone(&template.local_resources.allowed_ip_name_lookups),
-        ..Default::default()
-    };
-
-    for mount in all_volume_mounts {
-        wasi_ctx_builder.preopened_dir(
-            &mount.host_path,
-            &mount.mount_path,
-            mount.dir_perms,
-            mount.file_perms,
-        )?;
-    }
+    let policy = Arc::new(template.socket_policy.for_guest(
+        kind,
+        &template.workload_id,
+        Arc::clone(&template.local_resources.allowed_hosts),
+        Arc::clone(&template.local_resources.allowed_host_loopback_ports),
+    ));
+    let sockets_ctx = sockets::WasiSocketsCtx::for_store(
+        policy,
+        Arc::clone(&template.loopback),
+        Arc::clone(&template.local_resources.allowed_ip_name_lookups),
+    );
 
     let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
-        .with_http_handler(http_handler)
+        .with_host(http_handler)
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(template.local_resources.allowed_hosts.clone());
@@ -327,42 +355,41 @@ async fn build_ctx_from_template(
     }
 
     let mut ctx = ctx_builder.build();
+    ctx.volume_mounts = all_volume_mounts.to_vec();
     ctx.store_id = store_id.to_string().into();
+    ctx.trap_hint_logged = Arc::clone(&template.trap_hint_logged);
     Ok(ctx)
 }
 
 pub(crate) async fn new_store_from_templates(
     engine: &wasmtime::Engine,
-    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    stream_payloads: &Arc<super::stream_payload::StreamPayloads>,
+    http_handler: &crate::host::HostRef,
     active: &ComponentCtxTemplate,
     linked: &[ComponentCtxTemplate],
     linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
     is_service: bool,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    let store_id = uuid::Uuid::new_v4().to_string();
+    let store_id = uuid::Uuid::now_v7().to_string();
     let all_volume_mounts = std::iter::once(active)
         .chain(linked.iter())
         .flat_map(|template| template.volume_mounts.clone())
         .collect::<Vec<_>>();
     let active_ctx = build_ctx_from_template(
         active,
-        http_handler.clone(),
+        http_handler,
         &all_volume_mounts,
         &store_id,
         is_service,
     )
     .await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
+    shared_ctx.stream_payloads = Arc::clone(stream_payloads);
 
     for linked in linked {
-        let linked_ctx = build_ctx_from_template(
-            linked,
-            http_handler.clone(),
-            &all_volume_mounts,
-            &store_id,
-            false,
-        )
-        .await?;
+        let linked_ctx =
+            build_ctx_from_template(linked, http_handler, &all_volume_mounts, &store_id, false)
+                .await?;
         shared_ctx
             .contexts
             .insert(linked.component_id.clone(), linked_ctx);
@@ -384,12 +411,15 @@ pub(crate) async fn new_store_from_templates(
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {
         store.data_mut().set_active_ctx(linked_id)?;
-        let instantiate_result = linked_pre.instantiate_async(&mut store).await;
+        let instantiate_result = linked_pre
+            .instantiate_async(&mut store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e));
         store.data_mut().set_active_ctx(&active_id)?;
-        let instance = instantiate_result.map_err(|e| {
-            anyhow::anyhow!(
-                "failed to instantiate linked component '{linked_id}' in ephemeral store: {e}"
-            )
+        // Context rather than a new error, so the pool refusal and its remedy
+        // stay in the chain underneath.
+        let instance = instantiate_result.with_context(|| {
+            format!("failed to instantiate linked component '{linked_id}' in ephemeral store")
         })?;
         store
             .data_mut()
@@ -408,7 +438,8 @@ pub(crate) async fn new_store_from_templates(
 /// a component whose entry is replaced does not keep serving from a pool that
 /// belongs to the old entry.
 async fn callee_instance_pool(call: &EphemeralLinkedCall) -> Option<Arc<InstancePool>> {
-    let components = call.components.read().await;
+    let components = call.components().ok()?;
+    let components = components.read().await;
     let linked: HashSet<Arc<str>> = call.linked_component_ids.iter().cloned().collect();
     instance_pool::poolable(&components, &call.active_component_id, &linked)
 }
@@ -444,7 +475,8 @@ async fn new_ephemeral_store(
     component_ids.push(call.active_component_id.clone());
     component_ids.sort();
     component_ids.dedup();
-    resolve_component_volume_mounts_in_map(&call.components, &component_ids).await?;
+    let components = call.components()?;
+    resolve_component_volume_mounts_in_map(&components, &component_ids).await?;
 
     // One read-lock scope, no `WorkloadMetadata` clones: cloning metadata would
     // deep-clone its by-value `Linker`, and `pre_instantiate_ref` needs only
@@ -458,7 +490,7 @@ async fn new_ephemeral_store(
     let template_of = component_ctx_template_from_metadata;
 
     let (active, linked, linked_instances) = {
-        let components = call.components.read().await;
+        let components = components.read().await;
         let active = template_of(
             &components
                 .get(&call.active_component_id)
@@ -491,7 +523,8 @@ async fn new_ephemeral_store(
 
     let store = new_store_from_templates(
         &call.engine,
-        call.http_handler.clone(),
+        &call.stream_payloads,
+        &call.http_handler,
         &active,
         &linked,
         &linked_instances,
@@ -517,7 +550,8 @@ async fn callee_identity(
     if !call.invocation.is_enabled() {
         return None;
     }
-    let components = call.components.read().await;
+    let components = call.components().ok()?;
+    let components = components.read().await;
     let component = components.get(&call.active_component_id)?;
     Some(crate::observability::WorkloadIdentity::new(
         component.metadata().workload_namespace(),
@@ -675,13 +709,16 @@ async fn invoke_ephemeral_relocated(
         // included.
         let drain_flag = Arc::clone(&call_flag);
         let _abandoned = store.data().abandoned.watch(call_flag);
-        let instance = match callee_pre.instantiate_async(&mut store).await {
-            Ok(i) => i,
-            Err(e) => {
-                let _ = ready_tx.send(Err(e));
-                return;
-            }
-        };
+        let instance =
+            match callee_pre.instantiate_async(&mut store).await.map_err(|e| {
+                crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+            }) {
+                Ok(i) => i,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
         let _ = store
             .run_concurrent(async move |accessor| {
                 let ready = async {
@@ -763,7 +800,8 @@ async fn invoke_ephemeral_relocated(
                 }
                 Ok::<(), wasmtime::Error>(())
             })
-            .await;
+            .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e));
     }));
 
     let relocated = call
@@ -894,7 +932,13 @@ async fn invoke_ephemeral_plain(
             let mut store = new_ephemeral_store(ephemeral_call)
                 .await
                 .map_err(|e| wasmtime::format_err!("new ephemeral store creation failed: {e:#}"))?;
-            let instance = ephemeral_call.pre.instantiate_async(&mut store).await?;
+            let instance = ephemeral_call
+                .pre
+                .instantiate_async(&mut store)
+                .await
+                .map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })?;
             ComponentInstance { store, instance }
         }
     };
@@ -944,6 +988,7 @@ async fn invoke_ephemeral_plain(
                 Ok::<Vec<Val>, wasmtime::Error>(results_buf)
             })
             .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
             .map_err(|e| wasmtime::format_err!("{e:#}"))
             .and_then(|inner| inner)
     }));
@@ -1221,7 +1266,7 @@ async fn invoke_shared_store_linked_export(
     let _active_ctx = AccessorActiveCtxGuard::new(accessor, &inv.plugin_component_id)?;
 
     let call: wasmtime::Result<()> = async {
-        let (func, params_buf) = accessor.with(|mut access| -> wasmtime::Result<_> {
+        let (func, lowered) = accessor.with(|mut access| -> wasmtime::Result<_> {
             let instance = access
                 .data_mut()
                 .exporter_instances
@@ -1243,18 +1288,19 @@ async fn invoke_shared_store_linked_export(
                     .collect::<Vec<_>>()
                     .into()
             });
-            let params_buf = lower_params(&mut access.as_context_mut(), params, tys)?;
-            Ok((func, params_buf))
+            let lowered = lower_params(&mut access.as_context_mut(), params, tys)?;
+            Ok((func, lowered))
         })?;
 
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
-        func.call_concurrent(accessor, &params_buf, &mut results_buf)
+        func.call_concurrent(accessor, &lowered.vals, &mut results_buf)
             .await?;
 
         accessor.with(|mut access| -> wasmtime::Result<_> {
-            lift_results(&mut access.as_context_mut(), results_buf, results)
+            lift_results(&mut access.as_context_mut(), results_buf, results)?;
+            lowered.release_identity_borrows(access.as_context_mut())
         })?;
 
         Ok(())
@@ -1300,7 +1346,7 @@ pub(crate) async fn invoke_linked_sync_export(
                 .collect::<Vec<_>>()
                 .into()
         });
-        let params_buf = lower_params(store, params, tys)?;
+        let lowered = lower_params(store, params, tys)?;
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoking dynamic export");
 
         let mut results_buf = vec![Val::Bool(false); results.len()];
@@ -1308,7 +1354,7 @@ pub(crate) async fn invoke_linked_sync_export(
         let call_timeout = crate::timeouts::shared_store_call();
         timeout(
             call_timeout,
-            func.call_async(&mut store, &params_buf, &mut results_buf),
+            func.call_async(&mut store, &lowered.vals, &mut results_buf),
         )
         .await
         .map_err(|e| {
@@ -1316,8 +1362,14 @@ pub(crate) async fn invoke_linked_sync_export(
         })??;
 
         lift_results(store, results_buf, results)?;
+        lowered.release_identity_borrows(&mut *store)?;
         trace!(name = %inv.import_name, fn_name = %inv.export_name, "invoked dynamic export");
         Ok(())
     }
     .await
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "linked_call_contract_tests.rs"]
+mod contract_tests;

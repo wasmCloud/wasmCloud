@@ -7,8 +7,12 @@ tests/output
 # Ignore Rust target directory
 target/
 
+# scripts/k6bench run output
+bench-results/
+
 # Ignore build artifacts
 wash.exe
+/runtime-gateway/runtime-gateway
 
 # Ignore worktrees
 worktrees/

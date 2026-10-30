@@ -29,17 +29,13 @@ use tokio::time::timeout;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
-use wasmtime_wasi_http::p2::{
-    HttpResult,
-    body::{HyperIncomingBody, HyperOutgoingBody},
-    types::{HostFutureIncomingResponse, IncomingResponse, OutgoingRequestConfig},
-};
+use wasmtime_wasi_http::{RequestOptions, WasiBody};
 
 use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        http::{DynamicRouter, Ingress, OutgoingHandler},
+        http::{DynamicRouter, Ingress, OutgoingHandler, RequestIoFuture, SendFuture},
     },
     plugin::{wasi_config::DynamicConfig, wasi_logging::TracingLogger},
     types::{Component, LocalResources, Workload, WorkloadStartRequest},
@@ -66,10 +62,11 @@ impl OutgoingHandler for FakeOutgoingHandler {
     fn send_request(
         &self,
         _workload_id: &str,
-        request: hyper::Request<HyperOutgoingBody>,
-        _config: OutgoingRequestConfig,
-    ) -> HttpResult<HostFutureIncomingResponse> {
-        let handle = wasmtime_wasi::runtime::spawn(async move {
+        request: hyper::Request<WasiBody>,
+        _options: Option<RequestOptions>,
+        _fut: RequestIoFuture,
+    ) -> SendFuture {
+        Box::new(async move {
             let (_parts, body) = request.into_parts();
             // Surface drain errors so future tests sending non-empty bodies
             // don't silently mask a guest-side body-stream bug behind a 200.
@@ -77,30 +74,16 @@ impl OutgoingHandler for FakeOutgoingHandler {
                 tracing::warn!(error = ?e, "FakeOutgoingHandler: draining request body failed");
             }
 
-            let body: HyperIncomingBody = Empty::<Bytes>::new()
+            let body: WasiBody = Empty::<Bytes>::new()
                 .map_err(|never| match never {})
                 .boxed_unsync();
             let resp = hyper::Response::builder()
                 .status(hyper::StatusCode::OK)
                 .body(body)
                 .expect("static response is well-formed");
-            Ok(Ok(IncomingResponse {
-                resp,
-                worker: None,
-                between_bytes_timeout: Duration::from_secs(1),
-            }))
-        });
-        Ok(HostFutureIncomingResponse::pending(handle))
-    }
-
-    fn send_request_p3(
-        &self,
-        _workload_id: &str,
-        _request: hyper::Request<wash_runtime::host::http_p3::P3Body>,
-        _options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-        _fut: wash_runtime::host::http_p3::P3RequestErrorFuture,
-    ) -> wash_runtime::host::http_p3::P3SendFuture {
-        unimplemented!("fixture targets wasip2; P3 path is unused by these tests")
+            let io: RequestIoFuture = Box::new(async { Ok(()) });
+            Ok((resp, io))
+        })
     }
 }
 

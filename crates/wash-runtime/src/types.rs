@@ -92,8 +92,9 @@ pub struct Component {
     pub reclaim_window_seconds: i32,
     /// How many warm instances a reclaim sweep never retires below. Unset
     /// lets an idle pool empty out, so the next call after a quiet spell
-    /// starts cold. Capped at `pool_size`, and only meaningful alongside
-    /// `reclaim_window_seconds`.
+    /// starts cold. A value at or above `pool_size` disables reclaim
+    /// entirely, since a sweep could never find a surplus to retire. Only
+    /// meaningful alongside `reclaim_window_seconds`.
     pub reclaim_min_instances: i32,
 }
 
@@ -126,8 +127,9 @@ pub struct LocalResources {
     /// request hot path matches against the typed enum directly.
     pub allowed_hosts: Arc<[AllowedHost]>,
     /// Which names the component may resolve through
-    /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`).
-    /// **Empty = deny every lookup**, reported to the guest as
+    /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`), beyond the hosts
+    /// `allowed_hosts` names — a host it may connect to it may also resolve.
+    /// **Both empty = deny every lookup**, reported to the guest as
     /// `permanent-resolver-failure`. See
     /// [`crate::host::allowed_ip_name`] for the accepted entry forms; pass
     /// an explicit `[AllowedIpName::Any]` to resolve any name. Strings from

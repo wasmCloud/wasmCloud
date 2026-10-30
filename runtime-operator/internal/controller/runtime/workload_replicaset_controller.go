@@ -23,6 +23,8 @@ const (
 	workloadReplicaSetNameIndex            = "workload.replicaset.name"
 	workloadReplicaSetHashIndex            = "workload.replicaset.hash"
 	workloadReplicaSetGenerationAnnotation = "runtime.wasmcloud.dev/workload-replica-set-generation"
+	workloadReplicaSetNameAnnotation       = "runtime.wasmcloud.dev/workload-replicaset-name"
+	workloadDeploymentNameAnnotation       = "runtime.wasmcloud.dev/workload-deployment"
 )
 
 // WorkloadReplicaSetReconciler reconciles a WorkloadReplicaSet object
@@ -57,14 +59,27 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 	expectedReplicas := int(*replicaSet.Spec.Replicas)
 
 	for i := len(workloads.Items); i < expectedReplicas; i++ {
+		annotations := make(map[string]string, len(replicaSet.Spec.Template.Annotations)+3)
+		for k, v := range replicaSet.Spec.Template.Annotations {
+			if k == workloadReplicaSetGenerationAnnotation ||
+				k == workloadReplicaSetNameAnnotation ||
+				k == workloadDeploymentNameAnnotation {
+				continue
+			}
+			annotations[k] = v
+		}
+		annotations[workloadReplicaSetGenerationAnnotation] = replicaSet.Spec.Template.Hash()
+		annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
+		if replicaSet.Labels != nil && replicaSet.Labels[workloadDeploymentNameLabel] != "" {
+			annotations[workloadDeploymentNameAnnotation] = replicaSet.Labels[workloadDeploymentNameLabel]
+		}
+
 		workload := &runtimev1alpha1.Workload{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%s", replicaSet.Name, randHash()),
-				Namespace: replicaSet.Namespace,
-				Labels:    replicaSet.Spec.Template.Labels,
-				Annotations: map[string]string{
-					workloadReplicaSetGenerationAnnotation: replicaSet.Spec.Template.Hash(),
-				},
+				Name:        fmt.Sprintf("%s-%s", replicaSet.Name, randHash()),
+				Namespace:   replicaSet.Namespace,
+				Labels:      replicaSet.Spec.Template.Labels,
+				Annotations: annotations,
 			},
 			Spec: replicaSet.Spec.Template.Spec,
 		}

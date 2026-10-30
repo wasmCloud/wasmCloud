@@ -21,9 +21,8 @@
 //! # Empty list denies every connection
 //!
 //! Same shape as its neighbours: an empty or absent list denies every
-//! host-loopback connection. The workload's declaration is only half of it —
-//! the host must also be started with `--allow-host-loopback`, so neither a
-//! workload author nor an operator can open this door alone.
+//! host-loopback connection. A guest's declaration is only half of it — the
+//! host must also be started with `--allow-host-loopback`.
 
 use core::net::SocketAddr;
 use std::fmt;
@@ -143,8 +142,42 @@ impl Serialize for AllowedLoopbackPort {
 
 impl<'de> Deserialize<'de> for AllowedLoopbackPort {
     fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
-        s.parse().map_err(de::Error::custom)
+        struct Visitor;
+
+        impl de::Visitor<'_> for Visitor {
+            type Value = AllowedLoopbackPort;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a port number or a string such as 5432 or 53/udp")
+            }
+
+            fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                value.to_string().parse().map_err(E::custom)
+            }
+
+            fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                // Caught here rather than in `FromStr`: a negative reaches it
+                // as text carrying a `-`, which reads there as the range
+                // separator, and the operator is answered about ranges when
+                // what they wrote is an impossible port.
+                if value < 0 {
+                    return Err(E::custom(format!(
+                        "host-loopback entry {value} is negative; a port is between 1 and 65535"
+                    )));
+                }
+                value.to_string().parse().map_err(E::custom)
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+
+            fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+                self.visit_str(&value)
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
     }
 }
 
@@ -171,6 +204,18 @@ mod tests {
         }
         // TCP is the default, so it renders bare rather than as `/tcp`.
         assert_eq!(parse("5432/tcp").to_string(), "5432");
+    }
+
+    #[test]
+    fn deserializes_string_and_integer_forms() {
+        assert_eq!(
+            serde_json::from_str::<AllowedLoopbackPort>("5432").unwrap(),
+            AllowedLoopbackPort::tcp(5432)
+        );
+        assert_eq!(
+            serde_json::from_str::<AllowedLoopbackPort>(r#""53/udp""#).unwrap(),
+            AllowedLoopbackPort::udp(53)
+        );
     }
 
     #[test]

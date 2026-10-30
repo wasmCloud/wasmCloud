@@ -685,7 +685,6 @@ async fn fetch_with(
     // Load or create lock file
     let mut lock_file = load_lock_file(&project_dir).await?;
 
-    // Fetch dependencies
     if let Err(e) = fetcher
         .fetch_wit_dependencies(&wit_dir, &mut lock_file)
         .await

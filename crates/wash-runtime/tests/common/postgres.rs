@@ -19,7 +19,7 @@ use wash_runtime::{
         HostApi, HostBuilder,
         http::{DevRouter, Ingress},
     },
-    plugin::wasmcloud_postgres::WasmcloudPostgres,
+    plugin::{PluginBindingSet, PluginBindings, wasmcloud_postgres::WasmcloudPostgres},
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
     wit::WitInterface,
 };
@@ -93,11 +93,19 @@ pub async fn start_postgres_workload(
 
     // Base URL without a database — the plugin strips it and the workload's
     // interface config supplies `database`.
-    let bouncer_url = format!("postgres://postgres:postgres@{host_addr}/");
+    let bouncer_url = url::Url::parse(&format!("postgres://postgres:postgres@{host_addr}/"))?;
     let host = HostBuilder::new()
         .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(WasmcloudPostgres::new(&bouncer_url)?))?
+        // Under the default `deny`, the databases a workload may select are the
+        // operator's to list.
+        .with_plugin_bindings(PluginBindings::new().with_plugin(
+            PluginBindingSet::new("wasmcloud-postgres").with_base(HashMap::from([(
+                "database".to_string(),
+                "postgres".to_string(),
+            )])),
+        ))
         .build()?;
     let host = host.start().await.context("failed to start host")?;
 

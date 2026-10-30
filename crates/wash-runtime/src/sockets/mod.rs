@@ -1,7 +1,5 @@
-use core::future::Future;
 use core::ops::Deref;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::component::{HasData, ResourceTable};
 
@@ -18,6 +16,7 @@ pub(crate) mod network;
 pub(crate) mod p2_tcp;
 pub(crate) mod p2_udp;
 pub mod policy;
+pub mod resolved_names;
 pub(crate) mod tcp;
 pub(crate) mod udp;
 pub(crate) mod util;
@@ -49,9 +48,42 @@ pub struct WasiSocketsCtx {
     pub(crate) socket_addr_check: SocketAddrCheck,
     pub(crate) allowed_network_uses: AllowedNetworkUses,
     /// Which names this component may resolve through
-    /// `wasi:sockets/ip-name-lookup`. Empty denies every lookup.
+    /// `wasi:sockets/ip-name-lookup`, beyond those `allowed_hosts` names.
     pub(crate) allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    /// The egress allowlist `socket_addr_check` decides against. Held here as
+    /// well because a name it permits connecting to may also be resolved.
+    pub(crate) allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    /// What this store's lookups returned. Shared with `socket_addr_check`,
+    /// which is how a name entry in `allowedHosts` permits a socket.
+    pub(crate) resolved_names: Arc<resolved_names::ResolvedNames>,
+}
+
+impl WasiSocketsCtx {
+    /// One store's socket context under `policy`.
+    ///
+    /// The lookup history is allocated here, per store, and handed to both the
+    /// lookup hooks and the address check: `policy` is reused across stores and
+    /// must not carry it.
+    pub(crate) fn for_store(
+        policy: Arc<policy::SocketPolicy>,
+        loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    ) -> Self {
+        let resolved_names = Arc::new(resolved_names::ResolvedNames::new(policy.resolved_names));
+        let names = Arc::clone(&resolved_names);
+        let allowed_hosts = Arc::clone(&policy.allowed_hosts);
+        Self {
+            socket_addr_check: SocketAddrCheck::new(move |addr, reason| {
+                policy.decide_for_store(reason, addr, &names)
+            }),
+            allowed_network_uses: AllowedNetworkUses::default(),
+            allowed_ip_name_lookups,
+            allowed_hosts,
+            loopback,
+            resolved_names,
+        }
+    }
 }
 
 pub struct WasiSocketsCtxView<'a> {
@@ -173,6 +205,9 @@ pub struct Allowed {
     /// so waiting for a slot it must make progress to free deadlocks it against
     /// itself.
     pub permit: Option<crate::host::quota::ConnectionSlot>,
+    /// When this decision stops holding, for one resting on a resolved name —
+    /// see [`resolved_names`]. `None` does not lapse.
+    pub valid_until: Option<std::time::Instant>,
 }
 
 /// The answer to "may this address be used for this, and how".
@@ -195,6 +230,7 @@ impl AddrDecision {
             addr,
             plane,
             permit: None,
+            valid_until: None,
         })
     }
 
@@ -203,6 +239,7 @@ impl AddrDecision {
             addr,
             plane,
             permit: None,
+            valid_until: None,
         })
     }
 
@@ -214,34 +251,52 @@ impl AddrDecision {
     }
 }
 
-type SocketAddrCheckFn = dyn Fn(SocketAddr, SocketAddrUse) -> Pin<Box<dyn Future<Output = AddrDecision> + Send + Sync>>
-    + Send
-    + Sync;
+type SocketAddrCheckFn = dyn Fn(SocketAddr, SocketAddrUse) -> AddrDecision + Send + Sync;
 
-/// The single outbound choke point: called for every address a guest binds,
-/// connects, or sends a datagram to, and answers with an [`AddrDecision`].
+/// The socket policy choke point for creation and address use.
+///
+/// Synchronous: `wasi:sockets` p2 `start-connect` and datagram `send` are
+/// synchronous host calls, and the decision picks the plane before any socket
+/// is touched.
 #[derive(Clone)]
 pub(crate) struct SocketAddrCheck(Arc<SocketAddrCheckFn>);
 
 impl SocketAddrCheck {
     pub(crate) fn new(
-        f: impl Fn(
-            SocketAddr,
-            SocketAddrUse,
-        ) -> Pin<Box<dyn Future<Output = AddrDecision> + Send + Sync>>
-        + Send
-        + Sync
-        + 'static,
+        f: impl Fn(SocketAddr, SocketAddrUse) -> AddrDecision + Send + Sync + 'static,
     ) -> Self {
         Self(Arc::new(f))
     }
 
-    pub(crate) async fn check(
+    pub(crate) fn check(
         &self,
         addr: SocketAddr,
         reason: SocketAddrUse,
     ) -> Result<Allowed, util::ErrorCode> {
-        (self.0)(addr, reason).await.into_allowed()
+        (self.0)(addr, reason).into_allowed()
+    }
+
+    /// Whether a connected UDP socket may still send to `peer`, given the
+    /// deadline its connect decision carried.
+    ///
+    /// The policy is asked again only once that deadline has passed, so a send
+    /// costs a clock read, and nothing at all for a decision that does not
+    /// lapse. A guest that resolved the name again gets the new deadline; one
+    /// that did not is refused. Only real egress carries a deadline, so the
+    /// address decided again is never a rewritten sentinel.
+    pub(crate) fn refresh_connected(
+        &self,
+        peer: SocketAddr,
+        valid_until: &mut Option<std::time::Instant>,
+    ) -> Result<(), util::ErrorCode> {
+        match *valid_until {
+            Some(deadline) if std::time::Instant::now() >= deadline => {
+                let allowed = self.check(peer, SocketAddrUse::UdpOutgoingDatagram)?;
+                *valid_until = allowed.valid_until;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -256,7 +311,7 @@ impl Deref for SocketAddrCheck {
 impl Default for SocketAddrCheck {
     fn default() -> Self {
         Self(Arc::new(|_, _| {
-            Box::pin(async { AddrDecision::Deny(DenyReason::NotPermitted) })
+            AddrDecision::Deny(DenyReason::NotPermitted)
         }))
     }
 }
@@ -264,10 +319,20 @@ impl Default for SocketAddrCheck {
 /// The reason what a socket address is being used for.
 #[derive(Clone, Copy, Debug)]
 pub enum SocketAddrUse {
+    /// Creating a TCP socket. The address carries only its family.
+    TcpCreate,
     /// Binding TCP socket
     TcpBind,
+    /// Listening on a bound TCP socket
+    TcpListen,
+    /// Accepting an inbound network TCP connection
+    TcpAccept,
+    /// Accepting an inbound virtual TCP connection
+    TcpAcceptVirtual,
     /// Connecting TCP socket
     TcpConnect,
+    /// Creating a UDP socket. The address carries only its family.
+    UdpCreate,
     /// Binding UDP socket, as an explicit `bind` call from the guest
     UdpBind,
     /// Binding UDP socket implicitly, to give an outgoing datagram a local
@@ -281,6 +346,8 @@ pub enum SocketAddrUse {
     UdpConnect,
     /// Sending datagram on non-connected UDP socket
     UdpOutgoingDatagram,
+    /// Receiving a UDP datagram
+    UdpReceive,
 }
 
 /// Convert our custom `util::ErrorCode` to the P3 bindings `ErrorCode`.

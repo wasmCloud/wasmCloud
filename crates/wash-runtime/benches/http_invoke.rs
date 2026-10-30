@@ -27,14 +27,12 @@ mod common;
 
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use common::{Flavor, engine, http_host_interfaces};
+use anyhow::Context as _;
+use common::{Flavor, REQUEST_TIMEOUT, engine, http_host_interfaces};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 
@@ -101,6 +99,7 @@ async fn start_warm_host_with_pool(flavor: Flavor, pool_size: i32) -> anyhow::Re
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(64)
         .tcp_nodelay(true)
+        .timeout(REQUEST_TIMEOUT)
         .build()?;
 
     // Correctness check  - also primes any one-time lazy caches before bench.
@@ -108,13 +107,17 @@ async fn start_warm_host_with_pool(flavor: Flavor, pool_size: i32) -> anyhow::Re
         .get(format!("http://{addr}/"))
         .header("HOST", flavor.host_header())
         .send()
-        .await?;
+        .await
+        .with_context(|| format!("warmup request failed for {flavor:?}"))?;
     anyhow::ensure!(
         warmup.status().is_success(),
         "warmup request failed for {flavor:?}: {}",
         warmup.status()
     );
-    let body = warmup.text().await?;
+    let body = warmup
+        .text()
+        .await
+        .with_context(|| format!("warmup response body failed for {flavor:?}"))?;
     anyhow::ensure!(
         body == flavor.expected_body(),
         "unexpected warmup body for {flavor:?}: {body:?}"
@@ -146,10 +149,14 @@ async fn hot_invocation(warm: &WarmHost) -> anyhow::Result<()> {
         .get(format!("http://{}/", warm.addr))
         .header("HOST", warm.host_header)
         .send()
-        .await?;
+        .await
+        .with_context(|| format!("request failed for {}", warm.host_header))?;
     anyhow::ensure!(resp.status().is_success(), "non-2xx: {}", resp.status());
     // Consume body so the server-side stream completes before timing stops.
-    let _ = resp.bytes().await?;
+    let _ = resp
+        .bytes()
+        .await
+        .with_context(|| format!("response body failed for {}", warm.host_header))?;
     Ok(())
 }
 
@@ -256,13 +263,10 @@ fn bench_throughput(c: &mut Criterion) {
         let host_header = warm.host_header;
         let client = warm.client.clone();
 
-        let failures = Arc::new(AtomicUsize::new(0));
-        let failures_ref = failures.clone();
         group.bench_function(BenchmarkId::from_parameter(flavor.name()), |b| {
             b.to_async(&rt).iter_custom(|iters| {
                 let url = url.clone();
                 let client = client.clone();
-                let failures = failures_ref.clone();
                 async move {
                     let mut total = Duration::ZERO;
                     for _ in 0..iters {
@@ -272,23 +276,30 @@ fn bench_throughput(c: &mut Criterion) {
                         for _ in 0..CONCURRENCY {
                             let client = client.clone();
                             let url = url.clone();
-                            let failures = failures.clone();
                             handles.push(tokio::spawn(async move {
                                 for _ in 0..per_worker {
-                                    match client.get(&url).header("HOST", host_header).send().await
-                                    {
-                                        Ok(resp) if resp.status().is_success() => {
-                                            let _ = resp.bytes().await;
-                                        }
-                                        _ => {
-                                            failures.fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    }
+                                    let resp = client
+                                        .get(&url)
+                                        .header("HOST", host_header)
+                                        .send()
+                                        .await
+                                        .with_context(|| {
+                                            format!("request failed for {host_header}")
+                                        })?;
+                                    anyhow::ensure!(
+                                        resp.status().is_success(),
+                                        "non-2xx: {}",
+                                        resp.status()
+                                    );
+                                    let _ = resp.bytes().await.with_context(|| {
+                                        format!("response body failed for {host_header}")
+                                    })?;
                                 }
+                                Ok::<(), anyhow::Error>(())
                             }));
                         }
                         for h in handles {
-                            h.await.expect("worker");
+                            h.await.expect("worker").expect("throughput request");
                         }
                         total += start.elapsed();
                     }
@@ -296,13 +307,6 @@ fn bench_throughput(c: &mut Criterion) {
                 }
             });
         });
-        let failed = failures.load(Ordering::Relaxed);
-        if failed > 0 {
-            eprintln!(
-                "[http_throughput/{}] {failed} requests failed during bench run",
-                flavor.name()
-            );
-        }
         drop(warm);
     }
     group.finish();
@@ -354,6 +358,7 @@ async fn start_sleeper_host(
     let client = reqwest::Client::builder()
         .pool_max_idle_per_host(256)
         .tcp_nodelay(true)
+        .timeout(REQUEST_TIMEOUT)
         .build()?;
     Ok(WarmHost {
         _host: Box::new(host),
@@ -371,9 +376,17 @@ async fn sleeper_burst(warm: &WarmHost, n: usize) -> anyhow::Result<()> {
         let url = format!("http://{}/", warm.addr);
         let host_header = warm.host_header;
         tasks.push(tokio::spawn(async move {
-            let resp = client.get(url).header("HOST", host_header).send().await?;
+            let resp = client
+                .get(url)
+                .header("HOST", host_header)
+                .send()
+                .await
+                .with_context(|| format!("request failed for {host_header}"))?;
             anyhow::ensure!(resp.status().is_success(), "non-2xx: {}", resp.status());
-            let _ = resp.bytes().await?;
+            let _ = resp
+                .bytes()
+                .await
+                .with_context(|| format!("response body failed for {host_header}"))?;
             Ok::<(), anyhow::Error>(())
         }));
     }

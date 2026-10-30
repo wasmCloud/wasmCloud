@@ -15,7 +15,7 @@ use anyhow::Context as _;
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
-use super::config::{ConnKey, NatsAuth, NatsConfig};
+use super::config::{ConnKey, NatsConfig};
 use super::policy::PolicyEngine;
 
 /// Budget for draining one connection's in-flight work at shutdown.
@@ -34,12 +34,6 @@ const REPLY_GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 /// Cap on outstanding reply grants, so a firehose of unanswered requests cannot
 /// grow the map without bound.
 const MAX_PENDING_REPLIES: usize = 1024;
-
-/// How long to wait on a credentials-file read before failing the bind.
-///
-/// The read is off the executor either way; the timeout is so a hung mount
-/// fails the deploy with something legible rather than parking it forever.
-const CREDS_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A live connection plus everything derived from the config that opened it.
 pub struct ConnHandle {
@@ -65,6 +59,7 @@ pub struct ConnHandle {
     pub subscription_denials: tokio::sync::broadcast::Sender<String>,
     pub client: async_nats::Client,
     pub jetstream: async_nats::jetstream::Context,
+    pub(super) jetstream_prefix: String,
     pub policy: Arc<PolicyEngine>,
     pub ack_mode: super::config::AckMode,
     pub limits: super::config::Limits,
@@ -184,40 +179,6 @@ pub struct ConnectionRegistry {
     workloads: RwLock<HashMap<String, WorkloadConns>>,
 }
 
-/// Applies auth to a builder. The nkey signing callback stays here, host-side.
-async fn apply_auth(
-    opts: async_nats::ConnectOptions,
-    auth: &NatsAuth,
-) -> anyhow::Result<async_nats::ConnectOptions> {
-    Ok(match auth {
-        NatsAuth::Anonymous => opts,
-        NatsAuth::CredsFile(path) => {
-            // Blocking here would pin a runtime worker for as long as the mount
-            // takes to answer, which on a hung NFS/FUSE path is forever.
-            let creds = tokio::time::timeout(CREDS_READ_TIMEOUT, tokio::fs::read_to_string(path))
-                .await
-                .with_context(|| format!("timed out reading NATS creds file {}", path.display()))?
-                .with_context(|| format!("failed to read NATS creds file {}", path.display()))?;
-            async_nats::ConnectOptions::with_credentials(&creds)
-                .context("failed to parse NATS creds file")?
-        }
-        NatsAuth::JwtNkey { jwt, seed } => {
-            let key_pair = std::sync::Arc::new(
-                nkeys::KeyPair::from_seed(seed).context("invalid NATS nkey seed")?,
-            );
-            opts.jwt(jwt.clone(), move |nonce| {
-                let key_pair = key_pair.clone();
-                async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-            })
-        }
-        NatsAuth::NkeySeed(seed) => opts.nkey(seed.to_string()),
-        NatsAuth::UserPassword { username, password } => {
-            opts.user_and_password(username.clone(), password.to_string())
-        }
-        NatsAuth::Token(token) => opts.token(token.to_string()),
-    })
-}
-
 /// Builds connect options from a workload's config.
 ///
 /// `reconnects` is bumped from the event callback, which is the only place the
@@ -226,8 +187,11 @@ async fn build_options(
     config: &NatsConfig,
     reconnects: tokio::sync::watch::Sender<u64>,
     denials: tokio::sync::broadcast::Sender<String>,
+    ignore_discovered_servers: bool,
 ) -> anyhow::Result<async_nats::ConnectOptions> {
-    let mut opts = apply_auth(async_nats::ConnectOptions::new(), &config.auth).await?;
+    // The signing callback stays here, host-side, and rereads any credential
+    // file on every connect.
+    let mut opts = config.auth.credentials().primed_connect_options().await?;
 
     if let Some(name) = &config.name {
         opts = opts.name(name);
@@ -250,6 +214,10 @@ async fn build_options(
     }
     if let (Some(cert), Some(key)) = (&config.tls.cert, &config.tls.key) {
         opts = opts.add_client_certificate(cert.clone(), key.clone());
+    }
+    if ignore_discovered_servers {
+        // Only operator-declared servers were checked against the policy.
+        opts = opts.ignore_discovered_servers();
     }
 
     // Without a callback these are raised and discarded. SlowConsumer is the
@@ -422,6 +390,7 @@ impl ConnectionRegistry {
         binding: &str,
         config: &NatsConfig,
         lattice_prefixes: Vec<String>,
+        ignore_discovered_servers: bool,
     ) -> anyhow::Result<Arc<ConnHandle>> {
         let key = config.connection_key();
 
@@ -442,7 +411,13 @@ impl ConnectionRegistry {
 
         let (reconnects, _) = tokio::sync::watch::channel(0);
         let (subscription_denials, _) = tokio::sync::broadcast::channel(64);
-        let opts = build_options(config, reconnects.clone(), subscription_denials.clone()).await?;
+        let opts = build_options(
+            config,
+            reconnects.clone(),
+            subscription_denials.clone(),
+            ignore_discovered_servers,
+        )
+        .await?;
         let client = opts
             .connect(config.servers.clone())
             .await
@@ -464,6 +439,10 @@ impl ConnectionRegistry {
             subscription_denials,
             client,
             jetstream,
+            jetstream_prefix: config.jetstream_domain.as_ref().map_or_else(
+                || "$JS.API".to_string(),
+                |domain| format!("$JS.{domain}.API"),
+            ),
             policy: Arc::new(PolicyEngine::new(&config.policy, lattice_prefixes)),
             ack_mode: config.ack_mode,
             limits: config.limits.clone(),
@@ -690,6 +669,76 @@ mod tests {
             denied_subscription_subject("Unknown Protocol Operation"),
             None
         );
+    }
+
+    /// A binding's secret file is read on every connect, so a rotated Secret
+    /// is what the next reconnect presents, with no rebind.
+    #[tokio::test]
+    async fn a_rotated_token_file_is_presented_on_reconnect() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::accept_connect;
+
+        let dir = tempfile::tempdir()?;
+        let token = dir.path().join("token");
+        std::fs::write(&token, "first\n")?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let config = NatsConfig::from_map(
+            &[
+                ("servers", format!("nats://{}", listener.local_addr()?)),
+                ("token-file", token.display().to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        )?;
+
+        let registry = ConnectionRegistry::default();
+        let (first, _handle) = tokio::try_join!(
+            accept_connect(&listener, "first-nonce"),
+            registry.acquire("wl", UNNAMED_BINDING, &config, Vec::new(), true),
+        )?;
+        assert_eq!(first["auth_token"], "first");
+
+        std::fs::write(&token, "second\n")?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["auth_token"], "second");
+        Ok(())
+    }
+
+    /// `jwt-as-token` repeats whichever JWT the creds file holds on each
+    /// connect, so the token follows a rotation too.
+    #[tokio::test]
+    async fn jwt_as_token_repeats_the_current_jwt() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::{accept_connect, creds_file};
+
+        let dir = tempfile::tempdir()?;
+        let creds = dir.path().join("user.creds");
+        let key = nkeys::KeyPair::new_user();
+        std::fs::write(&creds, creds_file("first.jwt", &key.seed()?))?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let config = NatsConfig::from_map(
+            &[
+                ("servers", format!("nats://{}", listener.local_addr()?)),
+                ("creds", creds.display().to_string()),
+                ("jwt-as-token", "true".to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        )?;
+
+        let registry = ConnectionRegistry::default();
+        let (first, _handle) = tokio::try_join!(
+            accept_connect(&listener, "first-nonce"),
+            registry.acquire("wl", UNNAMED_BINDING, &config, Vec::new(), true),
+        )?;
+        assert_eq!(first["jwt"], "first.jwt");
+        assert_eq!(first["auth_token"], "first.jwt");
+
+        std::fs::write(&creds, creds_file("rotated.jwt", &key.seed()?))?;
+        let second = accept_connect(&listener, "second-nonce").await?;
+        assert_eq!(second["jwt"], "rotated.jwt");
+        assert_eq!(second["auth_token"], "rotated.jwt");
+        Ok(())
     }
 
     #[test]

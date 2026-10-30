@@ -6,6 +6,9 @@
 # Two harness types share this script:
 #   - criterion benches (http_invoke, service_http, wasmtime_baseline,
 #     wasmtime_serve) write to $CARGO_TARGET_DIR/criterion/.
+#   - density benches (scale_density) write a list of
+#     bench_tools::density::Report to $CARGO_TARGET_DIR/density/<bench>.json,
+#     which `bench-tools jsonl` and `summary` read.
 #   - gungraun benches (gungraun, gungraun_plugin) write to $CARGO_TARGET_DIR/gungraun/
 #     and are pinned to the isolated CPU (set by hetzner-postinstall.sh
 #     via isolcpus=) so that scheduler interference doesn't leak into
@@ -30,6 +33,16 @@ bench="${1:?bench name required}"
 # shellcheck disable=SC1091
 . "$HOME/.cargo/env"
 
+# Use the linker installed by provision.yml for every nested fixture build,
+# including on runners registered before install-runner.sh configured Cargo.
+# An explicit caller override still wins. Installing a binary on PATH alone
+# does not replace Rust's older bundled wasm32-wasip2 linker.
+export CARGO_TARGET_WASM32_WASIP2_LINKER="${CARGO_TARGET_WASM32_WASIP2_LINKER:-/usr/local/bin/wasm-component-ld}"
+if ! linker_version=$("$CARGO_TARGET_WASM32_WASIP2_LINKER" --version); then
+  echo "cannot run the fixture linker at ${CARGO_TARGET_WASM32_WASIP2_LINKER}; run ansible-playbook provision.yml --tags wasm-component-ld" >&2
+  exit 1
+fi
+
 : "${CARGO_TARGET_DIR:=/var/lib/bench/target}"
 mkdir -p "$CARGO_TARGET_DIR"
 
@@ -53,6 +66,7 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
   # dispatch ref, so this log header agrees with the emitted data rows.
   echo "ref:    ${WASMCLOUD_BENCH_REF:-${GITHUB_REF_NAME:-?}}"
   echo "ts:     $(date -u +%FT%TZ)"
+  echo "linker: ${linker_version} (${CARGO_TARGET_WASM32_WASIP2_LINKER})"
   echo
 } | tee "$log"
 
@@ -61,7 +75,7 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
 # persistent (kept for the *build* cache, not the measurement output).
 # The build cache lives elsewhere in $CARGO_TARGET_DIR and is preserved.
 # Both criterion and gungraun keep "previous run" baseline data we don't use.
-rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun"
+rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun" "${CARGO_TARGET_DIR}/density"
 
 # Touch the run marker right before invoking cargo so `find -newer "$marker"`
 # in `bench-tools jsonl` picks up exactly the files this run produced.
@@ -76,6 +90,25 @@ touch "$marker"
 if [ -d xtask ]; then
   echo "building wasm test fixtures via xtask" | tee -a "$log"
   cargo xtask build-fixtures 2>&1 | tee -a "$log"
+fi
+
+# gungraun refuses to run unless gungraun-runner's version equals the gungraun
+# version resolved in Cargo.lock. Prefer the shared /usr/local copy that
+# provision.yml installs; when the lockfile has moved past it, install the
+# matching runner into a per-version cache and point the bench at it.
+if [[ "$bench" == gungraun* ]]; then
+  want="$(awk '/^name = "gungraun"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)"
+  have="$(gungraun-runner --version 2>/dev/null | awk '{ print $NF }' || true)"
+  if [ -n "$want" ] && [ "$have" != "$want" ]; then
+    root="${WASMCLOUD_BENCH_TOOLS_DIR:-$HOME/.cache/wasmcloud-bench}/gungraun-runner-${want}"
+    if [ ! -x "${root}/bin/gungraun-runner" ]; then
+      echo "::warning::gungraun-runner ${have:-missing} != Cargo.lock gungraun ${want}; installing ${want} to ${root}" | tee -a "$log"
+      cargo install --locked --quiet gungraun-runner --version "$want" --root "$root" 2>&1 | tee -a "$log"
+    fi
+    # Read at compile time (option_env!); rustc tracks it, so a change rebuilds the bench.
+    export GUNGRAUN_RUNNER="${root}/bin/gungraun-runner"
+    echo "using GUNGRAUN_RUNNER=${GUNGRAUN_RUNNER}" | tee -a "$log"
+  fi
 fi
 
 # gungraun: pin to the isolated CPU. The criterion-style benches are
@@ -96,6 +129,10 @@ fi
 # gungraun_plugin` behaves identically to CI.
 features=()
 case "$bench" in
+  scale_density)
+    mkdir -p "${CARGO_TARGET_DIR}/density"
+    export WASH_SCALE_REPORT_JSON="${CARGO_TARGET_DIR}/density/${bench}.json"
+    ;;
   gungraun_plugin)
     features=(--features host-component-plugins)
     echo "enabling features: ${features[*]}" | tee -a "$log"

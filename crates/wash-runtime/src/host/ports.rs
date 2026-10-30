@@ -21,6 +21,7 @@ use crate::sockets::loopback;
 /// not branch on it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PortOwner {
+    Host(Arc<str>),
     Workload(Arc<str>),
     Plugin(Arc<str>),
 }
@@ -28,6 +29,7 @@ pub enum PortOwner {
 impl core::fmt::Display for PortOwner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Host(name) => write!(f, "host {name}"),
             Self::Workload(id) => write!(f, "workload '{id}'"),
             Self::Plugin(id) => write!(f, "host plugin '{id}'"),
         }

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
+use crate::plugin::PluginEgressPolicy;
 use crate::plugin::multiplex::BackendProvider;
 
 use super::{BrokerMessage, MsgBackend, MsgError, MsgId};
@@ -70,8 +71,21 @@ impl BackendProvider<MsgId> for InMemoryMsgProvider {
         super::DEFAULT_BACKEND
     }
 
-    async fn instantiate(&self, _config: &HashMap<String, String>) -> anyhow::Result<MsgId> {
+    async fn instantiate(
+        &self,
+        _config: &HashMap<String, String>,
+        _egress: Option<&PluginEgressPolicy>,
+    ) -> anyhow::Result<MsgId> {
         Ok(Arc::new(InMemoryMsgBackend::new()))
+    }
+
+    /// Does not connect out.
+    fn check_egress(
+        &self,
+        _config: &HashMap<String, String>,
+        _policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 }
 

@@ -108,7 +108,7 @@ runs:
     - name: Publish or skip
       id: publish
       if: github.event_name == 'push' && github.ref == 'refs/heads/main' && inputs.image != ''
-      uses: ./.github/actions/oci-push-with-digest
+      uses: $/.github/actions/oci-push-with-digest
       with:
         ref: ${{ steps.resolve.outputs.ref }}
         artifact: ${{ steps.resolve.outputs.artifact }}

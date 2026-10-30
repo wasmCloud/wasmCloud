@@ -50,6 +50,25 @@
     # Node 18 in `main`, which is past EOL; NodeSource gives us a current
     # LTS without competing with the OS package.
     node_lts_major: 24
+    # scripts/k6bench tools, linux-amd64, each pinned with the sha256 from its
+    # release. Bump version and checksum together; kubectl tracks the kind
+    # node image pinned in scripts/k6bench/kind-config.yaml.
+    k6bench_tools:
+      - name: kind
+        url: https://github.com/kubernetes-sigs/kind/releases/download/v0.29.0/kind-linux-amd64
+        sha256: c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284
+      - name: kubectl
+        url: https://dl.k8s.io/release/v1.33.1/bin/linux/amd64/kubectl
+        sha256: 5de4e9f2266738fd112b721265a0c1cd7f4e5208b670f811861f699474a100a3
+    k6bench_archives:
+      - name: helm
+        url: https://get.helm.sh/helm-v3.18.3-linux-amd64.tar.gz
+        sha256: 6ec85f306dd8fe9eb05c61ba4593182b2afcfefb52f21add3fe043ebbdc48e39
+        member: linux-amd64/helm
+      - name: k6
+        url: https://github.com/grafana/k6/releases/download/v2.3.0/k6-v2.3.0-linux-amd64.tar.gz
+        sha256: 39c3117b6af817592dcd0ce4242105c0a7af10948c2a425306f0be8f7a8a8ab1
+        member: k6-v2.3.0-linux-amd64/k6
 
   pre_tasks:
     - name: Refuse to run if WASMCLOUD_BENCH_HOSTNAME isn't exported
@@ -231,6 +250,101 @@
       changed_when: "'CHANGED' in wcl_cfg.stdout"
       tags: [toolchain, wasm-component-ld]
 
+    # ── k6bench: Docker + kind + kubectl + helm + k6 ─────────────────────
+    # Docker is socket-activated, not started at boot: between k6 runs the
+    # daemon is gone, so criterion and gungraun see the host they always
+    # have. The userland proxy is off so published ports go through iptables
+    # instead of a copying process (run.sh targets the kind node's IP anyway).
+    - name: Apt — Docker engine
+      ansible.builtin.apt:
+        name: docker.io
+        state: present
+      tags: [k6bench]
+
+    - name: Docker daemon config
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          { "userland-proxy": false }
+        mode: "0644"
+      tags: [k6bench]
+
+    # Installing docker.io starts the daemon, and bench.yml's pre-flight fails
+    # while it runs; stopped, the next activation reads daemon.json.
+    - name: Docker socket-activated only
+      ansible.builtin.systemd:
+        name: "{{ item.name }}"
+        enabled: "{{ item.enabled }}"
+        state: "{{ item.state }}"
+      loop:
+        - { name: docker.socket, enabled: true, state: started }
+        - { name: docker.service, enabled: false, state: stopped }
+      tags: [k6bench]
+
+    # install-runner.sh does the same on a fresh host, but exits before it
+    # once /opt/actions-runner exists, so a registered host only gets it here.
+    - name: Check for the bench user
+      ansible.builtin.command: id bench
+      register: bench_user
+      changed_when: false
+      failed_when: false
+      tags: [k6bench]
+
+    - name: Let the bench user use Docker
+      ansible.builtin.user:
+        name: bench
+        groups: docker
+        append: true
+      when: bench_user.rc == 0
+      notify: restart actions runner
+      tags: [k6bench]
+
+    - name: Let the bench user stop the Docker daemon
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/bench-docker
+        content: "bench ALL=(root) NOPASSWD: /usr/bin/systemctl stop docker.service\n"
+        mode: "0440"
+        validate: visudo -cf %s
+      when: bench_user.rc == 0
+      tags: [k6bench]
+
+    - name: Install k6bench binaries
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/usr/local/bin/{{ item.name }}"
+        checksum: "sha256:{{ item.sha256 }}"
+        mode: "0755"
+      loop: "{{ k6bench_tools }}"
+      tags: [k6bench]
+
+    - name: Download k6bench archives
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "/tmp/{{ item.name }}.tar.gz"
+        checksum: "sha256:{{ item.sha256 }}"
+      loop: "{{ k6bench_archives }}"
+      tags: [k6bench]
+
+    - name: Install k6bench binaries from archives
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tar -xzf /tmp/{{ item.name }}.tar.gz -C /tmp {{ item.member }}
+        install -m 0755 /tmp/{{ item.member }} /usr/local/bin/{{ item.name }}
+      args:
+        executable: /bin/bash
+        creates: "/usr/local/bin/{{ item.name }}.{{ item.sha256[:12] }}"
+      loop: "{{ k6bench_archives }}"
+      tags: [k6bench]
+
+    - name: Stamp installed archive versions
+      ansible.builtin.file:
+        path: "/usr/local/bin/{{ item.name }}.{{ item.sha256[:12] }}"
+        state: touch
+        modification_time: preserve
+        access_time: preserve
+      loop: "{{ k6bench_archives }}"
+      tags: [k6bench]
+
     # ── Repo clone for ad-hoc / manual benches ────────────────────────────
     - name: Clone wasmCloud repo to {{ repo_dir }}
       ansible.builtin.git:
@@ -320,6 +434,15 @@
         name: cpu-performance.service
         enabled: true
       listen: enable cpu-performance
+
+    # The running runner keeps the groups it started with, so jobs wouldn't
+    # see docker until it restarts. svc.sh records its unit name in .service.
+    # Restarting kills an in-flight job: provision while the runner is idle.
+    - name: restart actions runner
+      ansible.builtin.shell: systemctl restart "$(cat /opt/actions-runner/.service)"
+      args:
+        removes: /opt/actions-runner/.service
+      listen: restart actions runner
 
   post_tasks:
     - name: Note pending reboot if cmdline changed

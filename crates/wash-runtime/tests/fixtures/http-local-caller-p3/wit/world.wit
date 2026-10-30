@@ -1,0 +1,16 @@
+package wasmcloud:test-p3@0.1.0;
+
+/// The p3 counterpart of the p2 `http-allowed-hosts` fixture: an HTTP handler
+/// that makes an *outgoing* `wasi:http` request per route and reports what
+/// happened to it as its own status code. Importing and exporting the same
+/// handler interface is the ordinary proxy shape, and it is what lets the
+/// same-host tests exercise the P3 egress path rather than only the P2 one.
+world http-local-caller-p3 {
+    import wasi:http/types@0.3.0;
+    // `client/send` is the outgoing side the host links (`wasi:http/handler` as
+    // an *import* is a component-to-component link, which is a different thing
+    // and not what an egress test wants).
+    import wasi:http/client@0.3.0;
+
+    export wasi:http/handler@0.3.0;
+}

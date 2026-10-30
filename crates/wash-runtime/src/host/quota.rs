@@ -267,6 +267,8 @@ pub struct GuestConnectionQuota {
 
 #[derive(Debug, Default)]
 struct QuotaStats {
+    outbound_http_granted: AtomicU64,
+    outbound_http_refused: AtomicU64,
     outbound_sockets_granted: AtomicU64,
     outbound_sockets_refused: AtomicU64,
     inbound_sockets_granted: AtomicU64,
@@ -303,6 +305,22 @@ impl GuestConnectionQuota {
             &self.outbound_sockets,
             &self.stats.outbound_sockets_granted,
             &self.stats.outbound_sockets_refused,
+        )
+    }
+
+    /// Take a slot for an outbound HTTP call the host serves without opening a
+    /// connection — a same-host locally routed request.
+    ///
+    /// Never waits, for the same reason the socket surfaces do not: the only
+    /// thing that frees a slot here is another of this guest's calls finishing,
+    /// and a guest holds a call across yield points, so waiting would let it
+    /// deadlock against itself. A pooled network request *does* wait, because
+    /// there an idle connection returning to the pool can satisfy it.
+    pub fn try_acquire_outbound_http(&self) -> Option<ConnectionSlot> {
+        self.try_acquire(
+            &self.outbound_http,
+            &self.stats.outbound_http_granted,
+            &self.stats.outbound_http_refused,
         )
     }
 
@@ -373,6 +391,8 @@ impl GuestConnectionQuota {
     /// Grants and refusals per surface, for reporting.
     pub fn counts(&self) -> QuotaCounts {
         QuotaCounts {
+            outbound_http_granted: self.stats.outbound_http_granted.load(Ordering::Relaxed),
+            outbound_http_refused: self.stats.outbound_http_refused.load(Ordering::Relaxed),
             outbound_sockets_granted: self.stats.outbound_sockets_granted.load(Ordering::Relaxed),
             outbound_sockets_refused: self.stats.outbound_sockets_refused.load(Ordering::Relaxed),
             inbound_sockets_granted: self.stats.inbound_sockets_granted.load(Ordering::Relaxed),
@@ -384,6 +404,8 @@ impl GuestConnectionQuota {
 /// Snapshot of one quota's activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuotaCounts {
+    pub outbound_http_granted: u64,
+    pub outbound_http_refused: u64,
     pub outbound_sockets_granted: u64,
     pub outbound_sockets_refused: u64,
     pub inbound_sockets_granted: u64,
@@ -401,6 +423,20 @@ pub struct QuotaRegistry {
     global: Option<Arc<Semaphore>>,
     http_wait: Duration,
     quotas: moka::sync::Cache<String, GuestConnectionQuota>,
+}
+
+/// The registry a policy built without one draws on.
+///
+/// One per process, not one per policy: a registry of its own would give each
+/// policy a private "host-wide" ceiling, which is the opposite of a ceiling —
+/// two of them would let a host hold the limit twice over. Built on first use,
+/// so a host that raises its descriptor limit during startup is measured after
+/// the raise rather than before it.
+pub fn default_registry() -> Arc<QuotaRegistry> {
+    static DEFAULT: std::sync::LazyLock<Arc<QuotaRegistry>> = std::sync::LazyLock::new(|| {
+        QuotaRegistry::new(QuotaLimits::default(), Some(default_max_connections()))
+    });
+    Arc::clone(&DEFAULT)
 }
 
 impl QuotaRegistry {
@@ -456,16 +492,16 @@ impl QuotaRegistry {
     }
 }
 
-/// Counters for what the socket policy decided.
+/// Counters for what the socket policy and the `hostPath` volume gate decided.
 ///
-/// `would_deny` is the migration signal: while the host runs in count mode it
+/// `would_deny` is the count-mode signal: while the host runs in count mode it
 /// records every refusal enforcement *would* have made, so an operator can see
-/// the blast radius before turning it on. If these are non-zero, enforcing
-/// breaks someone.
+/// the blast radius. If these are non-zero, enforcing breaks someone.
 #[derive(Debug, Default)]
 pub struct PolicyMeters {
     denied: [AtomicU64; DENY_REASONS],
     would_deny: [AtomicU64; DENY_REASONS],
+    host_path_denied: AtomicU64,
 }
 
 const DENY_REASONS: usize = 6;
@@ -506,20 +542,214 @@ impl PolicyMeters {
             .map_or(0, |c| c.load(Ordering::Relaxed))
     }
 
+    /// Record a refused `hostPath` volume: one outside the host's allowed host
+    /// paths, or one exposing a reserved path, a kernel filesystem, or the
+    /// `emptyDir` scratch root.
+    pub fn record_host_path_denied(&self) {
+        self.host_path_denied.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `hostPath` volumes the host refused.
+    pub fn host_path_denied(&self) -> u64 {
+        self.host_path_denied.load(Ordering::Relaxed)
+    }
+
     /// Every reason with a non-zero count, for a status line or a metric sweep.
     pub fn nonzero(&self) -> Vec<(DenyReason, u64, u64)> {
-        [
-            DenyReason::NotPermitted,
-            DenyReason::BindNotPermitted,
-            DenyReason::HostLoopbackNotPermitted,
-            DenyReason::HostOwnedPort,
-            DenyReason::BlockedRange,
-            DenyReason::NoCapacity,
-        ]
-        .into_iter()
-        .map(|r| (r, self.denied(r), self.would_deny(r)))
-        .filter(|(_, d, w)| *d > 0 || *w > 0)
-        .collect()
+        ALL_REASONS
+            .into_iter()
+            .map(|r| (r, self.denied(r), self.would_deny(r)))
+            .filter(|(_, d, w)| *d > 0 || *w > 0)
+            .collect()
+    }
+
+    /// These counters, published as metrics on the process-wide meter: the
+    /// would-deny figures are what an operator watches before switching the
+    /// socket policy to enforce. With no OTel exporter configured the global
+    /// meter is a no-op and nothing is ever read.
+    pub fn into_metered(self) -> Arc<Self> {
+        let meters = Arc::new(self);
+        meters.register_metrics(&opentelemetry::global::meter("wash-runtime"));
+        meters
+    }
+
+    fn register_metrics(self: &Arc<Self>, meter: &opentelemetry::metrics::Meter) {
+        // Weak, so the meter provider does not keep a dropped host's counters
+        // alive; a callback that cannot upgrade reports nothing.
+        let observe = |name: &'static str, doc: &'static str, read: fn(&Self) -> u64| {
+            let meters = Arc::downgrade(self);
+            let _ = meter
+                .u64_observable_counter(name)
+                .with_description(doc)
+                .with_unit("{volume}")
+                .with_callback(move |observer| {
+                    if let Some(meters) = meters.upgrade() {
+                        observer.observe(read(&meters), &[]);
+                    }
+                })
+                .build();
+        };
+        observe(
+            "host_path.denied",
+            "hostPath volumes refused: outside the allowlist, or exposing a reserved path, a \
+             kernel filesystem, or the emptyDir scratch root",
+            Self::host_path_denied,
+        );
+        let by_reason =
+            |name: &'static str, doc: &'static str, read: fn(&Self, DenyReason) -> u64| {
+                let meters = Arc::downgrade(self);
+                let _ = meter
+                    .u64_observable_counter(name)
+                    .with_description(doc)
+                    .with_unit("{connection}")
+                    .with_callback(move |observer| {
+                        if let Some(meters) = meters.upgrade() {
+                            for reason in ALL_REASONS {
+                                observer.observe(
+                                    read(&meters, reason),
+                                    &[opentelemetry::KeyValue::new("reason", reason.as_str())],
+                                );
+                            }
+                        }
+                    })
+                    .build();
+            };
+        by_reason(
+            "socket_policy.denied",
+            "Socket operations the socket policy refused, by reason",
+            Self::denied,
+        );
+        by_reason(
+            "socket_policy.would_deny",
+            "Socket operations counted in count mode that enforcement would refuse, by reason",
+            Self::would_deny,
+        );
+    }
+}
+
+const ALL_REASONS: [DenyReason; DENY_REASONS] = [
+    DenyReason::NotPermitted,
+    DenyReason::BindNotPermitted,
+    DenyReason::HostLoopbackNotPermitted,
+    DenyReason::HostOwnedPort,
+    DenyReason::BlockedRange,
+    DenyReason::NoCapacity,
+];
+
+#[cfg(test)]
+mod policy_meter_tests {
+    use super::*;
+
+    /// The would-deny counters an operator is told to watch reach an exporter,
+    /// through a real SDK pipeline with a reader of its own.
+    #[test]
+    fn policy_counters_are_published_as_metrics() {
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+            data::{AggregatedMetrics, MetricData},
+        };
+
+        let meters = Arc::new(PolicyMeters::default());
+        meters.record_host_path_denied();
+        meters.record_would_deny(DenyReason::BlockedRange);
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        meters.register_metrics(&provider.meter("test"));
+        provider.force_flush().expect("flush");
+
+        let mut seen = std::collections::BTreeMap::new();
+        for resource in exporter.get_finished_metrics().expect("finished metrics") {
+            for scope in resource.scope_metrics() {
+                for metric in scope.metrics() {
+                    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+                        continue;
+                    };
+                    for point in sum.data_points() {
+                        let reason = point
+                            .attributes()
+                            .find(|kv| kv.key.as_str() == "reason")
+                            .map(|kv| kv.value.to_string());
+                        seen.insert((metric.name().to_string(), reason), point.value());
+                    }
+                }
+            }
+        }
+        assert_eq!(seen[&("host_path.denied".to_string(), None)], 1);
+        assert_eq!(
+            seen[&(
+                "socket_policy.would_deny".to_string(),
+                Some("blocked_range".to_string())
+            )],
+            1
+        );
+        assert_eq!(
+            seen[&(
+                "socket_policy.denied".to_string(),
+                Some("not_permitted".to_string())
+            )],
+            0
+        );
+    }
+}
+
+#[cfg(test)]
+mod outbound_http_tests {
+    use super::*;
+
+    /// Local dispatch takes its slot here, so the surface has to bound and then
+    /// recover: a guest at its ceiling is refused, and a finished call gives the
+    /// slot back rather than leaking it.
+    #[test]
+    fn outbound_http_slots_bound_and_recover() {
+        let quota = GuestConnectionQuota::new(
+            QuotaLimits {
+                outbound_http: 2,
+                ..Default::default()
+            },
+            None,
+        );
+
+        let a = quota.try_acquire_outbound_http().expect("first slot");
+        let b = quota.try_acquire_outbound_http().expect("second slot");
+        assert!(
+            quota.try_acquire_outbound_http().is_none(),
+            "a guest at its ceiling must be refused, not queued"
+        );
+
+        drop(a);
+        let c = quota
+            .try_acquire_outbound_http()
+            .expect("slot freed on drop");
+        drop((b, c));
+
+        let counts = quota.counts();
+        assert_eq!(counts.outbound_http_granted, 3);
+        assert_eq!(counts.outbound_http_refused, 1);
+    }
+
+    /// The host-wide ceiling binds too, so one busy guest cannot exhaust the
+    /// host through the local path any more than through the pooled one.
+    #[test]
+    fn outbound_http_slots_respect_the_host_wide_ceiling() {
+        let global = Arc::new(Semaphore::new(1));
+        let limits = QuotaLimits {
+            outbound_http: 8,
+            ..Default::default()
+        };
+        let one = GuestConnectionQuota::new(limits, Some(Arc::clone(&global)));
+        let two = GuestConnectionQuota::new(limits, Some(global));
+
+        let held = one.try_acquire_outbound_http().expect("host slot");
+        assert!(
+            two.try_acquire_outbound_http().is_none(),
+            "the host-wide ceiling is spent, even though this guest is idle"
+        );
+        drop(held);
+        assert!(two.try_acquire_outbound_http().is_some());
     }
 }
 

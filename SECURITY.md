@@ -21,8 +21,16 @@ We are extremely grateful for security researchers and users who report vulnerab
 wasmCloud community. All reports are thoroughly investigated by a set of wasmCloud maintainers.
 
 To make a report, email the private security list at **security@wasmcloud.com** with the details.
+This works for any repository in the wasmCloud GitHub organization.
+
 You can also use [GitHub's private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing/privately-reporting-a-security-vulnerability)
-on any repository in the wasmCloud GitHub organization.
+on these repositories:
+
+- [wasmCloud/wasmCloud](https://github.com/wasmCloud/wasmCloud/security/advisories/new)
+- [wasmCloud/go](https://github.com/wasmCloud/go/security/advisories/new)
+- [wasmCloud/typescript](https://github.com/wasmCloud/typescript/security/advisories/new)
+- [wasmCloud/wasmcloud.com](https://github.com/wasmCloud/wasmcloud.com/security/advisories/new)
+- [wasmCloud/awesome-wasmcloud](https://github.com/wasmCloud/awesome-wasmcloud/security/advisories/new)
 
 Reports are received by the wasmCloud security team, which is a subset of active org maintainers.
 See [Security Team Membership](#security-team-membership) for details.
@@ -31,7 +39,8 @@ See [Security Team Membership](#security-team-membership) for details.
 
 You believe you have found a vulnerability in a wasmCloud project or in a dependency of a wasmCloud
 project. This includes any repository in the [wasmCloud GitHub
-organization](https://github.com/wasmCloud).
+organization](https://github.com/wasmCloud). For what this repository treats as a vulnerability,
+and what it does not, see the [threat model](THREAT_MODEL.md).
 
 ### When Not To Send A Report
 

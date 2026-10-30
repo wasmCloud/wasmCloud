@@ -1,0 +1,41 @@
+# Rendered once per workload by run.sh, __I__ = 0 … WORKLOADS-1. hello-0's
+# Service is the NodePort every request enters through; the host routes each
+# one to its workload by Host header.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-__I__
+spec:
+  # No selector: the operator writes this Service's EndpointSlice, pointing at
+  # the host pods running the workload below, and registers hello-__I__.<namespace>
+  # as a Host alias for it.
+  type: __SVC_TYPE__
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+__NODEPORT__
+---
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: WorkloadDeployment
+metadata:
+  name: hello-__I__
+spec:
+  replicas: 1
+  kubernetes:
+    service:
+      name: hello-__I__
+  template:
+    spec:
+      hostSelector:
+        hostgroup: default
+      hostInterfaces:
+        - namespace: wasi
+          package: http
+          interfaces:
+            - incoming-handler
+          config:
+            host: hello-__I__.k6bench
+      components:
+        - name: hello
+          image: __HELLO_IMAGE__

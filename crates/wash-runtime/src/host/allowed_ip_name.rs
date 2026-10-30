@@ -133,6 +133,46 @@ pub fn check_allowed_ip_name(policy: &[AllowedIpName], host: &url::Host<String>)
     policy.iter().any(|entry| entry.matches(host))
 }
 
+/// Returns `true` if a guest may resolve `host`: `lookups` names it, or
+/// `hosts` permits connecting to it.
+///
+/// `lookups` alone is the narrower grant, for a name a guest resolves without
+/// ever connecting to it. Both empty denies every name.
+#[must_use]
+pub fn check_allowed_lookup(
+    lookups: &[AllowedIpName],
+    hosts: &[crate::host::allowed_hosts::AllowedHost],
+    host: &url::Host<String>,
+) -> bool {
+    check_allowed_ip_name(lookups, host) || hosts.iter().any(|entry| entry.permits_lookup(host))
+}
+
+/// Why [`check_allowed_lookup`] refused `host`, and what would permit it.
+///
+/// The guest only ever sees `permanent-resolver-failure`, so this is the one
+/// place the cause is spelled out. `*` in `allowedHosts` gets its own wording:
+/// it reads as though it should cover the lookup, and does not.
+#[must_use]
+pub fn lookup_denial(
+    hosts: &[crate::host::allowed_hosts::AllowedHost],
+    host: &url::Host<String>,
+) -> String {
+    use crate::host::allowed_hosts::AllowedHost;
+
+    if hosts.iter().any(|entry| matches!(entry, AllowedHost::Any)) {
+        format!(
+            "lookup of {host} denied: allowedHosts has `*`, which permits connections but \
+             opens no name lookup. Add {host}, or `*`, to allowedIpNameLookups"
+        )
+    } else {
+        format!(
+            "lookup of {host} denied: neither allowedHosts nor allowedIpNameLookups names it. \
+             Name it in allowedHosts to resolve and connect to it, or in allowedIpNameLookups \
+             to resolve it only"
+        )
+    }
+}
+
 impl FromStr for AllowedIpName {
     type Err = anyhow::Error;
 
@@ -392,5 +432,43 @@ mod tests {
             assert_eq!(parsed.to_string(), entry);
             assert_eq!(parsed.to_string().parse::<AllowedIpName>().unwrap(), parsed);
         }
+    }
+
+    /// A refused lookup says what would permit it, and `*` in `allowedHosts`
+    /// — which looks as though it should — is called out by name.
+    #[test]
+    fn a_refused_lookup_says_how_to_permit_it() {
+        use crate::host::allowed_hosts::AllowedHost;
+
+        let host = url::Host::parse("db.internal").unwrap();
+        let hosts = |entries: &[&str]| -> Vec<AllowedHost> {
+            entries.iter().map(|e| e.parse().unwrap()).collect()
+        };
+
+        let star = hosts(&["*"]);
+        assert!(!check_allowed_lookup(&[], &star, &host));
+        let message = lookup_denial(&star, &host);
+        assert!(
+            message.contains("db.internal")
+                && message.contains("allowedHosts has `*`")
+                && message.contains("allowedIpNameLookups"),
+            "{message}"
+        );
+
+        let other = hosts(&["other.internal:5432"]);
+        assert!(!check_allowed_lookup(&[], &other, &host));
+        let message = lookup_denial(&other, &host);
+        assert!(
+            message.contains("db.internal")
+                && message.contains("neither allowedHosts nor allowedIpNameLookups")
+                && !message.contains("`*`"),
+            "{message}"
+        );
+
+        assert!(check_allowed_lookup(
+            &[],
+            &hosts(&["db.internal:5432"]),
+            &host
+        ));
     }
 }

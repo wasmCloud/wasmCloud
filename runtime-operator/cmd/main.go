@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
-	"net/http"
 	"os"
 	"strings"
 
@@ -41,6 +40,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/natsclient"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
 
 	"github.com/nats-io/nats.go"
@@ -65,7 +65,7 @@ func main() {
 	var (
 		metricsAddr                 string
 		natsUrl                     string
-		natsCreds                   string
+		natsClient                  = natsclient.Flags{Name: "runtime-operator"}
 		natsCa                      string
 		natsClientCert              string
 		natsClientKey               string
@@ -86,7 +86,7 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8082", "The address the probe endpoint binds to.")
-	flag.StringVar(&natsCreds, "nats-creds", "", "Path to NATS credentials file.")
+	natsClient.Register(flag.CommandLine, "nats")
 	flag.StringVar(&natsCa, "nats-ca", "", "Path to TLS CA pem")
 	flag.StringVar(&natsClientCert, "nats-client-cert", "", "Path to TLS client certificate pem")
 	flag.StringVar(&natsClientKey, "nats-client-key", "", "Path to TLS client key pem")
@@ -176,9 +176,12 @@ func main() {
 		AllowSharedHosts:          allowSharedHosts,
 	}
 
-	if natsCreds != "" {
-		operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, nats.UserCredentials(natsCreds))
+	clientOptions, err := natsClient.Options()
+	if err != nil {
+		setupLog.Error(err, "invalid NATS client configuration")
+		os.Exit(1)
 	}
+	operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, clientOptions...)
 
 	if natsCa != "" {
 		operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, nats.RootCAs(natsCa))
@@ -204,6 +207,9 @@ func main() {
 			setupLog.Error(nil, "nats connection closed")
 		}),
 	)
+	// Last, so it wraps the handlers above rather than replacing them.
+	liveness := natsclient.NewLiveness(natsClient.AuthFailureGrace)
+	operatorCfg.NatsOptions = append(operatorCfg.NatsOptions, liveness.Option())
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -320,12 +326,13 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	// Liveness must reflect NATS connectivity: a permanently closed connection
-	// means the operator can no longer observe host heartbeats, so the kubelet
-	// should restart the pod. Only the terminal closed state fails the probe —
-	// transient reconnecting stays healthy so routine NATS rollouts don't
-	// trigger restart storms.
-	if err := mgr.AddHealthzCheck("nats", natsLivenessCheck(embeddedOperator.NatsConn)); err != nil {
+	// Liveness must reflect NATS connectivity: a closed connection, or one whose
+	// credential the server has refused past the grace, means the operator can
+	// no longer observe host heartbeats, so the kubelet should restart the pod.
+	// Reconnecting for any other reason stays healthy so routine NATS rollouts
+	// don't trigger restart storms.
+	liveness.Watch(embeddedOperator.NatsConn)
+	if err := mgr.AddHealthzCheck("nats", liveness.Check); err != nil {
 		setupLog.Error(err, "unable to set up nats health check")
 		os.Exit(1)
 	}
@@ -338,20 +345,6 @@ func main() {
 	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
-	}
-}
-
-// natsLivenessCheck reports the operator as unhealthy only when the NATS
-// connection is permanently closed. A closed connection means the operator can
-// no longer observe host heartbeats, so Kubernetes should restart the pod. It
-// deliberately stays healthy while merely reconnecting so routine NATS rollouts
-// don't trigger restart storms.
-func natsLivenessCheck(nc *nats.Conn) healthz.Checker {
-	return func(_ *http.Request) error {
-		if nc.IsClosed() {
-			return errors.New("nats connection permanently closed")
-		}
-		return nil
 	}
 }
 

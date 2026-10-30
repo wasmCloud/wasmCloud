@@ -10,6 +10,7 @@
 //   WASMCLOUD_BENCH_HOSTNAME       expected hostname (workflow: vars.WASMCLOUD_BENCH_HOSTNAME)
 //   WASMCLOUD_BENCH_ISOLATED_CPU   override for the isolated-CPU index (default: "5")
 //   CARGO_TARGET_DIR               persistent target dir (default: /var/lib/bench/target)
+//   WASMCLOUD_BENCH_K6             "1" for a k6bench run: also check its tools (#11)
 //
 // Each invariant prints one line on success ("pre-flight: …") or a
 // GitHub Actions error annotation on failure and exits non-zero.
@@ -200,5 +201,61 @@ if (!existsSync(cargoBin)) {
   fail(`cargo not found at ${cargoBin}`);
 }
 ok(`cargo: ${runStdout(cargoBin, ['--version'])}`);
+
+// 10. Docker idle. The daemon is socket-activated, and `docker ps` would start
+//     it (and the always-restart local registry), so ask systemd instead,
+//     which doesn't. A criterion or gungraun bench refuses to share the host
+//     with a running daemon; k6bench.yml stops it after every run, so one
+//     running here means that teardown didn't happen. A k6 run starts it
+//     anyway, and only needs no leftover containers: a stray kind cluster
+//     keeps kube-apiserver and etcd busy on every CPU.
+const hasDocker = spawnSync('sh', ['-c', 'command -v docker'], { stdio: 'ignore' }).status === 0;
+const dockerUp =
+  hasDocker &&
+  spawnSync('systemctl', ['is-active', '--quiet', 'docker.service'], { stdio: 'ignore' }).status ===
+    0;
+if (dockerUp && process.env.WASMCLOUD_BENCH_K6 !== '1') {
+  fail('docker daemon is running; stop it first (sudo systemctl stop docker.service)');
+}
+if (dockerUp) {
+  const allowed = new Set(['kind-registry']);
+  const running = spawnSync('docker', ['ps', '--format', '{{.Names}}'], { encoding: 'utf8' });
+  if (running.status !== 0) {
+    fail(`docker ps failed: ${running.stderr.trim()}`);
+  }
+  const stray = running.stdout
+    .split('\n')
+    .filter((n) => n && !allowed.has(n));
+  if (stray.length > 0) {
+    fail(`containers still running: ${stray.join(', ')} (kind delete cluster --name k6bench)`);
+  }
+}
+ok(dockerUp ? 'docker: no leftover containers' : 'docker: daemon not running');
+
+// 11. k6bench runs only: the tools scripts/k6bench/run.sh drives, and room
+//     for the node and wasmCloud images.
+if (process.env.WASMCLOUD_BENCH_K6 === '1') {
+  if (!hasDocker || spawnSync('docker', ['info'], { stdio: 'ignore' }).status !== 0) {
+    fail('docker is not usable by this user');
+  }
+  for (const tool of ['kind', 'kubectl', 'helm', 'k6']) {
+    if (spawnSync('sh', ['-c', `command -v ${tool}`], { stdio: 'ignore' }).status !== 0) {
+      fail(`${tool} not on PATH (scripts/bench/ansible/provision.yml installs it)`);
+    }
+  }
+  // With the daemon stopped, #10 couldn't see a cluster a failed teardown left
+  // behind; run.sh would otherwise reuse it, stopped nodes and all.
+  const clusters = runStdout('kind', ['get', 'clusters']);
+  if (clusters.split('\n').includes('k6bench')) {
+    fail('kind cluster k6bench left over from an earlier run (kind delete cluster --name k6bench)');
+  }
+  const dockerRoot = runStdout('docker', ['info', '--format', '{{.DockerRootDir}}']);
+  const dfs = statfsSync(dockerRoot);
+  const dockerFree = Number(dfs.bavail) * Number(dfs.bsize);
+  if (dockerFree < 2 * MIN_FREE_BYTES) {
+    fail(`less than 10 GiB free for docker at ${dockerRoot}`);
+  }
+  ok(`k6bench tools present; ${Math.floor(dockerFree / 1024 ** 3)} GiB free at ${dockerRoot}`);
+}
 
 ok('all checks passed');

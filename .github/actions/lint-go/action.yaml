@@ -20,11 +20,11 @@ runs:
       working-directory: "${{ inputs.working-directory }}"
       run: "go mod tidy"
     - name: "Verify Go Mod Tidy"
-      uses: ./.github/actions/no-diff
+      uses: $/.github/actions/no-diff
       with:
         fixup-command: "go mod tidy"
     - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
       with:
-        version: v2.11
+        version: v2.15
         working-directory: "${{ inputs.working-directory }}"
         args: --verbose --path-prefix "${{ inputs.working-directory }}" --timeout ${{ inputs.timeout }}

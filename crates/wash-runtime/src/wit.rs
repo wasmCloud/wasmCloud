@@ -198,8 +198,6 @@ pub struct WitInterface {
     pub package: String,
     /// The specific interfaces within the package (e.g., "incoming-handler", "types")
     pub interfaces: HashSet<String>,
-    // TODO: This is a nice way to represent a version, but it doesn't account for
-    // compatible versions. We should revisit this and implement https://docs.rs/semver/1.0.27/semver/struct.VersionReq.html
     /// Optional semantic version for the interface
     #[serde(default)]
     pub version: Option<semver::Version>,
@@ -208,9 +206,15 @@ pub struct WitInterface {
     #[serde(default)]
     pub config: HashMap<String, String>,
     /// Optional name identifying this specific instance when multiple entries
-    /// of the same namespace:package exist. Used as the routing key in
-    /// multiplexing plugins (the `identifier` in store::open, etc.), and as the
-    /// binding name an operator declares under a `host.plugins` entry.
+    /// of the same namespace:package exist. Three meanings, all routing keys:
+    /// the `identifier` a multiplexing plugin opens with (store::open, etc.);
+    /// the binding name an operator declares under a `host.plugins` entry; and,
+    /// for an intra-workload import, the `name` of the component in the same
+    /// workload that serves it.
+    ///
+    /// When a name means more than one of those at once, the host wins: a name
+    /// declared on a `hostInterfaces` entry is served by the host even if a
+    /// component in the workload carries it too.
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -273,20 +277,14 @@ impl WitInterface {
     }
 
     /// Returns `true` if `other` belongs to the same `namespace:package` at a
-    /// compatible version. Equal when both specify a version;
-    /// if either omits a version, any version is considered compatible.
+    /// compatible version. Compatibility follows the Component Model's semver
+    /// rule: versions share a major, and `0.x` versions also share a minor. If
+    /// either omits a version, any version is considered compatible.
     pub fn same_package(&self, other: &WitInterface) -> bool {
         if self.namespace != other.namespace || self.package != other.package {
             return false;
         }
-        // If both interfaces specify a version, they must match.
-        if let Some(v) = &self.version
-            && let Some(ov) = &other.version
-            && v != ov
-        {
-            return false;
-        }
-        true
+        versions_compatible(self.version.as_ref(), other.version.as_ref())
     }
 
     /// Checks if this interface contains (is a superset of) another interface.
@@ -319,6 +317,16 @@ impl WitInterface {
         self.interfaces.is_superset(&other.interfaces)
     }
 
+    /// Whether this is a WASI base package the host links itself, at a version
+    /// compatible with one it links.
+    pub fn is_host_builtin(&self) -> bool {
+        self.namespace == "wasi"
+            && WASI_BASE_PACKAGES.contains(&self.package.as_str())
+            && wasi_base_versions(&self.package)
+                .iter()
+                .any(|v| versions_compatible(self.version.as_ref(), Some(v)))
+    }
+
     /// Returns `true` if this interface is an incoming `wasi:http` handler.
     ///
     /// This recognises both the WASI P2 `incoming-handler` interface and the
@@ -328,6 +336,59 @@ impl WitInterface {
         self.namespace == "wasi"
             && self.package == "http"
             && (self.interfaces.contains("incoming-handler") || self.interfaces.contains("handler"))
+    }
+}
+
+/// Whether two interface versions resolve to one another under the Component
+/// Model's semver rule; an unversioned side matches anything.
+///
+/// Versions match when equal or when they share a canonical version. A
+/// prerelease or `0.0.x` version has no canonical version.
+pub(crate) fn versions_compatible(
+    a: Option<&semver::Version>,
+    b: Option<&semver::Version>,
+) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            (a.major, a.minor, a.patch, &a.pre) == (b.major, b.minor, b.patch, &b.pre)
+                || canonical_version(a).is_some_and(|c| Some(c) == canonical_version(b))
+        }
+        _ => true,
+    }
+}
+
+/// The `(major, minor)` prefix compatible versions share, matching wasmtime's
+/// `alternate_lookup_key`. The minor is only significant for `0.x`.
+fn canonical_version(v: &semver::Version) -> Option<(u64, u64)> {
+    match (v.major, v.minor) {
+        _ if !v.pre.is_empty() => None,
+        (0, 0) => None,
+        (0, minor) => Some((0, minor)),
+        (major, _) => Some((major, 0)),
+    }
+}
+
+/// WASI packages the host links into every component and plugin store.
+pub(crate) const WASI_BASE_PACKAGES: &[&str] = &[
+    "io",
+    "filesystem",
+    "clocks",
+    "random",
+    "cli",
+    "sockets",
+    "http",
+];
+
+/// Versions of a [`WASI_BASE_PACKAGES`] package the host links. Anything
+/// compatible with one of them resolves against it. WASI 0.3 folded `wasi:io`
+/// into the component model, so it has no 0.3 release.
+fn wasi_base_versions(package: &str) -> &'static [semver::Version] {
+    const P2: &[semver::Version] = &[semver::Version::new(0, 2, 0)];
+    const P2_AND_P3: &[semver::Version] =
+        &[semver::Version::new(0, 2, 0), semver::Version::new(0, 3, 0)];
+    match package {
+        "io" => P2,
+        _ => P2_AND_P3,
     }
 }
 
@@ -581,6 +642,45 @@ mod tests {
         let wit9 = WitInterface::from("wasi:http/types,incoming-handler,outgoing-handler@0.2.0");
         let wit10 = WitInterface::from("wasi:http/types,incoming-handler@0.2.0");
         assert!(wit9.contains(&wit10));
+    }
+
+    #[test]
+    fn test_component_model_version_compatibility() {
+        let interface = |version| WitInterface::from(format!("wasmcloud:nats/core@{version}"));
+
+        assert!(interface("0.1.0").same_package(&interface("0.1.1")));
+        assert!(!interface("0.1.0").same_package(&interface("0.2.0")));
+        assert!(interface("1.2.0").same_package(&interface("1.9.0")));
+        assert!(!interface("1.2.0").same_package(&interface("2.0.0")));
+        assert!(!interface("0.1.0-draft").same_package(&interface("0.1.0")));
+        assert!(interface("0.1.0-draft").same_package(&interface("0.1.0-draft")));
+        assert!(!interface("0.1.0-draft").same_package(&interface("0.1.1-draft")));
+        assert!(interface("0.0.1").same_package(&interface("0.0.1")));
+        assert!(!interface("0.0.1").same_package(&interface("0.0.2")));
+        assert!(interface("0.2.3").same_package(&interface("0.2.3+abc")));
+    }
+
+    #[test]
+    fn wasi_builtins_match_any_compatible_version() {
+        for builtin in [
+            "wasi:random/random@0.2.2",
+            "wasi:random/random@0.2.12",
+            "wasi:random/random",
+            "wasi:clocks/monotonic-clock@0.3.0",
+            "wasi:http/types@0.2.6",
+        ] {
+            assert!(WitInterface::from(builtin).is_host_builtin(), "{builtin}");
+        }
+        for other in [
+            "wasi:random/random@0.1.0",
+            "wasi:random/random@0.4.0",
+            "wasi:random/random@0.3.0-rc-2026-01-01",
+            "wasi:io/streams@0.3.0",
+            "wasi:keyvalue/store@0.2.0-draft",
+            "wasmcloud:random/random@0.2.2",
+        ] {
+            assert!(!WitInterface::from(other).is_host_builtin(), "{other}");
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -138,18 +139,10 @@ func findAllowedHostsPattern(crd map[string]any) (string, bool) {
 }
 
 func lookupAllowedHostsPattern(root map[string]any) (string, bool) {
-	path := []string{
-		"properties",
-		"spec",
-		"properties",
-		"components",
-		"items",
-		"properties",
-		"localResources",
-		"properties",
-		"allowedHosts",
-		"items",
-	}
+	path := strings.Split(
+		"properties.spec.properties.components.items.properties.localResources.properties.allowedHosts.items",
+		".",
+	)
 
 	node := root
 	for _, key := range path {

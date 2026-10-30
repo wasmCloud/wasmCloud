@@ -16,9 +16,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "async-task"
@@ -48,6 +48,62 @@ dependencies = [
 
 [[package]]
 name = "blobstore-implements-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-caller-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-caller-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-consumer-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-consumer-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-middleware-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-middleware-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-producer-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "borrow-producer-p3"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.60.0",
@@ -87,6 +143,13 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "cli-service-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "command-p3"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.60.0",
@@ -185,6 +248,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51093e27b0797c359783294ca4f0a911c270184cb10f85783b118614a1501be"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "feeds-callee-a"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "feeds-callee-b"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "feeds-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
 ]
 
 [[package]]
@@ -421,6 +505,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-local-caller-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "http-loopback-gateway"
 version = "0.0.0"
 dependencies = [
@@ -433,6 +524,14 @@ name = "http-memory-grow"
 version = "0.0.0"
 dependencies = [
  "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "http-relay"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "wstd",
 ]
 
 [[package]]
@@ -917,6 +1016,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "structured-caller"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "structured-plugin"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "svc-counter"
 version = "0.0.0"
 dependencies = [
@@ -979,9 +1092,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.52.3"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "pin-project-lite",

@@ -30,7 +30,7 @@
 //! store, which honours `SSL_CERT_FILE`/`SSL_CERT_DIR`) with any explicitly
 //! configured PEM bundles layered on top.
 //!
-//! The per-connection helpers ([`connect_tcp`], [`connect_tls`], the
+//! The per-connection helpers ([`connect_http_tcp`], [`connect_http_tls`], the
 //! connection-worker spawners) follow wasmtime's `default_send_request` error
 //! mappings and serve the gRPC egress fast path in `host::http`, which manages
 //! its own HTTP/2 connections rather than going through the pool.
@@ -49,23 +49,20 @@ use hyper_util::client::legacy::connect::{
     CaptureConnection, Connected, Connection, HttpConnector, capture_connection,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
-use rustls::pki_types::{CertificateDer, pem::PemObject};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
-use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::p2::hyper_request_error;
-use wasmtime_wasi_http::p2::types::{IncomingResponse, OutgoingRequestConfig};
+use wasmtime_wasi_http::{Error as HttpError, RequestOptions, WasiBody};
 
-use crate::host::http_p3::{P3Body, P3RequestErrorFuture};
+use crate::host::http::{RequestIoFuture, SendResult};
 
-/// Error type carried by the unified request body handed to the pooled client.
+/// Error type carried by the request body handed to the pooled client.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Unified request body: P2 and P3 bodies are mapped into this so a single
-/// connection pool serves both.
+/// Request body the pooled client sends.
 type ClientBody = UnsyncBoxBody<Bytes, BoxError>;
 
 type PoolClient = hyper_util::client::legacy::Client<BoundedConnector, ClientBody>;
@@ -173,8 +170,84 @@ pub enum TrustRoots {
     ExtraOnly,
 }
 
-/// Trust-root options for outbound HTTPS from components.
+/// PEM files holding a client certificate chain and its private key.
+///
+/// The other half of the egress trust store from
+/// [`ClientTlsOptions::extra_ca_paths`]: the bundles there decide which
+/// servers the host will talk to, this decides who it says it is when one
+/// asks. A peer that only *requests* a certificate completes the handshake
+/// either way, so a missing identity surfaces as the upstream rejecting
+/// requests rather than as a TLS error.
+///
+/// `#[non_exhaustive]`: PEM files on disk are the only form today, but a
+/// credential can arrive as a PKCS#12 bundle, as DER already in memory, or as
+/// a handle to something that never leaves an HSM. Naming the shape now keeps
+/// adding one from being a breaking change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClientIdentity {
+    /// A certificate chain and its private key, each PEM-encoded on disk.
+    CertificatePem {
+        /// Certificate chain, leaf first.
+        cert_path: PathBuf,
+        /// Private key for the leaf certificate.
+        key_path: PathBuf,
+    },
+}
+
+impl std::fmt::Display for ClientIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CertificatePem {
+                cert_path,
+                key_path,
+            } => write!(
+                f,
+                "certificate {} with key {}",
+                cert_path.display(),
+                key_path.display()
+            ),
+        }
+    }
+}
+
+impl ClientIdentity {
+    /// Read the chain and key.
+    pub(crate) fn load(
+        &self,
+    ) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+        let Self::CertificatePem {
+            cert_path,
+            key_path,
+        } = self;
+        let certs = CertificateDer::pem_file_iter(cert_path)
+            .with_context(|| format!("failed to read client certificate {}", cert_path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| {
+                format!(
+                    "failed to parse PEM in client certificate {}",
+                    cert_path.display()
+                )
+            })?;
+        anyhow::ensure!(
+            !certs.is_empty(),
+            "no certificate found in {}",
+            cert_path.display()
+        );
+
+        let key = PrivateKeyDer::from_pem_file(key_path)
+            .with_context(|| format!("failed to read client private key {}", key_path.display()))?;
+        Ok((certs, key))
+    }
+}
+
+/// Trust-root and client-identity options for outbound HTTPS from components.
+///
+/// `#[non_exhaustive]`: build one with [`Default`] and the `with_*` methods
+/// rather than a struct literal, so that adding an option later is not a
+/// breaking change for callers outside this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ClientTlsOptions {
     /// Built-in roots to start from.
     pub roots: TrustRoots,
@@ -182,16 +255,107 @@ pub struct ClientTlsOptions {
     /// more certificates), layered on top of `roots`. Use this to reach hosts
     /// behind a corporate or otherwise private CA.
     pub extra_ca_paths: Vec<PathBuf>,
+    /// Client certificate the host presents when a peer requests one. `None`
+    /// presents nothing, which is what an unconfigured host does.
+    ///
+    /// Loading this once at build time is deliberate: a credential that only
+    /// fails at handshake time surfaces as a peer rejecting every request,
+    /// which reads like a broken upstream.
+    ///
+    /// Validity is *not* tracked. The pair is checked for consistency when it
+    /// is loaded and then presented for the life of the configuration, so a
+    /// long-running host will keep offering it past `notAfter`. A host that
+    /// needs either rotation or expiry handling should install its own
+    /// [`rustls::client::ResolvesClientCert`] on the built configuration,
+    /// which rustls consults once per handshake and which can decline.
+    pub client_identity: Option<ClientIdentity>,
 }
 
 impl ClientTlsOptions {
+    /// Options trusting `roots` and nothing else yet.
+    #[must_use]
+    pub fn new(roots: TrustRoots) -> Self {
+        Self {
+            roots,
+            ..Default::default()
+        }
+    }
+
+    /// Also trust the CA bundles at `paths`.
+    #[must_use]
+    pub fn with_ca_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.extra_ca_paths.extend(paths);
+        self
+    }
+
+    /// Present `identity` when a peer requests a client certificate.
+    #[must_use]
+    pub fn with_client_identity(mut self, identity: ClientIdentity) -> Self {
+        self.client_identity = Some(identity);
+        self
+    }
+
     /// Build a rustls client configuration from these options.
     ///
     /// Fails when an entry in `extra_ca_paths` cannot be read or contains no
-    /// usable certificate, or when the options yield an empty trust store
-    /// (e.g. [`TrustRoots::ExtraOnly`] with no bundles); problems loading
-    /// individual native-store certificates are logged and skipped.
+    /// usable certificate, when the options yield an empty trust store
+    /// (e.g. [`TrustRoots::ExtraOnly`] with no bundles), or when
+    /// `client_identity` names an unreadable or mismatched pair; problems
+    /// loading individual native-store certificates are logged and skipped.
     pub fn build(&self) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+        // Resolved first: `root_store` installs the crypto provider that
+        // `ClientConfig::builder` panics without, and as the receiver the
+        // builder would otherwise be evaluated before it.
+        let roots = self.root_store()?;
+        let builder = rustls::ClientConfig::builder().with_root_certificates(roots);
+        let config = match &self.client_identity {
+            Some(identity) => {
+                let (certs, key) = identity.load()?;
+                // Parses the key and compares it against the leaf's
+                // SubjectPublicKeyInfo, so this rejects both a key the
+                // provider cannot use and a crossed pair. Not a guarantee of
+                // consistency: `CertifiedKey::from_der` tolerates
+                // `InconsistentKeys(Unknown)`, so a key that cannot report its
+                // public half is accepted unchecked.
+                let config = builder
+                    .with_client_auth_cert(certs, key)
+                    .with_context(|| format!("{identity} is not a usable client identity"))?;
+                debug!(
+                    identity = %identity,
+                    "presenting a client certificate for outbound TLS"
+                );
+                config
+            }
+            None => builder.with_no_client_auth(),
+        };
+
+        Ok(Arc::new(config))
+    }
+
+    /// Build a rustls client configuration whose client identity comes from
+    /// `resolver` rather than from [`Self::client_identity`].
+    ///
+    /// Uses the same trust roots as [`Self::build`] and ignores
+    /// [`Self::client_identity`]. Session resumption is disabled so each new
+    /// connection consults the resolver.
+    pub fn build_with_resolver(
+        &self,
+        resolver: Arc<dyn rustls::client::ResolvesClientCert>,
+    ) -> anyhow::Result<Arc<rustls::ClientConfig>> {
+        let roots = self.root_store()?;
+        let mut config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_client_cert_resolver(resolver);
+        config.resumption = rustls::client::Resumption::disabled();
+        Ok(Arc::new(config))
+    }
+
+    /// The trust store these options describe, without deciding how the client
+    /// authenticates itself.
+    ///
+    /// Split out for the OTLP exporters, which trust a collector the same way
+    /// but may also present a client certificate to it.
+    pub(crate) fn root_store(&self) -> anyhow::Result<rustls::RootCertStore> {
         crate::init_crypto();
         let mut roots = match self.roots {
             TrustRoots::WebpkiAndNative | TrustRoots::Webpki => rustls::RootCertStore {
@@ -233,11 +397,7 @@ impl ClientTlsOptions {
             self.extra_ca_paths.len()
         );
 
-        Ok(Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        ))
+        Ok(roots)
     }
 }
 
@@ -264,61 +424,15 @@ pub fn default_client_tls_config() -> Arc<rustls::ClientConfig> {
         .clone()
 }
 
-/// Transport-level failure while establishing an outbound connection.
+/// A name-resolution failure as wasmtime's `default_send_request` reports it.
 ///
-/// The P2 and P3 egress paths use distinct wasi:http `ErrorCode` types, so the
-/// shared connection helpers report through this enum and each path converts
-/// with the matching `From` impl below (both follow wasmtime's
-/// `default_send_request` mappings).
-#[derive(Debug)]
-pub(crate) enum ConnectError {
-    /// The connect timeout elapsed.
-    Timeout,
-    /// TCP connect failed for a non-DNS reason.
-    Refused,
-    /// Name resolution failed ("address not available").
-    Dns,
-    /// The authority's host is not usable as a TLS server name.
-    InvalidDnsName,
-    /// The TLS handshake failed.
-    Tls,
-}
-
-impl From<ConnectError> for wasmtime_wasi_http::p2::bindings::http::types::ErrorCode {
-    fn from(err: ConnectError) -> Self {
-        use wasmtime_wasi_http::p2::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        let dns_error = |rcode: &str| {
-            ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some(rcode.to_string()),
-                info_code: Some(0),
-            })
-        };
-        match err {
-            ConnectError::Timeout => ErrorCode::ConnectionTimeout,
-            ConnectError::Refused => ErrorCode::ConnectionRefused,
-            ConnectError::Dns => dns_error("address not available"),
-            ConnectError::InvalidDnsName => dns_error("invalid dns name"),
-            ConnectError::Tls => ErrorCode::TlsProtocolError,
-        }
-    }
-}
-
-impl From<ConnectError> for wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-    fn from(err: ConnectError) -> Self {
-        use wasmtime_wasi_http::p3::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        let dns_error = |rcode: &str| {
-            ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some(rcode.to_string()),
-                info_code: Some(0),
-            })
-        };
-        match err {
-            ConnectError::Timeout => ErrorCode::ConnectionTimeout,
-            ConnectError::Refused => ErrorCode::ConnectionRefused,
-            ConnectError::Dns => dns_error("address not available"),
-            ConnectError::InvalidDnsName => dns_error("invalid dns name"),
-            ConnectError::Tls => ErrorCode::TlsProtocolError,
-        }
+/// `rcode="address not available"` is what it emits for every resolver
+/// failure — misleading, but the error shape guests already match on, so both
+/// transports here emit it too.
+fn dns_error(rcode: &str) -> HttpError {
+    HttpError::DnsError {
+        rcode: Some(rcode.to_string()),
+        info_code: Some(0),
     }
 }
 
@@ -344,20 +458,19 @@ fn is_resolver_error(err: &std::io::Error) -> bool {
     cfg!(windows) && matches!(err.raw_os_error(), Some(11001..=11004))
 }
 
-/// Open a TCP connection to `authority` within `connect_timeout`, mapping
-/// failures the way wasmtime's default transport does.
-pub(crate) async fn connect_tcp(
+/// Open an HTTP TCP connection and return guest-visible connection errors.
+pub(crate) async fn connect_http_tcp(
     authority: &str,
     connect_timeout: Duration,
-) -> Result<TcpStream, ConnectError> {
+) -> Result<TcpStream, HttpError> {
     timeout(connect_timeout, TcpStream::connect(authority))
         .await
-        .map_err(|_| ConnectError::Timeout)?
+        .map_err(|_| HttpError::ConnectionTimeout)?
         .map_err(|e| {
             if is_resolver_error(&e) {
-                ConnectError::Dns
+                dns_error("address not available")
             } else {
-                ConnectError::Refused
+                HttpError::ConnectionRefused
             }
         })
 }
@@ -378,70 +491,42 @@ pub(crate) fn isolated_resumption(tls: &rustls::ClientConfig) -> rustls::ClientC
 
 /// Run a TLS client handshake over an established TCP stream, using
 /// `authority`'s host portion as the SNI server name.
-pub(crate) async fn connect_tls(
+pub(crate) async fn connect_http_tls(
     tls: Arc<rustls::ClientConfig>,
     authority: &str,
     tcp_stream: TcpStream,
-) -> Result<tokio_rustls::client::TlsStream<TcpStream>, ConnectError> {
+) -> Result<tokio_rustls::client::TlsStream<TcpStream>, HttpError> {
     let connector = tokio_rustls::TlsConnector::from(tls);
     let domain = tls_server_name(authority).ok_or_else(|| {
         warn!(authority = %authority, "invalid TLS server name");
-        ConnectError::InvalidDnsName
+        dns_error("invalid dns name")
     })?;
     connector.connect(domain, tcp_stream).await.map_err(|e| {
         warn!("tls protocol error: {e:?}");
-        ConnectError::Tls
+        HttpError::TlsProtocolError
     })
 }
 
-/// Spawn the hyper connection driver for a P2 egress connection.
+/// Spawn the hyper connection driver for an egress connection.
 ///
-/// P2's `IncomingResponse::worker` is an `AbortOnDropJoinHandle<()>`, so a
-/// connection error can only be logged here; body errors still reach the guest
-/// through the response body stream (mirrors wasmtime's
-/// `default_send_request_handler`).
-pub(crate) fn spawn_p2_conn_worker<F>(conn: F) -> AbortOnDropJoinHandle<()>
+/// The returned handle doubles as the request's [`RequestIoFuture`], so a
+/// connection failure is propagated to the guest via [`connection_error`]
+/// rather than dropped.
+pub(crate) fn spawn_conn_worker<F>(conn: F) -> AbortOnDropJoinHandle<Result<(), HttpError>>
 where
     F: Future<Output = Result<(), hyper::Error>> + Send + 'static,
 {
-    wasmtime_wasi::runtime::spawn(async move {
-        if let Err(e) = conn.await {
-            warn!(err = %e, "dropping outbound connection error");
-        }
-    })
+    wasmtime_wasi::runtime::spawn(async move { conn.await.map_err(connection_error) })
 }
 
-/// Spawn the hyper connection driver for a P3 egress connection.
-///
-/// The returned handle doubles as the request-error future handed back to
-/// wasmtime, so a connection failure is propagated to the guest via
-/// [`p3_connection_error`] rather than dropped.
-pub(crate) fn spawn_p3_conn_worker<F>(
-    conn: F,
-) -> AbortOnDropJoinHandle<Result<(), wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>>
-where
-    F: Future<Output = Result<(), hyper::Error>> + Send + 'static,
-{
-    wasmtime_wasi::runtime::spawn(async move { conn.await.map_err(p3_connection_error) })
-}
-
-/// Translate an error from a hyper connection driver into a P3 [`ErrorCode`].
-///
-/// wasmtime's equivalent (`ErrorCode::from_hyper_response_error`) is crate
-/// private, so mirror it here: a timeout becomes `HttpResponseTimeout`, and
-/// everything else falls through to the public request mapping, which already
-/// recovers an `ErrorCode` carried in the error's source chain.
-///
-/// [`ErrorCode`]: wasmtime_wasi_http::p3::bindings::http::types::ErrorCode
-pub(crate) fn p3_connection_error(
-    err: hyper::Error,
-) -> wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-    use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-
+/// Translate an error from a hyper connection or response body, as wasmtime's
+/// `default_send_request` does: a timeout becomes `HttpResponseTimeout`, and
+/// anything else is left for wasmtime to classify.
+pub(crate) fn connection_error(err: hyper::Error) -> HttpError {
     if err.is_timeout() {
-        ErrorCode::HttpResponseTimeout
+        HttpError::HttpResponseTimeout
     } else {
-        ErrorCode::from_hyper_request_error(err)
+        HttpError::Hyper(err)
     }
 }
 
@@ -493,16 +578,15 @@ fn tls_server_name(authority: &str) -> Option<rustls::pki_types::ServerName<'sta
         .map(|name| name.to_owned())
 }
 
-/// Why awaiting a response head failed, before it is mapped to the P2 or P3
-/// `ErrorCode` (which are distinct types).
+/// Why awaiting a response head failed.
+///
+/// A timeout is already the guest's error: `connect_timeout` bounds the wait
+/// for a usable connection, `first_byte_timeout` the head itself. A transport
+/// failure is not yet — it may be hyper's wrapper around the guest's own body
+/// error, which only the caller of [`send_head`] can see.
 enum HeadError {
-    /// No connection became usable within the guest's `connect_timeout`.
-    ConnectTimeout,
-    /// A connection was in hand, but the head did not arrive within the
-    /// guest's `first_byte_timeout`.
-    ReadTimeout,
-    /// The transport failed; [`classify_client_error`] sorts out the cause.
-    Send(hyper_util::client::legacy::Error),
+    Timeout(HttpError),
+    Transport(hyper_util::client::legacy::Error),
 }
 
 /// Resolve once `captured` has a connection, discarding the metadata.
@@ -538,7 +622,9 @@ async fn send_head(
         biased;
         result = &mut send => Some(result),
         () = wait_connected(&mut captured) => None,
-        () = tokio::time::sleep(connect_timeout) => return Err(HeadError::ConnectTimeout),
+        () = tokio::time::sleep(connect_timeout) => {
+            return Err(HeadError::Timeout(HttpError::ConnectionTimeout));
+        }
     };
     let result = match settled {
         // The send resolved before a connection was ever observed — a connect
@@ -546,17 +632,38 @@ async fn send_head(
         Some(result) => result,
         None => timeout(first_byte_timeout, send)
             .await
-            .map_err(|_| HeadError::ReadTimeout)?,
+            .map_err(|_| HeadError::Timeout(HttpError::ConnectionReadTimeout))?,
     };
-    result.map_err(HeadError::Send)
+    result.map_err(HeadError::Transport)
 }
 
 /// Which protocol a connector negotiates, over ALPN for HTTPS and by prior
 /// knowledge for cleartext.
 #[derive(Clone, Copy)]
-enum Alpn {
+pub(crate) enum Alpn {
     Http1,
     H2,
+}
+
+/// The HTTPS connector every outbound connection this host makes is built on.
+/// A plain `HttpConnector` with `nodelay`, wrapped so it also speaks TLS.
+pub(crate) fn https_connector(
+    tls: &rustls::ClientConfig,
+    alpn: Alpn,
+) -> hyper_rustls::HttpsConnector<HttpConnector> {
+    crate::init_crypto();
+    let mut http = HttpConnector::new();
+    // The inner connector sees https URIs too; scheme handling belongs
+    // to the wrapping HttpsConnector.
+    http.enforce_http(false);
+    http.set_nodelay(true);
+    let builder = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_tls_config(tls.clone())
+        .https_or_http();
+    match alpn {
+        Alpn::Http1 => builder.enable_http1().wrap_connector(http),
+        Alpn::H2 => builder.enable_http2().wrap_connector(http),
+    }
 }
 
 /// A pooled outbound HTTP client with configurable TLS trust roots.
@@ -610,27 +717,13 @@ impl PooledClient {
         // both protocols: they belong to the workload, not to a pool.
         let tls_config = isolated_resumption(&tls);
         let last_permit_warning = Arc::new(std::sync::Mutex::new(None));
-        let connector = |alpn: Alpn| {
-            let mut http = HttpConnector::new();
-            // The inner connector sees https URIs too; scheme handling belongs
-            // to the wrapping HttpsConnector.
-            http.enforce_http(false);
-            http.set_nodelay(true);
-            let builder = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_tls_config(tls_config.clone())
-                .https_or_http();
-            let inner = match alpn {
-                Alpn::Http1 => builder.enable_http1().wrap_connector(http),
-                Alpn::H2 => builder.enable_http2().wrap_connector(http),
-            };
-            BoundedConnector {
-                inner,
-                workload: workload.clone(),
-                workload_permits: workload_permits.clone(),
-                global_permits: global_permits.clone(),
-                permit_wait,
-                last_permit_warning: last_permit_warning.clone(),
-            }
+        let connector = |alpn: Alpn| BoundedConnector {
+            inner: https_connector(&tls_config, alpn),
+            workload: workload.clone(),
+            workload_permits: workload_permits.clone(),
+            global_permits: global_permits.clone(),
+            permit_wait,
+            last_permit_warning: last_permit_warning.clone(),
         };
         let pool = || {
             let mut builder = hyper_util::client::legacy::Client::builder(TokioExecutor::new());
@@ -659,97 +752,34 @@ impl PooledClient {
         self.tls.clone()
     }
 
-    /// Send a P2 outgoing request through the HTTP/1.1 pool.
-    pub(crate) async fn send_request_p2(
-        &self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-        self.p2(&self.client, request, config).await
-    }
-
-    /// Send a P2 gRPC request through the HTTP/2 pool.
-    pub(crate) async fn send_grpc_request_p2(
-        &self,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-        self.p2(&self.grpc, request, config).await
-    }
-
-    async fn p2(
-        &self,
-        pool: &PoolClient,
-        request: hyper::Request<HyperOutgoingBody>,
-        config: OutgoingRequestConfig,
-    ) -> Result<IncomingResponse, wasmtime_wasi_http::p2::bindings::http::types::ErrorCode> {
-        let OutgoingRequestConfig {
-            // The URI scheme (validated upstream against this flag) tells the
-            // connector whether to wrap the stream in TLS.
-            use_tls: _,
-            connect_timeout,
-            first_byte_timeout,
-            between_bytes_timeout,
-        } = config;
-        let request = request.map(|body| body.map_err(|e| Box::new(e) as BoxError).boxed_unsync());
-        let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
-            .await
-            .map_err(|err| {
-                use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-                match err {
-                    HeadError::ConnectTimeout => ErrorCode::ConnectionTimeout,
-                    HeadError::ReadTimeout => ErrorCode::ConnectionReadTimeout,
-                    HeadError::Send(e) => classify_client_error(&e).into_p2(),
-                }
-            })?;
-        Ok(IncomingResponse {
-            resp: resp.map(|body| body.map_err(hyper_request_error).boxed_unsync()),
-            // Connection lifecycle is owned by the pool; there is no
-            // per-request connection task to keep alive.
-            worker: None,
-            between_bytes_timeout,
-        })
-    }
-
-    /// Send a P3 outgoing request through the HTTP/1.1 pool.
+    /// Send an outgoing request through the HTTP/1.1 pool.
     ///
     /// The returned future reports the request-body upload outcome to the
     /// guest: `Ok(())` once the body has been fully pulled, or the body's own
     /// error if producing it failed.
-    pub(crate) async fn send_request_p3(
+    pub(crate) async fn send_request(
         &self,
-        request: hyper::Request<P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    ) -> Result<
-        (hyper::Response<P3Body>, P3RequestErrorFuture),
-        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-    > {
-        self.p3(&self.client, request, options).await
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> SendResult {
+        self.send(&self.client, request, options).await
     }
 
-    /// Send a P3 gRPC request through the HTTP/2 pool.
-    pub(crate) async fn send_grpc_request_p3(
+    /// Send a gRPC request through the HTTP/2 pool.
+    pub(crate) async fn send_grpc_request(
         &self,
-        request: hyper::Request<P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    ) -> Result<
-        (hyper::Response<P3Body>, P3RequestErrorFuture),
-        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-    > {
-        self.p3(&self.grpc, request, options).await
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> SendResult {
+        self.send(&self.grpc, request, options).await
     }
 
-    async fn p3(
+    async fn send(
         &self,
         pool: &PoolClient,
-        request: hyper::Request<P3Body>,
-        options: Option<wasmtime_wasi_http::p3::RequestOptions>,
-    ) -> Result<
-        (hyper::Response<P3Body>, P3RequestErrorFuture),
-        wasmtime_wasi_http::p3::bindings::http::types::ErrorCode,
-    > {
-        use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
-
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+    ) -> SendResult {
         let connect_timeout = options
             .and_then(|o| o.connect_timeout)
             .unwrap_or(Duration::from_secs(600));
@@ -760,43 +790,84 @@ impl PooledClient {
             .and_then(|o| o.between_bytes_timeout)
             .unwrap_or(Duration::from_secs(600));
 
-        let (upload_tx, upload_rx) = tokio::sync::oneshot::channel::<Result<(), ErrorCode>>();
         let (parts, body) = request.into_parts();
-        let body = UploadProbe {
-            inner: body,
-            done: Some(upload_tx),
-        }
-        .map_err(|e| Box::new(e) as BoxError)
-        .boxed_unsync();
+        let (body, mut upload_rx) = UploadProbe::new(body);
+        let body = body.map_err(|e| Box::new(e) as BoxError).boxed_unsync();
         let request = hyper::Request::from_parts(parts, body);
 
         let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
             .await
             .map_err(|err| match err {
-                HeadError::ConnectTimeout => ErrorCode::ConnectionTimeout,
-                HeadError::ReadTimeout => ErrorCode::ConnectionReadTimeout,
-                HeadError::Send(e) => classify_client_error(&e).into_p3(),
+                HeadError::Timeout(err) => err,
+                // The guest's own body error, when that is what failed, rather
+                // than the transport error hyper wrapped the marker in.
+                HeadError::Transport(e) => match upload_rx.try_recv() {
+                    Ok(Err(body_err)) => body_err,
+                    _ => classify_client_error(&e),
+                },
             })?;
 
         let resp = resp.map(|body| {
             crate::host::http::TimedBody::new(body, between_bytes_timeout).boxed_unsync()
         });
 
-        let io: P3RequestErrorFuture = Box::new(async move {
-            match upload_rx.await {
-                Ok(result) => result,
-                // The body was dropped before completing — e.g. the server
-                // responded without draining the upload. Not a guest-visible
-                // failure.
-                Err(_) => Ok(()),
-            }
-        });
-        Ok((resp, io))
+        Ok((resp, upload_io(upload_rx)))
     }
 }
 
-/// Per-workload pooled clients sharing one TLS configuration and one
-/// host-wide ceiling.
+/// Supplies the TLS configuration a workload's outbound connections use.
+///
+/// A host that gives each workload its own client identity implements this;
+/// one that does not passes an `Arc<rustls::ClientConfig>`, which implements
+/// it by handing the same configuration to everyone.
+///
+/// Consulted when a workload's [`PooledClient`] is built, not per request, so
+/// a configuration handed out here is the one every connection in that pool
+/// negotiates with.
+///
+/// Must be cheap and must not block. It is called synchronously on the
+/// runtime worker serving the workload's first outbound request, while the
+/// client cache holds its per-key initialization lock, so reading a file or
+/// fetching a secret here stalls that worker and serializes every concurrent
+/// first request for the workload. Resolve credentials ahead of time and let
+/// this hand back what is already loaded. Replace a credential *without* rebuilding the pool by
+/// keeping one configuration per workload whose
+/// [`rustls::client::ResolvesClientCert`] reads swappable state: rustls
+/// consults that on every handshake, so a rotated credential applies to new
+/// connections while established ones keep what they negotiated with.
+///
+/// `workload_id` is the host-assigned identifier described on
+/// [`WorkloadClients::client`], never guest-controlled, which is what makes
+/// it safe to key an identity on.
+pub trait ClientTlsConfigResolver: Send + Sync + 'static {
+    /// The configuration `workload_id`'s connections use.
+    fn config_for(&self, workload_id: &str) -> Arc<rustls::ClientConfig>;
+
+    /// The configuration for egress that belongs to no single workload.
+    ///
+    /// Reached through [`OutgoingHandler::client_tls_config`] on the gRPC
+    /// fallback path, which only handlers that do not pool per workload take:
+    /// [`DefaultOutgoingHandler`] answers gRPC from the workload's own pooled
+    /// client, so it keeps that workload's identity.
+    ///
+    /// [`OutgoingHandler::client_tls_config`]: crate::host::http::OutgoingHandler::client_tls_config
+    /// [`DefaultOutgoingHandler`]: crate::host::http::DefaultOutgoingHandler
+    fn host_config(&self) -> Arc<rustls::ClientConfig>;
+}
+
+/// One configuration for every workload, which is what a host without
+/// per-workload identity wants.
+impl ClientTlsConfigResolver for Arc<rustls::ClientConfig> {
+    fn config_for(&self, _workload_id: &str) -> Arc<rustls::ClientConfig> {
+        Arc::clone(self)
+    }
+
+    fn host_config(&self) -> Arc<rustls::ClientConfig> {
+        Arc::clone(self)
+    }
+}
+
+/// Per-workload pooled clients sharing one host-wide ceiling.
 ///
 /// Each workload gets its own [`PooledClient`] (created lazily on first
 /// request, evicted after [`WORKLOAD_CLIENT_IDLE`] without use), so a
@@ -808,7 +879,7 @@ impl PooledClient {
 /// Cloning is cheap and shares the underlying client cache.
 #[derive(Clone)]
 pub struct WorkloadClients {
-    tls: Arc<rustls::ClientConfig>,
+    tls: Arc<dyn ClientTlsConfigResolver>,
     /// Where each workload's allowance comes from. Held apart from
     /// [`Self::clients`] so that a client rebuilt for a workload draws on the
     /// same quota its predecessor did: a replaced client's connections keep
@@ -827,6 +898,45 @@ pub struct WorkloadClients {
     /// before any request builds a client, and is dropped when it unbinds.
     call_concurrency: Arc<std::sync::RwLock<BTreeMap<String, usize>>>,
     clients: moka::sync::Cache<String, PooledClient>,
+    /// Unbinds whose invalidated clients have not been dropped yet. Non-zero
+    /// while a task is dropping them, so a burst of unbinds runs one task
+    /// rather than one each.
+    release_pending: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Owns maintenance before it is queued, including if the runtime cancels it
+/// before the blocking closure starts. Cancellation still drains the pending
+/// invalidations, so their clients do not wait for another cache access.
+struct ReleaseOwner {
+    clients: moka::sync::Cache<String, PooledClient>,
+    pending: Arc<std::sync::atomic::AtomicUsize>,
+    armed: bool,
+}
+
+impl ReleaseOwner {
+    fn release(&mut self) {
+        use std::sync::atomic::Ordering;
+        while self.armed {
+            let seen = self.pending.load(Ordering::Acquire);
+            self.clients.run_pending_tasks();
+            // An unbind during this pass left its invalidation to us. Keep
+            // ownership until a complete pass has caught up with every one.
+            if self
+                .pending
+                .compare_exchange(seen, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                // A new owner can start immediately after the exchange.
+                self.armed = false;
+            }
+        }
+    }
+}
+
+impl Drop for ReleaseOwner {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 impl WorkloadClients {
@@ -856,10 +966,23 @@ impl WorkloadClients {
         tls: Arc<rustls::ClientConfig>,
         quotas: Arc<crate::host::quota::QuotaRegistry>,
     ) -> Self {
+        Self::with_tls_config_resolver(Arc::new(tls), quotas)
+    }
+
+    /// Create a per-workload client cache that resolves a TLS configuration
+    /// per workload, so each can present its own client identity.
+    ///
+    /// Otherwise identical to [`Self::with_quotas`], which is this with a
+    /// resolver that answers every workload the same way.
+    pub fn with_tls_config_resolver(
+        tls: Arc<dyn ClientTlsConfigResolver>,
+        quotas: Arc<crate::host::quota::QuotaRegistry>,
+    ) -> Self {
         Self {
             tls,
             quotas,
             call_concurrency: Arc::new(std::sync::RwLock::new(BTreeMap::new())),
+            release_pending: Arc::default(),
             clients: moka::sync::Cache::builder()
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
@@ -914,7 +1037,7 @@ impl WorkloadClients {
                 .copied()
                 .unwrap_or(1);
             PooledClient::bounded(
-                self.tls.clone(),
+                self.tls.config_for(workload_id),
                 Some(Arc::from(workload_id)),
                 quota.outbound_http_permits(),
                 // An unset host-wide ceiling is spelled as an effectively
@@ -941,19 +1064,62 @@ impl WorkloadClients {
     /// window ([`WORKLOAD_CLIENT_IDLE`]) once nothing refers to the workload.
     pub fn invalidate(&self, workload_id: &str) {
         self.clients.invalidate(workload_id);
-        // moka may defer dropping the evicted value to a maintenance pass;
-        // force it so the pool (and the permits its idle connections pin) is
-        // released now, not on the next cache access.
-        self.clients.run_pending_tasks();
         self.call_concurrency
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(workload_id);
+        drop(self.release_invalidated());
     }
 
-    /// The TLS configuration the per-workload clients verify servers against.
+    /// Drop invalidated clients now rather than on the next cache access.
+    ///
+    /// moka may defer dropping an evicted value to a maintenance pass, and
+    /// until then its pool keeps its idle connections, and the permits they
+    /// pin. Running that pass inline put the whole cache's pending work on
+    /// every unbind, so it runs off the caller's thread, on one task at a time
+    /// that keeps passing until no unbind arrived during its last pass.
+    fn release_invalidated(&self) -> Option<tokio::task::JoinHandle<()>> {
+        use std::sync::atomic::Ordering;
+        // Only the unbind that finds nothing pending starts a task: a burst
+        // otherwise spawned one blocking task per unbind, each queueing on
+        // moka's maintenance lock behind the last.
+        if self.release_pending.fetch_add(1, Ordering::AcqRel) != 0 {
+            return None;
+        }
+        let mut owner = ReleaseOwner {
+            clients: self.clients.clone(),
+            pending: Arc::clone(&self.release_pending),
+            armed: true,
+        };
+        let release = move || owner.release();
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => Some(runtime.spawn_blocking(release)),
+            Err(_) => {
+                let mut release = release;
+                release();
+                None
+            }
+        }
+    }
+
+    /// The TLS configuration for egress belonging to no single workload.
+    ///
+    /// Not necessarily what any given workload's connections use: a host with
+    /// per-workload identities resolves those in [`Self::client`]. See
+    /// [`ClientTlsConfigResolver::host_config`].
     pub fn tls_config(&self) -> Arc<rustls::ClientConfig> {
-        self.tls.clone()
+        self.tls.host_config()
+    }
+
+    /// The resolver these clients draw their configurations from.
+    ///
+    /// Rebuilding a cache (as [`DefaultOutgoingHandler::with_quotas`] does)
+    /// has to carry this over: taking [`Self::tls_config`] instead would
+    /// collapse every workload onto the host-wide configuration.
+    ///
+    /// [`DefaultOutgoingHandler::with_quotas`]: crate::host::http::DefaultOutgoingHandler::with_quotas
+    pub fn tls_config_resolver(&self) -> Arc<dyn ClientTlsConfigResolver> {
+        Arc::clone(&self.tls)
     }
 }
 
@@ -1141,18 +1307,46 @@ impl Connection for PermittedStream {
 
 /// Request body wrapper that reports the upload outcome over a oneshot once
 /// the body has been fully pulled (or fails).
-struct UploadProbe {
-    inner: P3Body,
-    done: Option<
-        tokio::sync::oneshot::Sender<
-            Result<(), wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>,
-        >,
-    >,
+///
+/// A failure is *moved* into the oneshot, and hyper is handed a marker in its
+/// place: [`HttpError`] is `#[non_exhaustive]` and not `Clone`, so copying one
+/// would mean maintaining a hand-written clone of an upstream enum. The
+/// oneshot is the only reader that matters — [`PooledClient::send`] takes the
+/// error from it, whether the request failed before the head or after it.
+pub(crate) struct UploadProbe {
+    inner: WasiBody,
+    done: Option<tokio::sync::oneshot::Sender<Result<(), HttpError>>>,
+}
+
+/// The outcome channel of an [`UploadProbe`], which a sender both reads
+/// directly — to prefer the guest's own body error over hyper's wrapper — and
+/// hands to the guest as its request-error future.
+pub(crate) type UploadOutcome = tokio::sync::oneshot::Receiver<Result<(), HttpError>>;
+
+impl UploadProbe {
+    /// Wrap `inner`, returning the channel its upload outcome arrives on.
+    pub(crate) fn new(inner: WasiBody) -> (Self, UploadOutcome) {
+        let (done, outcome) = tokio::sync::oneshot::channel();
+        (
+            Self {
+                inner,
+                done: Some(done),
+            },
+            outcome,
+        )
+    }
+}
+
+/// The guest's request-error future for a body wrapped by [`UploadProbe`]. A
+/// body dropped before completing, e.g. by a server that responded without
+/// draining it, is not a guest-visible failure.
+pub(crate) fn upload_io(outcome: UploadOutcome) -> RequestIoFuture {
+    Box::new(async move { outcome.await.unwrap_or(Ok(())) })
 }
 
 impl hyper::body::Body for UploadProbe {
     type Data = Bytes;
-    type Error = wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
+    type Error = HttpError;
 
     fn poll_frame(
         mut self: std::pin::Pin<&mut Self>,
@@ -1167,10 +1361,17 @@ impl hyper::body::Body for UploadProbe {
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(err))) => {
-                if let Some(done) = self.done.take() {
-                    let _ = done.send(Err(err.clone()));
+                match self.done.take() {
+                    // Sent before hyper can observe the failure, so `send` finds
+                    // it waiting.
+                    Some(done) => {
+                        let _ = done.send(Err(err));
+                        Poll::Ready(Some(Err(HttpError::InternalError(Some(
+                            "request body failed".to_string(),
+                        )))))
+                    }
+                    None => Poll::Ready(Some(Err(err))),
                 }
-                Poll::Ready(Some(Err(err)))
             }
             other => other,
         }
@@ -1182,63 +1383,6 @@ impl hyper::body::Body for UploadProbe {
 
     fn size_hint(&self) -> hyper::body::SizeHint {
         self.inner.size_hint()
-    }
-}
-
-/// Protocol-agnostic classification of a pooled-client send error, mapped to
-/// the P2/P3 `ErrorCode` variants below.
-enum SendError {
-    /// Name resolution failed. Deliberately mapped to the same misleading
-    /// `rcode="address not available"` DNS payload wasmtime's default
-    /// transport emits, so guests that already match on that error shape see
-    /// no change.
-    Dns,
-    ConnectionTimeout,
-    ConnectionRefused,
-    TlsProtocol,
-    /// The guest-provided request body failed while being uploaded.
-    P2Body(wasmtime_wasi_http::p2::bindings::http::types::ErrorCode),
-    P3Body(wasmtime_wasi_http::p3::bindings::http::types::ErrorCode),
-    Protocol(String),
-}
-
-impl SendError {
-    fn into_p2(self) -> wasmtime_wasi_http::p2::bindings::http::types::ErrorCode {
-        use wasmtime_wasi_http::p2::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        match self {
-            SendError::Dns => ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some("address not available".to_string()),
-                info_code: Some(0),
-            }),
-            SendError::ConnectionTimeout => ErrorCode::ConnectionTimeout,
-            SendError::ConnectionRefused => ErrorCode::ConnectionRefused,
-            SendError::TlsProtocol => ErrorCode::TlsProtocolError,
-            SendError::P2Body(code) => code,
-            SendError::P3Body(_) => ErrorCode::HttpProtocolError,
-            SendError::Protocol(msg) => {
-                warn!(err = %msg, "outbound HTTP protocol error");
-                ErrorCode::HttpProtocolError
-            }
-        }
-    }
-
-    fn into_p3(self) -> wasmtime_wasi_http::p3::bindings::http::types::ErrorCode {
-        use wasmtime_wasi_http::p3::bindings::http::types::{DnsErrorPayload, ErrorCode};
-        match self {
-            SendError::Dns => ErrorCode::DnsError(DnsErrorPayload {
-                rcode: Some("address not available".to_string()),
-                info_code: Some(0),
-            }),
-            SendError::ConnectionTimeout => ErrorCode::ConnectionTimeout,
-            SendError::ConnectionRefused => ErrorCode::ConnectionRefused,
-            SendError::TlsProtocol => ErrorCode::TlsProtocolError,
-            SendError::P3Body(code) => code,
-            SendError::P2Body(_) => ErrorCode::HttpProtocolError,
-            SendError::Protocol(msg) => {
-                warn!(err = %msg, "outbound HTTP protocol error");
-                ErrorCode::HttpProtocolError
-            }
-        }
     }
 }
 
@@ -1317,52 +1461,115 @@ fn find_in_chain<'a, T: std::error::Error + 'static>(
 /// re-diff this against `wasmtime_wasi_http`'s mapping; the
 /// `connect_failures_classify_to_dns_and_refused` test pins the two
 /// classifications guests most commonly match on.
-fn classify_client_error(err: &hyper_util::client::legacy::Error) -> SendError {
-    // A guest body error travels through hyper wrapped in our BoxError; give
-    // it back to the guest unchanged.
-    if let Some(code) =
-        find_in_chain::<wasmtime_wasi_http::p2::bindings::http::types::ErrorCode>(err)
-    {
-        return SendError::P2Body(code.clone());
-    }
-    if let Some(code) =
-        find_in_chain::<wasmtime_wasi_http::p3::bindings::http::types::ErrorCode>(err)
-    {
-        return SendError::P3Body(code.clone());
-    }
-
+fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
     if err.is_connect() {
         if find_in_chain::<rustls::pki_types::InvalidDnsNameError>(err).is_some() {
             warn!(err = %format!("{err:?}"), "outbound TLS protocol error");
-            return SendError::TlsProtocol;
+            return HttpError::TlsProtocolError;
         }
         if let Some(io) = find_in_chain::<std::io::Error>(err) {
             let facts = unwrap_io_error(io);
             if facts.tls {
                 warn!(err = %format!("{err:?}"), "outbound TLS protocol error");
-                return SendError::TlsProtocol;
+                return HttpError::TlsProtocolError;
             }
             return match facts.kind {
-                std::io::ErrorKind::AddrNotAvailable => SendError::Dns,
-                std::io::ErrorKind::TimedOut => SendError::ConnectionTimeout,
-                _ if facts.resolver => SendError::Dns,
-                _ => SendError::ConnectionRefused,
+                std::io::ErrorKind::AddrNotAvailable => dns_error("address not available"),
+                std::io::ErrorKind::TimedOut => HttpError::ConnectionTimeout,
+                _ if facts.resolver => dns_error("address not available"),
+                _ => HttpError::ConnectionRefused,
             };
         }
-        return SendError::ConnectionRefused;
+        return HttpError::ConnectionRefused;
     }
 
     if let Some(hyper_err) = find_in_chain::<hyper::Error>(err)
         && hyper_err.is_timeout()
     {
-        return SendError::ConnectionTimeout;
+        return HttpError::ConnectionTimeout;
     }
-    SendError::Protocol(format!("{err:?}"))
+    warn!(err = %format!("{err:?}"), "outbound HTTP protocol error");
+    HttpError::HttpProtocolError
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_release_drains_clients_and_allows_another_runtime() {
+        use std::sync::atomic::Ordering;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let busy = runtime.spawn_blocking(move || {
+            started.send(()).unwrap();
+            let _ = blocked.recv();
+        });
+        ready.recv().unwrap();
+
+        let clients = WorkloadClients::new(default_client_tls_config());
+        clients.clients.insert(
+            "workload".into(),
+            PooledClient::new(default_client_tls_config()),
+        );
+        clients.clients.insert(
+            "another-workload".into(),
+            PooledClient::new(default_client_tls_config()),
+        );
+        clients.clients.run_pending_tasks();
+        assert_eq!(clients.clients.entry_count(), 2);
+        clients.clients.invalidate("workload");
+        let queued = {
+            let _entered = runtime.enter();
+            let queued = clients.release_invalidated().unwrap();
+            // Coalesced unbinds must also be drained on cancellation.
+            clients.invalidate("another-workload");
+            queued
+        };
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 2);
+
+        // Rebinding the ID must survive the old task's cleanup.
+        let new_tls = Arc::new((*default_client_tls_config()).clone());
+        clients
+            .clients
+            .insert("workload".into(), PooledClient::new(Arc::clone(&new_tls)));
+        queued.abort();
+        release.send(()).unwrap();
+        runtime.block_on(async {
+            busy.await.unwrap();
+            assert!(queued.await.unwrap_err().is_cancelled());
+        });
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+        assert_eq!(
+            clients.clients.entry_count(),
+            1,
+            "cancelled maintenance must drain"
+        );
+        assert!(
+            Arc::ptr_eq(&clients.clients.get("workload").unwrap().tls, &new_tls,),
+            "the rebound client must survive"
+        );
+        drop(runtime);
+
+        let next_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let next = {
+            let _entered = next_runtime.enter();
+            clients.clients.invalidate("workload");
+            clients.release_invalidated().unwrap()
+        };
+        next_runtime.block_on(next).unwrap();
+        assert_eq!(clients.release_pending.load(Ordering::Acquire), 0);
+        assert_eq!(clients.clients.entry_count(), 0);
+    }
 
     /// Shorter than the production [`PERMIT_WAIT`]: the connection-bound tests
     /// deliberately wait out abandoned connect attempts parked on the
@@ -1438,6 +1645,169 @@ mod tests {
         assert_eq!(TrustRoots::default(), TrustRoots::Webpki);
     }
 
+    /// Writes a self-signed certificate and its key, as an operator mounts a
+    /// client credential.
+    fn write_identity(dir: &std::path::Path, stem: &str) -> ClientIdentity {
+        let issued = rcgen::generate_simple_self_signed(vec!["client".to_string()])
+            .expect("failed to generate test certificate");
+        let cert_path = dir.join(format!("{stem}.crt"));
+        let key_path = dir.join(format!("{stem}.key"));
+        std::fs::write(&cert_path, issued.cert.pem()).unwrap();
+        std::fs::write(&key_path, issued.signing_key.serialize_pem()).unwrap();
+        ClientIdentity::CertificatePem {
+            cert_path,
+            key_path,
+        }
+    }
+
+    #[test]
+    fn no_client_identity_presents_nothing() {
+        let config = ClientTlsOptions::default()
+            .build()
+            .expect("default options build");
+        assert!(!config.client_auth_cert_resolver.has_certs());
+    }
+
+    #[test]
+    fn a_client_identity_is_presented() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = ClientTlsOptions {
+            client_identity: Some(write_identity(dir.path(), "id")),
+            ..Default::default()
+        };
+        let config = opts.build().expect("a matching pair builds");
+        assert!(config.client_auth_cert_resolver.has_certs());
+    }
+
+    /// A crossed pair fails at build time rather than on every handshake,
+    /// where it would look like the peer rejecting the host.
+    #[test]
+    fn a_mismatched_client_identity_fails_to_build() {
+        let dir = tempfile::tempdir().unwrap();
+        // Cross the pair: the certificate from one, the key from another.
+        let (
+            ClientIdentity::CertificatePem { cert_path, .. },
+            ClientIdentity::CertificatePem { key_path, .. },
+        ) = (
+            write_identity(dir.path(), "first"),
+            write_identity(dir.path(), "second"),
+        );
+        let opts = ClientTlsOptions {
+            client_identity: Some(ClientIdentity::CertificatePem {
+                cert_path,
+                key_path,
+            }),
+            ..Default::default()
+        };
+        assert!(opts.build().is_err());
+    }
+
+    #[test]
+    fn a_missing_client_identity_fails_to_build() {
+        let opts = ClientTlsOptions {
+            client_identity: Some(ClientIdentity::CertificatePem {
+                cert_path: PathBuf::from("/definitely/not/a/real/client.crt"),
+                key_path: PathBuf::from("/definitely/not/a/real/client.key"),
+            }),
+            ..Default::default()
+        };
+        assert!(opts.build().is_err());
+    }
+
+    /// A resolver keyed on the workload, which is what per-workload identity
+    /// needs: two workloads must not collapse onto one configuration.
+    #[derive(Debug)]
+    struct PerWorkload {
+        a: Arc<rustls::ClientConfig>,
+        b: Arc<rustls::ClientConfig>,
+        host: Arc<rustls::ClientConfig>,
+    }
+
+    impl ClientTlsConfigResolver for PerWorkload {
+        fn config_for(&self, workload_id: &str) -> Arc<rustls::ClientConfig> {
+            match workload_id {
+                "a" => Arc::clone(&self.a),
+                "b" => Arc::clone(&self.b),
+                _ => Arc::clone(&self.host),
+            }
+        }
+
+        fn host_config(&self) -> Arc<rustls::ClientConfig> {
+            Arc::clone(&self.host)
+        }
+    }
+
+    fn per_workload_resolver() -> Arc<PerWorkload> {
+        let dir = tempfile::tempdir().unwrap();
+        let build = |stem: &str| {
+            ClientTlsOptions {
+                client_identity: Some(write_identity(dir.path(), stem)),
+                ..Default::default()
+            }
+            .build()
+            .unwrap()
+        };
+        Arc::new(PerWorkload {
+            a: build("a"),
+            b: build("b"),
+            host: default_client_tls_config(),
+        })
+    }
+
+    #[test]
+    fn an_arc_config_answers_every_workload_the_same_way() {
+        let config = default_client_tls_config();
+        let resolver: Arc<dyn ClientTlsConfigResolver> = Arc::new(Arc::clone(&config));
+        assert!(Arc::ptr_eq(&resolver.config_for("a"), &config));
+        assert!(Arc::ptr_eq(&resolver.config_for("b"), &config));
+        assert!(Arc::ptr_eq(&resolver.host_config(), &config));
+    }
+
+    #[test]
+    fn each_workloads_client_gets_its_own_configuration() {
+        let resolver = per_workload_resolver();
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::clone(&resolver) as _,
+            test_quotas(4, 16),
+        );
+
+        let a = clients.client("a").tls_config();
+        let b = clients.client("b").tls_config();
+        assert!(Arc::ptr_eq(&a, &resolver.a));
+        assert!(Arc::ptr_eq(&b, &resolver.b));
+        assert!(!Arc::ptr_eq(&a, &b));
+    }
+
+    /// `tls_config` is host-wide by contract: a caller reaching for it must
+    /// not silently receive one workload's identity.
+    #[test]
+    fn the_host_configuration_is_not_a_workloads() {
+        let resolver = per_workload_resolver();
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::clone(&resolver) as _,
+            test_quotas(4, 16),
+        );
+        let host = clients.tls_config();
+        assert!(Arc::ptr_eq(&host, &resolver.host));
+        assert!(!Arc::ptr_eq(&host, &resolver.a));
+    }
+
+    /// Rebuilding a cache for new quotas must not flatten per-workload
+    /// identities onto the host-wide configuration.
+    #[test]
+    fn a_rebuilt_cache_keeps_its_resolver() {
+        let resolver = per_workload_resolver();
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::clone(&resolver) as _,
+            test_quotas(4, 16),
+        );
+        let rebuilt = WorkloadClients::with_tls_config_resolver(
+            clients.tls_config_resolver(),
+            test_quotas(8, 32),
+        );
+        assert!(Arc::ptr_eq(&rebuilt.client("a").tls_config(), &resolver.a));
+    }
+
     #[test]
     fn extra_ca_path_must_exist() {
         let opts = ClientTlsOptions {
@@ -1457,6 +1827,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![path],
+            ..Default::default()
         };
         opts.build().expect("PEM CA bundle should load");
     }
@@ -1469,6 +1840,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![path],
+            ..Default::default()
         };
         assert!(opts.build().is_err());
     }
@@ -1478,6 +1850,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![],
+            ..Default::default()
         };
         let err = opts.build().expect_err("an empty trust store must fail");
         assert!(err.to_string().contains("trust store is empty"), "{err}");
@@ -1488,6 +1861,7 @@ mod tests {
         let opts = ClientTlsOptions {
             roots: TrustRoots::Webpki,
             extra_ca_paths: vec![],
+            ..Default::default()
         };
         opts.build().expect("webpki-only roots should build");
     }
@@ -1585,28 +1959,27 @@ mod tests {
         (addr, conns)
     }
 
-    fn grpc_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
+    fn grpc_request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
             .uri(uri)
             .method(hyper::Method::POST)
             .header(hyper::header::CONTENT_TYPE, "application/grpc")
-            .body(HyperOutgoingBody::default())
+            .body(WasiBody::default())
             .unwrap()
     }
 
-    fn p2_config(use_tls: bool) -> OutgoingRequestConfig {
-        OutgoingRequestConfig {
-            use_tls,
-            connect_timeout: Duration::from_secs(5),
-            first_byte_timeout: Duration::from_secs(5),
-            between_bytes_timeout: Duration::from_secs(5),
-        }
+    fn test_options() -> Option<RequestOptions> {
+        Some(RequestOptions {
+            connect_timeout: Some(Duration::from_secs(5)),
+            first_byte_timeout: Some(Duration::from_secs(5)),
+            between_bytes_timeout: Some(Duration::from_secs(5)),
+        })
     }
 
-    fn p2_request(uri: &str) -> hyper::Request<HyperOutgoingBody> {
+    fn request(uri: &str) -> hyper::Request<WasiBody> {
         hyper::Request::builder()
             .uri(uri)
-            .body(HyperOutgoingBody::default())
+            .body(WasiBody::default())
             .unwrap()
     }
 
@@ -1620,13 +1993,13 @@ mod tests {
         let client = PooledClient::new(default_client_tls_config());
 
         for _ in 0..20 {
-            let response = client
-                .send_request_p2(p2_request(&format!("http://{addr}/")), p2_config(false))
+            let (response, _io) = client
+                .send_request(request(&format!("http://{addr}/")), test_options())
                 .await
                 .expect("request should succeed");
-            assert_eq!(response.resp.status(), 200);
+            assert_eq!(response.status(), 200);
             // Drain the body so the connection is returned to the pool.
-            let _ = response.resp.into_body().collect().await;
+            let _ = response.into_body().collect().await;
         }
 
         let opened = conns.load(std::sync::atomic::Ordering::SeqCst);
@@ -1648,13 +2021,13 @@ mod tests {
         for workload_id in ["workload-a", "workload-b"] {
             let client = clients.client(workload_id);
             for _ in 0..10 {
-                let response = client
-                    .send_request_p2(p2_request(&uri), p2_config(false))
+                let (response, _io) = client
+                    .send_request(request(&uri), test_options())
                     .await
                     .expect("request should succeed");
-                assert_eq!(response.resp.status(), 200);
+                assert_eq!(response.status(), 200);
                 // Drain the body so the connection is returned to the pool.
-                let _ = response.resp.into_body().collect().await;
+                let _ = response.into_body().collect().await;
             }
         }
 
@@ -1669,15 +2042,6 @@ mod tests {
         );
     }
 
-    fn p3_request(uri: &str) -> hyper::Request<P3Body> {
-        hyper::Request::builder()
-            .uri(uri)
-            .body(P3Body::new(
-                http_body_util::Empty::new().map_err(|_: std::convert::Infallible| unreachable!()),
-            ))
-            .unwrap()
-    }
-
     /// A guest may set any `between-bytes-timeout`, including zero, and
     /// `tokio::time::interval` panics on a zero period — so the response-body
     /// wrapper must clamp it rather than take the host down.
@@ -1685,14 +2049,14 @@ mod tests {
     async fn zero_between_bytes_timeout_is_not_a_panic() {
         let (addr, _conns) = spawn_counting_server().await;
         let client = PooledClient::new(default_client_tls_config());
-        let options = wasmtime_wasi_http::p3::RequestOptions {
+        let options = RequestOptions {
             connect_timeout: None,
             first_byte_timeout: None,
             between_bytes_timeout: Some(Duration::ZERO),
         };
 
         let (response, _io) = client
-            .send_request_p3(p3_request(&format!("http://{addr}/")), Some(options))
+            .send_request(request(&format!("http://{addr}/")), Some(options))
             .await
             .expect("a zero between-bytes timeout must not fail the request head");
         assert_eq!(response.status(), 200);
@@ -1714,19 +2078,18 @@ mod tests {
         let (addr, _conns) = spawn_counting_server_with_delay(Duration::from_millis(400)).await;
         let client = PooledClient::new(default_client_tls_config());
 
-        let response = client
-            .send_request_p2(
-                p2_request(&format!("http://{addr}/")),
-                OutgoingRequestConfig {
-                    use_tls: false,
-                    connect_timeout: Duration::from_millis(150),
-                    first_byte_timeout: Duration::from_secs(5),
-                    between_bytes_timeout: Duration::from_secs(5),
-                },
+        let (response, _io) = client
+            .send_request(
+                request(&format!("http://{addr}/")),
+                Some(RequestOptions {
+                    connect_timeout: Some(Duration::from_millis(150)),
+                    first_byte_timeout: Some(Duration::from_secs(5)),
+                    between_bytes_timeout: Some(Duration::from_secs(5)),
+                }),
             )
             .await
             .expect("a slow head must not be charged against the connect deadline");
-        assert_eq!(response.resp.status(), 200);
+        assert_eq!(response.status(), 200);
     }
 
     /// When no connection can be had, it is the guest's `connect_timeout`
@@ -1741,8 +2104,6 @@ mod tests {
     /// deadline was the one being honoured.
     #[tokio::test]
     async fn connect_timeout_fires_before_the_first_byte_deadline() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let connect_timeout = TEST_PERMIT_WAIT / 5;
         let (addr, _conns) = spawn_counting_server_with_delay(TEST_PERMIT_WAIT * 2).await;
         let clients = WorkloadClients::with_quotas(default_client_tls_config(), test_quotas(1, 1));
@@ -1752,32 +2113,32 @@ mod tests {
         let busy = clients.client("workload-a");
         let busy_uri = uri.clone();
         let busy = tokio::spawn(async move {
-            let response = busy
-                .send_request_p2(p2_request(&busy_uri), p2_config(false))
+            let (response, _io) = busy
+                .send_request(request(&busy_uri), test_options())
                 .await
                 .expect("the first request should get the only connection");
-            let _ = response.resp.into_body().collect().await;
+            let _ = response.into_body().collect().await;
         });
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let started = tokio::time::Instant::now();
         let err = clients
             .client("workload-b")
-            .send_request_p2(
-                p2_request(&uri),
-                OutgoingRequestConfig {
-                    use_tls: false,
-                    connect_timeout,
-                    first_byte_timeout: Duration::from_secs(30),
-                    between_bytes_timeout: Duration::from_secs(30),
-                },
+            .send_request(
+                request(&uri),
+                Some(RequestOptions {
+                    connect_timeout: Some(connect_timeout),
+                    first_byte_timeout: Some(Duration::from_secs(30)),
+                    between_bytes_timeout: Some(Duration::from_secs(30)),
+                }),
             )
             .await
-            .expect_err("no slot is available, so the connect deadline must expire");
+            .err()
+            .expect("no slot is available, so the connect deadline must expire");
         let elapsed = started.elapsed();
 
         assert!(
-            matches!(err, ErrorCode::ConnectionTimeout),
+            matches!(err, HttpError::ConnectionTimeout),
             "expected ConnectionTimeout, got {err:?}"
         );
         assert!(
@@ -1799,22 +2160,22 @@ mod tests {
         let uri = format!("http://{addr}/");
 
         let client = clients.client("workload-a");
-        let response = client
-            .send_request_p2(p2_request(&uri), p2_config(false))
+        let (response, _io) = client
+            .send_request(request(&uri), test_options())
             .await
             .expect("request should succeed");
-        let _ = response.resp.into_body().collect().await;
+        let _ = response.into_body().collect().await;
         drop(client);
         assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         clients.invalidate("workload-a");
 
         let client = clients.client("workload-a");
-        let response = client
-            .send_request_p2(p2_request(&uri), p2_config(false))
+        let (response, _io) = client
+            .send_request(request(&uri), test_options())
             .await
             .expect("request should succeed");
-        let _ = response.resp.into_body().collect().await;
+        let _ = response.into_body().collect().await;
         assert_eq!(
             conns.load(std::sync::atomic::Ordering::SeqCst),
             2,
@@ -1832,12 +2193,12 @@ mod tests {
         let uri = format!("http://{addr}/svc.Test/Call");
 
         for _ in 0..20 {
-            let response = client
-                .send_grpc_request_p2(grpc_request(&uri), p2_config(false))
+            let (response, _io) = client
+                .send_grpc_request(grpc_request(&uri), test_options())
                 .await
                 .expect("gRPC request should succeed");
-            assert_eq!(response.resp.status(), 200);
-            let _ = response.resp.into_body().collect().await;
+            assert_eq!(response.status(), 200);
+            let _ = response.into_body().collect().await;
         }
 
         let opened = conns.load(std::sync::atomic::Ordering::SeqCst);
@@ -1852,8 +2213,6 @@ mod tests {
     /// cannot evade its cap by switching protocols.
     #[tokio::test]
     async fn grpc_and_http_egress_share_the_workload_quota() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let (grpc_addr, _grpc_conns) = spawn_counting_h2c_server().await;
         let (http_addr, http_conns) = spawn_counting_server().await;
         let clients =
@@ -1862,29 +2221,29 @@ mod tests {
 
         // One gRPC connection, left idle in the h2 pool still holding the
         // workload's only permit.
-        let response = client
-            .send_grpc_request_p2(
+        let (response, _io) = client
+            .send_grpc_request(
                 grpc_request(&format!("http://{grpc_addr}/svc.Test/Call")),
-                p2_config(false),
+                test_options(),
             )
             .await
             .expect("gRPC request should succeed");
-        let _ = response.resp.into_body().collect().await;
+        let _ = response.into_body().collect().await;
 
         let err = client
-            .send_request_p2(
-                p2_request(&format!("http://{http_addr}/")),
-                OutgoingRequestConfig {
-                    use_tls: false,
-                    connect_timeout: TEST_PERMIT_WAIT / 5,
-                    first_byte_timeout: Duration::from_secs(30),
-                    between_bytes_timeout: Duration::from_secs(30),
-                },
+            .send_request(
+                request(&format!("http://{http_addr}/")),
+                Some(RequestOptions {
+                    connect_timeout: Some(TEST_PERMIT_WAIT / 5),
+                    first_byte_timeout: Some(Duration::from_secs(30)),
+                    between_bytes_timeout: Some(Duration::from_secs(30)),
+                }),
             )
             .await
-            .expect_err("the gRPC connection holds the workload's only permit");
+            .err()
+            .expect("the gRPC connection holds the workload's only permit");
         assert!(
-            matches!(err, ErrorCode::ConnectionTimeout),
+            matches!(err, HttpError::ConnectionTimeout),
             "expected ConnectionTimeout, got {err:?}"
         );
         assert_eq!(
@@ -1910,11 +2269,11 @@ mod tests {
         let busy_client = clients.client("workload-a");
         let busy_uri = uri.clone();
         let busy = tokio::spawn(async move {
-            if let Ok(response) = busy_client
-                .send_request_p2(p2_request(&busy_uri), p2_config(false))
+            if let Ok((response, _io)) = busy_client
+                .send_request(request(&busy_uri), test_options())
                 .await
             {
-                let _ = response.resp.into_body().collect().await;
+                let _ = response.into_body().collect().await;
             }
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1948,8 +2307,6 @@ mod tests {
     /// them as connection-refused.
     #[tokio::test]
     async fn connect_failures_classify_to_dns_and_refused() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let client = PooledClient::new(default_client_tls_config());
 
         // RFC 6761 reserves `.invalid`: resolution always fails.
@@ -1957,22 +2314,25 @@ mod tests {
         // The generous `connect_timeout` is load-bearing. [`send_head`] races
         // the send against that deadline, so a resolver slow to answer — a
         // GitHub macOS runner walking its search domains has needed more than
-        // the 5s [`p2_config`] hands out — lets the timeout arm win and the
+        // the 5s [`test_options`] hands out — lets the timeout arm win and the
         // assertion below reads `ConnectionTimeout`. What is pinned here is how
         // a resolver failure classifies, not how fast the ambient resolver
         // reports one.
         let err = client
-            .send_request_p2(
-                p2_request("http://definitely-not-a-real-host.invalid/"),
-                OutgoingRequestConfig {
-                    connect_timeout: Duration::from_secs(60),
-                    ..p2_config(false)
-                },
+            .send_request(
+                request("http://definitely-not-a-real-host.invalid/"),
+                Some(RequestOptions {
+                    connect_timeout: Some(Duration::from_secs(60)),
+                    // The rest stay short: a head that hangs should fail this
+                    // test by name rather than park until the suite times out.
+                    ..test_options().unwrap_or_default()
+                }),
             )
             .await
-            .expect_err("resolution must fail");
+            .err()
+            .expect("resolution must fail");
         assert!(
-            matches!(err, ErrorCode::DnsError(_)),
+            matches!(err, HttpError::DnsError { .. }),
             "expected DnsError, got {err:?}"
         );
 
@@ -1981,14 +2341,15 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         let err = client
-            .send_request_p2(
-                p2_request(&format!("http://127.0.0.1:{port}/")),
-                p2_config(false),
+            .send_request(
+                request(&format!("http://127.0.0.1:{port}/")),
+                test_options(),
             )
             .await
-            .expect_err("connect must be refused");
+            .err()
+            .expect("connect must be refused");
         assert!(
-            matches!(err, ErrorCode::ConnectionRefused),
+            matches!(err, HttpError::ConnectionRefused),
             "expected ConnectionRefused, got {err:?}"
         );
     }
@@ -2022,16 +2383,16 @@ mod tests {
         port
     }
 
-    /// The response body must keep streaming after the head on the pooled P3
+    /// The response body must keep streaming after the head on the pooled
     /// path, including when the request-error future has already been driven
     /// to completion — connection lifetime belongs to the pool, not to that
     /// future.
     #[tokio::test]
-    async fn p3_body_streams_after_head_on_pooled_connection() {
+    async fn body_streams_after_head_on_pooled_connection() {
         let port = delayed_body_server(Duration::from_millis(300)).await;
         let client = PooledClient::new(default_client_tls_config());
         let (response, io) = client
-            .send_request_p3(p3_request(&format!("http://127.0.0.1:{port}/")), None)
+            .send_request(request(&format!("http://127.0.0.1:{port}/")), None)
             .await
             .expect("request should succeed");
 
@@ -2048,13 +2409,51 @@ mod tests {
         drop(io);
     }
 
+    /// The request-error future carries a failed upload to the guest, and a
+    /// body dropped unread resolves as success.
+    #[tokio::test]
+    async fn upload_probe_reports_the_body_outcome() {
+        struct FailingBody;
+        impl hyper::body::Body for FailingBody {
+            type Data = Bytes;
+            type Error = HttpError;
+            fn poll_frame(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, HttpError>>> {
+                std::task::Poll::Ready(Some(Err(HttpError::HttpProtocolError)))
+            }
+        }
+
+        // The error is moved, so the guest's own future gets it and whoever is
+        // reading the body — hyper, or a co-located callee on the local path —
+        // gets told only that it failed, as a network peer would be.
+        let (probe, outcome) = UploadProbe::new(FailingBody.boxed_unsync());
+        let seen_by_reader = BodyExt::collect(probe).await.err();
+        assert!(
+            matches!(seen_by_reader, Some(HttpError::InternalError(Some(ref m))) if m == "request body failed"),
+            "the body's reader must see the failure marker, got {seen_by_reader:?}"
+        );
+        assert!(matches!(
+            Box::into_pin(upload_io(outcome)).await,
+            Err(HttpError::HttpProtocolError)
+        ));
+
+        let empty = http_body_util::Empty::<Bytes>::new()
+            .map_err(|never| match never {})
+            .boxed_unsync();
+        let (probe, outcome) = UploadProbe::new(empty);
+        drop(probe);
+        assert!(Box::into_pin(upload_io(outcome)).await.is_ok());
+    }
+
     /// A server that hangs up mid-body must surface as an error on the
     /// response body, not as a silently truncated success. On the pooled path
     /// this guarantee is enforced by hyper's content-length check surfacing
     /// through `TimedBody`'s error mapping — pin it here (ported from the
     /// per-request transport's test suite).
     #[tokio::test]
-    async fn p3_truncated_body_surfaces_as_body_error() {
+    async fn truncated_body_surfaces_as_body_error() {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2073,7 +2472,7 @@ mod tests {
 
         let client = PooledClient::new(default_client_tls_config());
         let (response, io) = client
-            .send_request_p3(p3_request(&format!("http://127.0.0.1:{port}/")), None)
+            .send_request(request(&format!("http://127.0.0.1:{port}/")), None)
             .await
             .expect("response head should arrive");
         let io = wasmtime_wasi::runtime::spawn(async move { Box::into_pin(io).await });
@@ -2085,12 +2484,19 @@ mod tests {
         .await
         .expect("body read should not hang")
         .expect_err("a truncated body must not read as success");
-        assert!(
-            matches!(
-                err,
-                wasmtime_wasi_http::p3::bindings::http::types::ErrorCode::HttpProtocolError
-            ),
-            "expected HttpProtocolError, got {err:?}"
+        // The truncation itself, not merely "some hyper error": a body that ends
+        // early carries an `UnexpectedEof`. wasmtime turns this into
+        // `HttpProtocolError` for the guest.
+        let HttpError::Hyper(hyper_err) = &err else {
+            panic!("expected a hyper error, got {err:?}");
+        };
+        let truncated = std::error::Error::source(hyper_err)
+            .and_then(|source| source.downcast_ref::<std::io::Error>())
+            .map(std::io::Error::kind);
+        assert_eq!(
+            truncated,
+            Some(std::io::ErrorKind::UnexpectedEof),
+            "expected a truncated body, got {err:?}"
         );
         drop(io);
     }
@@ -2110,13 +2516,13 @@ mod tests {
             let client = clients.client("workload-a");
             let uri = uri.clone();
             async move {
-                let response = client
-                    .send_request_p2(p2_request(&uri), p2_config(false))
+                let (response, _io) = client
+                    .send_request(request(&uri), test_options())
                     .await
                     .expect("request should succeed despite waiting for a connection");
-                assert_eq!(response.resp.status(), 200);
+                assert_eq!(response.status(), 200);
                 // Drain the body so the connection is returned to the pool.
-                let _ = response.resp.into_body().collect().await;
+                let _ = response.into_body().collect().await;
             }
         });
         futures::future::join_all(requests).await;
@@ -2143,12 +2549,12 @@ mod tests {
             let client = clients.client("workload-a");
             let uri = uri.clone();
             async move {
-                let response = client
-                    .send_request_p2(p2_request(&uri), p2_config(false))
+                let (response, _io) = client
+                    .send_request(request(&uri), test_options())
                     .await
                     .expect("request should succeed despite waiting for a connection");
-                assert_eq!(response.resp.status(), 200);
-                let _ = response.resp.into_body().collect().await;
+                assert_eq!(response.status(), 200);
+                let _ = response.into_body().collect().await;
             }
         });
         futures::future::join_all(requests).await;
@@ -2181,11 +2587,11 @@ mod tests {
         // Workload B can now connect instead of starving on permits pinned by
         // A's idle pool.
         let client_b = clients.client("workload-b");
-        let response = client_b
-            .send_request_p2(p2_request(&uri), p2_config(false))
+        let (response, _io) = client_b
+            .send_request(request(&uri), test_options())
             .await
             .expect("workload B should connect once A's permits are released");
-        assert_eq!(response.resp.status(), 200);
+        assert_eq!(response.status(), 200);
     }
 
     /// Spawn an HTTP/1.1-over-TLS server whose certificate chains to a private
@@ -2245,8 +2651,6 @@ mod tests {
     /// via `extra_ca_paths`, and must keep failing with a TLS error without it.
     #[tokio::test]
     async fn extra_ca_enables_https_to_private_ca_server() {
-        use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode;
-
         let (port, ca_pem) = private_ca_tls_server().await;
         let dir = tempfile::tempdir().unwrap();
         let ca_path = dir.path().join("ca.pem");
@@ -2255,14 +2659,15 @@ mod tests {
         // Without the CA: the handshake must fail with a TLS error.
         let default_client = PooledClient::new(default_client_tls_config());
         let err = default_client
-            .send_request_p2(
-                p2_request(&format!("https://127.0.0.1:{port}/")),
-                p2_config(true),
+            .send_request(
+                request(&format!("https://127.0.0.1:{port}/")),
+                test_options(),
             )
             .await
-            .expect_err("untrusted CA must fail");
+            .err()
+            .expect("untrusted CA must fail");
         assert!(
-            matches!(err, ErrorCode::TlsProtocolError),
+            matches!(err, HttpError::TlsProtocolError),
             "expected TlsProtocolError, got {err:?}"
         );
 
@@ -2270,17 +2675,18 @@ mod tests {
         let tls = ClientTlsOptions {
             roots: TrustRoots::ExtraOnly,
             extra_ca_paths: vec![ca_path],
+            ..Default::default()
         }
         .build()
         .unwrap();
         let client = PooledClient::new(tls);
-        let response = client
-            .send_request_p2(
-                p2_request(&format!("https://127.0.0.1:{port}/")),
-                p2_config(true),
+        let (response, _io) = client
+            .send_request(
+                request(&format!("https://127.0.0.1:{port}/")),
+                test_options(),
             )
             .await
             .expect("request with the private CA trusted should succeed");
-        assert_eq!(response.resp.status(), 200);
+        assert_eq!(response.status(), 200);
     }
 }

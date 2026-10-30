@@ -49,7 +49,7 @@ use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi_http::p3::bindings::Service;
 
 use crate::engine::ctx::SharedCtx;
-use crate::engine::dispatch::{GuestJob, GuestTask};
+use crate::engine::dispatch::{GuestJob, GuestTask, Placement};
 use crate::host::http::ServiceHttpJob;
 #[cfg(feature = "host-component-plugins")]
 use crate::host::job_registry::JobRegistry;
@@ -294,13 +294,12 @@ impl PreparedIngress {
                         ));
                         continue;
                     }
-                    // No pool slot: a service's instance is the workload's one
-                    // long-lived item, not one of a pool's to retire.
+                    // Services are not pooled and cannot be retired.
                     let spawned = accessor.spawn(GuestServeTask {
                         task: GuestTask {
                             instance: *instance,
                             job,
-                            pool_slot: None,
+                            placement: Placement::Service,
                         },
                         in_flight: InFlightGuard::new(Arc::clone(in_flight)),
                     });
@@ -495,6 +494,7 @@ pub(crate) async fn run_trigger_driver(
     let instance = pre
         .instantiate_async(&mut *store)
         .await
+        .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))
         .context("failed to instantiate trigger service")?;
     // `cli/run` is optional: a service exports it (its long-running work), but a
     // pure capability host component plugin need not — in which case there is
@@ -545,6 +545,7 @@ pub(crate) async fn run_trigger_driver(
                 futures::future::join_all(prepared.iter_mut().map(|p| p.serve(accessor))).await
             })
             .await
+            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
             .context("trigger service driver exited")?;
         // Every channel closed → clean stop, unless an ingress asked to flush a
         // proxied-resource drop (which needs top-level store access), in which

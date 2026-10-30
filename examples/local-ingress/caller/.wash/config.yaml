@@ -1,0 +1,18 @@
+version: 2.0.0
+
+build:
+  command: cargo build --target wasm32-wasip2 --release --locked
+  component_path: target/wasm32-wasip2/release/local_ingress_caller.wasm
+
+dev:
+  address: 0.0.0.0:8000
+
+workload:
+  environment:
+    config:
+      # In dev the two components run in separate `wash dev` hosts, so the
+      # caller reaches the callee over loopback. In a cluster this variable
+      # points at a hostname the callee's ingress serves instead — see
+      # ../deploy/workloads.yaml.
+      CALLEE_URL: http://localhost:8001
+  # allowedHosts omitted: wash dev defaults to allow-all egress.

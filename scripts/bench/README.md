@@ -309,10 +309,20 @@ The playbook installs (as `root` on the bench host):
   `wasm32-wasip1`, and `wasm32-wasip2` targets). The default is set so
   out-of-tree `cargo install` invocations (notably
   `gungraun-runner` below) have something to pick.
-- **`gungraun-runner`** via `cargo install --version 0.19.1`
-  (pinned). gungraun (formerly `iai-callgrind`; renamed at 0.17.0)
-  enforces equality between the runner binary and the `gungraun` crate
-  version pinned in `crates/wash-runtime/Cargo.toml`; bump them together.
+- **`gungraun-runner`** via `cargo install --version <X>`, where `<X>`
+  is the `gungraun` version resolved in `Cargo.lock`. gungraun (formerly
+  `iai-callgrind`; renamed at 0.17.0) enforces equality between the
+  runner binary and the crate. When the lockfile moves ahead of this
+  copy (e.g. a Dependabot bump), `run-bench.sh` installs the matching
+  runner under `~/.cache/wasmcloud-bench/` and sets `GUNGRAUN_RUNNER`,
+  so the bench keeps working until the next Ansible run.
+- **`wasm-component-ld`** in `/usr/local/bin`, pinned by `provision.yml`.
+  `run-bench.sh` selects this binary with
+  `CARGO_TARGET_WASM32_WASIP2_LINKER` and logs its version before building.
+  This also covers existing runners whose Cargo config predates the linker
+  setup. An explicit `CARGO_TARGET_WASM32_WASIP2_LINKER` is preserved. To
+  install or repair the shared binary, run
+  `ansible-playbook provision.yml --tags wasm-component-ld`.
 - **Node.js (current LTS)** from NodeSource's apt repo. The CI
   workflow runs `.github/scripts/*.mjs` via `run: node …`, which
   needs an OS-level `node` on `PATH` (self-hosted runners do not
@@ -338,7 +348,7 @@ nproc                              # 6
 uname -r                           # 6.8.0-* (Ubuntu Noble)
 cargo --version                    # rustup-pinned stable
 valgrind --version                 # valgrind-3.22.x or newer
-gungraun-runner --version          # 0.19.1
+gungraun-runner --version          # the gungraun version in Cargo.lock
 node --version                     # the node_lts_major pinned in provision.yml
 cat /etc/wasmcloud-bench-stage     # post-install marker
 ```
@@ -380,7 +390,7 @@ with a fresh token). It:
 - Installs **rustup as the `bench` user** so `cargo` is available in
   the workflow's PATH. The actual toolchain is auto-installed on
   first build via `rust-toolchain.toml`.
-- Downloads `actions-runner-linux-x64-2.335.1.tar.gz`, **verifies the
+- Downloads `actions-runner-linux-x64-2.337.0.tar.gz`, **verifies the
   SHA256** (constant in the script — bump version + sha together
   when upgrading), extracts to `/opt/actions-runner`.
 - Registers the runner with labels `self-hosted, bench, hetzner` and
@@ -438,39 +448,36 @@ touches the repo, a CI log, or `/proc/<pid>/cmdline` (env-only).
 ## 7. Pipeline architecture
 
 ```text
-┌──────────────────────┐               ┌────────────────────────────────────┐
-│  GitHub Actions      │               │   <WASMCLOUD_BENCH_HOSTNAME>       │
-│  workflow_dispatch ──┼──────────────▶│   self-hosted runner (user: bench) │
-│  inputs: bench, ref  │               │   labels: self-hosted,bench,hetzner│
-└──────────────────────┘               │                                    │
-        ▲                              │   1. checkout + preflight checks   │
-        │ artifact + step              │   2. cargo bench                   │
-        │ summary                      │   3. summarize → step summary      │
-        │                              │   4. upload criterion artifact     │
-        ▼                              │   5. push S3 + invalidate CF       │
-┌──────────────────────────────┐       └────────────────────────────────────┘
-│ S3 (private)                 │                                  │
-│   runs/<date>/<sha>/<run>/…  │◀─────────────────────────────────┘
-│   history.json               │ ◄── public via CloudFront ───────────────┐
-└──────────────────────────────┘                                          │
-                                                                          ▼
-                                             ┌──────────────────────────────────┐
-                                             │  arewefastyet                    │
-                                             │ (separate repo, GitHub Pages)    │
-                                             │ fetches history.json             │
-                                             └──────────────────────────────────┘
+workflow_dispatch / release
+           │
+           ▼
+self-hosted bench runner
+  checkout + preflight → run → summary → data artifact
+           │
+           ▼
+GitHub-hosted publisher
+  download artifact → AWS OIDC → S3 upload + history merge → CloudFront invalidation
+                                │
+                                ▼
+                    arewefastyet reads history.json
 ```
 
-**Workflow:** [`.github/workflows/bench.yml`](../../.github/workflows/bench.yml)
+**Workflows:** [`bench.yml`](../../.github/workflows/bench.yml) dispatches
+each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.yml).
 
-- Trigger: `workflow_dispatch` only. Inputs: `bench` (choice of
+- Trigger: `workflow_dispatch` and published releases. Inputs: `bench` (choice of
   `http_invoke` / `wasmtime_baseline` / `wasmtime_serve`) and `ref`
   (any branch/tag/sha; defaults to the workflow's ref).
-- `runs-on: [self-hosted, bench, hetzner]`
-- `concurrency: bench-host`, `cancel-in-progress: false` — queues
-  rather than cancelling, so an in-flight bench is never interrupted.
-- `permissions:` minimal; the bench job adds `contents: read` and
-  `id-token: write` (OIDC for AWS).
+- Variants: a `bench` choice may name an entry in `BENCH_VARIANTS` (in
+  `bench.yml`) instead of a bench. It runs that entry's `bench` with its `env`
+  preset, and is never published or part of the release subset.
+  - `max_scale`: `scale_density` with each guest memory's reservation and
+    guard shrunk (`WASH_SCALE_MEMORY_RESERVATION`, `WASH_SCALE_MEMORY_GUARD`).
+- The single `[self-hosted, bench, hetzner]` runner serializes measurements.
+  Each entry measures the commit resolved before queuing and publishes as soon
+  as its own measurement completes.
+- The bench job has `contents: read`. Only the GitHub-hosted publisher has
+  `id-token: write` for AWS OIDC.
 - `CARGO_TARGET_DIR=/var/lib/bench/target` so the cache survives
   `actions/checkout`'s clean.
 - `persist-credentials: false` on checkout — the runner runs untrusted
@@ -492,24 +499,54 @@ touches the repo, a CI log, or `/proc/<pid>/cmdline` (env-only).
    instruction-count table from the gungraun output instead.
 4. **Upload artifact** — the criterion and/or gungraun output dirs as
    `bench-<bench>-<run-id>` with 90-day retention.
-5. **Configure AWS** — `aws-actions/configure-aws-credentials@v6.1.1`
-   assumes the `WASMCLOUD_BENCH_AWS_ROLE_ARN` role via OIDC.
-6. **Push S3 + invalidate CloudFront**
-   ([`bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)) —
-   uploads per-run artifacts under `runs/…`, then read-modify-writes
-   `s3://<bucket>/history.json` (the public aggregate), then issues
-   `cloudfront create-invalidation /history.json`.
+5. **Prepare publish artifact** —
+   [`bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)
+   archives the data and generates JSONL and metadata without AWS credentials.
+   The host log is removed after the required uploads. Failed runs keep their
+   output in the job log.
+6. **Publish from a GitHub-hosted job** — downloads that data artifact, assumes
+   `WASMCLOUD_BENCH_AWS_ROLE_ARN` through OIDC, uploads under `runs/…`,
+   merges `history.json`, and invalidates CloudFront. The publisher checks
+   every row against the resolved commit, ref, bench, run ID, and attempt.
 
 **Triggers:** `workflow_dispatch` plus `release: published` (the latter
-auto-populates the releases timeline; see §9.3). Both require repo
-write to fire, which keeps untrusted fork code off the self-hosted
-bench host. The `release` matrix is intentionally narrower than the
-dispatch choice list — see §9.3.
+auto-populates the releases timeline; see §9.3). GitHub requires repo write
+access for manual dispatch, but that includes non-maintainers with write
+access. The `release` matrix is intentionally narrower than the dispatch
+choice list — see §9.3.
+
+**Sibling pipeline:** [`k6bench.yml`](../../.github/workflows/k6bench.yml)
+runs the system-level k6 load tests in [`../k6bench/`](../k6bench/README.md)
+on this same runner, with the same triggers, and publishes to the same bucket
+and `history.json` through a separate GitHub-hosted job. It has no workflow
+concurrency group; the single bench runner serializes measurements. Publishers
+use conditional S3 writes so overlapping bench and k6 runs cannot lose rows.
 
 **Why no `pull_request_target` trigger:** see §9.4. Self-hosted runners
 on a public repo are a foot-gun if exposed to fork PRs (a fork can
 ship a malicious workflow file or build script to your bench host).
 Comparison runs use `workflow_dispatch` only.
+
+### Restrict bench dispatch to maintainers
+
+Apply a repository Actions policy for `bench.yml`, `bench-run.yml`,
+`bench-compare.yml`, `k6bench.yml`, and `k6bench-run.yml` that allows the `@wasmCloud/ci-maintainers` and
+`@wasmCloud/org-maintainers` teams to trigger them. It also allows
+`@automation-wasmcloud`, which publishes releases and triggers the automatic
+release benchmarks. The policy lives in GitHub settings, not in a workflow
+file, so a dispatch from another ref cannot edit it away.
+
+A repository admin with an authenticated `gh` CLI and `jq` applies or updates
+the policy with:
+
+```sh
+./scripts/bench/restrict-dispatch.sh
+```
+
+The script prints the stored policy. Check that `enforcement` is `active`, the
+five workflow paths are included, and the allowed actors match the two teams
+and release account. Changes to those GitHub teams then take effect without
+editing workflow YAML.
 
 ## 8. AWS bootstrap (S3 + CloudFront + IAM)
 
@@ -584,8 +621,8 @@ against its baseline rather than read its absolute numbers, use **bench-compare*
 | `wasmtime_serve`    | criterion     | wall-clock                         | wasmtime serve subcommand baseline                                                                                                                             |
 | `gungraun_plugin`   | gungraun      | CPU instruction count (cachegrind) | host component plugin: the cross-store capability hop, and the plugin's `on-workload-bind` contribution separated from component instantiation. Both are far below what a wall-clock harness can resolve, which is why this is an instruction-count bench rather than a criterion one. Needs `--features host-component-plugins` (added by `run-bench.sh`) plus valgrind — no Apple Silicon support, so it runs on the bench host only |
 
-Anyone with repo-write can dispatch. The job queues on the
-`bench-host` concurrency group, so two dispatched runs serialize.
+The repository Actions policy restricts dispatch to the maintainer teams and
+release account. The single runner serializes dispatched measurements.
 
 ### 9.2 Via SSH (manual / debugging)
 
@@ -727,9 +764,8 @@ s3://<bucket>/history.json
   - Capped to last 365 days by HISTORY_MAX_AGE_DAYS.
 ```
 
-`bench-push-results.mjs` does the read-modify-write on `history.json`
-after each run. This is safe without locking because the workflow is
-`concurrency: bench-host` — there's only ever one writer.
+`bench-push-results.mjs` retries the `history.json` merge with S3
+conditional writes if another publisher updates it first.
 
 **Row schema.** Every row carries `metric` (the measurement name) and
 `value` (the measurement). Criterion rows additionally carry the
@@ -776,6 +812,26 @@ gungraun row (`metric: "Ir"`):
   "cpus_online": 6,
   "metric": "Ir",
   "value": 12345678
+}
+```
+
+Density row (`scale_density`, from `<target>/density/<bench>.json`): no
+`throughput`; like k6 rows, each carries its own `unit` and which way is
+`better`. Metrics are `served_workloads`, `binding_limit`,
+`marginal_bytes_per_workload`, `baseline_footprint_bytes`, `starts_per_sec`,
+`start_p99_ms`, `request_p99_ms`, `spin_down_ms` and `cpu_ms_per_start`, each
+present only when measured:
+
+```json
+{
+  "bench": "scale_density",
+  "group": "density",
+  "param": "warm",
+  "sha": "...", "ref": "main", "...": "...",
+  "metric": "served_workloads",
+  "value": 3250,
+  "unit": "workloads",
+  "better": "higher"
 }
 ```
 
@@ -863,7 +919,7 @@ it's idempotent and will reconcile the inline policy.
 
 Two-minute lag is normal (`Cache-Control: max-age=60` + browser
 cache). For longer staleness:
-1. Verify the bench job's `push to s3 + invalidate CloudFront` step
+1. Verify the publisher job's `push results to s3 + invalidate CloudFront` step
    logged the invalidation ID.
 2. Check the distribution: `aws cloudfront list-invalidations --distribution-id <id>`.
 3. As a last resort, force-refresh: `aws s3 cp s3://<bucket>/history.json /dev/null`
@@ -882,14 +938,17 @@ cache). For longer staleness:
 | [`install-runner.sh`](./install-runner.sh)                                                                     | Phase 3 on the host: registers the GH Actions runner under the `bench` user and wires it to the shared bench tools in `/usr/local` (installed by `provision.yml`). Kept as bash because runner registration takes a one-shot token whose lifecycle is awkward to model declaratively.             |
 | [`../../.github/scripts/bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)                       | CI step: refuses to bench on a drifted host (env: `WASMCLOUD_BENCH_HOSTNAME`). GHA-only — runs via `node` from the workflow.                                                                                              |
 | [`run-bench.sh`](./run-bench.sh)                                                                               | CI step + local: invokes `cargo bench`, writes a run log. Stays bash because compare-bench.sh invokes it on the host for local operator runs.                                                                             |
-| [`../../.github/scripts/bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)                 | CI step: per-run upload + history.json aggregate + CloudFront invalidate; archives `target/criterion/` and/or `target/gungraun/`. GHA-only.                                                                                    |
+| [`../../.github/scripts/bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)                 | Prepares the data artifact on the bench host, then publishes it to S3 from a hosted job.                                                                                    |
 | [`compare-bench.sh`](./compare-bench.sh)                                                                       | Pair-bench script: runs one bench against two refs (interleaved for criterion, 1× for gungraun) and snapshots per-iteration data                                                                                               |
 | [`../../crates/bench-tools/`](../../crates/bench-tools/)                                                       | Rust binary that parses criterion + gungraun output and renders the JSONL trend rows, the step-summary markdown, and comparison deltas — see "Data processing" below                                                     |
 | [`build-history.sh`](./build-history.sh)                                                                       | Maintenance: rebuild `history.json` from scratch by scanning all per-run JSONL in S3                                                                                                                                      |
 | [`aws/setup-aws.sh`](./aws/setup-aws.sh)                                                                       | One-shot: bucket + OAC + CloudFront + WRITE role                                                                                                                                                                          |
 | [`../../.github/workflows/bench.yml`](../../.github/workflows/bench.yml)                                       | Trends pipeline (workflow_dispatch + release auto-trigger)                                                                                                                                                                |
+| [`../../.github/workflows/bench-run.yml`](../../.github/workflows/bench-run.yml)                               | One bench measurement and its separate GitHub-hosted publisher                                                                                                                                                             |
 | [`../../.github/workflows/bench-compare.yml`](../../.github/workflows/bench-compare.yml)                       | Comparison pipeline (workflow_dispatch only — see §9.4 for the rationale against a PR-label trigger)                                                                                                                      |
 | [`../../.github/workflows/bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml)               | Monthly upstream-version checks (no bench-host involvement; opens / updates / auto-closes a tracking issue per check — see §15)                                                                                           |
+| [`../k6bench/`](../k6bench/README.md) + [`../../.github/workflows/k6bench.yml`](../../.github/workflows/k6bench.yml) | System-level k6 load tests on a kind cluster, same host and S3/history.json pipeline (`bench: "k6"`); own README |
+| [`../../.github/workflows/k6bench-run.yml`](../../.github/workflows/k6bench-run.yml)                           | One k6 measurement and its separate GitHub-hosted publisher                                                                                                                                                                |
 | [`../../.github/scripts/bench-check-runner-version.mjs`](../../.github/scripts/bench-check-runner-version.mjs) | Compares `RUNNER_VERSION` in `install-runner.sh` to the latest actions/runner release; runs from bench-host-checks.yml                                                                                                    |
 
 Sensitive values (the bench host's IP, IPv6, and hostname) are kept in
@@ -935,11 +994,12 @@ into layers, each with its own cadence.
 | glibc / libstdc++                      | with the kernel                                   | apt                                                                                                | Same reason.                                                                                                                                                                                                           |
 | valgrind                               | yearly, or when gungraun asks for it              | apt                                                                                                | Major valgrind bumps have historically renamed cachegrind event columns; our `Ir` parser is robust to that, but verify.                                                                                                |
 | Rust toolchain                         | rolls with `rust-toolchain.toml` (monthly stable) | repo file                                                                                          | No bench-host-specific pin.                                                                                                                                                                                            |
-| `gungraun` crate + runner              | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml`, resolved in `Cargo.lock`                                          | Bump the dep in `Cargo.toml` and `cargo update -p gungraun`; `provision.yml` installs the matching `gungraun-runner` (derived from the **resolved** `Cargo.lock` version — a caret req resolves up to the latest patch) to the shared `/usr/local`. gungraun enforces crate-vs-runner equality at run time.                       |
+| `gungraun` crate + runner              | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml`, resolved in `Cargo.lock`                                          | Bump the dep in `Cargo.toml` and `cargo update -p gungraun`; `provision.yml` installs the matching `gungraun-runner` (derived from the **resolved** `Cargo.lock` version — a caret req resolves up to the latest patch) to the shared `/usr/local`; until it is re-run, `run-bench.sh` installs a per-version copy itself. gungraun enforces crate-vs-runner equality at run time.                       |
 | Node.js                                | quarterly (with the kernel bump)                  | `provision.yml` (`node_lts_major`)                                                                 | Bump to the current active LTS line. Built-ins-only scripts; Node version changes are usually low-risk.                                                                                                                |
 | GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
 | Action SHA pins (`actions/checkout@…`) | weekly via Dependabot                             | `.github/workflows/*.yml`                                                                          | Low risk — these execute on hosted runners, not the bench host.                                                                                                                                                        |
 | AWS CLI v2                             | yearly                                            | `install-runner.sh` (curl from official zip)                                                       | Unpinned; we just pull whatever's current at install time.                                                                                                                                                             |
+| Docker, kind, kubectl, helm, k6 (k6bench) | quarterly (with the kernel bump) | `provision.yml` (`k6bench_tools` / `k6bench_archives`, URL + sha256) | kubectl tracks the kind node image pinned in `scripts/k6bench/kind-config.yaml`; bump both together. Docker is Ubuntu's `docker.io`, socket-activated. |
 
 ### Monthly: the actions/runner version check
 
@@ -981,9 +1041,6 @@ dashboard shows one annotated step instead of N small ones:
 Deliberately not built; document the "why not yet" so the next person
 doesn't reinvent or reattempt without context.
 
-- **Auto-trigger on `release: published`** — would let new tags
-  populate the `releases` view automatically. Easy add when we want
-  it; out for v1 because we're still tuning what to bench per release.
 - **Comment-driven dispatch** (e.g. `@rust-timer queue` style) —
   needs a fine-grained PAT or GH App. Worth doing once we want PR
   authors to dispatch their own benches.
@@ -992,8 +1049,7 @@ doesn't reinvent or reattempt without context.
   storage cost ever shows up on the bill (currently ≪ $0.01/mo).
 - **Multi-host fan-out** — bench numbers across architectures
   (aarch64, Apple silicon) or multiple x86_64 baselines. Requires
-  rethinking the `concurrency: bench-host` group and the per-row
-  schema.
+  new runner labels and a host dimension in the per-row schema.
 - **Auto-regression alerting** — Slack/issue post when a bench
   regresses by N % with non-overlapping CI vs. baseline. The data
   is in S3 already; the consumer is missing.

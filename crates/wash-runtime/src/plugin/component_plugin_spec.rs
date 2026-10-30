@@ -19,6 +19,7 @@ use anyhow::{Context as _, anyhow, bail, ensure};
 use crate::component_source::ComponentSource;
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::allowed_ip_name::AllowedIpName;
+use crate::host::allowed_loopback::AllowedLoopbackPort;
 
 /// A host component plugin to load: a host-unique id, a source for its wasm, and
 /// optional supervision/integrity settings.
@@ -48,13 +49,16 @@ pub struct ComponentPluginSpec {
     /// Names this plugin's `wasi:sockets/ip-name-lookup` calls may resolve.
     /// Empty (the default) denies every DNS lookup.
     pub allowed_ip_name_lookups: Arc<[AllowedIpName]>,
+    /// Ports on the machine's loopback this plugin may reach through raw
+    /// `wasi:sockets` connections to `host.wasmcloud.internal`. Empty denies
+    /// every connection. `wasi:http` does not resolve the sentinel name.
+    pub allowed_host_loopback_ports: Arc<[AllowedLoopbackPort]>,
     /// Ports this plugin listens on. Empty (the default) means it binds nothing:
     /// the deny that applied to every plugin before ports existed.
     ///
-    /// A plugin may always bind its own private virtual loopback whether or not
-    /// it declares a port here — that reaches nothing until something publishes
-    /// it. What this list controls is exposure: which of those the host binds a
-    /// real port for, and which concrete addresses the plugin may bind itself.
+    /// A plugin may always bind its own private virtual loopback. This list
+    /// grants concrete addresses the plugin may bind itself. `publish` is
+    /// rejected until host-component port splicing is implemented.
     pub ports: Arc<[crate::host::declared_port::DeclaredPort]>,
 }
 
@@ -70,6 +74,7 @@ impl ComponentPluginSpec {
             config: HashMap::new(),
             allowed_hosts: Arc::from([]),
             allowed_ip_name_lookups: Arc::from([]),
+            allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
         }
     }
@@ -145,6 +150,7 @@ impl FromStr for ComponentPluginSpec {
             config: HashMap::new(),
             allowed_hosts: Arc::from([]),
             allowed_ip_name_lookups: Arc::from([]),
+            allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
         })
     }
@@ -177,9 +183,11 @@ mod tests {
     fn parses_file_spec_and_defaults_pull_policy_for_oci() {
         let file: ComponentPluginSpec = "id=kv,file=./kv.wasm".parse().unwrap();
         assert_eq!(file.source, ComponentSource::File("./kv.wasm".into()));
+        assert!(file.allowed_host_loopback_ports.is_empty());
 
         let oci: ComponentPluginSpec = "id=kv,image=ghcr.io/acme/kv:1".parse().unwrap();
         assert_eq!(oci.source, ComponentSource::image("ghcr.io/acme/kv:1"));
+        assert!(oci.allowed_host_loopback_ports.is_empty());
     }
 
     #[test]

@@ -56,6 +56,8 @@ pub(crate) fn error_code_from_io(error: std::io::ErrorKind) -> ErrorCode {
 pub struct Network {
     pub(crate) socket_addr_check: SocketAddrCheck,
     pub(crate) allowed_ip_name_lookups: Arc<[crate::host::allowed_ip_name::AllowedIpName]>,
+    pub(crate) allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
+    pub(crate) resolved_names: Arc<super::resolved_names::ResolvedNames>,
 }
 
 impl Network {
@@ -63,11 +65,11 @@ impl Network {
     ///
     /// The returned address may differ from `addr`: an internal-zone sentinel
     /// resolves to a real address here.
-    pub async fn check_socket_addr(
+    pub fn check_socket_addr(
         &self,
         addr: SocketAddr,
         reason: SocketAddrUse,
     ) -> Result<super::Allowed, super::util::ErrorCode> {
-        self.socket_addr_check.check(addr, reason).await
+        self.socket_addr_check.check(addr, reason)
     }
 }

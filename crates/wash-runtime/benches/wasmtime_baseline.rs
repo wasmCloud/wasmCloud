@@ -85,22 +85,12 @@ impl WasiView for Ctx {
     }
 }
 
-impl wasmtime_wasi_http::p2::WasiHttpView for Ctx {
-    fn http(&mut self) -> wasmtime_wasi_http::p2::WasiHttpCtxView<'_> {
-        wasmtime_wasi_http::p2::WasiHttpCtxView {
+impl wasmtime_wasi_http::WasiHttpView for Ctx {
+    fn http(&mut self) -> wasmtime_wasi_http::WasiHttpCtxView<'_> {
+        wasmtime_wasi_http::WasiHttpCtxView {
             ctx: &mut self.http,
             table: &mut self.table,
-            hooks: Default::default(),
-        }
-    }
-}
-
-impl wasmtime_wasi_http::p3::WasiHttpView for Ctx {
-    fn http(&mut self) -> wasmtime_wasi_http::p3::WasiHttpCtxView<'_> {
-        wasmtime_wasi_http::p3::WasiHttpCtxView {
-            ctx: &mut self.http,
-            table: &mut self.table,
-            hooks: wasmtime_wasi_http::p3::default_hooks(),
+            hooks: wasmtime_wasi_http::default_hooks(),
         }
     }
 }
@@ -156,10 +146,10 @@ async fn handle_p2(
         None => P2Scheme::Http,
     };
 
-    let wasi_req = wasmtime_wasi_http::p2::WasiHttpView::http(store.data_mut())
+    let wasi_req = wasmtime_wasi_http::WasiHttpView::http(store.data_mut())
         .new_incoming_request(scheme, req)?;
-    let out = wasmtime_wasi_http::p2::WasiHttpView::http(store.data_mut())
-        .new_response_outparam(sender)?;
+    let out =
+        wasmtime_wasi_http::WasiHttpView::http(store.data_mut()).new_response_outparam(sender)?;
     let proxy_pre = ProxyPre::new(pre)?;
 
     let task: JoinHandle<anyhow::Result<()>> = tokio::task::spawn(async move {
@@ -186,19 +176,13 @@ async fn handle_p3(
     pre: wasmtime::component::InstancePre<Ctx>,
     req: hyper::Request<Incoming>,
 ) -> anyhow::Result<hyper::Response<HyperOutgoingBody>> {
-    use wasmtime_wasi_http::p2::bindings::http::types::ErrorCode as P2ErrorCode;
     use wasmtime_wasi_http::p3::bindings::ServicePre;
-    use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode as P3ErrorCode;
 
     let mut store = Store::new(pre.component().engine(), Ctx::new());
     let service_pre = ServicePre::new(pre)?;
 
-    let (parts, body) = req.into_parts();
-    let body = body
-        .map_err(|e| P3ErrorCode::InternalError(Some(e.to_string())))
-        .boxed_unsync();
-    let req = hyper::Request::from_parts(parts, body);
-    let (wasi_req, req_io) = wasmtime_wasi_http::p3::Request::from_http(req);
+    let (wasi_req, req_io) =
+        wasmtime_wasi_http::p3::Request::from_http(wasmtime_wasi_http::default_hooks(), req);
 
     let service = service_pre.instantiate_async(&mut store).await?;
 
@@ -244,9 +228,7 @@ async fn handle_p3(
             .await??;
 
     // Convert the collected response back to a streaming hyper body suitable
-    // for the outgoing connection. `HyperOutgoingBody` uses P2's ErrorCode as
-    // its error type, but our body is infallible so no mapping is needed.
-    let _ = P2ErrorCode::InternalError(None); // keep the import in scope
+    // for the outgoing connection; the body is infallible so no mapping is needed.
     let (parts, body) = collected.into_parts();
     let body: HyperOutgoingBody = http_body_util::Full::new(body.to_bytes())
         .map_err(|never| match never {})

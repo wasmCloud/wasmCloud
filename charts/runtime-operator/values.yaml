@@ -226,6 +226,11 @@ operator:
   #   extraArgs:
   #     - "-cpu-backpressure-threshold=75"
   extraArgs: []
+  # -- Additional operator pod volumes, including credential Secrets.
+  volumes: []
+  # -- Additional operator container mounts. Mount Secret directories without
+  # subPath so Kubernetes can refresh rotated credentials.
+  volumeMounts: []
   # -- How long a terminating operator pod has to shut down before it is
   # killed. On `SIGTERM` the manager stops its controllers and lets the
   # reconciles already running finish, waiting up to controller-runtime's 30s
@@ -310,6 +315,62 @@ runtime:
   # relax verification but replaces it: every registry drops to plain HTTP, so
   # nothing is verified and credentials travel in the clear.
   ociCaPaths: []
+
+  # -- Extra CA certificate bundles (paths inside the host container) trusted
+  # for outbound HTTPS that components make (`wasi:http`), for a service behind
+  # a private or in-cluster CA. Applies to every host group; add
+  # `hostGroups[].httpClientCaPaths` for one group alone.
+  #
+  # A third trust store, separate from `ociCaPaths` above and from the ingress
+  # server's own TLS: naming a bundle for image pulls does nothing for a
+  # component's outgoing call, which fails its handshake with
+  # `InvalidCertificate(UnknownIssuer)` until it is named here too.
+  #
+  # A service served from a host group in this cluster presents a certificate
+  # from the chart's own CA, already mounted whenever `global.tls.enabled`:
+  #   httpClientCaPaths: ["/runtime-cert/ca.crt"]
+  #
+  # Verifies remote servers. See `clientIdentity` for client authentication.
+  httpClientCaPaths: []
+
+  # -- Built-in roots layered under `httpClientCaPaths`: `webpki` (the default,
+  # compiled-in public roots), `webpki-and-native` (also the platform store,
+  # honouring `SSL_CERT_FILE`/`SSL_CERT_DIR`), `native`, or `extra-only` (trust
+  # exactly the bundles above and nothing else — the corporate-CA case of
+  # pinning a single private root).
+  #
+  # Empty leaves the host's own default. A group overrides this with a
+  # non-empty `hostGroups[].httpClientTrustRoots`; a group cannot set empty to
+  # fall back to the host default once this is set, so name the roots it wants.
+  httpClientTrustRoots: ""
+
+  # Client identity for mutual TLS from components.
+  #
+  # Every workload and destination in the host group shares this identity.
+  # Restrict workload `allowedHosts` to the intended services.
+  #
+  # The key is not exposed through `wasi:config` or `wasi:cli/env`. Workload
+  # `hostPath` mounts can still read it. Use a separate host group for workloads
+  # that must not access this identity.
+  clientIdentity:
+    # -- Existing `kubernetes.io/tls` Secret. Empty disables the identity.
+    #
+    # The Secret must be in the host group's namespace. cert-manager
+    # Certificate resources produce this Secret type.
+    secretName: ""
+    # -- Data keys inside the Secret.
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    # -- Directory the Secret is mounted at inside the host container.
+    mountPath: "/client-identity"
+    # -- Re-read the credential on this interval, such as `30s` or `5m`.
+    # Empty reads it once. Zero is invalid.
+    #
+    # A failed refresh keeps the current credential. The directory mount lets
+    # kubelet publish Secret updates.
+    #
+    # A non-empty interval enables certificate-chain expiry checks.
+    refreshInterval: "30s"
   # -- Labels to add to runtime host pod templates
   podLabels: {}
   # -- Annotations to add to runtime host pod templates
@@ -352,12 +413,14 @@ runtime:
   # host: size `limits.memory` for your expected per-host workload density, or
   # remove it to leave host memory uncapped.
   #
-  # `defaultHeapMemory`, `coreInstances`, `guestMemoryMode` and
-  # `maxConcurrentStarts` are host knobs rather than Kubernetes resource fields;
-  # the chart strips them out of the container's `resources` block and sets them
-  # as `WASH_DEFAULT_HEAP_MEMORY` / `WASH_CORE_INSTANCES` /
-  # `WASH_GUEST_MEMORY_MODE` / `WASH_MAX_CONCURRENT_STARTS` for the host.
-  # Leaving them empty uses the host's own defaults.
+  # `defaultHeapMemory`, `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`,
+  # `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` are host knobs
+  # rather than Kubernetes resource fields; the chart strips them out of the
+  # container's `resources` block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
+  # `WASH_MAX_MEMORIES` / `WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT` /
+  # `WASH_CORE_INSTANCES` / `WASH_GUEST_MEMORY_MODE` /
+  # `WASH_MAX_CONCURRENT_STARTS` for the host. Leaving them empty uses the
+  # host's own defaults.
   #
   # The simplest way to change host sizing for the whole release:
   #   --set runtime.resources.limits.memory=2Gi
@@ -367,29 +430,48 @@ runtime:
       cpu: "250m"
       memory: "64Mi"
     limits:
-      memory: "512Mi"
+      memory: "768Mi"
     # -- Ceiling on any single guest linear memory. Empty leaves wasmtime's
     # default of 4GiB.
     defaultHeapMemory: ""
-    # -- Instance slots the pooling allocator keeps. Empty leaves wasmtime's
-    # default of 1000.
+    # -- Linear memories the pooling allocator keeps room for, the count that
+    # sizes the pool: each reserves 4 GiB of address space plus a guard, and
+    # the fiber-stack, component-instance, core-instance, table and GC heap
+    # totals follow from it. Empty lets the host derive it from the node: half its
+    # address space and 90% of `vm.max_map_count` at six mappings per warm
+    # component, 9,829 on a default Linux node, never below 1000. Set it to
+    # plan a node's `vm.max_map_count` around a known pool.
+    maxMemories: ""
+    # -- On a node that commits the pool's stack and table mappings at
+    # startup (Linux with `vm.overcommit_memory=2`, or a finite `RLIMIT_DATA`),
+    # an empty `maxMemories` keeps the host at 1000 memories rather than the
+    # derived count, since the derived count would commit about 25 GiB of
+    # stacks and tables. `true` lets the host size itself against a quarter
+    # of its commit limit instead, the smallest of that and the usual bounds.
+    # No effect on other nodes or when `maxMemories` is set.
+    setMaxMemoriesFromMemoryPrecommitLimit: false
+    # -- Core instances (live core modules) the pool admits: a counter that
+    # reserves nothing, sixteen per memory when empty. Set alone, without
+    # `maxMemories`, it also pins the memory count to this number, as it did
+    # before `maxMemories` existed, and the host warns at startup; set
+    # `maxMemories` instead.
     coreInstances: ""
-    # -- Whether `limits.memory` is enforced against total guest memory or only
-    # counted: `count` (the default) charges every guest `memory.grow` to the
-    # budget and reports what it would have refused, but allows it; `enforce`
-    # refuses growth past the budget, which the guest sees as `memory.grow`
-    # returning -1. Guest memory has never been bounded in aggregate, so run in
-    # `count` and watch the host's reported high-water mark before switching.
+    # -- Whether the host's guest memory budget is enforced or only counted:
+    # `enforce` (what an empty value renders) refuses growth past the budget,
+    # which the guest sees as `memory.grow` returning -1; `count` charges every
+    # guest `memory.grow` to the budget and reports what it would have refused,
+    # but allows it. Use `count` to size a host: watch its reported high-water
+    # mark, then return to `enforce`.
     #
-    # Before setting `enforce`, note that the chart passes `limits.memory`
-    # through as the guest budget unchanged — 100% of the pod. Guests are not
-    # all a host pod holds: wasmtime itself, compiled module images, NATS, OCI
-    # pulls and HTTP buffers come out of the same limit, and none of them is
-    # charged to this budget. A host left to derive its own budget keeps a
-    # quarter back for them. So an enforced budget equal to `limits.memory` can
-    # still be OOM-killed before it ever refuses a guest; give the host its
-    # headroom by setting `limits.memory` above the guest budget you want, or
-    # by overriding `WASH_HOST_MAX_GUEST_MEMORY` below it via `runtime.env`.
+    # The host derives the budget: three quarters of `limits.memory`, and
+    # never less than 256MiB — so keep `limits.memory` above 342Mi, or the
+    # floor leaves the host no headroom. Guests are not all a host pod holds:
+    # wasmtime itself, compiled module images, NATS, OCI pulls and HTTP
+    # buffers come out of the same limit, and none of them is charged to this
+    # budget, so the last quarter is kept back for them. The same budget sizes
+    # the `wasmcloud:nats` backlog ceiling. Name a different budget with
+    # `WASH_HOST_MAX_GUEST_MEMORY` via `runtime.env`; one equal to
+    # `limits.memory` can be OOM-killed before it ever refuses a guest.
     guestMemoryMode: ""
     # -- How many workloads a host pulls and compiles at once. Each start it
     # admits ends in a compile that spreads over every core the host can see,
@@ -560,6 +642,8 @@ runtime:
       #
       #   plugins:
       #     - id: wasmcloud-nats
+      #       allowedHosts: [nats.default.svc:4222]
+      #       allowedIpNameLookups: [nats.default.svc]
       #       bindings:
       #         orders:
       #           config:
@@ -576,20 +660,28 @@ runtime:
       # a binding of its own; it defaults to `deny`.
       #
       # Keys are `wasmcloud:nats` config keys — `servers`, `subject-allow`,
-      # `stream-allow`, `bucket-allow`, `creds`, `jwt`/`nkey-seed`,
+      # `stream-allow`, `stream-delete-allow`, `bucket-allow`, `creds`, `jwt`/`nkey-seed`,
       # `username`/`password`, `token`, `tls-*`, `jetstream-domain`. The
       # entry's own `config` applies to every binding; each entry under
       # `bindings` layers over it. Leave `servers` out to take
       # `wasmcloudNatsUrl` above, which brings the data plane's TLS with it.
       #
-      # The three grants are ceilings, not switches: a workload may ask for a
-      # subset of what is declared here and is refused only for asking for
-      # more. All three are deny-by-default, and `stream-allow` on its own
-      # reaches nothing readable — every stored message a workload reads is
-      # checked against `subject-allow` as well, so a binding granted streams
-      # and no subjects gets empty results rather than an error. Grant the
-      # subjects those streams store alongside the stream itself. (The host
-      # warns at bind when a binding has streams and no subjects.)
+      # `nkey-seed-file`, `password-file` and `token-file` name files in place
+      # of those values. The host rereads them, like `creds`, on every
+      # reconnect, so a Secret mounted into the host pod rotates without a
+      # redeploy. `jwt-as-token: "true"` also sends the `creds` or `jwt` user
+      # JWT as the token, for an auth callout on a server without trusted
+      # operators, which drops the JWT before the callout sees it.
+      #
+      # A workload may narrow the host's grant ceilings. All deny by default.
+      # Stored messages also require `subject-allow`, so `stream-allow` on its
+      # own reaches nothing readable: a binding granted streams and no subjects
+      # gets empty results rather than an error. Grant the subjects those
+      # streams store alongside the stream itself. (The host warns at bind
+      # when a binding has streams but no subjects.)
+      # Purge and delete also require `stream-delete-allow` for the stream.
+      # Purge filters must fit inside `subject-allow`; deleting a sequence
+      # checks its stored subject. All grants are host-owned ceilings.
       #
       # `inbox-prefix` is refused on the entry's own `config`: it would give
       # every workload on the group the same inbox, and two workloads sharing
@@ -644,10 +736,19 @@ runtime:
       #                   how you rehearse a flip to `deny` without breaking a
       #                   workload mid-flight.
       #
-      #                   `deny` refuses nothing where nothing is declared, so
-      #                   it is safe as the default: a plugin that names no
-      #                   keys of its own, under an entry that sets none, owns
-      #                   none.
+      #                   `deny` refuses only the keys a plugin claims or this
+      #                   entry sets. The built-ins claim the keys that decide
+      #                   what a binding reaches: `wasmcloud-nats` its servers,
+      #                   credentials, and grants; the multiplexed keyvalue
+      #                   plugins `url`, `root`, and `prefix`, blobstore `url`
+      #                   and `root`, messaging `url`; `wasmcloud-postgres` a
+      #                   named import's `url`, and the databases the unnamed
+      #                   import may select as a comma-separated `database`.
+      #
+      #                   A value on the entry's own `config` is shared by every
+      #                   workload binding that label: one `root` or redis
+      #                   `prefix` there is one store for all of them. Declare
+      #                   `bindings` per label to keep workloads apart.
       #   hostOwnedKeys   extra keys claimed for the host under `deny`, on top
       #                   of the ones the plugin declares in code and the ones
       #                   this entry sets. The point is the keys left *unset* —
@@ -665,6 +766,8 @@ runtime:
       #
       #   plugins:
       #     - id: wasmcloud-nats           # native: no image/file
+      #       allowedHosts: [nats.default.svc:4222]
+      #       allowedIpNameLookups: [nats.default.svc]
       #       config:
       #         servers: nats://nats.default.svc:4222
       #       bindings:
@@ -686,9 +789,8 @@ runtime:
       # native plugin's configuration belongs under `plugins`. Merges with
       # (does not replace) `plugins`.
       #
-      # Host component plugins for this host group: WebAssembly components
-      # that provide a host capability, each served from its own supervised
-      # store to every workload that imports its interface.
+      # Host component plugins for this host group. Native plugin declarations
+      # belong under `plugins` above.
       #
       # Requires a wash image built with the `host-component-plugins` feature
       # (not enabled in release images yet); a host handed a plugin it cannot
@@ -700,9 +802,9 @@ runtime:
       # (image only).
       #
       # A plugin entry with none of `config`/`configFrom`/`secretFrom`/
-      # `allowedHosts`/`allowedIpNameLookups` set renders as a plain
-      # `--host-plugin=...` CLI arg (unchanged from before). Setting any of
-      # those five instead renders the WHOLE entry into a `wash host` config
+      # `allowedHosts`/`allowedIpNameLookups`/`allowedHostLoopbackPorts`/`ports` set
+      # renders as a plain `--host-plugin=...` CLI arg. Setting any of those
+      # instead renders the WHOLE entry into a `wash host` config
       # file (`--config`) mounted into the pod — never a CLI arg, so a secret
       # never appears on the command line:
       #
@@ -718,11 +820,9 @@ runtime:
       #   secretFrom      names of Secrets (same namespace), merged in last
       #                   (wins over `config`/`configFrom`). Same
       #                   host-only-reads-the-mount posture.
-      #   allowedHosts    this plugin's own `wasi:http/outgoing-handler`
-      #                   allowlist. Omitted/empty denies every outbound host
-      #                   — a host component plugin is operator-controlled
-      #                   and more privileged than a workload, so it gets no
-      #                   ergonomic allow-all default.
+      #   allowedHosts    endpoints this plugin may reach. Component plugins
+      #                   are gated at WASI; native plugins must check their
+      #                   client endpoints. Omitted/empty denies all.
       #
       # Editing any of these rolls the host automatically (the Deployment
       # carries a checksum over the rendered config file). Rotating the
@@ -735,9 +835,15 @@ runtime:
       # the host on its own. Without that controller the annotations are
       # inert, and a rotation needs a manual `kubectl rollout restart`.
       #
-      #   allowedIpNameLookups  names this plugin's own
-      #                   `wasi:sockets/ip-name-lookup` calls may resolve.
-      #                   Omitted/empty denies every lookup.
+      #   allowedIpNameLookups  names this plugin may resolve, beyond the
+      #                   hosts `allowedHosts` names. Both omitted/empty
+      #                   denies every lookup.
+      #   allowedHostLoopbackPorts  ports this plugin may reach on host
+      #                   loopback. Components use raw `wasi:sockets` with
+      #                   `host.wasmcloud.internal`; native clients check their
+      #                   loopback URL directly.
+      #                   Each entry is a port or `port/udp`; TCP is default.
+      #                   Requires this host group's `allowHostLoopback`.
       #
       # Examples:
       #
@@ -762,12 +868,9 @@ runtime:
       #       image: ghcr.io/example/grpc-gateway:1.0.0
       #       ports:
       #         - name: grpc
-      #           port: 50051        # the plugin binds 127.0.0.1:50051
+      #           port: 50051
       #           protocol: TCP
-      #           publish: 31051     # the host binds :31051 and splices in
-      #         - name: bulk
-      #           port: 9000
-      #           bind: 10.0.0.5     # the plugin binds 10.0.0.5:9000 itself
+      #           bind: 10.0.0.5     # the plugin binds this address itself
       hostPlugins: []
       # -- Networking policy for guests on this host group. Every value here is
       # the *host's* half of a two-sided grant: a workload or plugin must also
@@ -778,13 +881,37 @@ runtime:
         # `allowedHostLoopbackPorts` entry naming the port. `127.0.0.1` keeps
         # meaning the guest's own virtual network either way.
         allowHostLoopback: false
-        # -- How the raw-socket egress policy is applied: `count` or `enforce`.
+        # -- How the raw-socket egress policy is applied: `enforce` or `count`.
         #
-        # Raw socket connect was never gated, so enforcing on upgrade would
-        # sever live traffic. `count` evaluates the policy, records what it
-        # would refuse, and allows the connection anyway. Watch the
-        # would-deny counters, then switch to `enforce`.
-        socketEgress: count
+        # `enforce` refuses a connection the policy does not permit: a workload
+        # reaches only what its `allowedHosts` declares. An entry permits an
+        # address by naming it (a literal IP, or `*`) or by naming a host the
+        # workload itself resolved into it — see `ipNameLookupGrantLifetime`.
+        #
+        # `count` evaluates the policy, records what it would refuse in the
+        # would-deny counters, and allows the connection anyway — range
+        # refusals included, not only a missing `allowedHosts` entry.
+        socketEgress: enforce
+        # -- How long an address a workload resolved stays connectable under an
+        # `allowedHosts` entry naming the host it resolved, e.g. "60s". Empty
+        # (the default) keeps it connectable for as long as the workload's
+        # store remembers the lookup, even after the name has moved off that
+        # address. Set one where addresses are reused, such as pod IPs.
+        #
+        # A raw socket carries no name, so `allowedHosts: [db.internal:5432]`
+        # permits a socket only to an address a lookup of `db.internal` handed
+        # that workload, on that port. That entry also lets the workload
+        # resolve the name; `allowedIpNameLookups` is for names it resolves
+        # without connecting to them.
+        # With a lifetime set the grant lapses that long after the lookup. Not
+        # a DNS TTL: a workload that caches an address longer must then resolve
+        # again before a new connect or datagram, and open connections are
+        # unaffected.
+        #
+        # The grant is the address, not the server: two names behind one
+        # address are indistinguishable, and a name that resolves to another
+        # private service grants that service unless `denyPrivateRanges` is on.
+        ipNameLookupGrantLifetime: ""
         # -- Deny outbound connections to loopback, link-local (including the
         # cloud metadata address), multicast, and documentation ranges —
         # including whatever DNS returned for a permitted name.
@@ -826,9 +953,54 @@ runtime:
         # allows any port the OS will grant.
         # NOTE: not yet wired to the host, as with `publishPorts` above.
         publishPortRange: ""
+      # -- Which host directories a workload's `hostPath` volume may name. A
+      # volume is judged by its canonical path, so `..` and symlinks cannot
+      # step outside an allowed directory. The host's own credential paths,
+      # kernel filesystems (`/proc`, `/sys`, `/dev`), and any volume inside or
+      # containing `scratchRoot` (such as `/tmp` with the default root) are
+      # refused whatever is set here.
+      # This is a host-wide guardrail, not a multi-tenant storage policy:
+      # every workload on the host may mount any directory listed. Where
+      # tenants author workloads, refuse their raw `hostPath` volumes before
+      # they reach a host.
+      hostPaths:
+        # -- Directories a `hostPath` volume may lie within. Empty permits none.
+        allowed: []
+      # -- Where `emptyDir` volumes live. Empty uses `wasmcloud-scratch` under
+      # the container's temporary directory. Point it at a mounted volume to
+      # keep scratch off the container filesystem, or at a memory-backed one
+      # knowing scratch then counts against the pod's memory. Each workload's
+      # scratch is removed when it stops, and a restarted host removes what
+      # its predecessor left.
+      scratchRoot: ""
       http:
         enabled: true
         port: 9191
+        # -- Enable same-host local routing: an outgoing HTTP request matching a
+        # co-located workload's `localRoute` config is served in-process by that
+        # workload instead of leaving the pod.
+        #
+        # This is one of two keys. Enabling it here makes no workload locally
+        # reachable on its own — each workload must also declare what it offers,
+        # via `hostInterfaces[].config.localRoute` (`host` for a whole hostname,
+        # or `host/path` for a prefix). Names published only through
+        # `host`/`host-aliases` are never short-circuited, and `localRoute` names
+        # are never reachable from the network.
+        #
+        # SECURITY: a `localRoute` is a claim, not a proof of ownership. Any
+        # workload on this host may claim any hostname — including a public one
+        # it has nothing to do with — and will then receive its neighbours'
+        # requests to that name. Dispatch is in-memory, so there is no TLS: an
+        # `https://` request to a claimed name is handed over in plaintext with
+        # the certificate never checked, and `allowedHosts` does not help
+        # because the caller legitimately lists the name it means to reach.
+        # Enable only on a hostgroup whose workloads are equally trusted — not
+        # on a shared multi-tenant hostgroup.
+        #
+        # Locally routed calls also bypass anything on the network path (ingress
+        # auth, rate limits, mesh mTLS, NetworkPolicy). The caller's
+        # `allowedHosts` egress policy is still enforced first.
+        localBypassRouting: false
         tls:
           # -- Enable TLS for the HTTP server. Requires global.tls.enabled to be true.
           # When enabled, a certificate is generated (if global.certificates.generate is true)
@@ -865,8 +1037,8 @@ runtime:
       #   limits:
       #     memory: "2Gi"
       #   defaultHeapMemory: "512MiB"
-      #   coreInstances: "200"
-      #   guestMemoryMode: "enforce"
+      #   maxMemories: "200"
+      #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
       # -- Per-host-group probes. Merged field by field over
       # `runtime.probes`, so a group can retune one timing and inherit the
@@ -878,3 +1050,17 @@ runtime:
       # chart-wide `runtime.ociCaPaths` rather than replacing it:
       # ociCaPaths:
       #   - "/runtime-cert/ca.crt"
+      # -- Extra CA bundles trusted for this group's component egress, added to
+      # the chart-wide `runtime.httpClientCaPaths` rather than replacing it:
+      # httpClientCaPaths:
+      #   - "/runtime-cert/ca.crt"
+      # -- Client identity for this group. Merged field by field over
+      # `runtime.clientIdentity`, so naming a secret alone inherits the key
+      # names, mount path and refresh interval:
+      # clientIdentity:
+      #   secretName: "partner-api-client"
+      # -- Built-in roots for this group's component egress. A non-empty
+      # value replaces the chart-wide `runtime.httpClientTrustRoots`; empty
+      # inherits it. There is no way to spell "ignore the chart-wide value and
+      # take the host default" — name the roots this group wants instead:
+      # httpClientTrustRoots: "extra-only"

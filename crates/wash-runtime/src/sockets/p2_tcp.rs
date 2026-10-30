@@ -534,3 +534,189 @@ impl OutputStream for LoopbackOutputStream {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::timeout;
+
+    async fn pair() -> (Arc<tokio::net::TcpStream>, tokio::net::TcpStream) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        (Arc::new(client), server)
+    }
+
+    #[tokio::test]
+    async fn native_reader_distinguishes_pending_data_partial_reads_and_eof() {
+        let (stream, mut peer) = pair().await;
+        let mut reader = TcpReadStream(Arc::new(Mutex::new(TcpReader::new(stream))));
+        assert!(reader.read(0).unwrap().is_empty());
+        assert!(reader.read(10).unwrap().is_empty());
+        assert!(matches!(
+            futures::poll!(Box::pin(reader.ready())),
+            std::task::Poll::Pending
+        ));
+        peer.write_all(b"hello").await.unwrap();
+        timeout(Duration::from_secs(5), reader.ready())
+            .await
+            .unwrap();
+        assert_eq!(reader.read(2).unwrap(), &b"he"[..]);
+        assert_eq!(reader.read(10).unwrap(), &b"llo"[..]);
+        peer.shutdown().await.unwrap();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                reader.ready().await;
+                match reader.read(10) {
+                    Err(StreamError::Closed) => break,
+                    Ok(bytes) => assert!(bytes.is_empty()),
+                    Err(error) => panic!("unexpected read error: {error:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(matches!(reader.read(0), Err(StreamError::Closed)));
+        timeout(Duration::from_secs(5), reader.ready())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn background_write_blocks_new_writes_until_ready() {
+        let (stream, mut peer) = pair().await;
+        let writer = Arc::new(Mutex::new(TcpWriter::new(stream)));
+        let mut output = TcpWriteStream(writer.clone());
+        timeout(Duration::from_secs(5), output.ready())
+            .await
+            .unwrap();
+        assert!(output.check_write().unwrap() > 0);
+        writer
+            .lock()
+            .await
+            .background_write(Bytes::from_static(b"payload"));
+        assert_eq!(output.check_write().unwrap(), 0);
+        output.flush().unwrap();
+        assert!(matches!(
+            output.write(Bytes::from_static(b"extra")),
+            Err(StreamError::Trap(_))
+        ));
+        timeout(Duration::from_secs(5), output.ready())
+            .await
+            .unwrap();
+        assert!(output.check_write().unwrap() > 0);
+        let mut buf = [0; 7];
+        timeout(Duration::from_secs(5), peer.read_exact(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&buf, b"payload");
+        output.cancel().await;
+        assert!(matches!(
+            output.write(Bytes::new()),
+            Err(StreamError::Closed)
+        ));
+        assert!(matches!(output.flush(), Err(StreamError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_the_background_write_before_eof() {
+        let (stream, mut peer) = pair().await;
+        let mut writer = TcpWriter::new(stream);
+        writer.background_write(Bytes::from_static(b"last message"));
+        writer.shutdown();
+        assert_eq!(writer.check_write().unwrap(), 0);
+        writer.shutdown();
+        timeout(Duration::from_secs(5), writer.ready())
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        timeout(Duration::from_secs(5), peer.read_to_end(&mut received))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received, b"last message");
+        assert!(matches!(writer.check_write(), Err(StreamError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn failed_background_write_reports_its_error_once() {
+        let (stream, _peer) = pair().await;
+        let mut writer = TcpWriter::new(stream);
+        writer.state = WriteState::Writing(wasmtime_wasi::runtime::spawn(async {
+            Err(io::Error::from(io::ErrorKind::ConnectionReset))
+        }));
+        timeout(Duration::from_secs(5), writer.ready())
+            .await
+            .unwrap();
+        writer.flush().unwrap();
+        assert!(matches!(
+            writer.check_write(),
+            Err(StreamError::LastOperationFailed(_))
+        ));
+        assert!(matches!(writer.check_write(), Err(StreamError::Closed)));
+    }
+
+    #[tokio::test]
+    async fn cancel_aborts_a_pending_background_write() {
+        let (stream, _peer) = pair().await;
+        let mut writer = TcpWriter::new(stream);
+        writer.state = WriteState::Writing(wasmtime_wasi::runtime::spawn(std::future::pending()));
+        timeout(Duration::from_secs(5), writer.cancel())
+            .await
+            .unwrap();
+        assert!(matches!(writer.check_write(), Err(StreamError::Closed)));
+        timeout(Duration::from_secs(5), writer.ready())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_native_stream_access_traps_instead_of_blocking() {
+        let (stream, _peer) = pair().await;
+        let reader = Arc::new(Mutex::new(TcpReader::new(stream.clone())));
+        let writer = Arc::new(Mutex::new(TcpWriter::new(stream.clone())));
+        let state = P2TcpStreamingState {
+            stream,
+            reader: reader.clone(),
+            writer: writer.clone(),
+        };
+        let mut input = TcpReadStream(reader.clone());
+        let mut output = TcpWriteStream(writer.clone());
+        let read_guard = reader.lock().await;
+        assert!(matches!(input.read(1), Err(StreamError::Trap(_))));
+        assert!(
+            state
+                .shutdown(Shutdown::Read)
+                .unwrap_err()
+                .downcast()
+                .is_err()
+        );
+        drop(read_guard);
+        let write_guard = writer.lock().await;
+        assert!(matches!(output.check_write(), Err(StreamError::Trap(_))));
+        assert!(matches!(output.flush(), Err(StreamError::Trap(_))));
+        assert!(matches!(
+            output.write(Bytes::new()),
+            Err(StreamError::Trap(_))
+        ));
+        assert!(
+            state
+                .shutdown(Shutdown::Write)
+                .unwrap_err()
+                .downcast()
+                .is_err()
+        );
+        drop(write_guard);
+        state.shutdown(Shutdown::Both).unwrap();
+        assert!(matches!(input.read(1), Err(StreamError::Closed)));
+        assert!(matches!(output.check_write(), Err(StreamError::Closed)));
+    }
+}

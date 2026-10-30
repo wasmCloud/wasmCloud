@@ -1,9 +1,8 @@
 //! Which addresses a guest may bind and connect, and on which plane.
 //!
 //! One [`SocketPolicy`] per guest, installed as the `socket_addr_check` closure
-//! on its [`WasiSocketsCtx`](super::WasiSocketsCtx). Every bind, connect, and
-//! outgoing datagram goes through [`SocketPolicy::decide`], so the answer to
-//! "what can this reach" is readable — and meterable — in one place.
+//! on its [`WasiSocketsCtx`](super::WasiSocketsCtx). Socket creation and every
+//! address use go through [`SocketPolicy::decide_for_store`].
 //!
 //! The order of evaluation for an outbound address, and why:
 //!
@@ -15,13 +14,16 @@
 //! 3. **Everything else** is real egress: layer 1 the declared `allowedHosts`,
 //!    layer 2 the address-range policy. Layer 1 is what closes the hole — a
 //!    range policy alone still permits dialing the Kubernetes API on an
-//!    ordinary routable address.
+//!    ordinary routable address. An entry satisfies layer 1 by naming the
+//!    address (a literal, or `*`) or by naming a host the store resolved into
+//!    it — see [`super::resolved_names`].
 //!
 //! Binds never reach the egress layers: a bind is not a destination.
 
 use core::net::SocketAddr;
 use std::sync::Arc;
 
+use super::resolved_names::ResolvedNames;
 use super::{AddrDecision, Allowed, DenyReason, Plane, SocketAddrUse, internal_names};
 use crate::host::allowed_hosts::{AllowedHost, check_allowed_addr};
 use crate::host::allowed_loopback::{AllowedLoopbackPort, check_allowed_loopback};
@@ -44,7 +46,7 @@ pub struct DirectBind {
 impl DirectBind {
     pub fn permits(&self, reason: SocketAddrUse, addr: SocketAddr) -> bool {
         let matches_protocol = match reason {
-            SocketAddrUse::TcpBind => !self.udp,
+            SocketAddrUse::TcpBind | SocketAddrUse::TcpListen => !self.udp,
             SocketAddrUse::UdpBind => self.udp,
             _ => return false,
         };
@@ -68,17 +70,16 @@ pub enum GuestKind {
 
 /// How strictly the egress gate is applied.
 ///
-/// Turning the gate on is a breaking change for any guest doing socket egress
-/// without a declared `allowedHosts` — which, since the socket path was never
-/// gated, is all of them. [`EgressMode::Count`] exists so an operator can see
-/// what enforcement *would* break before it breaks.
+/// The gate refuses socket egress from any guest without a declared
+/// `allowedHosts` entry covering it. [`EgressMode::Count`] exists so an
+/// operator can see what enforcement refuses without severing that traffic.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EgressMode {
     /// Evaluate the policy, log and count what it would refuse, allow it
-    /// anyway. The default, so upgrading a host does not sever live traffic.
-    #[default]
+    /// anyway.
     Count,
-    /// Refuse what the policy refuses.
+    /// Refuse what the policy refuses. The default.
+    #[default]
     Enforce,
 }
 
@@ -90,7 +91,7 @@ pub enum EgressMode {
 pub struct SocketPolicy {
     pub kind: GuestKind,
     /// Declared egress allowlist, shared with `wasi:http`. Empty denies every
-    /// connect once [`EgressMode::Enforce`] is on.
+    /// connect under [`EgressMode::Enforce`].
     pub allowed_hosts: Arc<[AllowedHost]>,
     /// Ports on the machine's own loopback this guest may reach through
     /// `host.wasmcloud.internal`. Empty denies every one.
@@ -109,21 +110,29 @@ pub struct SocketPolicy {
     /// same quota bounds its pooled HTTP and its inbound published ports.
     ///
     /// Minted per guest from the host's registry — see
-    /// [`SocketPolicy::for_guest`]. A policy built without one, as the
-    /// host-level template is, has no quota until a guest claims it.
+    /// [`SocketPolicy::for_guest`].
     pub quota: Option<crate::host::quota::GuestConnectionQuota>,
     /// Where [`SocketPolicy::for_guest`] mints a quota from.
     pub quotas: Option<Arc<crate::host::quota::QuotaRegistry>>,
     /// Counters for what the policy decided.
     pub meters: Option<Arc<crate::host::quota::PolicyMeters>>,
+    /// Bounds on each store's lookup history, which is what lets an
+    /// `allowed_hosts` entry naming a host permit a socket. Configuration only:
+    /// the history itself belongs to the store.
+    pub resolved_names: super::resolved_names::ResolvedNameLimits,
 }
 
 impl Default for SocketPolicy {
     /// The same policy the `wash` CLI builds when an operator passes no socket
-    /// flags: range filtering on, egress gate counting rather than enforcing,
-    /// host loopback closed. An embedder that installs no policy of its own
-    /// gets what an operator running the host would get, rather than a
-    /// permissive one nobody chose.
+    /// flags: range filtering on, egress gate enforcing, host loopback closed.
+    /// An embedder that installs no policy of its own gets what an operator
+    /// running the host would get, rather than a permissive one nobody chose.
+    ///
+    /// No port table: the table is the host's single record of which real ports
+    /// are spoken for, so it has to come from the host that owns it. Minting
+    /// one here would hand each defaulted policy a private table that nothing
+    /// reserves into, and an always-empty table answers "nobody owns that
+    /// port" — a denial silently absent rather than absent by `None`.
     fn default() -> Self {
         Self {
             kind: GuestKind::Component,
@@ -132,10 +141,31 @@ impl Default for SocketPolicy {
             host_loopback_enabled: false,
             egress_addrs: EgressAddressPolicy::default(),
             host_owned_ports: None,
-            egress_mode: EgressMode::Count,
+            egress_mode: EgressMode::default(),
             quota: None,
-            quotas: None,
+            // The process-wide default, so every policy that takes it shares
+            // one ceiling; a host that configures quotas passes its own.
+            quotas: Some(crate::host::quota::default_registry()),
             meters: None,
+            resolved_names: super::resolved_names::ResolvedNameLimits::default(),
+        }
+    }
+}
+
+/// Where an outbound address goes, and for how long that answer holds.
+struct Route {
+    addr: SocketAddr,
+    plane: Plane,
+    valid_until: Option<std::time::Instant>,
+}
+
+impl Route {
+    /// A route that does not lapse: everything but a grant by resolved name.
+    fn standing(addr: SocketAddr, plane: Plane) -> Self {
+        Self {
+            addr,
+            plane,
+            valid_until: None,
         }
     }
 }
@@ -155,9 +185,17 @@ impl SocketPolicy {
     /// share whatever single quota the template happened to carry, making the
     /// number a host-wide cap wearing a per-guest name.
     #[must_use]
-    pub fn for_guest(&self, kind: GuestKind, guest_id: &str) -> Self {
+    pub fn for_guest(
+        &self,
+        kind: GuestKind,
+        guest_id: &str,
+        allowed_hosts: Arc<[AllowedHost]>,
+        host_loopback: Arc<[AllowedLoopbackPort]>,
+    ) -> Self {
         Self {
             kind,
+            allowed_hosts,
+            host_loopback,
             quota: self.quota_for(guest_id),
             ..self.clone()
         }
@@ -173,26 +211,54 @@ impl SocketPolicy {
         self.quotas.as_ref().map(|r| r.for_guest(guest_id))
     }
 
+    /// [`Self::decide_for_store`] for a guest that has resolved nothing, so
+    /// only literal and `*` entries permit real egress.
+    #[cfg(test)]
+    pub(crate) fn decide(&self, reason: SocketAddrUse, addr: SocketAddr) -> AddrDecision {
+        self.decide_inner(reason, addr, None)
+    }
+
     /// The single decision point. See the module docs for the evaluation order.
-    pub fn decide(&self, reason: SocketAddrUse, addr: SocketAddr) -> AddrDecision {
+    ///
+    /// `names` is the calling store's lookup history: real egress to an address
+    /// it holds under a name `allowed_hosts` grants is permitted as that name.
+    pub fn decide_for_store(
+        &self,
+        reason: SocketAddrUse,
+        addr: SocketAddr,
+        names: &ResolvedNames,
+    ) -> AddrDecision {
+        self.decide_inner(reason, addr, Some(names))
+    }
+
+    fn decide_inner(
+        &self,
+        reason: SocketAddrUse,
+        addr: SocketAddr,
+        names: Option<&ResolvedNames>,
+    ) -> AddrDecision {
         let decision = match reason {
-            SocketAddrUse::TcpBind | SocketAddrUse::UdpBind => self.decide_bind(reason, addr),
+            SocketAddrUse::TcpCreate | SocketAddrUse::UdpCreate => {
+                self.allow_with_slot(addr, Plane::Host)
+            }
+            SocketAddrUse::TcpBind | SocketAddrUse::TcpListen | SocketAddrUse::UdpBind => {
+                self.decide_bind(reason, addr)
+            }
+            SocketAddrUse::TcpAccept => self.decide_accept(addr, true),
+            SocketAddrUse::TcpAcceptVirtual => self.decide_accept(addr, false),
             // Giving an outgoing datagram a local endpoint is egress, not
             // listening, and its destination is checked separately as
             // `UdpOutgoingDatagram`. Denying it would deny UDP egress outright
-            // — but it does open a real socket, so it spends a quota slot.
-            SocketAddrUse::UdpImplicitBind => self.allow_with_slot(addr, Plane::Host),
-            SocketAddrUse::TcpConnect => self.decide_connect(addr, Protocol::Tcp),
-            SocketAddrUse::UdpConnect => self.decide_connect(addr, Protocol::Udp),
-            // A datagram is not a connection: the socket sending it is one
-            // descriptor however many peers it addresses, and that socket
-            // already took a slot when it bound or connected. Charging per
-            // datagram would count traffic while bounding nothing, so this runs
-            // the same policy but spends nothing.
-            SocketAddrUse::UdpOutgoingDatagram => match self.resolve_connect(addr, Protocol::Udp) {
-                Ok((addr, plane)) => AddrDecision::allow_on(addr, plane),
-                Err(reason) => AddrDecision::Deny(reason),
-            },
+            // Socket creation already charged the descriptor.
+            SocketAddrUse::UdpImplicitBind => AddrDecision::allow_on(addr, Plane::Host),
+            // None of these spends a slot. A connect's socket took one when it
+            // was created, and a datagram is not a connection: the socket
+            // sending it is one descriptor however many peers it addresses.
+            // Charging per datagram would count traffic while bounding nothing.
+            SocketAddrUse::TcpConnect => self.decide_connect(addr, Protocol::Tcp, names),
+            SocketAddrUse::UdpConnect => self.decide_connect(addr, Protocol::Udp, names),
+            SocketAddrUse::UdpOutgoingDatagram => self.decide_connect(addr, Protocol::Udp, names),
+            SocketAddrUse::UdpReceive => self.decide_receive(addr),
         };
         if let (Some(meters), AddrDecision::Deny(why)) = (&self.meters, &decision) {
             meters.record_deny(*why);
@@ -202,32 +268,32 @@ impl SocketPolicy {
 
     fn decide_bind(&self, reason: SocketAddrUse, addr: SocketAddr) -> AddrDecision {
         let ip = addr.ip();
-        let permitted = match &self.kind {
-            // A component never *listens* — but a UDP bind is not listening.
-            // Binding a local endpoint is the required first step of UDP
-            // egress: p2 refuses `stream()` on an unbound socket, and Rust's
-            // std does an explicit bind on p3 too, so denying this would deny
-            // outbound datagrams rather than deny a listener.
-            GuestKind::Component => match reason {
-                SocketAddrUse::UdpBind => ip.is_loopback() || ip.is_unspecified(),
-                _ => false,
-            },
-            // A service listens inside the workload's virtual network. An
-            // unspecified UDP bind is permitted because `UdpSocket::bind`
-            // rewrites it to loopback before it reaches the OS, exactly as the
-            // TCP path does.
-            GuestKind::Service => match reason {
-                SocketAddrUse::UdpBind => ip.is_loopback() || ip.is_unspecified(),
-                _ => ip.is_loopback(),
-            },
-            // A plugin's virtual network is private, so a listener in it
-            // reaches nothing until the host publishes a real port that splices
-            // into it. Beyond that it may bind only an address the operator
-            // declared, matched exactly.
-            GuestKind::Plugin { direct_binds } => {
-                ip.is_loopback() || direct_binds.iter().any(|b| b.permits(reason, addr))
-            }
-        };
+        // A UDP bind is not listening: binding a local endpoint is the required
+        // first step of UDP egress — p2 refuses `stream()` on an unbound
+        // socket, and Rust's std does an explicit bind on p3 too — so denying
+        // it outright would deny outbound datagrams rather than deny a
+        // listener. That first step takes an ephemeral port, which is the only
+        // unspecified bind permitted here: `UdpSocket::bind` leaves an
+        // unspecified address unspecified at the OS, so a *named* port on it
+        // claims a real port of the machine's on every interface, which is a
+        // listener whatever the guest calls it. Every kind shares this, so the
+        // match below carries only what actually differs between them.
+        let udp_egress_bind = matches!(reason, SocketAddrUse::UdpBind)
+            && (ip.is_loopback() || (ip.is_unspecified() && addr.port() == 0));
+        let permitted = udp_egress_bind
+            || match &self.kind {
+                // A component never listens.
+                GuestKind::Component => false,
+                // A service listens inside the workload's virtual network.
+                GuestKind::Service => ip.is_loopback(),
+                // A plugin's virtual network is private, so a listener in it
+                // reaches nothing until the host publishes a real port that
+                // splices into it. Beyond that it may bind only an address the
+                // operator declared, matched exactly.
+                GuestKind::Plugin { direct_binds } => {
+                    ip.is_loopback() || direct_binds.iter().any(|b| b.permits(reason, addr))
+                }
+            };
         if permitted {
             AddrDecision::allow_by_address(addr)
         } else {
@@ -238,41 +304,110 @@ impl SocketPolicy {
     /// Resolve an outbound address to the address and plane to actually use,
     /// or the reason it is refused.
     ///
-    /// **The only place connect policy lives.** The metered path
-    /// ([`Self::decide_connect`]) and the unmetered datagram path both resolve
-    /// through here, so every rule applies to both and neither can drift.
+    /// **The only place connect policy lives.** Connects and outgoing
+    /// datagrams both resolve through here, so every rule applies to both and
+    /// neither can drift.
     fn resolve_connect(
         &self,
         addr: SocketAddr,
         protocol: Protocol,
-    ) -> Result<(SocketAddr, Plane), DenyReason> {
+        names: Option<&ResolvedNames>,
+    ) -> Result<Route, DenyReason> {
         // 1. The sentinel: the machine's own loopback, by name.
         if internal_names::is_host_sentinel(addr.ip()) {
-            return self.resolve_host_loopback(addr, protocol);
+            return self
+                .resolve_host_loopback(addr, protocol)
+                .map(|(addr, plane)| Route::standing(addr, plane));
         }
 
         // 2. The guest's own virtual network. Reaches nothing outside this
-        //    process, so no egress policy applies.
-        if addr.ip().to_canonical().is_loopback() {
-            return Ok((addr, Plane::Virtual));
+        //    process, so no egress policy applies. The unspecified address
+        //    names this machine too, so it never reaches the host plane.
+        let ip = addr.ip().to_canonical();
+        if ip.is_loopback() || ip.is_unspecified() {
+            return Ok(Route::standing(addr, Plane::Virtual));
         }
 
-        // 3. Real egress: the declared allowlist, then the address ranges.
-        if !check_allowed_addr(&self.allowed_hosts, addr) {
-            return self.gate(DenyReason::NotPermitted, addr).map(|p| (addr, p));
+        // 3. Real egress: the declared allowlist, then the address ranges. An
+        //    entry permits the address itself (a literal, or `*`), or a name
+        //    this store resolved into it. Being allowed to look a name up is
+        //    not being allowed to connect to it: only `allowed_hosts` grants.
+        //    A decision resting on a name lapses with that name's grant, if
+        //    grants have a lifetime.
+        //
+        //    Both layers are judged before either refuses. Enforcing, the
+        //    first refusal is the answer. Counting, every refusal is recorded,
+        //    so an operator sees all of what enforcing would say about a
+        //    destination and not only the first thing.
+        let named = if check_allowed_addr(&self.allowed_hosts, addr) {
+            Some(None)
+        } else {
+            names.and_then(|names| names.permitted_until(&self.allowed_hosts, addr))
+        };
+        let in_range = self.egress_addrs.permits(addr.ip());
+        if named.is_none() {
+            self.gate(DenyReason::NotPermitted, addr)?;
         }
-        if !self.egress_addrs.permits(addr.ip()) {
-            return self.gate(DenyReason::BlockedRange, addr).map(|p| (addr, p));
+        if !in_range {
+            self.gate(DenyReason::BlockedRange, addr)?;
         }
-        Ok((addr, Plane::Host))
+        Ok(Route {
+            addr,
+            plane: Plane::Host,
+            // A counted refusal is let through as it stands: nothing lapses.
+            valid_until: named.flatten().filter(|_| in_range),
+        })
     }
 
-    /// [`Self::resolve_connect`], spending a quota slot on what it permits.
-    fn decide_connect(&self, addr: SocketAddr, protocol: Protocol) -> AddrDecision {
-        match self.resolve_connect(addr, protocol) {
-            Ok((addr, plane)) => self.allow_with_slot(addr, plane),
+    /// Resolve a connect without charging the socket a second time.
+    fn decide_connect(
+        &self,
+        addr: SocketAddr,
+        protocol: Protocol,
+        names: Option<&ResolvedNames>,
+    ) -> AddrDecision {
+        match self.resolve_connect(addr, protocol, names) {
+            Ok(route) => AddrDecision::Allow(Allowed {
+                addr: route.addr,
+                plane: route.plane,
+                permit: None,
+                valid_until: route.valid_until,
+            }),
             Err(reason) => AddrDecision::Deny(reason),
         }
+    }
+
+    fn decide_accept(&self, addr: SocketAddr, network: bool) -> AddrDecision {
+        match self.kind {
+            GuestKind::Component => AddrDecision::Deny(DenyReason::NotPermitted),
+            GuestKind::Service | GuestKind::Plugin { .. } => {
+                let AddrDecision::Allow(mut allowed) = AddrDecision::allow_by_address(addr) else {
+                    unreachable!()
+                };
+                if network && let Some(quota) = &self.quota {
+                    let Some(permit) = quota.try_acquire_inbound_socket() else {
+                        return AddrDecision::Deny(DenyReason::NoCapacity);
+                    };
+                    allowed.permit = Some(permit);
+                }
+                AddrDecision::Allow(allowed)
+            }
+        }
+    }
+
+    /// A datagram that has arrived, judged by where it came from.
+    ///
+    /// Deliberately *not* the egress allowlist. `allowedHosts` describes where a
+    /// guest may send: its entries match a host and, when given, an exact port,
+    /// and a wildcard or a DNS name matches no address at all. A reply arrives
+    /// from an ephemeral port — and from an address, never a name — so checking
+    /// an inbound source against it refuses ordinary replies (a resolver, STUN,
+    /// TFTP) as soon as the gate is enforcing. The send side already decided
+    /// where this socket could talk to; what keeps an unsolicited datagram out
+    /// is the per-socket peer filter, which admits only peers the guest has
+    /// actually addressed (see [`crate::sockets::udp`]).
+    fn decide_receive(&self, addr: SocketAddr) -> AddrDecision {
+        AddrDecision::allow_by_address(addr)
     }
 
     fn resolve_host_loopback(
@@ -302,7 +437,7 @@ impl SocketPolicy {
     }
 
     /// Apply a refusal under the current [`EgressMode`]: deny it, or count it
-    /// and let it through so an operator can see the blast radius first.
+    /// and let it through so an operator can see the blast radius.
     fn gate(&self, reason: DenyReason, addr: SocketAddr) -> Result<Plane, DenyReason> {
         match self.egress_mode {
             EgressMode::Enforce => Err(reason),
@@ -322,11 +457,6 @@ impl SocketPolicy {
     }
 
     fn allow_with_slot(&self, addr: SocketAddr, plane: Plane) -> AddrDecision {
-        // Only real connections spend the quota: a virtual one costs no file
-        // descriptor and no remote resource.
-        if plane == Plane::Virtual {
-            return AddrDecision::allow_on(addr, plane);
-        }
         let Some(quota) = &self.quota else {
             return AddrDecision::allow_on(addr, plane);
         };
@@ -338,6 +468,7 @@ impl SocketPolicy {
                 addr,
                 plane,
                 permit: Some(permit),
+                valid_until: None,
             }),
             None => AddrDecision::Deny(DenyReason::NoCapacity),
         }
@@ -347,6 +478,7 @@ impl SocketPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sockets::resolved_names::ResolvedNameLimits;
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().expect("test address should parse")
@@ -385,12 +517,18 @@ mod tests {
     fn a_component_cannot_listen_at_all() {
         let policy = SocketPolicy::for_kind(GuestKind::Component);
         for a in ["127.0.0.1:8080", "0.0.0.0:8080", "10.0.0.5:8080"] {
-            assert_eq!(
-                denied(&policy.decide(SocketAddrUse::TcpBind, addr(a))),
-                Some(DenyReason::BindNotPermitted),
-                "component should not listen on {a}"
-            );
+            for reason in [SocketAddrUse::TcpBind, SocketAddrUse::TcpListen] {
+                assert_eq!(
+                    denied(&policy.decide(reason, addr(a))),
+                    Some(DenyReason::BindNotPermitted),
+                    "component should not listen on {a}"
+                );
+            }
         }
+        assert_eq!(
+            denied(&policy.decide(SocketAddrUse::TcpAccept, addr("127.0.0.1:50000"))),
+            Some(DenyReason::NotPermitted)
+        );
     }
 
     /// A UDP bind is the required first step of *egress*, not a listener: p2
@@ -416,11 +554,56 @@ mod tests {
     fn a_service_listens_only_on_its_virtual_loopback() {
         let policy = SocketPolicy::for_kind(GuestKind::Service);
         assert!(plane_of(&policy.decide(SocketAddrUse::TcpBind, addr("127.0.0.1:8080"))).is_some());
+        assert!(
+            plane_of(&policy.decide(SocketAddrUse::TcpListen, addr("127.0.0.1:8080"))).is_some()
+        );
+        assert!(
+            plane_of(&policy.decide(SocketAddrUse::TcpAccept, addr("10.0.0.5:50000"))).is_some()
+        );
         assert!(denied(&policy.decide(SocketAddrUse::TcpBind, addr("10.0.0.5:8080"))).is_some());
-        // Unspecified UDP is permitted only because the bind path rewrites it
-        // to loopback before the OS sees it.
-        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:8080"))).is_some());
+        // Unspecified UDP is permitted for egress, which takes an ephemeral
+        // port. A named port on it would be a real listener on every
+        // interface: `UdpSocket::bind` leaves an unspecified address
+        // unspecified at the OS. The service's own fixed-port endpoint is the
+        // loopback bind above, inside its virtual network.
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:0"))).is_some());
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("127.0.0.1:8080"))).is_some());
+        assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:8080"))).is_some());
         assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("10.0.0.5:8080"))).is_some());
+    }
+
+    #[test]
+    fn network_accepts_hold_inbound_capacity() {
+        let quota = crate::host::quota::GuestConnectionQuota::new(
+            crate::host::quota::QuotaLimits {
+                outbound_http: 1,
+                outbound_sockets: 1,
+                inbound_sockets: 1,
+            },
+            None,
+        );
+        let policy = SocketPolicy {
+            quota: Some(quota.clone()),
+            ..SocketPolicy::for_kind(GuestKind::Service)
+        };
+        let peer = addr("10.0.0.5:50000");
+
+        let AddrDecision::Allow(accepted) = policy.decide(SocketAddrUse::TcpAccept, peer) else {
+            panic!("first network accept should be allowed");
+        };
+        assert!(accepted.permit.is_some());
+        assert_eq!(quota.inbound_sockets_available(), 0);
+        assert_eq!(
+            denied(&policy.decide(SocketAddrUse::TcpAccept, peer)),
+            Some(DenyReason::NoCapacity)
+        );
+        assert!(matches!(
+            policy.decide(SocketAddrUse::TcpAcceptVirtual, peer),
+            AddrDecision::Allow(_)
+        ));
+
+        drop(accepted);
+        assert_eq!(quota.inbound_sockets_available(), 1);
     }
 
     #[test]
@@ -446,6 +629,10 @@ mod tests {
                 plane_of(&policy.decide(SocketAddrUse::TcpBind, addr(ok))).is_some(),
                 "{ok} should bind"
             );
+            assert!(
+                plane_of(&policy.decide(SocketAddrUse::TcpListen, addr(ok))).is_some(),
+                "{ok} should listen"
+            );
         }
         for denied_addr in ["10.0.0.6:9000", "10.0.0.5:9001", "0.0.0.0:9000"] {
             assert!(
@@ -455,6 +642,39 @@ mod tests {
         }
         // Same tuple, wrong protocol.
         assert!(denied(&policy.decide(SocketAddrUse::UdpBind, addr("10.0.0.5:9000"))).is_some());
+        // UDP needs a local endpoint before it can send anywhere, and that
+        // endpoint takes an ephemeral port.
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:0"))).is_some());
+    }
+
+    /// An unspecified bind reaches the OS unspecified, so a named port on it
+    /// claims that port of the machine's on every interface — a listener no
+    /// guest kind may open without declaring it.
+    #[test]
+    fn an_unspecified_udp_bind_may_not_name_a_port() {
+        let declared: Arc<[DirectBind]> = Arc::from([DirectBind {
+            addr: addr("10.0.0.5:9000"),
+            udp: true,
+        }]);
+        for kind in [
+            GuestKind::Component,
+            GuestKind::Service,
+            GuestKind::Plugin {
+                direct_binds: Arc::clone(&declared),
+            },
+        ] {
+            let policy = SocketPolicy::for_kind(kind);
+            assert_eq!(
+                denied(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:53"))),
+                Some(DenyReason::BindNotPermitted)
+            );
+            assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("0.0.0.0:0"))).is_some());
+        }
+        // A plugin still binds the concrete address an operator declared.
+        let policy = SocketPolicy::for_kind(GuestKind::Plugin {
+            direct_binds: declared,
+        });
+        assert!(plane_of(&policy.decide(SocketAddrUse::UdpBind, addr("10.0.0.5:9000"))).is_some());
     }
 
     #[test]
@@ -463,6 +683,22 @@ mod tests {
         // `allowed_hosts` is empty, yet the guest's own network is reachable.
         let decision = policy.decide(SocketAddrUse::TcpConnect, addr("127.0.0.1:6432"));
         assert_eq!(plane_of(&decision), Some(Plane::Virtual));
+    }
+
+    /// `0.0.0.0` and `::` name this machine, so they stay on the guest's own
+    /// network even where `*` and a permissive range policy would admit them.
+    #[test]
+    fn the_unspecified_address_never_reaches_the_host() {
+        let policy = SocketPolicy {
+            allowed_hosts: Arc::from(["*".parse().unwrap()]),
+            egress_mode: EgressMode::Count,
+            egress_addrs: EgressAddressPolicy::permissive(),
+            ..SocketPolicy::for_kind(GuestKind::Component)
+        };
+        for a in ["0.0.0.0:6379", "[::]:6379", "[::ffff:0.0.0.0]:6379"] {
+            let decision = policy.decide(SocketAddrUse::TcpConnect, addr(a));
+            assert_eq!(plane_of(&decision), Some(Plane::Virtual), "{a}");
+        }
     }
 
     #[test]
@@ -596,7 +832,7 @@ mod tests {
         );
     }
 
-    /// Count mode is the upgrade path: it must decide exactly as enforce would,
+    /// Count mode is the opt-out: it must decide exactly as enforce would,
     /// record it, and then let the traffic through.
     #[test]
     fn count_mode_allows_what_enforce_would_refuse_and_counts_it() {
@@ -617,8 +853,7 @@ mod tests {
         assert_eq!(meters.denied(DenyReason::NotPermitted), 0);
     }
 
-    /// A bind refusal is not part of the egress rollout: it was always denied,
-    /// so count mode must not weaken it.
+    /// A bind refusal is not egress, so count mode must not weaken it.
     #[test]
     fn count_mode_does_not_soften_bind_refusals() {
         let policy = SocketPolicy {
@@ -631,9 +866,7 @@ mod tests {
         );
     }
 
-    /// The quota bounds concurrent connections, so a decision must *hold* its
-    /// permit — a policy that granted and immediately released one would count
-    /// attempts and bound nothing.
+    /// Creation takes and holds a slot before the OS descriptor is opened.
     #[test]
     fn an_exhausted_quota_denies_with_its_own_reason() {
         let policy = SocketPolicy {
@@ -648,22 +881,22 @@ mod tests {
             allowed_hosts: Arc::from([AllowedHost::Any]),
             ..enforcing(GuestKind::Component)
         };
-        let target = addr("10.0.0.5:5432");
+        let target = addr("0.0.0.0:0");
 
-        let first = policy.decide(SocketAddrUse::TcpConnect, target);
+        let first = policy.decide(SocketAddrUse::TcpCreate, target);
         assert_eq!(plane_of(&first), Some(Plane::Host));
 
         // The first decision is still holding its slot.
         assert_eq!(
-            denied(&policy.decide(SocketAddrUse::TcpConnect, target)),
+            denied(&policy.decide(SocketAddrUse::TcpCreate, target)),
             Some(DenyReason::NoCapacity)
         );
 
         drop(first);
         assert_eq!(
-            plane_of(&policy.decide(SocketAddrUse::TcpConnect, target)),
+            plane_of(&policy.decide(SocketAddrUse::TcpCreate, target)),
             Some(Plane::Host),
-            "releasing a connection must return its slot"
+            "dropping a socket must return its slot"
         );
     }
 
@@ -736,10 +969,9 @@ mod tests {
         }
     }
 
-    /// Reaching the guest's own virtual network costs no file descriptor and no
-    /// remote resource, so it must not draw on an allowance meant for real egress.
+    /// Connect checks do not charge again after creation charged the descriptor.
     #[test]
-    fn the_virtual_plane_does_not_spend_the_quota() {
+    fn connect_does_not_spend_a_second_quota_slot() {
         let policy = SocketPolicy {
             quota: Some(crate::host::quota::GuestConnectionQuota::new(
                 crate::host::quota::QuotaLimits {
@@ -751,18 +983,20 @@ mod tests {
             )),
             ..enforcing(GuestKind::Component)
         };
+        let create = policy.decide(SocketAddrUse::TcpCreate, addr("0.0.0.0:0"));
+        assert_eq!(plane_of(&create), Some(Plane::Host));
         let virtual_target = addr("127.0.0.1:6432");
         let held: Vec<_> = (0..8)
             .map(|_| policy.decide(SocketAddrUse::TcpConnect, virtual_target))
             .collect();
         assert!(
             held.iter().all(|d| plane_of(d) == Some(Plane::Virtual)),
-            "virtual connections must not be capped by the egress quota"
+            "connect policy must not charge an already-created socket"
         );
     }
 
-    /// Nor is the sentinel: it is new capability, so there is nothing to
-    /// grandfather and count mode must keep it shut.
+    /// Nor is the sentinel: its grant is explicit on both sides, so count mode
+    /// must keep it shut.
     #[test]
     fn count_mode_does_not_open_the_host_loopback_door() {
         let policy = SocketPolicy {
@@ -786,8 +1020,329 @@ mod tests {
         assert_eq!(policy.egress_addrs, EgressAddressPolicy::default());
         assert!(policy.egress_addrs.deny_special);
         assert!(policy.egress_addrs.allow_private);
-        // `--socket-egress count`, `--allow-host-loopback` off.
-        assert_eq!(policy.egress_mode, EgressMode::Count);
+        // `--socket-egress enforce`, `--allow-host-loopback` off.
+        assert_eq!(policy.egress_mode, EgressMode::Enforce);
         assert!(!policy.host_loopback_enabled);
+    }
+
+    /// What a store whose grants last a minute resolved.
+    fn resolved(name: &str, addrs: &[&str]) -> ResolvedNames {
+        let names = ResolvedNames::new(ResolvedNameLimits {
+            lifetime: Some(std::time::Duration::from_secs(60)),
+            ..Default::default()
+        });
+        names.record(
+            name,
+            addrs.iter().map(|a| a.parse().unwrap()),
+            std::time::Instant::now(),
+        );
+        names
+    }
+
+    fn naming(entries: &[&str]) -> SocketPolicy {
+        SocketPolicy {
+            allowed_hosts: entries.iter().map(|e| e.parse().unwrap()).collect(),
+            ..enforcing(GuestKind::Component)
+        }
+    }
+
+    #[test]
+    fn a_name_entry_permits_the_address_its_name_resolved_to() {
+        let policy = naming(&["postgres.default.svc:5432"]);
+        let names = resolved("postgres.default.svc", &["10.96.12.34"]);
+        let connect = |a| policy.decide_for_store(SocketAddrUse::TcpConnect, addr(a), &names);
+
+        assert_eq!(plane_of(&connect("10.96.12.34:5432")), Some(Plane::Host));
+        assert_eq!(
+            denied(&connect("10.96.12.34:6379")),
+            Some(DenyReason::NotPermitted),
+            "the entry pins the port"
+        );
+        assert_eq!(
+            denied(&connect("10.96.12.35:5432")),
+            Some(DenyReason::NotPermitted),
+            "an address the name did not return is not the name"
+        );
+        assert_eq!(
+            denied(&policy.decide(SocketAddrUse::TcpConnect, addr("10.96.12.34:5432"))),
+            Some(DenyReason::NotPermitted),
+            "a store that resolved nothing holds no grant"
+        );
+    }
+
+    /// `allowedIpNameLookups` lets a guest resolve; only `allowedHosts` lets it
+    /// connect.
+    #[test]
+    fn resolving_a_name_grants_nothing_without_an_allowlist_entry_for_it() {
+        let names = resolved("postgres.default.svc", &["10.96.12.34"]);
+        for policy in [naming(&[]), naming(&["other.default.svc"])] {
+            assert_eq!(
+                denied(&policy.decide_for_store(
+                    SocketAddrUse::TcpConnect,
+                    addr("10.96.12.34:5432"),
+                    &names
+                )),
+                Some(DenyReason::NotPermitted)
+            );
+        }
+    }
+
+    #[test]
+    fn a_wildcard_entry_permits_a_resolved_subdomain() {
+        let policy = naming(&["*.default.svc:5432"]);
+        let names = resolved("postgres.default.svc", &["10.96.12.34", "10.96.12.35"]);
+        for a in ["10.96.12.34:5432", "10.96.12.35:5432"] {
+            assert_eq!(
+                plane_of(&policy.decide_for_store(SocketAddrUse::TcpConnect, addr(a), &names)),
+                Some(Plane::Host)
+            );
+        }
+        let apex = resolved("default.svc", &["10.96.12.36"]);
+        assert_eq!(
+            denied(&policy.decide_for_store(
+                SocketAddrUse::TcpConnect,
+                addr("10.96.12.36:5432"),
+                &apex
+            )),
+            Some(DenyReason::NotPermitted)
+        );
+    }
+
+    /// TCP, UDP connect and an outgoing datagram all resolve through one rule.
+    #[test]
+    fn every_egress_use_honors_a_resolved_name() {
+        let policy = naming(&["dns.internal:53"]);
+        let names = resolved("dns.internal", &["10.0.0.53"]);
+        for reason in [
+            SocketAddrUse::TcpConnect,
+            SocketAddrUse::UdpConnect,
+            SocketAddrUse::UdpOutgoingDatagram,
+        ] {
+            assert_eq!(
+                plane_of(&policy.decide_for_store(reason, addr("10.0.0.53:53"), &names)),
+                Some(Plane::Host),
+                "{reason:?}"
+            );
+            assert_eq!(
+                denied(&policy.decide_for_store(reason, addr("10.0.0.54:53"), &names)),
+                Some(DenyReason::NotPermitted),
+                "{reason:?}"
+            );
+        }
+    }
+
+    /// A granted name does not launder an address the range policy refuses.
+    #[test]
+    fn a_name_resolving_into_a_blocked_range_is_still_refused() {
+        let policy = naming(&["metadata.internal"]);
+        let names = resolved("metadata.internal", &["169.254.169.254"]);
+        assert_eq!(
+            denied(&policy.decide_for_store(
+                SocketAddrUse::TcpConnect,
+                addr("169.254.169.254:80"),
+                &names
+            )),
+            Some(DenyReason::BlockedRange)
+        );
+    }
+
+    /// The earlier layers decide first, whatever a name resolved to.
+    #[test]
+    fn a_resolved_name_does_not_reorder_loopback_or_the_sentinel() {
+        let policy = naming(&["db.internal"]);
+        let names = resolved("db.internal", &["127.0.0.1", "127.255.255.254"]);
+        assert_eq!(
+            plane_of(&policy.decide_for_store(
+                SocketAddrUse::TcpConnect,
+                addr("127.0.0.1:5432"),
+                &names
+            )),
+            Some(Plane::Virtual)
+        );
+        assert_eq!(
+            denied(&policy.decide_for_store(
+                SocketAddrUse::TcpConnect,
+                addr("127.255.255.254:5432"),
+                &names
+            )),
+            Some(DenyReason::HostLoopbackNotPermitted)
+        );
+    }
+
+    #[test]
+    fn a_mapped_destination_matches_the_address_a_name_resolved_to() {
+        let policy = naming(&["db.internal:5432"]);
+        let names = resolved("db.internal", &["10.0.0.5"]);
+        assert_eq!(
+            plane_of(&policy.decide_for_store(
+                SocketAddrUse::TcpConnect,
+                addr("[::ffff:10.0.0.5]:5432"),
+                &names
+            )),
+            Some(Plane::Host)
+        );
+    }
+
+    /// One policy serves every store of a guest; each store's history is its
+    /// own, and a recreated store starts with none.
+    #[test]
+    fn stores_sharing_a_policy_do_not_share_what_they_resolved() {
+        let policy = Arc::new(naming(&["db.internal"]));
+        let store = || {
+            crate::sockets::WasiSocketsCtx::for_store(
+                Arc::clone(&policy),
+                Arc::default(),
+                Arc::from([]),
+            )
+        };
+        let (first, second) = (store(), store());
+        first.resolved_names.record(
+            "db.internal",
+            ["10.0.0.5".parse().unwrap()],
+            std::time::Instant::now(),
+        );
+
+        let target = addr("10.0.0.5:5432");
+        assert!(
+            first
+                .socket_addr_check
+                .check(target, SocketAddrUse::TcpConnect)
+                .is_ok()
+        );
+        assert!(
+            second
+                .socket_addr_check
+                .check(target, SocketAddrUse::TcpConnect)
+                .is_err()
+        );
+        assert!(
+            store()
+                .socket_addr_check
+                .check(target, SocketAddrUse::TcpConnect)
+                .is_err(),
+            "a new incarnation inherits nothing"
+        );
+    }
+
+    fn valid_until(decision: AddrDecision) -> Option<std::time::Instant> {
+        match decision {
+            AddrDecision::Allow(allowed) => allowed.valid_until,
+            AddrDecision::Deny(reason) => panic!("denied: {reason:?}"),
+        }
+    }
+
+    /// Only a decision resting on a resolved name lapses, and only when
+    /// grants have a lifetime. A literal, `*`, virtual loopback and the
+    /// sentinel all stand, so a socket connected through them never asks
+    /// again.
+    #[test]
+    fn only_a_decision_resting_on_a_name_carries_a_deadline() {
+        let names = resolved("db.internal", &["10.0.0.5"]);
+        let connect = |policy: &SocketPolicy, a| {
+            valid_until(policy.decide_for_store(SocketAddrUse::UdpConnect, addr(a), &names))
+        };
+
+        let named = naming(&["db.internal"]);
+        let deadline = connect(&named, "10.0.0.5:5432").expect("a name grant lapses");
+        assert!(deadline > std::time::Instant::now());
+        assert_eq!(connect(&named, "127.0.0.1:5432"), None);
+
+        let lasting = ResolvedNames::default();
+        lasting.record(
+            "db.internal",
+            [addr("10.0.0.5:0").ip()],
+            std::time::Instant::now(),
+        );
+        let decision =
+            named.decide_for_store(SocketAddrUse::UdpConnect, addr("10.0.0.5:5432"), &lasting);
+        assert_eq!(
+            valid_until(decision),
+            None,
+            "a grant with no lifetime stands"
+        );
+
+        // A literal entry for the same address outranks the name: it stands.
+        assert_eq!(
+            connect(&naming(&["db.internal", "10.0.0.5"]), "10.0.0.5:5432"),
+            None
+        );
+        assert_eq!(connect(&naming(&["*"]), "10.0.0.5:5432"), None);
+
+        let sentinel = SocketPolicy {
+            host_loopback_enabled: true,
+            host_loopback: Arc::from([AllowedLoopbackPort::udp(5432)]),
+            ..naming(&[])
+        };
+        assert_eq!(connect(&sentinel, "127.255.255.254:5432"), None);
+    }
+
+    /// The send-time check for a connected socket: free until the deadline,
+    /// then one policy decision that either extends it or refuses.
+    #[test]
+    fn a_connected_peer_is_decided_again_only_after_its_deadline() {
+        let policy = SocketPolicy {
+            resolved_names: ResolvedNameLimits {
+                lifetime: Some(std::time::Duration::from_secs(60)),
+                ..Default::default()
+            },
+            ..naming(&["db.internal"])
+        };
+        let ctx = crate::sockets::WasiSocketsCtx::for_store(
+            Arc::new(policy),
+            Arc::default(),
+            Arc::from([]),
+        );
+        let check = &ctx.socket_addr_check;
+        let peer = addr("10.0.0.5:5432");
+        let now = std::time::Instant::now();
+        let past = now
+            .checked_sub(std::time::Duration::from_millis(1))
+            .unwrap_or(now);
+
+        // No deadline, or one still ahead: the policy is not consulted, though
+        // it would refuse this peer.
+        let mut standing = None;
+        assert!(check.refresh_connected(peer, &mut standing).is_ok());
+        let mut ahead = Some(now + std::time::Duration::from_secs(60));
+        assert!(check.refresh_connected(peer, &mut ahead).is_ok());
+
+        // Past it with nothing resolved: refused.
+        let mut lapsed = Some(past);
+        assert!(check.refresh_connected(peer, &mut lapsed).is_err());
+
+        // Past it, but the guest resolved again: the socket takes the new
+        // deadline and carries on.
+        ctx.resolved_names
+            .record("db.internal", [peer.ip()], std::time::Instant::now());
+        assert!(check.refresh_connected(peer, &mut lapsed).is_ok());
+        assert!(lapsed.is_some_and(|deadline| deadline > now));
+    }
+
+    /// Count mode is how an operator learns what enforcing would refuse, so a
+    /// destination that fails both layers has to be counted under both.
+    /// Reporting only the first would have them fix that and then meet the
+    /// second for the first time under enforcement.
+    #[test]
+    fn count_mode_records_every_reason_a_destination_would_be_refused() {
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        let policy = SocketPolicy {
+            egress_mode: EgressMode::Count,
+            meters: Some(Arc::clone(&meters)),
+            ..SocketPolicy::for_kind(GuestKind::Component)
+        };
+        let metadata = addr("169.254.169.254:80");
+
+        assert_eq!(
+            plane_of(&policy.decide(SocketAddrUse::TcpConnect, metadata)),
+            Some(Plane::Host)
+        );
+        assert_eq!(meters.would_deny(DenyReason::NotPermitted), 1);
+        assert_eq!(meters.would_deny(DenyReason::BlockedRange), 1);
+
+        // Enforcing, the first refusal is still the answer.
+        assert_eq!(
+            denied(&enforcing(GuestKind::Component).decide(SocketAddrUse::TcpConnect, metadata)),
+            Some(DenyReason::NotPermitted)
+        );
     }
 }

@@ -11,6 +11,9 @@ use wasmtime::error::Context as _;
 pub struct UdpEndpoint {
     pub tx: mpsc::UnboundedSender<(UdpDatagram, OwnedSemaphorePermit)>,
     pub connected_address: Option<SocketAddr>,
+    /// Bytes this endpoint will queue before dropping datagrams, sized by
+    /// its socket's receive buffer.
+    pub receive_permits: Arc<Semaphore>,
 }
 
 pub struct UdpDatagram {
@@ -41,13 +44,29 @@ pub struct UdpSocket {
     pub state: UdpState,
     pub hop_limit: u8,
     pub receive_buffer_size: u64,
+    pub(crate) receive_permits: Arc<Semaphore>,
     pub send_buffer_size: u32,
     pub(crate) family: SocketAddressFamily,
     pub(crate) socket_addr_check: Option<SocketAddrCheck>,
 }
 
+/// Resize a buffer's semaphore from `current` to `value` permits. Permits held
+/// by queued datagrams cannot be forgotten, so the returned size counts them
+/// until they are released.
+fn resize_permits(permits: &Semaphore, current: u64, value: u64) -> Option<u64> {
+    let surplus = current.saturating_sub(value);
+    if surplus > 0 {
+        let reduced = permits.forget_permits(surplus.try_into().ok()?) as u64;
+        value.checked_add(surplus - reduced)
+    } else {
+        permits.add_permits((value - current).try_into().ok()?);
+        Some(value)
+    }
+}
+
 impl UdpSocket {
     pub const MAX_SEND_BUFFER_SIZE: u32 = 0x1_0000;
+    pub const MAX_RECEIVE_BUFFER_SIZE: u64 = 0x10_0000;
 
     pub fn p2_udp_streams(
         &self,
@@ -82,6 +101,7 @@ impl UdpSocket {
                 remote_address,
                 rx: Arc::clone(rx),
                 received: None,
+                socket_addr_check: self.socket_addr_check().cloned(),
             },
             crate::sockets::p2_udp::LoopbackOutgoingDatagramStream {
                 local_address: *local_address,
@@ -243,7 +263,12 @@ impl UdpSocket {
         if value == 0 {
             return Err(ErrorCode::InvalidArgument);
         }
-        self.receive_buffer_size = value;
+        self.receive_buffer_size = resize_permits(
+            &self.receive_permits,
+            self.receive_buffer_size,
+            value.min(Self::MAX_RECEIVE_BUFFER_SIZE),
+        )
+        .ok_or(ErrorCode::Unknown)?;
         Ok(())
     }
 
@@ -260,14 +285,9 @@ impl UdpSocket {
             .unwrap_or(Self::MAX_SEND_BUFFER_SIZE)
             .min(Self::MAX_SEND_BUFFER_SIZE);
         if let UdpState::Bound { permits, .. } | UdpState::Connected { permits, .. } = &self.state {
-            let surplus = self.send_buffer_size.saturating_sub(value);
-            if surplus > 0 {
-                let reduced = permits.forget_permits(surplus as _) as _;
-                let leaked = surplus.saturating_sub(reduced);
-                value = value.checked_add(leaked).ok_or(ErrorCode::Unknown)?;
-            } else {
-                permits.add_permits(value.saturating_sub(self.send_buffer_size) as _);
-            }
+            value = resize_permits(permits, self.send_buffer_size.into(), value.into())
+                .and_then(|value| value.try_into().ok())
+                .ok_or(ErrorCode::Unknown)?;
         }
         self.send_buffer_size = value;
         Ok(())

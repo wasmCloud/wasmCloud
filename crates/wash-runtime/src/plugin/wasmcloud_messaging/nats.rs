@@ -361,6 +361,8 @@ impl HostPlugin for NatsMessaging {
         let interface_consumer_group = interface.config.get(CONSUMER_GROUP_CONFIG).cloned();
         let interface_max_in_flight = interface.config.get(super::MAX_IN_FLIGHT_CONFIG).cloned();
         let interface_admission_wait = interface.config.get(super::ADMISSION_WAIT_CONFIG).cloned();
+        let interface_admission_group =
+            interface.config.get(super::ADMISSION_GROUP_CONFIG).cloned();
 
         // Bind only the revision(s) the workload actually declared: the two
         // surfaces are separate linker instances, and binding one a component
@@ -398,6 +400,11 @@ impl HostPlugin for NatsMessaging {
             .local_resources()
             .config
             .get(super::ADMISSION_WAIT_CONFIG)
+            .cloned();
+        let local_admission_group = component_handle
+            .local_resources()
+            .config
+            .get(super::ADMISSION_GROUP_CONFIG)
             .cloned();
 
         // Track a handler component OR a long-lived handler service:
@@ -439,9 +446,12 @@ impl HostPlugin for NatsMessaging {
             // something a manifest author recognizes and selects the gate, so
             // replicas of this deployment on this host share one ceiling
             // rather than getting one apiece.
+            let workload_name = super::parse_admission_group(local_admission_group.as_deref())
+                .or_else(|| super::parse_admission_group(interface_admission_group.as_deref()))
+                .unwrap_or_else(|| component_handle.stable_workload_name());
             let identity = super::AdmissionIdentity::new(
                 component_handle.workload_namespace(),
-                component_handle.workload_name(),
+                workload_name,
                 &component_name,
             );
             let admission = self
@@ -516,6 +526,11 @@ impl HostPlugin for NatsMessaging {
             }
         };
 
+        let admission = match &pre {
+            Some(_) => admission.with_workload(workload, component_id).await?,
+            None => admission,
+        };
+
         let workload = workload.clone();
         let component_id = component_id.to_string();
         let tracker_component_id = component_id.clone();
@@ -574,12 +589,22 @@ impl HostPlugin for NatsMessaging {
         let guest_meter = self.meters.read().await.guest();
         // The identity every message on this component is measured under,
         // resolved once here rather than per delivery.
-        let attributes = workload
-            .component_identity(&component_id)
-            .await
-            .attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
+        let identity = workload.component_identity(&component_id).await;
+        let attributes = identity.attributes(PLUGIN_MESSAGING_ID, super::MESSAGING_OPERATION);
 
-        let span = tracing::Span::current();
+        // The loop runs for the workload's life, so its span is a root of its
+        // own, linked to the start that created it. Parenting it on the
+        // current span would hold the start's span, and every span above it
+        // (`workload_start`, `handle_command`), open for as long as the
+        // workload runs, keeping them unexported and in memory. DEBUG, so a
+        // host not tracing at that level keeps no span per subscriber at all.
+        let span = tracing::debug_span!(
+            parent: None,
+            "wasmcloud.messaging.subscriber",
+            workload.id = %workload.id(),
+            component_id = %component_id,
+        );
+        span.follows_from(tracing::Span::current());
         let handle = tokio::spawn(async move {
             debug!(
                 parent: &span,
@@ -593,6 +618,7 @@ impl HostPlugin for NatsMessaging {
                             None => {
                                 warn!(
                                     parent: &span,
+                                    workload.id = %workload.id(),
                                     component_id = %component_id,
                                     "NATS subscriber stream closed unexpectedly; handler will stop receiving messages"
                                 );
@@ -607,21 +633,44 @@ impl HostPlugin for NatsMessaging {
                         let reply_to = msg.reply.as_ref().map(|r| r.to_string());
                         let body: Vec<u8> = msg.payload.into();
 
+                        // Only the trigger-service branch below needs the
+                        // handler; a per-message component is delivered to
+                        // without it. A gone handler therefore skips that
+                        // branch rather than ending the loop — the message is
+                        // already consumed, and tearing the subscriptions down
+                        // here would drop it with nothing able to redeliver.
+                        let http_handler = workload.try_http_handler();
+
+                        // Unless nothing else can serve it either. A workload
+                        // whose handler is its trigger service has no
+                        // per-message instance to fall back to, so going on
+                        // would win this component's share of a queue group
+                        // forever and drop every message in it.
+                        if http_handler.is_none() && pre.is_none() {
+                            warn!(
+                                parent: &span,
+                                workload.id = %workload.id(),
+                                component_id = %component_id,
+                                "host is gone and this component has no per-message \
+                                 instance; ending the NATS subscriber loop"
+                            );
+                            break;
+                        }
+
                         // If this workload runs a long-lived trigger service for
                         // messaging, deliver to it (preserving its in-memory
                         // state) rather than instantiating a component per message.
-                        if workload
-                            .http_handler()
-                            .has_trigger_service_messaging(workload.id())
-                            .await
+                        if let Some(http_handler) = &http_handler
+                            && http_handler
+                                .has_trigger_service_messaging(workload.id())
+                                .await
                         {
                             let broker = crate::host::trigger_service::BrokerMessage {
                                 subject: subject.clone(),
                                 body,
                                 reply_to,
                             };
-                            match workload
-                                .http_handler()
+                            match http_handler
                                 .deliver_trigger_service_message(
                                     workload.id(),
                                     broker,
@@ -631,10 +680,10 @@ impl HostPlugin for NatsMessaging {
                             {
                                 Ok(Ok(())) => debug!(%subject, "trigger service handled message"),
                                 Ok(Err(e)) => {
-                                    warn!(%subject, error = %e, "trigger service message handler returned error")
+                                    warn!(workload.id = %workload.id(), %subject, error = %e, "trigger service message handler returned error")
                                 }
                                 Err(e) => {
-                                    warn!(%subject, error = %e, "failed to deliver message to trigger service")
+                                    warn!(workload.id = %workload.id(), %subject, error = %e, "failed to deliver message to trigger service")
                                 }
                             }
                             continue;
@@ -642,6 +691,7 @@ impl HostPlugin for NatsMessaging {
 
                         let Some(pre) = &pre else {
                             warn!(
+                                workload.id = %workload.id(),
                                 %subject,
                                 component_id = %component_id,
                                 "no trigger service registered and no per-message instance; dropping message"
@@ -670,8 +720,21 @@ impl HostPlugin for NatsMessaging {
                         // while parked on a saturated semaphore, and is
                         // cancel-safe: dropping the future releases whichever
                         // permit it had already taken.
+                        // Looked up before admission: a warm instance already
+                        // holds its pool slots, so only a store of this
+                        // delivery's own reserves them (see `PoolCharge`).
+                        let pool = if pre.serves_async() {
+                            workload.instance_pool_for_component(&component_id).await
+                        } else {
+                            None
+                        };
+                        let charge = if pool.is_some() {
+                            super::PoolCharge::Defer
+                        } else {
+                            super::PoolCharge::Reserve
+                        };
                         let permit = tokio::select! {
-                            admitted = admission.acquire_before_deadline(&component_id, &subject) => {
+                            admitted = admission.acquire_before_deadline(&component_id, &subject, charge) => {
                                 match admitted {
                                     Admitted::Slot(permit) => permit,
                                     // Already logged and counted; drop this
@@ -719,12 +782,6 @@ impl HostPlugin for NatsMessaging {
                         // message: without a pool there is nothing to reuse,
                         // and the sync `@0.2.0` call holds `&mut Store` so it
                         // could not share an instance anyway.
-                        let pool = if pre.serves_async() {
-                            workload.instance_pool_for_component(&component_id).await
-                        } else {
-                            None
-                        };
-
                         if let Some(pool) = pool {
                             let msg = crate::host::trigger_service::BrokerMessage {
                                 subject,
@@ -735,15 +792,19 @@ impl HostPlugin for NatsMessaging {
                             let workload = workload.clone();
                             let component_id = component_id.clone();
                             let instance_pre = pre.instance_pre().clone();
+                            let admission = admission.clone();
                             tokio::spawn(async move {
-                                // Released on completion, trap or not — which
-                                // is what frees the slot this message holds.
-                                let _permit = permit;
+                                // The permit goes along: released on
+                                // completion, trap or not — which is what
+                                // frees the slot this message holds — and
+                                // reserved against if a store gets built.
                                 let result = super::deliver_pooled(
                                     &workload,
                                     &component_id,
                                     &instance_pre,
                                     &pool,
+                                    &admission,
+                                    permit,
                                     msg,
                                     attributes,
                                 )
@@ -754,16 +815,19 @@ impl HostPlugin for NatsMessaging {
                             continue;
                         }
 
-                        let mut store = match workload.new_store(&component_id).await {
+                        let mut store = match workload
+                            .new_store_as(&component_id, Some(&identity))
+                            .await
+                        {
                             Err(e) => {
-                                warn!("failed to create store for component {component_id}: {e}");
+                                warn!(workload.id = %workload.id(), "failed to create store for component {component_id}: {e}");
                                 continue;
                             }
                             Ok(s) => s,
                         };
                         let proxy = match pre.instantiate(&mut store).await {
                             Err(e) => {
-                                warn!("failed to instantiate component {component_id}: {e}");
+                                warn!(workload.id = %workload.id(), "failed to instantiate component {component_id}: {e}");
                                 continue;
                             }
                             Ok(p) => p,

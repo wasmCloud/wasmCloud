@@ -551,6 +551,11 @@ impl HostPlugin for InMemoryMessaging {
                 .get(super::ADMISSION_WAIT_CONFIG)
                 .map(String::as_str),
         );
+        let admission_group = component_handle
+            .local_resources()
+            .config
+            .get(super::ADMISSION_GROUP_CONFIG)
+            .cloned();
 
         // Track a handler component OR a long-lived handler service:
         // `WorkloadItem` derefs to the underlying metadata for both, so the
@@ -565,9 +570,11 @@ impl HostPlugin for InMemoryMessaging {
                 WorkloadItem::Component(component) => component.name().to_string(),
                 WorkloadItem::Service(_) => "service".to_string(),
             };
+            let workload_name = super::parse_admission_group(admission_group.as_deref())
+                .unwrap_or_else(|| component_handle.stable_workload_name());
             let identity = super::AdmissionIdentity::new(
                 component_handle.workload_namespace(),
-                component_handle.workload_name(),
+                workload_name,
                 &component_name,
             );
             let admission = self
@@ -643,6 +650,11 @@ impl HostPlugin for InMemoryMessaging {
             }
         };
 
+        let admission = match &pre {
+            Some(_) => admission.with_workload(workload, component_id).await?,
+            None => admission,
+        };
+
         let workload = workload.clone();
         let component_id = component_id.to_string();
 
@@ -678,21 +690,45 @@ impl HostPlugin for InMemoryMessaging {
 
                         debug!(subject = %msg.subject, reply_to = %msg.reply_to.as_deref().unwrap_or("<none>"), "Processing message");
 
+                        // Only the trigger-service branch below needs the
+                        // handler; a per-message component is delivered to
+                        // without it. So a gone handler skips that branch
+                        // rather than ending the drain — unless nothing else
+                        // can serve the message either, in which case the task
+                        // ends rather than waking per message forever. A
+                        // requester waiting on this one is failed on the way
+                        // out, as the shed path below does.
+                        let http_handler = workload.try_http_handler();
+                        if http_handler.is_none() && pre.is_none() {
+                            warn!(
+                                component_id = %component_id,
+                                "host is gone and this component has no per-message \
+                                 instance; ending the in-memory receive loop"
+                            );
+                            if sole_subscriber
+                                && let (Some(reply_to), Some(pending)) =
+                                    (&msg.reply_to, &pending_requests)
+                                && let Some(sender) = pending.write().await.remove(reply_to)
+                            {
+                                let _ = sender.send(Err(super::shed_error()));
+                            }
+                            break 'task;
+                        }
+
                         // If this workload runs a long-lived trigger service for
                         // messaging, deliver to it (preserving its in-memory
                         // state) rather than instantiating a component per message.
-                        if workload
-                            .http_handler()
-                            .has_trigger_service_messaging(workload.id())
-                            .await
+                        if let Some(http_handler) = &http_handler
+                            && http_handler
+                                .has_trigger_service_messaging(workload.id())
+                                .await
                         {
                             let broker = crate::host::trigger_service::BrokerMessage {
                                 subject: msg.subject.clone(),
                                 body: msg.body.clone(),
                                 reply_to: msg.reply_to.clone(),
                             };
-                            match workload
-                                .http_handler()
+                            match http_handler
                                 .deliver_trigger_service_message(
                                     workload.id(),
                                     broker,
@@ -729,8 +765,21 @@ impl HostPlugin for InMemoryMessaging {
                         // a loop parked forever lets the inbox reach
                         // `MAX_QUEUE_SIZE`, at which point a guest's `publish`
                         // starts failing with "message queue full".
+                        // Looked up before admission: a warm instance already
+                        // holds its pool slots, so only a store of this
+                        // delivery's own reserves them (see `PoolCharge`).
+                        let pool = if pre.serves_async() {
+                            workload.instance_pool_for_component(&component_id).await
+                        } else {
+                            None
+                        };
+                        let charge = if pool.is_some() {
+                            super::PoolCharge::Defer
+                        } else {
+                            super::PoolCharge::Reserve
+                        };
                         let permit = tokio::select! {
-                            admitted = admission.acquire_before_deadline(&component_id, &msg.subject) => {
+                            admitted = admission.acquire_before_deadline(&component_id, &msg.subject, charge) => {
                                 match admitted {
                                     super::Admitted::Slot(permit) => permit,
                                     // Already logged and counted; drop this
@@ -780,13 +829,12 @@ impl HostPlugin for InMemoryMessaging {
                         // a component that opted into pooling is served on a
                         // warm instance, honouring the limits it declared.
                         // Everything else keeps a store per message.
-                        let pool = if pre.serves_async() {
-                            workload.instance_pool_for_component(&component_id).await
-                        } else {
-                            None
-                        };
-
                         if let Some(pool) = pool {
+                            // Kept for the shed below, when this component is
+                            // the only one that could have answered.
+                            let shed_reply_to = sole_subscriber
+                                .then(|| msg.reply_to.clone())
+                                .flatten();
                             let broker = crate::host::trigger_service::BrokerMessage {
                                 subject: msg.subject,
                                 body: msg.body,
@@ -796,21 +844,38 @@ impl HostPlugin for InMemoryMessaging {
                             let workload = workload.clone();
                             let component_id = component_id.clone();
                             let instance_pre = pre.instance_pre().clone();
+                            let admission = admission.clone();
+                            let pending_requests = pending_requests.clone();
                             tokio::spawn(async move {
-                                // Released on completion, trap or not — which
-                                // is what frees the slot this message holds.
-                                let _permit = permit;
+                                // The permit goes along: released on
+                                // completion, trap or not — which is what
+                                // frees the slot this message holds — and
+                                // reserved against if a store gets built.
                                 let result = super::deliver_pooled(
                                     &workload,
                                     &component_id,
                                     &instance_pre,
                                     &pool,
+                                    &admission,
+                                    permit,
                                     broker,
                                     attributes,
                                 )
                                 .instrument(span)
                                 .await;
                                 super::log_delivery(&result);
+                                // A message shed while a store was being
+                                // reserved for it never reached the guest, so
+                                // its requester is failed now, as a shed at
+                                // admission fails it above, rather than left
+                                // to wait out its own timeout.
+                                if result.as_ref().is_err_and(|e| e.is::<super::AlreadyShed>())
+                                    && let (Some(reply_to), Some(pending)) =
+                                        (&shed_reply_to, &pending_requests)
+                                    && let Some(sender) = pending.write().await.remove(reply_to)
+                                {
+                                    let _ = sender.send(Err(super::shed_error()));
+                                }
                             });
                             continue;
                         }

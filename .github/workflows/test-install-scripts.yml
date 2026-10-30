@@ -8,6 +8,7 @@ on:
         required: false
         default: ""
   pull_request:
+  merge_group:
   push:
     branches:
       - main
@@ -201,6 +202,7 @@ jobs:
           & $washPath --version
 
   gate:
+    name: gate-test-install-scripts
     needs:
       - test-bash-install
       - test-powershell-install

@@ -15,7 +15,9 @@ use tracing::{debug, info};
 use crate::engine::workload::{ResolvedWorkload, UnresolvedWorkload, WorkloadItem};
 use crate::observability::{MeterKind, Meters};
 use crate::plugin::bindings::{UNNAMED_BINDING, describe_binding};
-use crate::plugin::{HostPlugin, WitInterfaces, WorkloadFailureSink, WorkloadTracker};
+use crate::plugin::{
+    HostPlugin, PluginEgressPolicy, WitInterfaces, WorkloadFailureSink, WorkloadTracker,
+};
 use crate::wit::{WitInterface, WitWorld};
 
 use super::config::{
@@ -62,6 +64,8 @@ pub struct WasmcloudNats {
     /// a server-side permission denial parks a subscription that deployed
     /// cleanly, and nothing else would ever move the workload off running.
     failure_sink: arc_swap::ArcSwapOption<WorkloadFailureSink>,
+    /// Network ceiling checked before the native client connects.
+    egress_policy: arc_swap::ArcSwapOption<PluginEgressPolicy>,
     /// The host's guest-memory budget, when it told this plugin. Subscription
     /// byte budgets are per subscription and were never compared against it:
     /// seven subscriptions at the 32MiB default is 224MiB of potential backlog
@@ -88,6 +92,7 @@ impl WasmcloudNats {
             meters: Arc::new(RwLock::new(Meters::new(MeterKind::Off))),
             lattice_prefixes: Vec::new(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
+            egress_policy: arc_swap::ArcSwapOption::empty(),
             memory_budget: None,
             host_backlog: Arc::new(subscriber::HostBacklogBudget::unbounded()),
         }
@@ -117,6 +122,16 @@ impl WasmcloudNats {
     /// Resolves the connection a plain, unlabeled call goes out on.
     pub(super) async fn conn_for(&self, workload_id: &str) -> Option<Arc<ConnHandle>> {
         self.connections.get(workload_id).await
+    }
+
+    fn check_egress(&self, config: &NatsConfig) -> anyhow::Result<()> {
+        let Some(policy) = self.egress_policy.load_full() else {
+            return Ok(());
+        };
+        for server in &config.servers {
+            policy.check_nats_server(server)?;
+        }
+        Ok(())
     }
 
     /// Opens one connection per binding name.
@@ -173,6 +188,7 @@ impl WasmcloudNats {
                     describe_binding(binding)
                 )
             })?;
+            self.check_egress(&config)?;
 
             // A stream grant alone reaches nothing: every read of a stored
             // message is checked against the *subject* grant, so a binding
@@ -223,13 +239,24 @@ impl WasmcloudNats {
                 )
             }
 
+            // A server the cluster advertises was never checked against the
+            // ceiling, so under a declared policy the client stays on the
+            // servers the operator wrote. `configure_egress_policy` says so at
+            // startup, where an operator can act on it.
+            let ignore_discovered_servers = self.egress_policy.load().is_some();
             let handle = self
                 .connections
-                .acquire(workload_id, binding, &config, self.lattice_prefixes.clone())
+                .acquire(
+                    workload_id,
+                    binding,
+                    &config,
+                    self.lattice_prefixes.clone(),
+                    ignore_discovered_servers,
+                )
                 .await?;
             *opened = true;
 
-            info!(
+            debug!(
                 workload_id,
                 binding = describe_binding(binding),
                 servers = config.servers.join(","),
@@ -244,6 +271,7 @@ impl WasmcloudNats {
                 binding = describe_binding(binding),
                 subject_allow = config.policy.subject_allow.join(","),
                 stream_allow = config.policy.stream_allow.join(","),
+                stream_delete_allow = config.policy.stream_delete_allow.join(","),
                 bucket_allow = config.policy.bucket_allow.join(","),
                 inbox_prefix = config.inbox_prefix.as_deref().unwrap_or_default(),
                 "wasmcloud:nats binding grant"
@@ -600,6 +628,23 @@ fn serves(interface: &WitInterface, names: &[&str]) -> bool {
 
 #[async_trait::async_trait]
 impl HostPlugin for WasmcloudNats {
+    /// Retains the declared ceiling and narrows the client to match it.
+    ///
+    /// Under a declared policy the client also stops following the servers a
+    /// cluster advertises: only what the operator wrote passes [`Self::check_egress`],
+    /// and a discovered peer arrives on the wire, after it. That costs the
+    /// failover an unlisted peer would have given, which is why it is said here
+    /// rather than left to be found when a node goes down.
+    fn configure_egress_policy(&self, policy: Arc<PluginEgressPolicy>) -> anyhow::Result<()> {
+        info!(
+            plugin_id = self.id(),
+            "wasmcloud:nats connections are limited to the declared `servers`; cluster-advertised \
+             servers are not followed. List every member a connection may fail over to"
+        );
+        self.egress_policy.store(Some(policy));
+        Ok(())
+    }
+
     fn binding_schema(&self) -> crate::plugin::BindingSchema {
         super::binding_schema()
     }
@@ -630,7 +675,10 @@ impl HostPlugin for WasmcloudNats {
         // The base alone is not required to be complete: a host that sets only
         // grants leaves the servers to a workload under `allow`.
         for (name, layer) in declared.host_layers(&super::binding_schema()) {
-            NatsConfig::from_map(&layer).map_err(|e| anyhow::anyhow!("binding `{name}`: {e:#}"))?;
+            let config = NatsConfig::from_map(&layer)
+                .map_err(|e| anyhow::anyhow!("binding `{name}`: {e:#}"))?;
+            self.check_egress(&config)
+                .with_context(|| format!("binding `{name}`"))?;
         }
         Ok(())
     }
@@ -656,7 +704,7 @@ impl HostPlugin for WasmcloudNats {
                     .all(|v| ceiling.iter().any(|c| c.contains(&v)))
             }
             // Plain names: subset, not pattern containment.
-            "stream-allow" | "bucket-allow" => {
+            "stream-allow" | "stream-delete-allow" | "bucket-allow" => {
                 let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
                 split(value).all(|v| ceiling.contains(v))
             }
@@ -1062,16 +1110,14 @@ impl HostPlugin for WasmcloudNats {
         workload_id: &str,
         _interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let workload_cleanup = |_| async {};
-        let component_cleanup = |data: ComponentData| async move {
-            data.cancel_token.cancel();
-        };
-
-        self.tracker
-            .write()
-            .await
-            .remove_workload_with_cleanup(workload_id, workload_cleanup, component_cleanup)
-            .await;
+        // Taken out under the lock and cancelled after it is released, so an
+        // unbind holds the plugin-wide tracker only for the removal itself.
+        let removed = self.tracker.write().await.take_workload(workload_id);
+        if let Some(removed) = removed {
+            for data in removed.components.into_values() {
+                data.cancel_token.cancel();
+            }
+        }
 
         self.connections.release(workload_id).await;
         debug!(
@@ -1108,7 +1154,94 @@ impl HostPlugin for WasmcloudNats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::{PluginBindingSet, WorkloadConfigPolicy};
+    use crate::host::allowed_loopback::AllowedLoopbackPort;
+    use crate::plugin::{PluginBindingSet, PluginEgressPolicy, WorkloadConfigPolicy};
+
+    fn nats_config(server: &str) -> NatsConfig {
+        NatsConfig::from_map(&HashMap::from([(
+            "servers".to_string(),
+            server.to_string(),
+        )]))
+        .unwrap()
+    }
+
+    /// A host that enforces its gate, so a denied endpoint reads as an error
+    /// rather than as a counted one. `host_loopback_enabled` rides along with
+    /// the table: the test that supplies one is the one testing loopback.
+    fn enforcing_policy(
+        host_owned_ports: Option<Arc<crate::host::ports::PortTable>>,
+    ) -> crate::sockets::policy::SocketPolicy {
+        crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: host_owned_ports.is_some(),
+            egress_mode: crate::sockets::policy::EgressMode::Enforce,
+            host_owned_ports,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn destructive_stream_ceiling_only_allows_subsets() {
+        let plugin = WasmcloudNats::new();
+        assert!(plugin.narrows("stream-delete-allow", "ORDERS,PAYMENTS", "ORDERS"));
+        assert!(plugin.narrows("stream-delete-allow", "ORDERS", ""));
+        assert!(!plugin.narrows("stream-delete-allow", "ORDERS", "ORDERS,OTHER"));
+        assert!(!plugin.narrows("stream-delete-allow", "", "ORDERS"));
+        assert!(!plugin.narrows("stream-delete-allow", "ORDERS", ">"));
+    }
+
+    #[test]
+    fn egress_check_uses_nats_endpoint_normalization() {
+        let plugin = WasmcloudNats::new();
+        plugin
+            .configure_egress_policy(Arc::new(PluginEgressPolicy::new(
+                Arc::from([
+                    "nats://example.com:4222".parse().unwrap(),
+                    "wss://secure.example.com:443".parse().unwrap(),
+                ]),
+                Arc::from([
+                    "example.com".parse().unwrap(),
+                    "secure.example.com".parse().unwrap(),
+                ]),
+                Arc::from([]),
+                &enforcing_policy(None),
+            )))
+            .unwrap();
+
+        plugin
+            .check_egress(&nats_config("example.com"))
+            .expect("a schemeless endpoint uses nats:// and port 4222");
+        plugin
+            .check_egress(&nats_config("wss://secure.example.com"))
+            .expect("wss uses port 443");
+        assert!(
+            plugin
+                .check_egress(&nats_config("ws://secure.example.com"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn egress_check_rejects_host_owned_loopback() {
+        let table = crate::host::ports::PortTable::new();
+        let _reservation = table
+            .reserve(
+                crate::host::declared_port::Protocol::Tcp,
+                "127.0.0.1:4222".parse().unwrap(),
+                crate::host::ports::PortOwner::Host("test".into()),
+            )
+            .unwrap();
+        let plugin = WasmcloudNats::new();
+        plugin
+            .configure_egress_policy(Arc::new(PluginEgressPolicy::new(
+                Arc::from([]),
+                Arc::from([]),
+                Arc::from([AllowedLoopbackPort::tcp(4222)]),
+                &enforcing_policy(Some(table)),
+            )))
+            .unwrap();
+
+        assert!(plugin.check_egress(&nats_config("localhost:4222")).is_err());
+    }
 
     #[test]
     fn world_advertises_the_package() {
@@ -1126,8 +1259,8 @@ mod tests {
             v.sort();
             v
         };
-        assert_eq!(versions(&world.imports), vec!["0.1.0"]);
-        assert_eq!(versions(&world.exports), vec!["0.1.0"]);
+        assert_eq!(versions(&world.imports), vec!["0.1.3"]);
+        assert_eq!(versions(&world.exports), vec!["0.1.3"]);
         for iface in world.exports.iter() {
             assert!(
                 iface.interfaces.contains("kv-handler"),
@@ -1135,6 +1268,16 @@ mod tests {
                 iface.interfaces
             );
         }
+    }
+
+    #[test]
+    fn world_accepts_the_previous_patch_version() {
+        let world = WasmcloudNats::new().world();
+        assert!(world.includes_bidirectional(&WitInterface::from("wasmcloud:nats/core@0.1.0")));
+        assert!(
+            world.includes_bidirectional(&WitInterface::from("wasmcloud:nats/core-handler@0.1.0"))
+        );
+        assert!(!world.includes_bidirectional(&WitInterface::from("wasmcloud:nats/core@0.2.0")));
     }
 
     fn entry(spec: &str, name: Option<&str>, config: &[(&str, &str)]) -> WitInterface {
@@ -1176,7 +1319,7 @@ mod tests {
     fn split_entries_fold_into_one_binding() {
         let entries = [
             entry(
-                "wasmcloud:nats/types,core,jetstream@0.1.0",
+                "wasmcloud:nats/types,core,jetstream@0.1.3",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1185,7 +1328,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/jetstream-handler@0.1.0",
+                "wasmcloud:nats/jetstream-handler@0.1.3",
                 None,
                 &[("jetstream-subscriptions", "ORDERS:orders.eu.>")],
             ),
@@ -1210,12 +1353,12 @@ mod tests {
     fn entries_may_repeat_a_key_they_agree_on() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.1.0",
+                "wasmcloud:nats/core@0.1.3",
                 None,
                 &[("servers", "nats://localhost:4222")],
             ),
             entry(
-                "wasmcloud:nats/core-handler@0.1.0",
+                "wasmcloud:nats/core-handler@0.1.3",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1234,12 +1377,12 @@ mod tests {
     #[test]
     fn a_label_naming_the_plugin_is_the_unnamed_binding() {
         let plain = entry(
-            "wasmcloud:nats/core@0.1.0",
+            "wasmcloud:nats/core@0.1.3",
             None,
             &[("servers", "nats://localhost:4222")],
         );
         let labeled = entry(
-            "wasmcloud:nats/core-handler@0.1.0",
+            "wasmcloud:nats/core-handler@0.1.3",
             Some(super::super::PLUGIN_NATS_ID),
             &[("core-subscriptions", "orders.new")],
         );
@@ -1257,7 +1400,7 @@ mod tests {
     #[test]
     fn conflicting_entries_are_refused_by_key_name() {
         let a = entry(
-            "wasmcloud:nats/core@0.1.0",
+            "wasmcloud:nats/core@0.1.3",
             None,
             &[
                 ("servers", "nats://localhost:4222"),
@@ -1265,7 +1408,7 @@ mod tests {
             ],
         );
         let b = entry(
-            "wasmcloud:nats/core-handler@0.1.0",
+            "wasmcloud:nats/core-handler@0.1.3",
             None,
             &[("subject_allow", "orders.>")],
         );
@@ -1285,7 +1428,7 @@ mod tests {
     #[test]
     fn a_binding_without_servers_is_still_refused() {
         let entries = [entry(
-            "wasmcloud:nats/jetstream-handler@0.1.0",
+            "wasmcloud:nats/jetstream-handler@0.1.3",
             None,
             &[("jetstream-subscriptions", "ORDERS:orders.>")],
         )];
@@ -1298,7 +1441,7 @@ mod tests {
     fn named_bindings_fold_separately() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.1.0",
+                "wasmcloud:nats/core@0.1.3",
                 Some("hub"),
                 &[
                     ("servers", "nats://hub:4222"),
@@ -1306,7 +1449,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/core@0.1.0",
+                "wasmcloud:nats/core@0.1.3",
                 Some("leaf"),
                 &[
                     ("servers", "nats://leaf:4222"),
