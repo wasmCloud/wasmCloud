@@ -706,6 +706,95 @@ particular runner. The bench job has no AWS permissions and no
 `pull-requests: write` permission, so a malicious comparison ref
 cannot exfiltrate the WRITE role or comment on PRs.
 
+### 9.5 Guest memory pressure test
+
+[`guest-memory-pressure.py`](guest-memory-pressure.py) compares `enforce` and
+`growth` under real Linux cgroup v2 limits, with CoW both enabled and disabled.
+It needs Docker, Python 3.11+, and enough Docker VM memory for an 8 GiB build
+container. From the repository root:
+
+```bash
+python3 scripts/bench/guest-memory-pressure.py --memory-mib 384 768 --repeats 3
+```
+
+The script builds the locked Rust example in the repository's pinned Rust
+toolchain image, then runs each case sequentially in a fresh container with two
+CPUs, the specified memory limit, no swap, and no network. Limits from 384 to
+2048 MiB are supported. The measured container runs the Rust executable as
+PID 1; the Python driver and build run outside its cgroup. Build caches use the
+named volumes `wash-pressure-target` and `wash-pressure-registry`; override them
+with `--target-volume` and `--registry-volume`. Do not rebuild into the same
+target volume while a pressure run is using its binary.
+
+The synthetic components retain every admitted store. Admission pauses for
+55 ms per 16 MiB of declared initial memory to allow guard refreshes. Four
+worker threads then start together, retaining all stores until the final
+memory sample:
+
+| Shape | Initial memory | Initial data | Request writes | Final writes |
+| --- | --- | --- | --- | --- |
+| `sparse` | One 1 MiB memory | 4 KiB | First 64 KiB | Same 64 KiB |
+| `data-heavy` | One 8 MiB memory | 8 MiB | First 64 KiB | Same 64 KiB |
+| `multiple` | Four 1 MiB memories in separate core modules | 4 KiB each | First 64 KiB of each | Same 64 KiB of each |
+| `dirty` | One 1 MiB memory | 4 KiB | First 64 KiB | Every initial page |
+
+`--dirty-mib 2` selects 2 MiB for the last shape. Running both sizes matters:
+transparent huge pages can make a 2 MiB allocation resident during admission
+with CoW disabled, while a 1 MiB allocation can remain sparse until the final
+writes. The `multiple` shape tests per-memory allowance accounting across core
+instances in a single component. These are controlled memory scenarios, not an
+end-to-end HTTP throughput benchmark; use the density benches for application
+performance and additional cold-start costs.
+
+The default matrix includes all four shapes, both modes, and both CoW settings.
+To focus on late writes, then compare a smaller initial allowance:
+
+```bash
+python3 scripts/bench/guest-memory-pressure.py \
+  --shapes dirty --memory-mib 384 768 --dirty-mib 2 --repeats 3
+
+python3 scripts/bench/guest-memory-pressure.py \
+  --shapes dirty --memory-mib 768 --guest-memory-mib 256 \
+  --initial-cap-mib 288 --repeats 3
+```
+
+`--modes enforce growth` and `--cow on off` select subsets. The initial-cap
+override applies only to `growth`. Without overrides, the real EngineBuilder
+defaults apply, including the `4 × G` initial allowance. See the runtime's
+[sizing guidance](../../crates/wash-runtime/README.md#sizing-guest-memory-in-containers)
+for the budget calculation and its physical-memory assumptions.
+
+Each run creates a new directory under `target/guest-memory-pressure/` (or
+`--output`). It contains the build log, source hashes and revision, image ID,
+settings, per-case stdout JSONL and stderr, Docker state and limits, and combined
+`results.json`. Samples report `baseline`, `ready`, `writing`, `touched`, and
+`released`, with guest reservations, process footprint, cgroup current/peak
+memory when available, kernel, architecture, and transparent-huge-page policy.
+The `ready` sample records the actual admission stop reason. The final resident
+sample is taken while every store is still alive; successful cleanup must
+return both reservation counters to zero. A peak from an OOM case is unknown
+unless captured before the kill; the last sampled value is not its final peak.
+
+An expected pressure result is either a complete bounded run, or Docker-verified
+OOM during `dirty` writes in `growth` after admission has reserved more initial
+bytes than the container can hold. The latter demonstrates the risk being
+tested, so it is labeled `expected late-write OOM` and passes the experiment.
+Exit 137 alone is insufficient. An OOM before writing, an OOM in `enforce` or a
+sparse/data-heavy/multiple case, a timeout, a configuration mismatch, or missing
+completion/accounting evidence fails the run. A guard or eager allocation can
+bound admission early enough that `growth` survives; OOM is not required on
+every kernel. Compare admission counts and retained memory as well as the
+pass/fail result. This test demonstrates overcommit behavior; it does not
+certify application sizing or make an expected OOM acceptable in production.
+
+The driver removes every measured container, including after a timeout or
+interruption. Docker retains the build-cache volumes. Lightweight result
+classification tests do not start containers:
+
+```bash
+python3 -m unittest discover -s scripts/bench -p test_guest_memory_pressure.py
+```
+
 ## 10. Pre-flight assertions
 
 [`bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs) runs first in every CI bench job.
