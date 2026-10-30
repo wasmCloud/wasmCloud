@@ -851,3 +851,104 @@ async fn pending_receive_accepts_other_peers_after_disconnect() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn p2_and_p3_senders_share_the_receivers_buffer_budget() {
+    use wasmtime_wasi::p2::bindings::sockets::{
+        instance_network,
+        network::IpAddressFamily as P2Family,
+        udp::{
+            HostIncomingDatagramStream as P2Incoming, HostOutgoingDatagramStream as P2Outgoing,
+            HostUdpSocket as P2Socket, OutgoingDatagram,
+        },
+        udp_create_socket,
+    };
+    for p2_first in [true, false] {
+        let mut data = Data::default();
+        let (receiver, destination) = bind(&mut data, "127.0.0.1:0").await;
+        let p2_sender =
+            udp_create_socket::Host::create_udp_socket(&mut view(&mut data), P2Family::Ipv4)
+                .await
+                .unwrap()
+                .rep();
+        let network = instance_network::Host::instance_network(&mut view(&mut data)).unwrap();
+        P2Socket::start_bind(
+            &mut view(&mut data),
+            Resource::new_borrow(p2_sender),
+            network,
+            crate::sockets::host_network::socket_addr_to_ip_socket_address(
+                "127.0.0.1:0".parse().unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        P2Socket::finish_bind(&mut view(&mut data), Resource::new_borrow(p2_sender)).unwrap();
+        let (p3_sender, _) = bind(&mut data, "127.0.0.1:0").await;
+        HostUdpSocket::set_receive_buffer_size(
+            &mut view(&mut data),
+            Resource::new_borrow(receiver),
+            1,
+        )
+        .unwrap();
+        let (_, p2_tx) =
+            P2Socket::stream(&mut view(&mut data), Resource::new_borrow(p2_sender), None)
+                .await
+                .unwrap();
+        let mut store = store(data);
+        let p2_send = |data: &mut Data, byte| {
+            let mut v = view(data);
+            assert_eq!(
+                P2Outgoing::check_send(&mut v, Resource::new_borrow(p2_tx.rep())).unwrap(),
+                1
+            );
+            assert_eq!(
+                P2Outgoing::send(
+                    &mut v,
+                    Resource::new_borrow(p2_tx.rep()),
+                    vec![OutgoingDatagram {
+                        data: vec![byte],
+                        remote_address: Some(
+                            crate::sockets::host_network::socket_addr_to_ip_socket_address(
+                                destination
+                            )
+                        ),
+                    }]
+                )
+                .unwrap(),
+                1
+            );
+        };
+        if p2_first {
+            p2_send(store.data_mut(), 1);
+            send(&mut store, p3_sender, vec![2], Some(destination))
+                .await
+                .unwrap();
+        } else {
+            send(&mut store, p3_sender, vec![1], Some(destination))
+                .await
+                .unwrap();
+            p2_send(store.data_mut(), 2);
+        }
+        assert_eq!(receive(&mut store, receiver).await.unwrap().0, [1]);
+        // P2 can inspect the same receiver queue without waiting: the second
+        // datagram must have been dropped, regardless of which API sent it.
+        let (rx, _) = P2Socket::stream(
+            &mut view(store.data_mut()),
+            Resource::new_borrow(receiver),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            P2Incoming::receive(
+                &mut view(store.data_mut()),
+                Resource::new_borrow(rx.rep()),
+                10
+            )
+            .unwrap()
+            .is_empty()
+        );
+        p2_send(store.data_mut(), 3);
+        assert_eq!(receive(&mut store, receiver).await.unwrap().0, [3]);
+    }
+}

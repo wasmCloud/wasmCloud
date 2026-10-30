@@ -675,13 +675,7 @@ impl udp::HostOutgoingDatagramStream for WasiSocketsCtxView<'_> {
                 .connect_udp(&stream.local_address, &addr)
                 .map_err(super::network::socket_error_from_util)?
             {
-                _ = endpoint.tx.send((
-                    super::loopback::UdpDatagram {
-                        source_address: stream.local_address,
-                        data: datagram.data,
-                    },
-                    permit,
-                ));
+                endpoint.send(stream.local_address, datagram.data, Some(permit));
             }
             Ok(())
         }
