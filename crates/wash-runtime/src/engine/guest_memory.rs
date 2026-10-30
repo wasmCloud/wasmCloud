@@ -28,6 +28,41 @@
 //!
 //! Same shape as [`crate::sockets::policy::EgressMode`].
 //!
+//! # Growth, for density
+//!
+//! [`GuestMemoryMode::Growth`] enforces growth like `Enforce` but does not
+//! charge a memory's first allocation: the grow from zero bytes that creates
+//! it, which for a declared memory is its initial size. A linear memory's
+//! initial size is mapped copy-on-write and backed by the kernel only as it
+//! is written, so a warm instance that declares 1 MiB and touches 70 KiB costs
+//! the host 70 KiB; charged at its declared size, a budget of three quarters
+//! of a 768 MiB container holds about 540 such instances, when the container
+//! holds several thousand. What the initial memory becomes resident is what
+//! `max_process_memory` measures, and that guard still refuses an
+//! instantiation while the process is over its limit.
+//!
+//! The trade is overcommit. `Enforce` guarantees that everything granted fits
+//! in the budget; `Growth` does not, for initial memory. The process guard
+//! refuses new instances and growth once the process is over its limit, but
+//! it cannot stop instances already admitted from writing the initial memory
+//! they hold, so instances that each come to write all of it can take the
+//! host past its limit. The bet is that initial memory is mostly reserved
+//! and untouched (a toolchain's default stack) where growth is asked for
+//! because it is about to be used. That is why it is opt-in and `Enforce`
+//! stays the default. It also means the mode leans on the process guard: with
+//! `max_process_memory` off, nothing bounds the memory instances start with,
+//! and the engine says so when it is built.
+//!
+//! Any grow from zero bytes counts as a memory's first allocation, whenever it
+//! happens: a declared memory's initial size, a zero-page memory's first
+//! `memory.grow`, a GC heap wasmtime creates on a guest's first GC
+//! allocation. Each is uncharged once per memory, because a memory never
+//! shrinks back to zero, and bounded as a declared minimum is (by the
+//! memory's maximum and the heap ceiling), so a guest gains nothing by it
+//! that it could not have declared. Telling them apart would need the limiter
+//! to know when an instantiation is under way, which every site that
+//! instantiates would then have to tell it.
+//!
 //! # What a refusal looks like to a guest
 //!
 //! Returning `Ok(false)` from [`wasmtime::ResourceLimiter::memory_growing`]
@@ -93,7 +128,12 @@ const PRESSURE_NUMERATOR: u64 = 3;
 const PRESSURE_DENOMINATOR: u64 = 4;
 
 /// How strictly the guest memory budget is applied.
+///
+/// Non-exhaustive since `Growth` was added: that addition, and this
+/// attribute, break a consumer that matched the two earlier modes
+/// exhaustively, once; a mode added after it will not.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GuestMemoryMode {
     /// Charge the growth, record that the budget would have refused it, and
     /// allow it anyway. For sizing a budget before it is relied on.
@@ -101,6 +141,10 @@ pub enum GuestMemoryMode {
     /// Refuse growth past the budget. The default.
     #[default]
     Enforce,
+    /// Refuse growth past the budget, but do not charge the memory an
+    /// instance starts with: that is mapped lazily and measured by the
+    /// process guard. See the module docs, "Growth, for density".
+    Growth,
 }
 
 impl GuestMemoryMode {
@@ -108,7 +152,13 @@ impl GuestMemoryMode {
         match self {
             Self::Count => "count",
             Self::Enforce => "enforce",
+            Self::Growth => "growth",
         }
+    }
+
+    /// Whether growth past the budget is refused.
+    pub fn enforces(self) -> bool {
+        !matches!(self, Self::Count)
     }
 }
 
@@ -151,6 +201,10 @@ pub struct GuestMemoryBudget {
     /// `would_refuse`, which are this budget's own: a host whose guests sit
     /// well inside their budget should not read as having outgrown it.
     process_refused: AtomicU64,
+    /// Initial memory live on stores under [`GuestMemoryMode::Growth`] that
+    /// was admitted without a charge: declared, not resident. Reported so a
+    /// host can see what the budget is not counting.
+    initial_uncharged: AtomicU64,
 }
 
 impl Default for GuestMemoryBudget {
@@ -175,6 +229,7 @@ impl GuestMemoryBudget {
             reported_refusals: AtomicU64::new(0),
             process: None,
             process_refused: AtomicU64::new(0),
+            initial_uncharged: AtomicU64::new(0),
         }
     }
 
@@ -218,7 +273,14 @@ impl GuestMemoryBudget {
         StoreMemoryLimiter {
             budget: Some(Arc::clone(self)),
             charged: 0,
+            uncharged: 0,
         }
+    }
+
+    /// First allocations of live memories that
+    /// [`GuestMemoryMode::Growth`] admitted without charging.
+    pub fn initial_uncharged(&self) -> u64 {
+        self.initial_uncharged.load(Ordering::Relaxed)
     }
 
     pub fn cap(&self) -> u64 {
@@ -241,7 +303,8 @@ impl GuestMemoryBudget {
         self.high_water.load(Ordering::Relaxed)
     }
 
-    /// Growths refused under [`GuestMemoryMode::Enforce`].
+    /// Growths refused under [`GuestMemoryMode::Enforce`] or
+    /// [`GuestMemoryMode::Growth`].
     pub fn refused(&self) -> u64 {
         self.refused.load(Ordering::Relaxed)
     }
@@ -297,6 +360,13 @@ impl GuestMemoryBudget {
             "By",
             "Guest linear memory currently charged to this host's budget",
             |b: &Arc<Self>| b.in_use()
+        );
+        observe!(
+            u64_observable_gauge,
+            "guest_memory.initial_uncharged",
+            "By",
+            "First allocations of guest memories excluded from the growth budget; mapped, not resident, bytes",
+            |b: &Arc<Self>| b.initial_uncharged()
         );
         // Kept rather than left to `max_over_time(in_use)` in the query layer:
         // the exporter samples, and a burst that begins and ends between two
@@ -384,6 +454,7 @@ impl GuestMemoryBudget {
                 in_use = %render_bytes(in_use),
                 high_water = %render_bytes(self.high_water()),
                 max_guest_memory = %render_bytes(self.cap),
+                initial_uncharged = %render_bytes(self.initial_uncharged()),
                 "guest memory budget"
             );
             return;
@@ -399,6 +470,7 @@ impl GuestMemoryBudget {
                 in_use = %render_bytes(in_use),
                 high_water = %render_bytes(self.high_water()),
                 max_guest_memory = %render_bytes(self.cap),
+                initial_uncharged = %render_bytes(self.initial_uncharged()),
                 refused,
                 would_refuse,
                 "guest memory is close to this host's budget"
@@ -410,17 +482,17 @@ impl GuestMemoryBudget {
             in_use = %render_bytes(in_use),
             high_water = %render_bytes(self.high_water()),
             max_guest_memory = %render_bytes(self.cap),
+            initial_uncharged = %render_bytes(self.initial_uncharged()),
             refused,
             would_refuse,
             "guest memory growth has been refused since the last report"
         );
     }
 
-    /// Charge `bytes` and report whether the growth may proceed.
+    /// Whether the process guard, if any, lets `bytes` more guest memory in.
     ///
-    /// Under [`GuestMemoryMode::Count`] the guest budget is observational.
-    /// The independent process limit still refuses growth in either mode.
-    fn charge(&self, bytes: u64) -> bool {
+    /// The independent process limit refuses growth in every mode.
+    fn process_admits(&self, bytes: u64) -> bool {
         // A zero-byte growth takes nothing, so there is nothing to refuse.
         if bytes > 0
             && let Some(process) = &self.process
@@ -438,12 +510,34 @@ impl GuestMemoryBudget {
                 mode = self.mode.as_str(),
                 "guest memory growth while this process is past max-process-memory"
             );
-            // No guest bytes were admitted, so neither the guest charge nor
-            // its observation-only refusal counter should increase.
+            return false;
+        }
+        true
+    }
+
+    /// Admit `bytes` of an instance's initial memory under
+    /// [`GuestMemoryMode::Growth`]: only the process guard may refuse it, and
+    /// nothing is charged.
+    fn admit_initial(&self, bytes: u64) -> bool {
+        if !self.process_admits(bytes) {
+            return false;
+        }
+        self.initial_uncharged.fetch_add(bytes, Ordering::Relaxed);
+        true
+    }
+
+    /// Charge `bytes` and report whether the growth may proceed.
+    ///
+    /// Under [`GuestMemoryMode::Count`] the guest budget is observational.
+    /// The independent process limit still refuses growth in every mode.
+    fn charge(&self, bytes: u64) -> bool {
+        // No guest bytes were admitted, so neither the guest charge nor its
+        // observation-only refusal counter should increase.
+        if !self.process_admits(bytes) {
             return false;
         }
         match self.mode {
-            GuestMemoryMode::Enforce => {
+            GuestMemoryMode::Enforce | GuestMemoryMode::Growth => {
                 let taken =
                     self.in_use
                         .try_update(Ordering::Relaxed, Ordering::Relaxed, |in_use| {
@@ -570,12 +664,22 @@ pub struct StoreMemoryLimiter {
     budget: Option<Arc<GuestMemoryBudget>>,
     /// What this store has taken from the budget and owes back on drop.
     charged: u64,
+    /// Initial memory this store was admitted without a charge, under
+    /// [`GuestMemoryMode::Growth`]; taken off the budget's
+    /// `initial_uncharged` on drop.
+    uncharged: u64,
 }
 
 impl StoreMemoryLimiter {
     /// What this store is currently charged.
     pub fn charged(&self) -> u64 {
         self.charged
+    }
+
+    /// Initial memory this store holds uncharged, under
+    /// [`GuestMemoryMode::Growth`].
+    pub fn uncharged(&self) -> u64 {
+        self.uncharged
     }
 }
 
@@ -608,6 +712,15 @@ impl wasmtime::ResourceLimiter for StoreMemoryLimiter {
         // `desired` is the memory's new total, not a delta, and wasmtime
         // guarantees it is the larger of the two.
         let growth = (desired as u64).saturating_sub(current as u64);
+        // A grow from zero bytes is a memory's first allocation; see the module
+        // docs, "Growth, for density".
+        if budget.mode == GuestMemoryMode::Growth && current == 0 {
+            if !budget.admit_initial(growth) {
+                return Ok(false);
+            }
+            self.uncharged = self.uncharged.saturating_add(growth);
+            return Ok(true);
+        }
         if !budget.charge(growth) {
             return Ok(false);
         }
@@ -635,10 +748,16 @@ impl wasmtime::ResourceLimiter for StoreMemoryLimiter {
 
 impl Drop for StoreMemoryLimiter {
     fn drop(&mut self) {
-        if let Some(budget) = &self.budget
-            && self.charged > 0
-        {
+        let Some(budget) = &self.budget else {
+            return;
+        };
+        if self.charged > 0 {
             budget.release(self.charged);
+        }
+        if self.uncharged > 0 {
+            budget
+                .initial_uncharged
+                .fetch_sub(self.uncharged, Ordering::Relaxed);
         }
     }
 }
@@ -703,6 +822,168 @@ mod tests {
         // The budget refuses what does not fit, not everything thereafter.
         assert!(b.memory_growing(0, 30 * MIB as usize, None).unwrap());
         assert_eq!(budget.in_use(), 90 * MIB);
+    }
+
+    /// Under `Growth` each memory's first allocation is admitted uncharged,
+    /// whenever it happens, and growth after it is charged and enforced.
+    #[test]
+    fn growth_leaves_initial_memory_to_the_process_guard() {
+        let budget = budget(100 * MIB, GuestMemoryMode::Growth);
+        let mut a = budget.limiter();
+        assert!(a.memory_growing(0, 60 * MIB as usize, None).unwrap());
+        assert_eq!(budget.in_use(), 0, "initial memory is not charged");
+        assert_eq!(budget.initial_uncharged(), 60 * MIB);
+        assert_eq!(a.uncharged(), 60 * MIB);
+        assert_eq!(a.charged(), 0);
+
+        assert!(
+            a.memory_growing(60 * MIB as usize, 120 * MIB as usize, None)
+                .unwrap()
+        );
+        assert_eq!(budget.in_use(), 60 * MIB, "growth is charged");
+
+        let mut b = budget.limiter();
+        assert!(
+            b.memory_growing(0, 60 * MIB as usize, None).unwrap(),
+            "another memory's first allocation is uncharged too"
+        );
+        assert_eq!(budget.initial_uncharged(), 120 * MIB);
+        assert!(
+            !b.memory_growing(60 * MIB as usize, 120 * MIB as usize, None)
+                .unwrap(),
+            "its growth past the budget is refused"
+        );
+        assert_eq!(budget.refused(), 1);
+
+        drop(a);
+        drop(b);
+        assert_eq!(budget.in_use(), 0);
+        assert_eq!(budget.initial_uncharged(), 0);
+    }
+
+    /// A core start runs during instantiate. Its grow of a memory that already
+    /// has pages is growth, charged and enforced; its first grow of a
+    /// zero-page memory is that memory's birth, bounded like a declared
+    /// minimum. A second module allocated after that start remains initial.
+    #[tokio::test]
+    async fn growth_charges_what_a_start_function_grows_past_birth() {
+        use crate::engine::ctx::{Ctx, SharedCtx};
+
+        // (declared pages, pages after start, start growths refused)
+        for (initial_pages, started_pages, refused) in [(0, 2, 0), (1, 1, 1)] {
+            for pooled in [false, true] {
+                let mut config = wasmtime::Config::new();
+                if pooled {
+                    let mut pool = wasmtime::PoolingAllocationConfig::default();
+                    pool.total_memories(2)
+                        .total_stacks(1)
+                        .total_core_instances(2);
+                    config.allocation_strategy(wasmtime::InstanceAllocationStrategy::Pooling(pool));
+                }
+                let engine = wasmtime::Engine::new(&config).unwrap();
+                let wasm = wat::parse_str(format!(
+                    r#"(component
+                        (core module $first
+                            (memory {initial_pages} 16)
+                            (func $start (drop (memory.grow (i32.const 2))))
+                            (start $start)
+                            (func (export "pages") (result i32) memory.size)
+                            (func (export "grow") (result i32)
+                                (memory.grow (i32.const 1))))
+                        (core instance $first (instantiate $first))
+                        (core module $second (memory 2))
+                        (core instance (instantiate $second))
+                        (func (export "pages") (result u32)
+                            (canon lift (core func $first "pages")))
+                        (func (export "grow") (result u32)
+                            (canon lift (core func $first "grow"))))"#
+                ))
+                .unwrap();
+                let component = wasmtime::component::Component::new(&engine, wasm).unwrap();
+                let pre = wasmtime::component::Linker::new(&engine)
+                    .instantiate_pre(&component)
+                    .unwrap();
+                let budget = budget(65_536, GuestMemoryMode::Growth);
+                let ctx = SharedCtx::new(Ctx::builder("growth", "start").build())
+                    .with_guest_memory(&budget);
+                let mut store = wasmtime::Store::new(&engine, ctx);
+                install_memory_limiter(&mut store);
+                let instance = pre.instantiate_async(&mut store).await.unwrap();
+                let pages = instance
+                    .get_typed_func::<(), (u32,)>(&mut store, "pages")
+                    .unwrap();
+                assert_eq!(
+                    pages.call_async(&mut store, ()).await.unwrap().0,
+                    started_pages
+                );
+                assert_eq!(budget.refused(), refused);
+                assert_eq!(budget.in_use(), 0);
+                assert_eq!(
+                    budget.initial_uncharged(),
+                    u64::from(started_pages + 2) * 65_536
+                );
+
+                let grow = instance
+                    .get_typed_func::<(), (u32,)>(&mut store, "grow")
+                    .unwrap();
+                assert_eq!(
+                    grow.call_async(&mut store, ()).await.unwrap().0,
+                    started_pages
+                );
+                assert_eq!(budget.in_use(), 65_536, "ordinary growth is charged too");
+                assert_eq!(grow.call_async(&mut store, ()).await.unwrap().0, u32::MAX);
+                drop(store);
+                assert_eq!(budget.in_use(), 0);
+                assert_eq!(budget.initial_uncharged(), 0);
+            }
+        }
+    }
+
+    /// An instantiation that fails after its memory was allocated leaves that
+    /// first allocation on the store, which gives it back when dropped.
+    #[tokio::test]
+    async fn a_trapping_start_gives_its_first_allocation_back_on_drop() {
+        use crate::engine::ctx::{Ctx, SharedCtx};
+
+        let engine = wasmtime::Engine::default();
+        let wasm = wat::parse_str(
+            "(component (core module $m (memory 1) (func $start unreachable) (start $start))
+             (core instance (instantiate $m)))",
+        )
+        .unwrap();
+        let component = wasmtime::component::Component::new(&engine, wasm).unwrap();
+        let pre = wasmtime::component::Linker::new(&engine)
+            .instantiate_pre(&component)
+            .unwrap();
+        let budget = budget(65_536, GuestMemoryMode::Growth);
+        let ctx = SharedCtx::new(Ctx::builder("growth", "trap").build()).with_guest_memory(&budget);
+        let mut store = wasmtime::Store::new(&engine, ctx);
+        install_memory_limiter(&mut store);
+        assert!(pre.instantiate_async(&mut store).await.is_err());
+        assert_eq!(budget.initial_uncharged(), 65_536);
+        drop(store);
+        assert_eq!(budget.initial_uncharged(), 0);
+    }
+
+    /// Under `Growth` the process guard is the only thing that refuses an
+    /// instantiation's initial memory: a process over its limit takes no new
+    /// instance, however much of the budget is free.
+    #[test]
+    fn growth_still_refuses_initial_memory_while_the_process_is_over() {
+        let guard = Arc::new(ProcessMemoryGuard::new(1000 * MIB));
+        let budget = Arc::new(
+            GuestMemoryBudget::new(100 * MIB, GuestMemoryMode::Growth)
+                .with_process_guard(Arc::clone(&guard)),
+        );
+        let mut limiter = budget.limiter();
+        guard.observe(2000 * MIB);
+        assert!(!limiter.memory_growing(0, 10 * MIB as usize, None).unwrap());
+        assert_eq!(budget.process_refused(), 1);
+        assert_eq!(budget.initial_uncharged(), 0);
+        guard.observe(100 * MIB);
+        assert!(limiter.memory_growing(0, 10 * MIB as usize, None).unwrap());
+        assert_eq!(budget.initial_uncharged(), 10 * MIB);
+        assert_eq!(budget.in_use(), 0);
     }
 
     /// The upgrade-safety guarantee: a host that gains a derived budget it
@@ -987,6 +1268,24 @@ mod tests {
             "the refusal must reach the pipeline: {seen:?}"
         );
         assert_eq!(seen.get("guest_memory.would_refuse"), Some(&0));
+    }
+
+    #[test]
+    fn uncharged_initial_memory_is_exported_and_released() {
+        let budget = budget(100 * MIB, GuestMemoryMode::Growth);
+        let mut limiter = budget.limiter();
+        assert!(limiter.memory_growing(0, 60 * MIB as usize, None).unwrap());
+        let seen = collect_metrics(&budget);
+        assert_eq!(
+            seen.get("guest_memory.initial_uncharged"),
+            Some(&(60 * MIB))
+        );
+        assert_eq!(seen.get("guest_memory.in_use"), Some(&0));
+        drop(limiter);
+        assert_eq!(
+            collect_metrics(&budget).get("guest_memory.initial_uncharged"),
+            Some(&0)
+        );
     }
 
     /// The high-water mark is exported rather than left to
