@@ -2698,7 +2698,7 @@ host:
           secretFrom:
             - s3-assets
 "#;
-        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let bindings = config
             .host()
             .to_plugin_bindings(&config, Path::new("."), None)
