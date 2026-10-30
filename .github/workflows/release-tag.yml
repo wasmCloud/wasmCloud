@@ -559,6 +559,17 @@ jobs:
       # release is already shipped above (tag pushed, images promoted, GH
       # release created). A failure here should not fail the run state or
       # suppress the success Slack — re-run the step or republish manually.
+      # The wasmcloud-release-dispatch trust policies live in the receiving
+      # repositories and grant only this workflow on main.
+      - name: Get a Homebrew dispatch token from octo-sts
+        id: octo-sts-homebrew
+        if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: wasmCloud/homebrew-wasmcloud
+          identity: wasmcloud-release-dispatch
+
       - name: Dispatch Homebrew tap update
         # Run after the GitHub Release exists so the formula update can
         # fetch the binaries and their attestations. Skipped for pre-
@@ -566,13 +577,22 @@ jobs:
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ steps.octo-sts-homebrew.outputs.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           echo "STAGE=homebrew" >> "${GITHUB_ENV}"
           gh api repos/wasmCloud/homebrew-wasmcloud/dispatches \
             -f event_type=brew-formula-update \
             -f "client_payload[tag_version]=${VERSION}"
+
+      - name: Get a docs dispatch token from octo-sts
+        id: octo-sts-docs
+        if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: wasmCloud/wasmcloud.com
+          identity: wasmcloud-release-dispatch
 
       - name: Dispatch docs version bump
         # Notifies wasmCloud/wasmcloud.com to bump WASMCLOUD_VERSION in
@@ -583,7 +603,7 @@ jobs:
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ steps.octo-sts-docs.outputs.token }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           echo "STAGE=docs-version-bump" >> "${GITHUB_ENV}"

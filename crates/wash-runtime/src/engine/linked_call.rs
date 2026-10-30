@@ -24,7 +24,7 @@
 //! [`EphemeralLinkedCall`] for how the ephemeral path is captured at link time.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -127,6 +127,9 @@ pub(crate) fn component_ctx_template_from_metadata_with_tls(
     template
 }
 
+/// A workload's components, keyed by id.
+type ComponentMap = RwLock<BTreeMap<Arc<str>, WorkloadComponent>>;
+
 /// Everything needed to spin up a throwaway store for a single cross-component
 /// linked call.
 ///
@@ -168,13 +171,28 @@ pub(crate) struct EphemeralLinkedCall {
     /// The meter of the host this call runs on; see
     /// [`crate::engine::abandon::StoreMetering`].
     pub(crate) invocation: crate::observability::InvocationMeter,
-    pub(crate) components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
+    /// Weak because the importer's linker, which holds this call, lives in this
+    /// same map: a strong handle would keep a stopped workload's components
+    /// alive. Upgraded per call by [`Self::components`].
+    pub(crate) components: Weak<ComponentMap>,
     pub(crate) active_component_id: Arc<str>,
     pub(crate) linked_component_ids: Vec<Arc<str>>,
     #[cfg(feature = "wasi-tls")]
     pub(crate) tls_provider: Option<SharedTlsProvider>,
     /// How this call moves its args/results across the store boundary.
     pub(crate) mode: EphemeralCallMode,
+}
+
+impl EphemeralLinkedCall {
+    /// The workload's component map, or an error once the workload has stopped.
+    fn components(&self) -> anyhow::Result<Arc<ComponentMap>> {
+        self.components.upgrade().ok_or_else(|| {
+            anyhow::anyhow!(
+                "linked component '{}' belongs to a workload that has stopped",
+                self.active_component_id
+            )
+        })
+    }
 }
 
 /// How an ephemeral linked call transfers its args/results across the store
@@ -419,7 +437,8 @@ pub(crate) async fn new_store_from_templates(
 /// a component whose entry is replaced does not keep serving from a pool that
 /// belongs to the old entry.
 async fn callee_instance_pool(call: &EphemeralLinkedCall) -> Option<Arc<InstancePool>> {
-    let components = call.components.read().await;
+    let components = call.components().ok()?;
+    let components = components.read().await;
     let linked: HashSet<Arc<str>> = call.linked_component_ids.iter().cloned().collect();
     instance_pool::poolable(&components, &call.active_component_id, &linked)
 }
@@ -455,7 +474,8 @@ async fn new_ephemeral_store(
     component_ids.push(call.active_component_id.clone());
     component_ids.sort();
     component_ids.dedup();
-    resolve_component_volume_mounts_in_map(&call.components, &component_ids).await?;
+    let components = call.components()?;
+    resolve_component_volume_mounts_in_map(&components, &component_ids).await?;
 
     // One read-lock scope, no `WorkloadMetadata` clones: cloning metadata would
     // deep-clone its by-value `Linker`, and `pre_instantiate_ref` needs only
@@ -469,7 +489,7 @@ async fn new_ephemeral_store(
     let template_of = component_ctx_template_from_metadata;
 
     let (active, linked, linked_instances) = {
-        let components = call.components.read().await;
+        let components = components.read().await;
         let active = template_of(
             &components
                 .get(&call.active_component_id)
@@ -529,7 +549,8 @@ async fn callee_identity(
     if !call.invocation.is_enabled() {
         return None;
     }
-    let components = call.components.read().await;
+    let components = call.components().ok()?;
+    let components = components.read().await;
     let component = components.get(&call.active_component_id)?;
     Some(crate::observability::WorkloadIdentity::new(
         component.metadata().workload_namespace(),
