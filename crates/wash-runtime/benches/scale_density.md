@@ -52,13 +52,15 @@ with the component, so these are a guide, not constants.
 - **Scale-to-zero** holds only host bookkeeping: the workload record, its
   component metadata and route, and the `InstancePre` the HTTP handler keeps.
   The WASI and `wasi:http` linker that used to dominate this (~180 KiB per
-  workload) is now built once per engine and shared. A component that a
-  plugin or a link writes to gets a temporary copy of its own (~140 KiB).
-  Once resolution succeeds, components and services keep their `InstancePre`
-  and release those copies; later invocations and service starts reuse the
-  cached link. A component with unresolved imports keeps its linker, so
-  every attempt to instantiate it reports wasmtime's linking error; it never
-  runs, so it is not part of a running workload's footprint.
+  workload) is now built once per engine and shared.
+  - A component that a plugin or a link writes to gets a copy of its own
+    (~140 KiB) while the workload resolves.
+  - Once it resolves, the component keeps its `InstancePre` and lets the copy
+    go; later invocations and service starts reuse the kept link.
+  - A component that does not link keeps only the error, which every attempt
+    to instantiate it reports.
+  - The bench's fixture imports nothing a plugin writes to, so it holds no
+    copy, and this does not show in its figures.
 - **Warm** adds a parked instance: its stores, its core instances, and the
   pages of linear memory the guest has touched. The guest budget charges the
   declared size whether or not it is resident, which is why the guest charge
