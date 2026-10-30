@@ -22,6 +22,15 @@ A useful report includes:
 
 Don't report security vulnerabilities as issues. Follow [SECURITY.md](SECURITY.md) to report them privately.
 
+## Escalating to the CRA Steward
+
+The security team escalates two kinds of event to the Linux Foundation, wasmCloud's CRA steward, at steward@linuxfoundation.org:
+
+- **Actively exploited vulnerabilities:** a vulnerability in wasmCloud for which the security team has reliable evidence that a malicious actor has exploited it.
+- **Severe incidents:** a security compromise of the project's own infrastructure, such as its GitHub organization, release pipeline, signing identities, or published artifacts.
+
+A vulnerability with no evidence of exploitation is not an escalation event and follows the normal process in [SECURITY.md](SECURITY.md#security-vulnerability-response). Remediation never waits on the escalation decision.
+
 ## Development Environment
 
 ### Prerequisites

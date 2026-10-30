@@ -1,6 +1,6 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-10-29'
+  last-updated: '2026-10-30'
   last-reviewed: '2026-10-27'
   url: https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/security-insights.yml
 
@@ -8,6 +8,14 @@ project:
   name: wasmCloud
   homepage: https://wasmcloud.com
   roadmap: https://github.com/wasmCloud/wasmCloud/blob/main/ROADMAP.md
+  steward:
+    uri: https://www.linuxfoundation.org/security
+    comment: >-
+      wasmCloud is a CNCF project, supported under the Linux Foundation CRA
+      stewardship framework. The security team escalates actively exploited
+      vulnerabilities and severe incidents to steward@linuxfoundation.org, as
+      described in
+      https://github.com/wasmCloud/wasmCloud/blob/main/CONTRIBUTING.md#escalating-to-the-cra-steward
   administrators:
     - name: wasmCloud org maintainers (@wasmCloud/org-maintainers)
       social: https://github.com/wasmCloud/wasmCloud/blob/main/MAINTAINERS.md#wasmcloudorg-maintainers
