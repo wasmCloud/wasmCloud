@@ -49,9 +49,16 @@
 //! host past its limit. The bet is that initial memory is mostly reserved
 //! and untouched (a toolchain's default stack) where growth is asked for
 //! because it is about to be used. That is why it is opt-in and `Enforce`
-//! stays the default. It also means the mode leans on the process guard: with
-//! `max_process_memory` off, nothing bounds the memory instances start with,
-//! and the engine says so when it is built.
+//! stays the default.
+//!
+//! What bounds the overcommit is a cap of its own,
+//! [`GuestMemoryBudget::with_initial_cap`]: uncharged first allocations may
+//! total that much and no more. An engine derives it as
+//! [`DEFAULT_INITIAL_OVERCOMMIT`] times the budget unless told otherwise, so
+//! the mode is bounded out of the box, in bytes an operator can read and
+//! move; it is kept apart from `in_use` so that figure stays a count of real
+//! growth. With both the cap and `max_process_memory` off, nothing bounds the
+//! memory instances start with, and the engine says so when it is built.
 //!
 //! Any grow from zero bytes counts as a memory's first allocation, whenever it
 //! happens: a declared memory's initial size, a zero-page memory's first
@@ -126,6 +133,14 @@ use super::process_memory::ProcessMemoryGuard;
 /// operator's attention rather than a debug line.
 const PRESSURE_NUMERATOR: u64 = 3;
 const PRESSURE_DENOMINATOR: u64 = 4;
+
+/// The initial cap an engine derives under [`GuestMemoryMode::Growth`], as a
+/// multiple of the budget: first allocations may be overcommitted this many
+/// times over before new memories are refused. A warm `http-handler-p3`
+/// instance declares about fifteen times what it touches, so four keeps a
+/// margin under that ratio while still holding several times the instances
+/// `Enforce` would.
+pub const DEFAULT_INITIAL_OVERCOMMIT: u64 = 4;
 
 /// How strictly the guest memory budget is applied.
 ///
@@ -205,6 +220,12 @@ pub struct GuestMemoryBudget {
     /// was admitted without a charge: declared, not resident. Reported so a
     /// host can see what the budget is not counting.
     initial_uncharged: AtomicU64,
+    /// Most `initial_uncharged` may reach under [`GuestMemoryMode::Growth`];
+    /// `None` is no bound. See [`Self::with_initial_cap`].
+    initial_cap: Option<u64>,
+    /// Whether `initial_cap` has refused anything yet, so the first refusal
+    /// is reported loudly and the rest quietly.
+    initial_crossed: AtomicBool,
 }
 
 impl Default for GuestMemoryBudget {
@@ -230,7 +251,26 @@ impl GuestMemoryBudget {
             process: None,
             process_refused: AtomicU64::new(0),
             initial_uncharged: AtomicU64::new(0),
+            initial_cap: None,
+            initial_crossed: AtomicBool::new(false),
         }
+    }
+
+    /// Bound the first allocations [`GuestMemoryMode::Growth`] leaves
+    /// uncharged: once they total `initial_cap`, a new memory is refused,
+    /// which a new instance sees as a failed instantiation. Without one,
+    /// nothing but the process guard bounds them. Ignored in other modes,
+    /// which charge first allocations like any growth.
+    #[must_use]
+    pub fn with_initial_cap(mut self, initial_cap: u64) -> Self {
+        self.initial_cap = Some(initial_cap);
+        self
+    }
+
+    /// The bound on uncharged first allocations, if any; see
+    /// [`Self::with_initial_cap`].
+    pub fn initial_cap(&self) -> Option<u64> {
+        self.initial_cap
     }
 
     /// Refuse every growth while `guard` says the process is past its limit.
@@ -515,15 +555,52 @@ impl GuestMemoryBudget {
         true
     }
 
-    /// Admit `bytes` of an instance's initial memory under
-    /// [`GuestMemoryMode::Growth`]: only the process guard may refuse it, and
-    /// nothing is charged.
+    /// Admit `bytes` of a memory's first allocation under
+    /// [`GuestMemoryMode::Growth`]: nothing is charged, and only the process
+    /// guard and the initial cap may refuse it.
     fn admit_initial(&self, bytes: u64) -> bool {
         if !self.process_admits(bytes) {
             return false;
         }
-        self.initial_uncharged.fetch_add(bytes, Ordering::Relaxed);
-        true
+        let admitted =
+            self.initial_uncharged
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                    let next = held.saturating_add(bytes);
+                    self.initial_cap
+                        .is_none_or(|cap| next <= cap)
+                        .then_some(next)
+                });
+        match admitted {
+            Ok(_) => true,
+            Err(held) => {
+                self.refused.fetch_add(1, Ordering::Relaxed);
+                self.report_initial_refusal(bytes, held);
+                false
+            }
+        }
+    }
+
+    /// Say that the initial cap refused a first allocation: loudly the first
+    /// time, quietly after that.
+    fn report_initial_refusal(&self, bytes: u64, held: u64) {
+        let cap = render_bytes(self.initial_cap.unwrap_or(u64::MAX));
+        if self.initial_crossed.swap(true, Ordering::Relaxed) {
+            tracing::debug!(
+                requested = %render_bytes(bytes),
+                initial_uncharged = %render_bytes(held),
+                max_initial_guest_memory = %cap,
+                "refusing a new guest memory past this host's initial cap"
+            );
+            return;
+        }
+        tracing::warn!(
+            requested = %render_bytes(bytes),
+            initial_uncharged = %render_bytes(held),
+            max_initial_guest_memory = %cap,
+            "refusing a new guest memory past this host's initial cap. A new instance that \
+             asks for one fails to instantiate. Raise --max-initial-guest-memory, or give this \
+             host fewer warm instances"
+        );
     }
 
     /// Charge `bytes` and report whether the growth may proceed.
@@ -984,6 +1061,34 @@ mod tests {
         assert!(limiter.memory_growing(0, 10 * MIB as usize, None).unwrap());
         assert_eq!(budget.initial_uncharged(), 10 * MIB);
         assert_eq!(budget.in_use(), 0);
+    }
+
+    /// The initial cap bounds what `Growth` leaves uncharged, apart from the
+    /// budget, and makes room again as stores give their memory back.
+    #[test]
+    fn growth_refuses_first_allocations_past_the_initial_cap() {
+        let budget = Arc::new(
+            GuestMemoryBudget::new(10 * MIB, GuestMemoryMode::Growth).with_initial_cap(100 * MIB),
+        );
+        let mut a = budget.limiter();
+        assert!(a.memory_growing(0, 60 * MIB as usize, None).unwrap());
+        let mut b = budget.limiter();
+        assert!(
+            !b.memory_growing(0, 60 * MIB as usize, None).unwrap(),
+            "past the initial cap, though the budget is untouched"
+        );
+        assert_eq!(budget.refused(), 1);
+        assert_eq!(budget.initial_uncharged(), 60 * MIB);
+        assert_eq!(budget.in_use(), 0);
+        assert!(b.memory_growing(0, 40 * MIB as usize, None).unwrap());
+
+        drop(a);
+        let mut c = budget.limiter();
+        assert!(
+            c.memory_growing(0, 60 * MIB as usize, None).unwrap(),
+            "a dropped store's first allocation is room again"
+        );
+        assert_eq!(budget.initial_uncharged(), 100 * MIB);
     }
 
     /// The upgrade-safety guarantee: a host that gains a derived budget it

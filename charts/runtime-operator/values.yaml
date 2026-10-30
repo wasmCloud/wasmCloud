@@ -456,18 +456,27 @@ runtime:
     # before `maxMemories` existed, and the host warns at startup; set
     # `maxMemories` instead.
     coreInstances: ""
-    # -- How the host's guest memory budget is applied: `enforce` (what an
-    # empty value renders) refuses growth past the budget, which the guest
-    # sees as `memory.grow` returning -1; `count` charges every guest
-    # `memory.grow` to the budget and reports what it would have refused, but
-    # allows it; `growth` enforces like `enforce` but does not charge the
-    # memory an instance is born with, only what it grows by, for hosts
-    # packing many small instances. Use `count` to size a host: watch its
-    # reported high-water mark, then return to `enforce`. `growth` overcommits:
-    # instances that come to write all their initial memory can take the host
-    # past its limit, since the process-memory guard (on by default, derived
-    # from `limits.memory`) refuses only new instances and growth. Do not pair
-    # it with `WASH_HOST_MAX_PROCESS_MEMORY=off`.
+    # -- How the host's guest memory budget is applied:
+    #
+    # - `enforce` (what an empty value renders) refuses growth past the budget.
+    #   The guest sees `memory.grow` return -1.
+    # - `count` charges every guest `memory.grow` to the budget
+    #   and reports what it would have refused, but allows it.
+    #   Use it to size a host: watch the reported high-water mark,
+    #   then return to `enforce`.
+    # - `growth` enforces like `enforce`,
+    #   but does not charge the memory an instance starts with,
+    #   only what it grows by.
+    #   It is for hosts packing many small instances.
+    #
+    # `growth` overcommits.
+    # The process-memory guard (on by default, derived from `limits.memory`)
+    # refuses only new instances and growth,
+    # so instances that come to write all their initial memory
+    # can take the host past its limit.
+    # `WASH_HOST_MAX_INITIAL_GUEST_MEMORY` bounds the overcommit:
+    # four times the budget, unless set in `runtime.env`.
+    # Do not turn off both it and `WASH_HOST_MAX_PROCESS_MEMORY`.
     #
     # The host derives the budget: three quarters of `limits.memory`, and
     # never less than 256MiB — so keep `limits.memory` above 342Mi, or the

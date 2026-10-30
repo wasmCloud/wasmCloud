@@ -258,6 +258,11 @@ async fn growth_mode_leaves_initial_memory_uncharged_and_enforces_growth() -> Re
     init_tracing();
     let (addr, host, budget) = start_host(GuestMemoryMode::Growth).await?;
     let client = reqwest::Client::new();
+    assert_eq!(
+        budget.initial_cap(),
+        Some(budget.cap() * wash_runtime::engine::guest_memory::DEFAULT_INITIAL_OVERCOMMIT),
+        "an engine bounds uncharged initial memory unless told not to"
+    );
 
     for name in ["grow-a", "grow-b"] {
         host.workload_start(grow_workload(name))
