@@ -598,17 +598,22 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_keeps_an_ephemeral_port() {
-        for bind_addr in ["0.0.0.0:0", "127.0.0.1:0"] {
-            let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
-            udp_bind(&sock, bind_addr.parse().unwrap()).unwrap();
+        for (family, local, peer) in [
+            (SocketAddressFamily::Ipv4, "127.0.0.1:0", "127.0.0.1:9999"),
+            (SocketAddressFamily::Ipv4, "0.0.0.0:0", "127.0.0.1:9999"),
+            (SocketAddressFamily::Ipv6, "[::1]:0", "[::1]:9999"),
+            (SocketAddressFamily::Ipv6, "[::]:0", "[::1]:9999"),
+        ] {
+            let sock = udp_socket(family).unwrap();
+            udp_bind(&sock, local.parse().unwrap()).unwrap();
             let bound = sock.local_addr().unwrap();
-
-            let remote: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-            udp_connect(&sock, remote).unwrap();
-            udp_disconnect(&sock).unwrap();
-
-            let after = sock.local_addr().unwrap();
-            assert_eq!(after.port(), bound.port(), "{bind_addr}: {after}");
+            for _ in 0..2 {
+                udp_connect(&sock, peer.parse().unwrap()).unwrap();
+                udp_disconnect(&sock).unwrap();
+                assert_eq!(sock.local_addr().unwrap().port(), bound.port());
+                #[cfg(target_os = "linux")]
+                assert_eq!(sock.local_addr().unwrap().ip(), bound.ip());
+            }
         }
     }
 
