@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     # P2 fixtures (wasm32-wasip2)
+    "p2-udp-progress",
     "structured-plugin",
     "structured-caller",
     "http-handler-p2",
