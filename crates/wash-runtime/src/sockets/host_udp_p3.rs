@@ -297,8 +297,7 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
         // Reused across refusals: a fresh 64 KiB zeroed allocation per refused
         // datagram would make refusing more expensive than delivering.
         let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
-        let mut refused = 0;
-        loop {
+        'refresh: loop {
             // Subscribe before reading the state so a reconnect cannot leave
             // this receive waiting on an obsolete peer or transport plane.
             let changed = connection_changed.notified();
@@ -340,65 +339,72 @@ impl<T> HostUdpSocketWithStore<T> for WasiSockets {
                 SocketResult::Ok((source, connected_addr))
             })?;
 
-            let receive = async {
-                SocketResult::Ok(match &source {
-                    RecvSource::Network {
-                        socket,
-                        egress_peers,
-                        loopback_rx,
-                    } => {
-                        let recv_network = async {
-                            loop {
-                                let (n, addr) =
-                                    socket.recv_from(&mut buf).await.map_err(|e| se(e.into()))?;
-                                // An unspecified-bound socket hears from anyone, so
-                                // deliver only what answers something the guest sent;
-                                // anything else would make it an unsolicited server
-                                // on a real interface.
-                                if connected_addr.is_none()
-                                    && let Some(peers) = egress_peers.as_ref()
-                                    && !peers.lock().is_ok_and(|peers| peers.contains(&addr))
-                                {
-                                    continue;
+            // The state read above admits or refuses every datagram until it
+            // changes, and a new state starts its own refusal count.
+            let mut refused = 0;
+            loop {
+                let receive = async {
+                    SocketResult::Ok(match &source {
+                        RecvSource::Network {
+                            socket,
+                            egress_peers,
+                            loopback_rx,
+                        } => {
+                            let recv_network = async {
+                                loop {
+                                    let (n, addr) = socket
+                                        .recv_from(&mut buf)
+                                        .await
+                                        .map_err(|e| se(e.into()))?;
+                                    // An unspecified-bound socket hears from anyone, so
+                                    // deliver only what answers something the guest sent;
+                                    // anything else would make it an unsolicited server
+                                    // on a real interface.
+                                    if connected_addr.is_none()
+                                        && let Some(peers) = egress_peers.as_ref()
+                                        && !peers.lock().is_ok_and(|peers| peers.contains(&addr))
+                                    {
+                                        continue;
+                                    }
+                                    break SocketResult::Ok((
+                                        buf.get(..n).unwrap_or_default().to_vec(),
+                                        addr,
+                                    ));
                                 }
-                                break SocketResult::Ok((
-                                    buf.get(..n).unwrap_or_default().to_vec(),
-                                    addr,
-                                ));
+                            };
+                            if let Some(rx) = loopback_rx {
+                                tokio::select! {
+                                    result = recv_network => result?,
+                                    result = recv_loopback(rx) => result?,
+                                }
+                            } else {
+                                recv_network.await?
                             }
-                        };
-                        if let Some(rx) = loopback_rx {
-                            tokio::select! {
-                                result = recv_network => result?,
-                                result = recv_loopback(rx) => result?,
-                            }
-                        } else {
-                            recv_network.await?
                         }
-                    }
-                    RecvSource::Loopback(rx) => recv_loopback(rx).await?,
-                })
-            };
-            let (data, addr) = tokio::select! {
-                biased;
-                _ = &mut changed => continue,
-                result = receive => result?,
-            };
-            if connected_addr.is_some_and(|peer| !super::util::is_same_peer(peer, addr)) {
-                continue;
-            }
-            if permissions.check(addr, SocketAddrUse::UdpReceive).is_ok() {
-                return Ok((data, addr.into()));
-            }
-            refused += 1;
-            // Waiting forever for a datagram the policy will accept leaves the
-            // guest's `receive` with no answer and no error.
-            if refused >= MAX_REFUSED_DATAGRAMS_PER_RECEIVE {
-                tracing::warn!(
-                    refused,
-                    "refused every datagram this `receive` saw; reporting access-denied"
-                );
-                return Err(se(super::util::ErrorCode::AccessDenied));
+                        RecvSource::Loopback(rx) => recv_loopback(rx).await?,
+                    })
+                };
+                let (data, addr) = tokio::select! {
+                    biased;
+                    _ = &mut changed => continue 'refresh,
+                    result = receive => result?,
+                };
+                if connected_addr.is_some_and(|peer| !super::util::is_same_peer(peer, addr)) {
+                    continue;
+                }
+                if permissions.check(addr, SocketAddrUse::UdpReceive).is_ok() {
+                    return Ok((data, addr.into()));
+                }
+                refused += 1;
+                // Waiting forever for a datagram the policy will accept leaves the
+                // guest's `receive` with no answer and no error.
+                if refused >= MAX_REFUSED_DATAGRAMS_PER_RECEIVE {
+                    tracing::warn!(
+                        refused,
+                        "refused every datagram this `receive` saw; reporting access-denied"
+                    );
+                    return Err(se(super::util::ErrorCode::AccessDenied));
+                }
             }
         }
     }
