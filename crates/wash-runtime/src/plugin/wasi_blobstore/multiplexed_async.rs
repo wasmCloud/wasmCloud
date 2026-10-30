@@ -507,7 +507,7 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         }
 
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         // `blobstore` (create/get/delete container, copy/move) routed per
         // `(implements ..)` label so each label lands on its own backend.
