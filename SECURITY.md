@@ -14,6 +14,9 @@ organization.
   - [Membership](#membership)
 - [Patch and Release Team](#patch-and-release-team)
 - [Disclosures](#disclosures)
+- [Supported Versions](#supported-versions)
+- [Dependency and Code Scanning](#dependency-and-code-scanning)
+- [Secrets and Credentials](#secrets-and-credentials)
 
 ## Report A Vulnerability
 
@@ -118,3 +121,94 @@ repository. Each disclosure will contain:
 
 Disclosures are published on the same day as the fixing release, after the release is published.
 Release notes will contain a link to the advisory.
+
+## Supported Versions
+
+Security fixes ship only in the latest minor release. When a new minor release ships, the previous
+one stops receiving security fixes. wasmCloud 1.x is end of life. See [SUPPORT.md](SUPPORT.md) for
+the full support policy.
+
+## Dependency and Code Scanning
+
+This policy covers released code: `wash`, `wash-runtime`, `runtime-operator`, `runtime-gateway`
+and the `runtime-operator` Helm chart. Examples and templates receive Dependabot updates, but
+their findings don't block a release.
+
+Findings come from:
+
+- [`cargo audit`](https://rustsec.org) and `cargo deny check licenses`, which run in
+  [`audit.yml`](.github/workflows/audit.yml) daily, on pushes to `main`, and on pull requests that
+  change dependencies.
+- Dependabot alerts for Cargo, Go modules and GitHub Actions.
+- CodeQL and zizmor code scanning, reported in the repository's Security tab.
+
+### Vulnerabilities
+
+A vulnerability that affects released code is fixed on this timeline, by its advisory's severity:
+
+| Severity | Fixed in |
+| -------- | -------- |
+| Critical | An out-of-cycle patch release within 7 days of a fix being available |
+| High     | The next scheduled release, at most 14 days |
+| Medium   | A release within 90 days |
+| Low      | Best effort |
+
+An advisory that doesn't affect wasmCloud is suppressed in [`.cargo/audit.toml`](.cargo/audit.toml)
+with a comment saying why it doesn't apply.
+
+### Licenses
+
+Every dependency must use a license on the allowlist in [`deny.toml`](deny.toml), which mirrors the
+[CNCF allowed license policy](https://github.com/cncf/foundation/blob/main/policies-guidance/allowed-third-party-license-policy.md).
+A dependency under any other license can't merge without a per-crate exception in `deny.toml` that
+links its [CNCF exception request](https://exceptions.cncf.io/). If CNCF declines the request, the
+dependency is replaced.
+
+### Code scanning
+
+Code scanning alerts in released code follow the vulnerability timeline above, by the alert's
+security severity. Each alert is either fixed or dismissed in the Security tab with a stated
+reason, such as code that only runs in tests.
+
+### Before a release
+
+A release PR can't merge while `cargo audit` or `cargo deny check licenses` fails, or while a
+known critical or high advisory that affects released code is open.
+
+## Secrets and Credentials
+
+This policy covers the credentials wasmCloud's CI and release automation use.
+
+### Prefer no stored secret
+
+Use a short-lived credential whenever the service supports one:
+
+- Signing and provenance use Sigstore keyless signing with the workflow's GitHub OIDC identity.
+- Cloud access uses OIDC role assumption. The benchmark workflows assume an AWS role this way.
+- GitHub API access beyond the current workflow's token uses a short-lived token from
+  [octo-sts](https://github.com/octo-sts/app) or a GitHub App, not a personal access token.
+- Everything else uses the workflow's `GITHUB_TOKEN`. Each workflow sets its own `permissions:`,
+  and the repository default is read-only.
+
+### Stored secrets
+
+When a service offers none of these, the credential is stored as a GitHub Actions secret:
+
+- Secrets never go in the repository, container images, build artifacts or logs. Secret scanning
+  and push protection are on for wasmCloud's repositories.
+- Each secret has the narrowest scope that works: one repository, or a deployment environment
+  restricted to `main` and release tags for secrets that publish or release. An organization
+  secret is shared only with the repositories that use it.
+- Only org maintainers and repository admins can create, update or delete secrets. Anyone with
+  write access can run a workflow that reads repository secrets, so write access follows
+  [Granting Access](CONTRIBUTION_LADDER.md#granting-access).
+- Org maintainers keep a private record of each secret: what it is for, who owns it, and when it
+  was last rotated. A secret no workflow uses is deleted.
+
+### Rotation
+
+A secret is rotated:
+
+- Immediately, if it may have been exposed.
+- When someone who held its value, or an org maintainer or repository admin, loses that access.
+- At least once a year, for any credential that doesn't expire on its own.

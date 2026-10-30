@@ -11,6 +11,7 @@
   - [Org Maintainer](#org-maintainer)
     - [How to become an org maintainer](#how-to-become-an-org-maintainer)
   - [Emeritus Maintainers](#emeritus-maintainers)
+  - [Granting Access](#granting-access)
 ---
 
 A contribution ladder defines the path to becoming a maintainer of one or more wasmCloud projects.
@@ -130,3 +131,18 @@ the nomination process described in [GOVERNANCE.md](./GOVERNANCE.md).
 Any maintainer (org or project) who withdraws from active maintainership will be recognized as an
 Emeritus Maintainer as a thank you for their contributions. They have no ongoing responsibilities
 but remain permanently on record as former maintainers unless they request to be removed.
+
+## Granting Access
+
+Escalated access is granted only after review. Escalated access means write, maintain or admin
+access to a repository, ownership of the GitHub organization, access to secrets or deployment
+environments, and permission to publish releases or packages.
+
+- No one receives escalated access until the PR that approves their role, as described above, has
+  merged into [MAINTAINERS.md](./MAINTAINERS.md).
+- After that merge, an org maintainer grants the access. The account must be the one with the
+  person's contribution history in the project, and the access must be the lowest level the role
+  needs.
+- When a maintainer becomes emeritus, an org maintainer removes their escalated access.
+- Org maintainers review who holds escalated access once a year, and remove any access the role no
+  longer needs.
