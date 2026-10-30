@@ -88,7 +88,10 @@ jobs:
     permissions:
       contents: write
       packages: write
-      # For release attestations and keyless tag signing.
+      # The canary wait and binary download read workflow runs and artifacts.
+      actions: read
+      # For release attestations, keyless tag signing and the octo-sts
+      # release-tag token.
       id-token: write
       attestations: write
       # actions/attest writes an org-level artifact storage record in
@@ -103,9 +106,9 @@ jobs:
           # workflow_run / workflow_dispatch without a sha → main HEAD.
           # workflow_dispatch with sha → that exact release commit (recovery).
           ref: ${{ inputs.sha || 'main' }}
-          # PAT so the tag push triggers the downstream tag-listening workflows.
-          token: ${{ secrets.WASMCLOUD_BOT_PAT }}
-          persist-credentials: true
+          # The tag pushes authenticate with the octo-sts token minted just
+          # before them, so no credentials are left in .git/config.
+          persist-credentials: false
           fetch-depth: 0
 
       - name: Set up gitsign
@@ -173,7 +176,7 @@ jobs:
 
       - name: Wait for canary builds on the merge commit
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
         run: |
           set -euo pipefail
@@ -248,7 +251,7 @@ jobs:
       - name: Download canary-binaries artifacts from wash.yml run
         id: bins
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -453,10 +456,21 @@ jobs:
       - name: Check every SBOM is attested
         run: node .github/scripts/release-sboms.mjs check-attested
 
+      # An app token (not GITHUB_TOKEN) so the tag pushes and the GitHub
+      # Release trigger the downstream workflows. It expires after an hour,
+      # so it is minted here, after the long canary wait.
+      - name: Get a release-tag token from octo-sts
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: ${{ github.repository }}
+          identity: release-tag
+
       - name: Push immutable release tag
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
+          PUSH_TOKEN: ${{ steps.octo-sts.outputs.token }}
         run: |
           set -euo pipefail
           echo "STAGE=push-tag" >> "${GITHUB_ENV}"
@@ -471,12 +485,13 @@ jobs:
             --certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "${TAG}"
-          git push origin "${TAG}"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${TAG}"
 
       - name: Push runtime-operator Go module tag
         env:
           TAG: ${{ steps.ver.outputs.tag }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
+          PUSH_TOKEN: ${{ steps.octo-sts.outputs.token }}
         run: |
           set -euo pipefail
           echo "STAGE=go-module-tag" >> "${GITHUB_ENV}"
@@ -494,7 +509,7 @@ jobs:
             --certificate-identity "${GITHUB_SERVER_URL}/${GITHUB_WORKFLOW_REF}" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "${GO_TAG}"
-          git push origin "${GO_TAG}"
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${GO_TAG}"
 
       - name: Generate release notes
         # Picks the previous wasmCloud release tag and pins it as
@@ -504,7 +519,7 @@ jobs:
         # Body is written to release-notes.md and passed via body_path
         # below. See .github/scripts/generate-release-notes.mjs.
         env:
-          GH_TOKEN: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ver.outputs.tag }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
         run: node .github/scripts/generate-release-notes.mjs
@@ -536,7 +551,7 @@ jobs:
           body_path: release-notes.md
           files: |
             ./artifacts/*/*
-          token: ${{ secrets.WASMCLOUD_BOT_PAT }}
+          token: ${{ steps.octo-sts.outputs.token }}
           prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
           fail_on_unmatched_files: true
 

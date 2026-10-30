@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/octo-sts/app/refs/heads/main/pkg/octosts/octosts.TrustPolicy.json
+
+issuer: https://token.actions.githubusercontent.com
+subject: repo:wasmCloud/wasmCloud:ref:refs/heads/main
+claim_pattern:
+  job_workflow_ref: wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main
+
+# Push the vX.Y.Z and runtime-operator/vX.Y.Z tags and create the GitHub
+# Release. An app token, unlike GITHUB_TOKEN, lets the tag push and the
+# release event trigger the downstream workflows.
+permissions:
+  contents: write
