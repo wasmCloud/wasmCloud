@@ -477,3 +477,118 @@ async fn outer_context_preserves_the_callers_trace_identity() {
     assert!(actual.is_remote);
     assert_eq!(actual.trace_state, expected.trace_state);
 }
+
+fn sums(
+    temporality: m::Temporality,
+    start_seconds: u64,
+    requests: u64,
+    in_flight: i64,
+) -> m::ResourceMetrics {
+    let sum =
+        |name: &str, value: m::MetricNumber, is_monotonic: bool, data: fn(m::Sum) -> _| m::Metric {
+            name: name.into(),
+            description: String::new(),
+            unit: String::new(),
+            data: data(m::Sum {
+                data_points: vec![m::SumDataPoint {
+                    attributes: attributes(),
+                    value,
+                    exemplars: vec![],
+                }],
+                start_time: Datetime {
+                    seconds: start_seconds,
+                    nanoseconds: 0,
+                },
+                time: time(),
+                temporality,
+                is_monotonic,
+            }),
+        };
+    m::ResourceMetrics {
+        resource: types::Resource {
+            attributes: vec![],
+            schema_url: None,
+        },
+        scope_metrics: vec![m::ScopeMetrics {
+            scope: scope(),
+            metrics: vec![
+                sum(
+                    "requests",
+                    m::MetricNumber::U64(requests),
+                    true,
+                    m::MetricData::U64Sum,
+                ),
+                sum(
+                    "in-flight",
+                    m::MetricNumber::S64(in_flight),
+                    false,
+                    m::MetricData::S64Sum,
+                ),
+            ],
+        }],
+    }
+}
+
+/// The instruments' totals after each export in `exports`, in order.
+async fn totals_after(exports: Vec<m::ResourceMetrics>) -> Vec<(f64, f64)> {
+    let exporter = InMemoryMetricExporter::default();
+    let plugin = Arc::new(WasiOtel::default());
+    *plugin.meter_provider.write().await = Some(
+        SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build(),
+    );
+    let mut shared = context(Some(plugin));
+    let mut ctx = extract_active_ctx(&mut shared);
+    let mut totals = Vec::new();
+    for export in exports {
+        m::Host::export(&mut ctx, export).await.unwrap().unwrap();
+        let finished = exporter.get_finished_metrics().unwrap();
+        let points = f64_points(&finished[finished.len() - 1..]);
+        totals.push((points["requests"].1, points["in-flight"].1));
+    }
+    totals
+}
+
+#[tokio::test]
+async fn repeated_cumulative_exports_add_only_their_growth() {
+    use m::Temporality::Cumulative;
+    let totals = totals_after(vec![
+        sums(Cumulative, 1, 3, -2),
+        sums(Cumulative, 1, 3, -2),
+        sums(Cumulative, 1, 5, -1),
+    ])
+    .await;
+    assert_eq!(totals, [(3.0, -2.0), (3.0, -2.0), (5.0, -1.0)]);
+}
+
+#[tokio::test]
+async fn each_instances_cumulative_series_counts_separately() {
+    use m::Temporality::Cumulative;
+    let totals = totals_after(vec![
+        sums(Cumulative, 1, 3, 1),
+        sums(Cumulative, 2, 1, 1),
+        sums(Cumulative, 1, 4, 1),
+    ])
+    .await;
+    assert_eq!(totals, [(3.0, 1.0), (4.0, 2.0), (5.0, 2.0)]);
+}
+
+#[tokio::test]
+async fn a_monotonic_total_that_falls_restarted_from_zero() {
+    use m::Temporality::Cumulative;
+    let totals = totals_after(vec![sums(Cumulative, 1, 5, 0), sums(Cumulative, 1, 2, 0)]).await;
+    assert_eq!(totals, [(5.0, 0.0), (7.0, 0.0)]);
+}
+
+#[tokio::test]
+async fn delta_exports_add_every_value() {
+    for temporality in [m::Temporality::Delta, m::Temporality::LowMemory] {
+        let totals = totals_after(vec![
+            sums(temporality, 1, 3, -2),
+            sums(temporality, 1, 3, -2),
+        ])
+        .await;
+        assert_eq!(totals, [(3.0, -2.0), (6.0, -4.0)]);
+    }
+}

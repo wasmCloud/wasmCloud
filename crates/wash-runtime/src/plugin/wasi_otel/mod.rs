@@ -81,9 +81,29 @@ struct ComponentContext {
     current_span_context: Option<SpanContext>,
 }
 
+/// Identifies one running total a guest reports. A guest instance's totals
+/// restart with a new start time, so each instance's series stays separate
+/// even when instances report concurrently.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct CumulativeSeries {
+    workload_id: Arc<str>,
+    component_id: Arc<str>,
+    scope: String,
+    name: String,
+    attributes: Vec<(String, String)>,
+    start: (u64, u32),
+}
+
+/// Bounds the totals remembered for per-request instances, which never report
+/// again. A series evicted while live re-adds its total on its next export.
+const MAX_CUMULATIVE_SERIES: u64 = 65_536;
+const CUMULATIVE_SERIES_IDLE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
 /// WASI OpenTelemetry Plugin
 pub struct WasiOtel {
     config: WasiOtelConfig,
+    /// The last total seen for each guest series, to turn totals into increments.
+    cumulative_totals: moka::sync::Cache<CumulativeSeries, f64>,
     tracker: Arc<RwLock<WorkloadTracker<(), ComponentContext>>>,
     /// Meter provider for metrics export
     meter_provider: Arc<RwLock<Option<SdkMeterProvider>>>,
@@ -95,10 +115,47 @@ impl Default for WasiOtel {
     fn default() -> Self {
         Self {
             config: WasiOtelConfig::default(),
+            cumulative_totals: moka::sync::Cache::builder()
+                .max_capacity(MAX_CUMULATIVE_SERIES)
+                .time_to_idle(CUMULATIVE_SERIES_IDLE)
+                .build(),
             tracker: Arc::new(RwLock::new(WorkloadTracker::default())),
             meter_provider: Arc::new(RwLock::new(None)),
             tracer_provider: Arc::new(RwLock::new(None)),
             logger_provider: Arc::new(RwLock::new(None)),
+        }
+    }
+}
+
+impl WasiOtel {
+    /// What to add to the host's instrument for `counter`, whose SDK treats
+    /// every `add` as an increment: a delta as it is, a total as its growth.
+    fn counter_increment(
+        &self,
+        workload_id: &Arc<str>,
+        component_id: &Arc<str>,
+        counter: &convert::CounterValue,
+    ) -> f64 {
+        let Some(start) = counter.series_start else {
+            return counter.value;
+        };
+        let mut attributes = counter.attributes.clone();
+        attributes.sort();
+        let series = CumulativeSeries {
+            workload_id: workload_id.clone(),
+            component_id: component_id.clone(),
+            scope: counter.scope.clone(),
+            name: counter.name.clone(),
+            attributes,
+            start,
+        };
+        let previous = self.cumulative_totals.get(&series).unwrap_or(0.0);
+        self.cumulative_totals.insert(series, counter.value);
+        let growth = counter.value - previous;
+        if counter.is_monotonic && growth < 0.0 {
+            counter.value
+        } else {
+            growth
         }
     }
 }
@@ -341,18 +398,23 @@ impl<'a> bindings::wasi::otel::metrics::Host for ActiveCtx<'a> {
                 }
 
                 // Record counter values
-                for (name, value, is_monotonic, attrs) in extract_counter_values(&resource_metrics)
-                {
-                    let kv_attrs: Vec<KeyValue> = attrs
+                for counter in extract_counter_values(&resource_metrics) {
+                    let increment = plugin.counter_increment(
+                        &self.ctx.workload_id,
+                        &self.ctx.component_id,
+                        &counter,
+                    );
+                    let kv_attrs: Vec<KeyValue> = counter
+                        .attributes
                         .into_iter()
                         .map(|(k, v)| KeyValue::new(k, v))
                         .collect();
-                    if is_monotonic {
-                        let counter = meter.f64_counter(name).build();
-                        counter.add(value, &kv_attrs);
+                    if counter.is_monotonic {
+                        let instrument = meter.f64_counter(counter.name).build();
+                        instrument.add(increment, &kv_attrs);
                     } else {
-                        let up_down = meter.f64_up_down_counter(name).build();
-                        up_down.add(value, &kv_attrs);
+                        let instrument = meter.f64_up_down_counter(counter.name).build();
+                        instrument.add(increment, &kv_attrs);
                     }
                 }
 
