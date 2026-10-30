@@ -42,7 +42,9 @@ const (
 // WorkloadDaemonSetReconciler reconciles a WorkloadDaemonSet object
 type WorkloadDaemonSetReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader reads past the cache, for decisions a stale read would get wrong.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 	// OperatorNamespace is the namespace every Host CRD lives in.
 	OperatorNamespace string
 	// AllowSharedHosts has the same meaning as on WorkloadReconciler.
@@ -78,6 +80,11 @@ func (h *daemonSetHost) readyCurrent() int32 {
 }
 
 func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, daemonSet *runtimev1alpha1.WorkloadDaemonSet) error {
+	// The garbage collector is removing or orphaning this DaemonSet's Workloads.
+	if !daemonSet.DeletionTimestamp.IsZero() {
+		return condition.ErrNoop()
+	}
+
 	if !daemonSet.Status.AllTrue(runtimev1alpha1.WorkloadDaemonSetConditionArtifact) {
 		return condition.ErrStatusUnknown(fmt.Errorf("artifacts not ready"))
 	}
@@ -104,6 +111,11 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	); err != nil {
 		return err
 	}
+	orphans, err := r.adoptOrphans(ctx, daemonSet)
+	if err != nil {
+		return err
+	}
+	workloads.Items = append(workloads.Items, orphans...)
 
 	hosts := make(map[string]*daemonSetHost, len(desired))
 	for hostID, since := range readySince {
@@ -391,34 +403,79 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 	if !apierrors.IsAlreadyExists(err) {
 		return workload, err
 	}
-	return r.adoptWorkload(ctx, daemonSet, name)
+	return r.existingInstance(ctx, daemonSet, name)
 }
 
-// adoptWorkload resolves a create that hit an existing name: ours is used
-// as-is, an orphan (e.g. from --cascade=orphan) is adopted, and one another
-// controller owns is an error.
-func (r *WorkloadDaemonSetReconciler) adoptWorkload(
+// existingInstance resolves a create that hit an existing name. It reads past
+// the cache, which may not hold this DaemonSet's own create yet. Anything this
+// DaemonSet doesn't control is holding the slot, which is an error.
+func (r *WorkloadDaemonSetReconciler) existingInstance(
 	ctx context.Context,
 	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
 	name string,
 ) (*runtimev1alpha1.Workload, error) {
 	existing := &runtimev1alpha1.Workload{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: daemonSet.Namespace, Name: name}, existing); err != nil {
+	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: daemonSet.Namespace, Name: name}, existing); err != nil {
 		return nil, err
 	}
-	if owner := metav1.GetControllerOf(existing); owner != nil {
-		if owner.UID == daemonSet.UID {
-			return existing, nil
-		}
-		return nil, fmt.Errorf("workload %s is controlled by %s %s", name, owner.Kind, owner.Name)
-	}
-	if err := controllerutil.SetControllerReference(daemonSet, existing, r.Scheme); err != nil {
-		return nil, err
-	}
-	if err := r.Update(ctx, existing); err != nil {
-		return nil, err
+	if owner := metav1.GetControllerOf(existing); owner == nil || owner.UID != daemonSet.UID {
+		return nil, fmt.Errorf("workload %s already exists and this WorkloadDaemonSet does not control it", name)
 	}
 	return existing, nil
+}
+
+// adoptOrphans takes over the Workloads that carry this DaemonSet's label but
+// have no controller, such as those --cascade=orphan left behind, so they roll,
+// scale and leave like any other instance. It returns them for this pass.
+func (r *WorkloadDaemonSetReconciler) adoptOrphans(
+	ctx context.Context,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+) ([]runtimev1alpha1.Workload, error) {
+	labelled := &runtimev1alpha1.WorkloadList{}
+	if err := r.List(ctx, labelled,
+		client.InNamespace(daemonSet.Namespace),
+		client.MatchingLabels{workloadDaemonSetNameLabel: ownerLabelValue(daemonSet.Name)},
+	); err != nil {
+		return nil, err
+	}
+	orphans := labelled.Items[:0]
+	for i := range labelled.Items {
+		if metav1.GetControllerOf(&labelled.Items[i]) == nil {
+			orphans = append(orphans, labelled.Items[i])
+		}
+	}
+	if len(orphans) == 0 {
+		return nil, nil
+	}
+
+	// Deleting a DaemonSet is what orphans its Workloads, and the cached copy
+	// may not show that delete yet.
+	latest := &runtimev1alpha1.WorkloadDaemonSet{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(daemonSet), latest); client.IgnoreNotFound(err) != nil {
+		return nil, err
+	}
+	if latest.UID != daemonSet.UID || !latest.DeletionTimestamp.IsZero() {
+		return nil, condition.ErrNoop()
+	}
+
+	adopted := orphans[:0]
+	for i := range orphans {
+		workload := &orphans[i]
+		if workload.DeletionTimestamp.IsZero() {
+			base := workload.DeepCopy()
+			if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
+				return nil, err
+			}
+			if err := r.Patch(ctx, workload, client.MergeFrom(base)); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return nil, err
+			}
+		}
+		adopted = append(adopted, *workload)
+	}
+	return adopted, nil
 }
 
 func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads []*runtimev1alpha1.Workload) error {

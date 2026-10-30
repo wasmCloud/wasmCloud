@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -88,6 +90,7 @@ func newDaemonSetReconciler(t *testing.T, objs ...client.Object) *WorkloadDaemon
 
 	return &WorkloadDaemonSetReconciler{
 		Client:            c,
+		APIReader:         c,
 		Scheme:            s,
 		OperatorNamespace: testNamespace,
 		AllowSharedHosts:  true,
@@ -173,12 +176,26 @@ func TestDaemonSetSchedule_RunsReplicasOnEveryMatchingHost(t *testing.T) {
 	}
 }
 
+// staleCacheClient reads like an informer cache that holds no Workloads yet.
+type staleCacheClient struct {
+	client.Client
+}
+
+func (c staleCacheClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*runtimev1alpha1.Workload); ok {
+		return apierrors.NewNotFound(schema.GroupResource{Group: "runtime.wasmcloud.dev", Resource: "workloads"}, key.Name)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
 // A reconcile that runs before the cache holds the last pass's creates
-// collides with them by name instead of starting a second set.
+// collides with them by name instead of starting a second set, and the
+// collision is not an error even though the cache can't find them either.
 func TestDaemonSetSchedule_StaleCacheDoesNotDuplicate(t *testing.T) {
 	ds := testDaemonSet(2)
 	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA))
 	schedule(t, r, ds)
+	r.Client = staleCacheClient{Client: r.Client}
 
 	template := ds.Spec.Template.DeepCopy()
 	host := &daemonSetHost{}
@@ -186,20 +203,42 @@ func TestDaemonSetSchedule_StaleCacheDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("syncHost with a stale view: %v", err)
 	}
 
+	if len(host.current) != 2 {
+		t.Fatalf("expected the 2 existing instances counted, got %d", len(host.current))
+	}
 	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 2})
 }
 
-// A Workload left behind by --cascade=orphan holds a slot's name. The
-// re-created DaemonSet adopts it instead of counting a local copy.
+// orphanedWorkload is what --cascade=orphan leaves: an instance with the
+// DaemonSet's label and no controller.
+func orphanedWorkload(name, hostID, generation string) *runtimev1alpha1.Workload {
+	return &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   testDaemonSetNamespace,
+			Name:        name,
+			Labels:      map[string]string{workloadDaemonSetNameLabel: testDaemonSetName},
+			Annotations: map[string]string{workloadDaemonSetGenerationAnnotation: generation},
+		},
+		Spec: runtimev1alpha1.WorkloadSpec{HostID: hostID},
+	}
+}
+
+// otherControllerRef makes a Workload belong to something other than the DaemonSet.
+func otherControllerRef() metav1.OwnerReference {
+	controller := true
+	return metav1.OwnerReference{
+		APIVersion: runtimev1alpha1.GroupVersion.String(),
+		Kind:       "WorkloadReplicaSet",
+		Name:       "another-replicaset",
+		UID:        "another-uid",
+		Controller: &controller,
+	}
+}
+
 func TestDaemonSetSchedule_AdoptsOrphanInSlot(t *testing.T) {
 	ds := testDaemonSet(1)
-	orphan := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: testDaemonSetNamespace,
-			Name:      daemonSetWorkloadName(testDaemonSetName, dsHostA, ds.Spec.Template.Hash(), 0),
-		},
-		Spec: runtimev1alpha1.WorkloadSpec{HostID: dsHostA},
-	}
+	hash := ds.Spec.Template.Hash()
+	orphan := orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
 	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
 
 	schedule(t, r, ds)
@@ -211,20 +250,185 @@ func TestDaemonSetSchedule_AdoptsOrphanInSlot(t *testing.T) {
 	}
 }
 
-func TestDaemonSetSchedule_SlotOwnedByAnotherControllerFails(t *testing.T) {
+// An orphan of an older template has a name no create collides with. It
+// rolls like any other outdated instance.
+func TestDaemonSetSchedule_OrphanOfOldTemplateRolls(t *testing.T) {
 	ds := testDaemonSet(1)
-	controller := true
-	foreign := &runtimev1alpha1.Workload{
+	orphan := orphanedWorkload("echo-everywhere-old-0", dsHostA, "old-template")
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
+
+	schedule(t, r, ds)
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 2})
+
+	markAllAvailable(t, r)
+	schedule(t, r, ds)
+
+	byHost := workloadsByHost(t, r)
+	assertPerHost(t, byHost, map[string]int{dsHostA: 1})
+	if byHost[dsHostA][0].Name == orphan.Name {
+		t.Fatalf("expected the old-template orphan replaced, got %s", orphan.Name)
+	}
+}
+
+// A re-apply with a lower replicasPerHost leaves orphans in slots it won't fill.
+func TestDaemonSetSchedule_ExcessOrphansAreRemoved(t *testing.T) {
+	ds := testDaemonSet(1)
+	hash := ds.Spec.Template.Hash()
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA),
+		orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash),
+		orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 1), dsHostA, hash),
+	)
+
+	schedule(t, r, ds)
+
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 1})
+	labelled := &runtimev1alpha1.WorkloadList{}
+	if err := r.List(context.Background(), labelled, client.InNamespace(testDaemonSetNamespace)); err != nil {
+		t.Fatalf("list workloads: %v", err)
+	}
+	if len(labelled.Items) != 1 {
+		t.Fatalf("expected the excess orphan removed, got %d workloads", len(labelled.Items))
+	}
+}
+
+func TestDaemonSetSchedule_OrphanOnLeftHostIsRemoved(t *testing.T) {
+	ds := testDaemonSet(1)
+	orphan := orphanedWorkload("echo-everywhere-gone-0", dsHostB, ds.Spec.Template.Hash())
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
+
+	schedule(t, r, ds)
+
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 1})
+	err := r.Get(context.Background(), client.ObjectKeyFromObject(orphan), &runtimev1alpha1.Workload{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected the orphan on a departed host removed, got %v", err)
+	}
+}
+
+// An orphan already being deleted isn't adopted, and its name stays taken.
+func TestDaemonSetSchedule_TerminatingOrphanHoldsItsSlot(t *testing.T) {
+	ds := testDaemonSet(1)
+	hash := ds.Spec.Template.Hash()
+	orphan := orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
+	now := metav1.Now()
+	orphan.DeletionTimestamp = &now
+	orphan.Finalizers = []string{"example.com/hold"}
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
+
+	schedule(t, r, ds)
+
+	byHost := workloadsByHost(t, r)
+	assertPerHost(t, byHost, map[string]int{dsHostA: 1})
+	if byHost[dsHostA][0].Name != daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 1) {
+		t.Fatalf("expected the next slot used, got %s", byHost[dsHostA][0].Name)
+	}
+}
+
+// Deleting with --cascade=orphan orphans the Workloads while the DaemonSet is
+// still there, and the cached copy may not show the delete yet. Adopting them
+// back, or starting more, would undo what the delete asked for.
+func TestDaemonSetSchedule_DeletingDaemonSetLeavesOrphans(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		staleCached bool
+	}{
+		{name: "cached copy shows the delete"},
+		{name: "cached copy predates the delete", staleCached: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := testDaemonSet(1)
+			now := metav1.Now()
+			ds.DeletionTimestamp = &now
+			ds.Finalizers = []string{"orphan"}
+			hash := ds.Spec.Template.Hash()
+			orphan := orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
+			r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
+
+			seen := ds.DeepCopy()
+			if tc.staleCached {
+				seen.DeletionTimestamp = nil
+			}
+			if err := r.reconcileSchedule(context.Background(), seen); !errors.Is(err, condition.ErrNoop()) {
+				t.Fatalf("expected a no-op, got %v", err)
+			}
+
+			got := &runtimev1alpha1.Workload{}
+			if err := r.Get(context.Background(), client.ObjectKeyFromObject(orphan), got); err != nil {
+				t.Fatalf("get orphan: %v", err)
+			}
+			if owner := metav1.GetControllerOf(got); owner != nil {
+				t.Fatalf("expected the orphan left alone, got owner %s", owner.Name)
+			}
+			assertPerHost(t, workloadsByHost(t, r), map[string]int{})
+		})
+	}
+}
+
+// A foreground delete is waiting on these Workloads to go, so none may start.
+func TestDaemonSetSchedule_DeletingDaemonSetStartsNothing(t *testing.T) {
+	ds := testDaemonSet(1)
+	now := metav1.Now()
+	ds.DeletionTimestamp = &now
+	ds.Finalizers = []string{"foregroundDeletion"}
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA))
+
+	if err := r.reconcileSchedule(context.Background(), ds); !errors.Is(err, condition.ErrNoop()) {
+		t.Fatalf("expected a no-op, got %v", err)
+	}
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{})
+}
+
+// Without the DaemonSet's label a Workload isn't an orphan of it, so one that
+// happens to hold a slot's name is an error rather than taken over.
+func TestDaemonSetSchedule_UnlabelledSlotHolderFails(t *testing.T) {
+	ds := testDaemonSet(1)
+	holder := &runtimev1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: testDaemonSetNamespace,
 			Name:      daemonSetWorkloadName(testDaemonSetName, dsHostA, ds.Spec.Template.Hash(), 0),
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: runtimev1alpha1.GroupVersion.String(),
-				Kind:       "WorkloadReplicaSet",
-				Name:       "someone-else",
-				UID:        "other-uid",
-				Controller: &controller,
-			}},
+		},
+		Spec: runtimev1alpha1.WorkloadSpec{HostID: dsHostA},
+	}
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), holder)
+
+	if err := r.reconcileSchedule(context.Background(), ds); err == nil {
+		t.Fatal("expected an error for a slot held by an unlabelled Workload")
+	}
+	got := &runtimev1alpha1.Workload{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(holder), got); err != nil {
+		t.Fatalf("get holder: %v", err)
+	}
+	if metav1.GetControllerOf(got) != nil {
+		t.Fatal("expected the unlabelled Workload left alone")
+	}
+}
+
+// A Workload another controller owns is not an orphan, even with the label.
+func TestDaemonSetSchedule_LeavesLabelledWorkloadOfAnotherController(t *testing.T) {
+	ds := testDaemonSet(1)
+	other := orphanedWorkload("echo-everywhere-other-0", dsHostA, ds.Spec.Template.Hash())
+	other.OwnerReferences = []metav1.OwnerReference{otherControllerRef()}
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), other)
+
+	schedule(t, r, ds)
+
+	got := &runtimev1alpha1.Workload{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(other), got); err != nil {
+		t.Fatalf("get workload: %v", err)
+	}
+	if owner := metav1.GetControllerOf(got); owner == nil || owner.Name != otherControllerRef().Name {
+		t.Fatalf("expected its owner kept, got %v", owner)
+	}
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 1})
+}
+
+func TestDaemonSetSchedule_SlotOwnedByAnotherControllerFails(t *testing.T) {
+	ds := testDaemonSet(1)
+	foreign := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:       testDaemonSetNamespace,
+			Name:            daemonSetWorkloadName(testDaemonSetName, dsHostA, ds.Spec.Template.Hash(), 0),
+			OwnerReferences: []metav1.OwnerReference{otherControllerRef()},
 		},
 	}
 	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), foreign)
