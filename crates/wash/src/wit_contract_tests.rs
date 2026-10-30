@@ -380,3 +380,93 @@ async fn git_sources_clone_local_repositories_and_find_the_wit_root() -> Result<
     assert!(checkout.0.join(".git").is_dir());
     Ok(())
 }
+
+#[tokio::test]
+async fn namespace_sources_apply_to_the_packages_a_root_names() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    package(dir.path())?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    let config = WitConfig {
+        sources: HashMap::from([("contracttest".to_string(), "./contract".to_string())]),
+        ..Default::default()
+    };
+    fetcher.apply_wit_config(&config, dir.path()).await?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    assert!(root.join("deps/contracttest-api-1.2.3").is_dir());
+    let (name, _, _) = fetcher.build_wit_package(&root, &mut lock).await?;
+    assert_eq!(name.to_string(), "app:root");
+    assert_eq!(
+        fetcher
+            .wkg_config
+            .overrides
+            .as_ref()
+            .map(|overrides| overrides.contains_key("contracttest")),
+        Some(true)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_package_override_takes_precedence_over_its_namespace() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = package(dir.path())?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    let local = |path: PathBuf| wasm_pkg_core::manifest::Override {
+        path: Some(path),
+        version: None,
+    };
+    fetcher.wkg_config.overrides = Some(HashMap::from([
+        ("contracttest".into(), local(dir.path().join("absent"))),
+        ("contracttest:api".into(), local(path)),
+    ]));
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    assert!(root.join("deps/contracttest-api-1.2.3").is_dir());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_path_override_does_not_serve_a_version_it_lacks() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = package(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    fetcher.wkg_config.overrides = Some(HashMap::from([(
+        "contracttest:api".into(),
+        wasm_pkg_core::manifest::Override {
+            path: Some(path),
+            version: None,
+        },
+    )]));
+    let name: PackageRef = "contracttest:api".parse()?;
+    match fetcher.load_package(&name, Some("9.9.9"), None).await {
+        PackageLookup::Missing(message) => {
+            assert!(message.contains("provides version [1.2.3]"), "{message}");
+            assert!(message.contains("requested version [9.9.9]"), "{message}");
+        }
+        PackageLookup::Found(_) => panic!("a version the override lacks was served"),
+        PackageLookup::Failed(error) => panic!("{error:#}"),
+    }
+    match fetcher.load_package(&name, Some("1.2.3"), None).await {
+        PackageLookup::Found(contents) => {
+            assert_eq!(contents.version, Some(semver::Version::new(1, 2, 3)));
+        }
+        PackageLookup::Missing(message) => panic!("{message}"),
+        PackageLookup::Failed(error) => panic!("{error:#}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn the_cache_dir_falls_back_to_the_default_wkg_cache() {
+    let args = CommonPackageArgs {
+        config: None,
+        cache: None,
+    };
+    let expected = std::env::var_os("WKG_CACHE_DIR")
+        .map(PathBuf::from)
+        .or_else(FileCache::global_cache_path);
+    assert_eq!(args.cache_dir().ok(), expected);
+}
