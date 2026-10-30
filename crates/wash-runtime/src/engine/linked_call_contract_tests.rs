@@ -531,7 +531,7 @@ async fn ephemeral_store_recipe_names_missing_components() -> anyhow::Result<()>
         stream_payloads: Arc::clone(engine.stream_payloads()),
         http_handler: crate::host::HostRef::detached(),
         invocation: crate::observability::InvocationMeter::default(),
-        components: Arc::clone(&components),
+        components: Arc::downgrade(&components),
         active_component_id: "ghost".into(),
         linked_component_ids: vec!["missing".into()],
         #[cfg(feature = "wasi-tls")]
