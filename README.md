@@ -88,6 +88,7 @@ wash -V
 ```
 
 For details and options, see the [Installation guide](https://wasmcloud.com/docs/installation).
+Verify downloaded binaries, images, and SBOMs with the [Release verification guide](https://wasmcloud.com/docs/verify-releases).
 
 ### wasmCloud on Kubernetes
 

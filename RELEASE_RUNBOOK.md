@@ -210,17 +210,36 @@ canary digest as `X.Y.Z`, it mints a fresh SLSA provenance attestation against t
 manifest digest, signed via Fulcio, linking that digest to the workflow run, source commit,
 and runner.
 
-Verify any released image with:
-```bash
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/wash:X.Y.Z
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-gateway:X.Y.Z
-gh attestation verify --repo wasmCloud/wasmCloud oci://ghcr.io/wasmcloud/runtime-operator:X.Y.Z
-```
+User-facing verification instructions live in the
+[release verification guide](https://wasmcloud.com/docs/verify-releases). It covers binary
+and container provenance, the expected `release-tag.yml` signer workflow, and SPDX SBOM
+verification. Keep consumer commands there.
 
-Binaries on the GitHub Release have equivalent attestations (verifiable by digest):
-```bash
-gh attestation verify --repo wasmCloud/wasmCloud ./wash
-```
+### Release SBOMs
+
+Before promoting anything, `release-tag.yml` scans the downloaded canary binaries and the
+`linux/amd64` and `linux/arm64` manifests of each image it is about to release, using
+version-pinned Syft (`.github/scripts/release-sboms.mjs`). The shared `setup-syft` action
+uses Anchore's SHA-pinned `download-syft` action to install Syft in the Actions tool cache.
+The binary builds use `cargo-auditable`, and `canary-binaries` checks each binary's embedded
+inventory at build time; the Chainguard Rust builder embeds the same metadata in wash images. No
+binaries or images are rebuilt during promotion.
+
+Each wash target gets an SPDX inventory. The Windows executable and ZIP share an inventory.
+Each image platform gets its own inventory (`<image>-image-linux-<arch>.spdx.json`) and SBOM
+attestation bound to the platform manifest digest, published to GHCR. The index keeps its
+existing build provenance. All SPDX documents and SBOM Sigstore bundles are attached to the
+GitHub Release. Documents are normalized to the release commit time and their download URL, so
+a re-run produces the same bytes.
+
+Missing Rust/Go dependency inventories or unexpected image platforms fail the release before
+any image tag, attestation, or git tag is published. Recovery against older binaries without
+embedded Rust metadata requires new canary artifacts; do not bypass the inventory check. A
+new `canary-binaries` target needs a matching `release-binary-sbom` step; the release fails
+before tagging when one is missing.
+
+Image resolution and promotion live in `.github/scripts/release-images.mjs`. Run the release
+script tests with `node --test .github/scripts/release-*.test.mjs`.
 
 ### Verifying release tags
 

@@ -190,6 +190,7 @@ async fn resource_waits_use_the_same_deadline_and_release_permits() {
             core_instances: 0,
             component_instances: 0,
             stacks: 0,
+            gc_heaps: 0,
         })
         .await
         .unwrap();
@@ -250,6 +251,7 @@ async fn a_store_reserved_after_admission_gives_the_host_permit_back_while_it_wa
             core_instances: 0,
             component_instances: 0,
             stacks: 0,
+            gc_heaps: 0,
         })
         .await
         .unwrap();
@@ -282,4 +284,191 @@ async fn a_store_reserved_after_admission_gives_the_host_permit_back_while_it_wa
     );
     drop(permit);
     assert_eq!(pool_share.available(), pool_share.budget());
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)] // Exercise admission against the raw Wasmtime pool.
+async fn linked_components_reserve_the_complete_store_and_leave_headroom() -> anyhow::Result<()> {
+    let mut pooling = config();
+    pooling
+        .total_memories(12)
+        .total_component_instances(12)
+        .total_stacks(12);
+    let engine = engine(pooling);
+    let caller = wat::parse_str(
+        r#"(component
+      (import "test:callee/api" (instance (export "f" (func))))
+      (core module $m (memory 1)) (core instance (instantiate $m)))"#,
+    )?;
+    let callee = wat::parse_str(
+        r#"(component
+      (core module $m (memory 1) (func (export "f")))
+      (core instance $m (instantiate $m))
+      (func $f (canon lift (core func $m "f")))
+      (instance $api (export "f" (func $f))) (export "test:callee/api" (instance $api)))"#,
+    )?;
+    let unresolved = engine.initialize_workload(
+        "linked",
+        crate::types::Workload {
+            name: "linked".into(),
+            namespace: "test".into(),
+            annotations: Default::default(),
+            service: None,
+            volumes: vec![],
+            host_interfaces: vec![],
+            components: vec![
+                crate::types::Component {
+                    name: "caller".into(),
+                    bytes: caller.into(),
+                    ..Default::default()
+                },
+                crate::types::Component {
+                    name: "callee".into(),
+                    bytes: callee.into(),
+                    ..Default::default()
+                },
+            ],
+        },
+    )?;
+    let workload = unresolved
+        .resolve(
+            None,
+            &Default::default(),
+            &crate::host::HostRef::detached(),
+            &Default::default(),
+        )
+        .await?;
+    let components = workload.components();
+    let components = components.read().await;
+    let caller = components.values().find(|c| c.name() == "caller").unwrap();
+    let id = caller.id().to_owned();
+    let pre = caller.pre_instantiate_ref()?;
+    drop(components);
+    let limits = MessagingLimits::resolve(Some(64), None, &engine);
+    let admission = limits
+        .admission(&identity(0), None)
+        .with_workload(&workload, &id)
+        .await?;
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        let permit = unconstrained(admission.acquire(PoolCharge::Reserve))
+            .now_or_never()
+            .flatten()
+            .unwrap();
+        let mut store = workload.new_store(&id).await?;
+        pre.instantiate_async(&mut store).await?;
+        held.push((store, permit));
+    }
+    assert!(
+        unconstrained(admission.acquire(PoolCharge::Reserve))
+            .now_or_never()
+            .is_none()
+    );
+    assert_eq!(engine.pool_usage().unwrap().memories.in_use, 8);
+    // A different trigger can still instantiate while messaging is at its cap.
+    let other = component(&engine, 1, 0, 1);
+    let mut store = Store::new(engine.inner(), ());
+    Linker::new(engine.inner())
+        .instantiate_async(&mut store, &other)
+        .await?;
+    drop(held.pop());
+    let _permit = unconstrained(admission.acquire(PoolCharge::Reserve))
+        .now_or_never()
+        .flatten()
+        .unwrap();
+    let mut replacement = workload.new_store(&id).await?;
+    pre.instantiate_async(&mut replacement).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)] // Exercise admission against the raw Wasmtime pool.
+async fn gc_stores_reserve_heap_backing_memory_and_independent_heap_slots() -> anyhow::Result<()> {
+    for (gc_heaps, admitted) in [(12, 4), (2, 2)] {
+        let mut pooling = config();
+        pooling
+            .total_memories(12)
+            .total_component_instances(12)
+            .total_stacks(12)
+            .total_gc_heaps(gc_heaps)
+            .max_memory_size(4 << 20);
+        let engine = engine(pooling);
+        let bytes = wat::parse_str(
+            r#"(component
+          (core module $m
+            (type $s (struct (field i32)))
+            (memory 1)
+            (global $keep (mut (ref null $s)) (ref.null $s))
+            (func $start i32.const 1 struct.new $s global.set $keep)
+            (start $start))
+          (core instance (instantiate $m)))"#,
+        )?;
+        let unresolved = engine.initialize_workload(
+            "gc",
+            crate::types::Workload {
+                name: "gc".into(),
+                namespace: "test".into(),
+                annotations: Default::default(),
+                service: None,
+                volumes: vec![],
+                host_interfaces: vec![],
+                components: vec![crate::types::Component {
+                    name: "handler".into(),
+                    bytes: bytes.into(),
+                    ..Default::default()
+                }],
+            },
+        )?;
+        let workload = unresolved
+            .resolve(
+                None,
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+            )
+            .await?;
+        let components = workload.components();
+        let components = components.read().await;
+        let handler = components.values().next().unwrap();
+        let id = handler.id().to_owned();
+        let pre = handler.pre_instantiate_ref()?;
+        drop(components);
+        let limits = MessagingLimits::resolve(Some(64), None, &engine);
+        let admission = limits
+            .admission(&identity(0), None)
+            .with_workload(&workload, &id)
+            .await?;
+        let budget = limits.pool.as_ref().unwrap().budget();
+        let mut held = Vec::new();
+        for _ in 0..admitted {
+            let permit = unconstrained(admission.acquire(PoolCharge::Reserve))
+                .now_or_never()
+                .flatten()
+                .unwrap();
+            let mut store = workload.new_store(&id).await?;
+            pre.instantiate_async(&mut store).await?;
+            held.push((store, permit));
+        }
+        assert!(
+            unconstrained(admission.acquire(PoolCharge::Reserve))
+                .now_or_never()
+                .is_none()
+        );
+        let actual = engine.pool_usage().unwrap();
+        assert_eq!(actual.memories.in_use, admitted * 2);
+        assert_eq!(actual.gc_heaps.in_use, admitted);
+        assert!(actual.memories.in_use <= u64::from(budget.memories));
+        assert!(actual.gc_heaps.in_use <= u64::from(budget.gc_heaps));
+        drop(held.pop());
+        let _permit = unconstrained(admission.acquire(PoolCharge::Reserve))
+            .now_or_never()
+            .flatten()
+            .unwrap();
+        let mut replacement = workload.new_store(&id).await?;
+        pre.instantiate_async(&mut replacement).await?;
+        drop(replacement);
+        drop(held);
+        assert_eq!(engine.pool_usage().unwrap().gc_heaps.in_use, 0);
+    }
+    Ok(())
 }

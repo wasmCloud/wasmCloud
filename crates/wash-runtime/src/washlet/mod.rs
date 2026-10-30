@@ -374,6 +374,10 @@ mod nats_auth;
 pub use nats_auth::{AuthHook, NatsAuth};
 
 pub mod types {
+    // Committed generator output, with no handwritten runtime code: the
+    // style, complexity, performance and suspicious groups are the
+    // generator's to answer for. Correctness lints stay on.
+    #[allow(clippy::style, clippy::complexity, clippy::perf, clippy::suspicious)]
     pub mod v2 {
         // Committed output of `cargo xtask generate-protos` — regenerate
         // after changing /proto/wasmcloud/runtime/v2.
