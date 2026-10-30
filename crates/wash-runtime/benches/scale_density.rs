@@ -261,6 +261,8 @@ enum Stop {
     /// max-guest-memory refused growth first: the budget for guest memory
     /// as declared, which warm instances fill before the footprint does.
     GuestBudget { refused: u64 },
+    /// Growth mode's cap on uncharged first allocations was reached.
+    InitialGuestBudget { refused: u64 },
     /// The footprint went [`GUARD_SLACK_PERCENT`] of the limit without the
     /// guard tripping.
     GuardDidNotHold,
@@ -282,6 +284,12 @@ impl std::fmt::Display for Stop {
             }
             Self::GuestBudget { refused } => {
                 write!(f, "max-guest-memory ({refused} growths refused)")
+            }
+            Self::InitialGuestBudget { refused } => {
+                write!(
+                    f,
+                    "max-initial-guest-memory ({refused} allocations refused)"
+                )
             }
             Self::GuardDidNotHold => f.write_str("footprint passed the limit, guard never tripped"),
             Self::StartRefused(message) => write!(f, "start refused: {message}"),
@@ -358,9 +366,10 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let baseline_in_use = pool_baseline.map_or(0, |u| u.core_instances.in_use);
     let memory_refusals_baseline = engine.guest_memory().process_refused();
     let guest_refusals_baseline = engine.guest_memory().refused();
+    let initial_refusals_baseline = engine.guest_memory().initial_refused();
     let pool_refusals_baseline = pool_refusals();
     let ceiling = settings.memory_limit / 100 * GUARD_SLACK_PERCENT;
-    let mut refusals_before = (0, 0, 0, 0);
+    let mut refusals_before = [0; 5];
 
     let run_started = Instant::now();
     let mut steps = Vec::new();
@@ -426,6 +435,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let bytes_per_workload = footprint.saturating_sub(baseline) / started.max(1) as u64;
         let memory_refused = engine.guest_memory().process_refused() - memory_refusals_baseline;
         let guest_refused = engine.guest_memory().refused() - guest_refusals_baseline;
+        let initial_refused = engine.guest_memory().initial_refused() - initial_refusals_baseline;
         let (cpu_now, _) = host_cpu(&load.threads);
         let between = |from: Option<Duration>, to: Option<Duration>| {
             to.zip(from)
@@ -436,20 +446,18 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let sample_cpu_secs = between(cpu_started, cpu_now);
         cpu_before = cpu_now;
         let wall_secs = step_started.elapsed().as_secs_f64().max(f64::EPSILON);
-        let refusals_now = (
+        let refusals_now = [
             memory_refused,
             guest_refused,
+            initial_refused,
             pool_refusals() - pool_refusals_baseline,
             guard.refused_starts(),
-        );
-        let refused_in_step = [
-            refusals_now.0 - refusals_before.0,
-            refusals_now.1 - refusals_before.1,
-            refusals_now.2 - refusals_before.2,
-            refusals_now.3 - refusals_before.3,
-        ]
-        .iter()
-        .sum::<u64>()
+        ];
+        let refused_in_step = refusals_now
+            .iter()
+            .zip(refusals_before)
+            .map(|(now, before)| now - before)
+            .sum::<u64>()
             + u64::from(starts.first_error.is_some());
         refusals_before = refusals_now;
         let served = serving.observe(answered.ok, answered.failed, warm_failed);
@@ -496,6 +504,11 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         if guest_refused > 0 {
             break Stop::GuestBudget {
                 refused: guest_refused,
+            };
+        }
+        if initial_refused > 0 {
+            break Stop::InitialGuestBudget {
+                refused: initial_refused,
             };
         }
         if footprint >= ceiling {
