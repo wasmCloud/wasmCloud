@@ -73,7 +73,6 @@ fn a_built_engine_publishes_its_guest_memory_budget() {
         BTreeSet::from([
             "guest_memory.high_water",
             "guest_memory.in_use",
-            "guest_memory.initial_uncharged",
             "guest_memory.limit",
             "guest_memory.refused",
             "guest_memory.would_refuse",
@@ -93,11 +92,7 @@ fn a_built_engine_publishes_its_guest_memory_budget() {
             value: BUDGET,
         }),
     );
-    for name in [
-        "guest_memory.in_use",
-        "guest_memory.high_water",
-        "guest_memory.initial_uncharged",
-    ] {
+    for name in ["guest_memory.in_use", "guest_memory.high_water"] {
         assert_eq!(
             exported.get(name),
             Some(&Exported {

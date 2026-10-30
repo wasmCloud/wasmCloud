@@ -249,8 +249,8 @@ async fn enforce_mode_refuses_the_growth_that_crosses_the_budget() -> Result<()>
     Ok(())
 }
 
-/// Growth mode, end to end: the memory each warm instance is born with is
-/// admitted without a charge, and growth past it is enforced exactly as in
+/// Growth mode, end to end: a small initial memory, as this fixture declares,
+/// is admitted without a charge, and growth past it is enforced exactly as in
 /// `Enforce`. This is the path the unit tests cannot see: the engine's
 /// budget and the limiter installed on the stores the host builds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -260,8 +260,8 @@ async fn growth_mode_leaves_initial_memory_uncharged_and_enforces_growth() -> Re
     let client = reqwest::Client::new();
     assert_eq!(
         budget.initial_cap(),
-        Some(budget.cap() * wash_runtime::engine::guest_memory::DEFAULT_INITIAL_OVERCOMMIT),
-        "an engine bounds uncharged initial memory unless told not to"
+        budget.cap() * wash_runtime::engine::guest_memory::DEFAULT_INITIAL_OVERCOMMIT,
+        "an engine bounds uncharged initial memory unless told otherwise"
     );
 
     for name in ["grow-a", "grow-b"] {
@@ -279,8 +279,8 @@ async fn growth_mode_leaves_initial_memory_uncharged_and_enforces_growth() -> Re
         },
         "the first guest is comfortably inside the budget"
     );
-    // A warm instance now exists, born with the fixture's declared memory:
-    // that birth is what growth mode leaves to the process guard.
+    // A warm instance now exists, born with the fixture's declared memory,
+    // which is under the uncharged threshold.
     assert!(
         budget.initial_uncharged() > 0,
         "the instance's initial memory must be admitted uncharged"
