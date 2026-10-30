@@ -182,6 +182,51 @@ func TestReconcileScale_PredecessorReplicaSetIsNotCounted(t *testing.T) {
 	}
 }
 
+// A Deployment being deleted starts and removes nothing: its ReplicaSets are the
+// garbage collector's, and --cascade=orphan means to keep them. Its status still
+// follows what is left, and it stops being Ready as the delete starts.
+func TestDeployment_DeleteChangesNothing(t *testing.T) {
+	wd := readyDeployment("")
+	now := metav1.Now()
+	wd.DeletionTimestamp = &now
+	wd.Finalizers = []string{metav1.FinalizerDeleteDependents}
+	// Sync is not True once the current ReplicaSet is gone, which is what makes
+	// reconcileDeploy want a new one.
+	wd.Status.SetConditions(condition.UnknownCondition(runtimev1alpha1.WorkloadDeploymentConditionSync, "Reconcile", "current ReplicaSet not found"))
+	wd.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact))
+	other := availableReplicaSet("older-rs")
+	r := newScaleReconciler(t, wd, other)
+	ctx := context.Background()
+
+	if err := r.reconcileDeploy(ctx, wd); !errors.Is(err, condition.ErrNoop()) {
+		t.Fatalf("reconcileDeploy: expected a no-op, got %v", err)
+	}
+	if err := r.reconcileScale(ctx, wd); !errors.Is(err, condition.ErrNoop()) {
+		t.Fatalf("reconcileScale: expected a no-op, got %v", err)
+	}
+
+	replicaSets := &runtimev1alpha1.WorkloadReplicaSetList{}
+	if err := r.List(ctx, replicaSets); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(replicaSets.Items) != 1 || replicaSets.Items[0].Name != other.Name {
+		t.Fatalf("expected the ReplicaSets unchanged, got %d", len(replicaSets.Items))
+	}
+	if wd.Status.Replicas == nil || wd.Status.Replicas.Current != testReplicas {
+		t.Fatalf("expected the status to follow what is left, got %+v", wd.Status.Replicas)
+	}
+
+	// Everything else may still read as fine at the start of a delete.
+	wd.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionSync),
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionDeploy),
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionScale),
+	)
+	if err := r.reconcileReady(ctx, wd); !condition.IsStatusUnknown(err) {
+		t.Fatalf("reconcileReady: expected Unknown, got %v", err)
+	}
+}
+
 // Regression coverage for reconcileScale used to return nil on a fresh
 // deploy regardless of whether the active ReplicaSet had any running
 // workloads, which propagated up to Ready=True before the workload had
