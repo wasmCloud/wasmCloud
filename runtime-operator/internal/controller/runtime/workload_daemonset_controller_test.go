@@ -214,10 +214,13 @@ func TestDaemonSetSchedule_StaleCacheDoesNotDuplicate(t *testing.T) {
 func orphanedWorkload(name, hostID, generation string) *runtimev1alpha1.Workload {
 	return &runtimev1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace:   testDaemonSetNamespace,
-			Name:        name,
-			Labels:      map[string]string{workloadDaemonSetNameLabel: testDaemonSetName},
-			Annotations: map[string]string{workloadDaemonSetGenerationAnnotation: generation},
+			Namespace: testDaemonSetNamespace,
+			Name:      name,
+			Labels:    map[string]string{workloadDaemonSetNameLabel: testDaemonSetName},
+			Annotations: map[string]string{
+				workloadDaemonSetGenerationAnnotation: generation,
+				workloadDaemonSetNameAnnotation:       testDaemonSetName,
+			},
 		},
 		Spec: runtimev1alpha1.WorkloadSpec{HostID: hostID},
 	}
@@ -360,6 +363,61 @@ func TestDaemonSetSchedule_DeletingDaemonSetLeavesOrphans(t *testing.T) {
 				t.Fatalf("expected the orphan left alone, got owner %s", owner.Name)
 			}
 			assertPerHost(t, workloadsByHost(t, r), map[string]int{})
+		})
+	}
+}
+
+// conflictingPatchClient rejects every patch as coming from a stale read.
+type conflictingPatchClient struct {
+	client.Client
+}
+
+func (c conflictingPatchClient) Patch(_ context.Context, obj client.Object, _ client.Patch, _ ...client.PatchOption) error {
+	return apierrors.NewConflict(schema.GroupResource{Group: "runtime.wasmcloud.dev", Resource: "workloads"}, obj.GetName(), errors.New("stale"))
+}
+
+// An orphan that changed since the cached read may have a new owner, so the
+// pass stops without an error or a new instance and tries again.
+func TestDaemonSetSchedule_AdoptionConflictRetries(t *testing.T) {
+	ds := testDaemonSet(1)
+	hash := ds.Spec.Template.Hash()
+	orphan := orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
+	r.Client = conflictingPatchClient{Client: r.Client}
+
+	if err := r.reconcileSchedule(context.Background(), ds); !errors.Is(err, condition.ErrNoop()) {
+		t.Fatalf("expected a no-op, got %v", err)
+	}
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{})
+}
+
+// The label value of a long name can equal another DaemonSet's whole name, and
+// a copied manifest can carry the label. Neither makes a Workload an orphan of
+// this DaemonSet, so it is left running.
+func TestDaemonSetSchedule_LabelAloneIsNotAdopted(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+	}{
+		{name: "another DaemonSet's instance", annotations: map[string]string{workloadDaemonSetNameAnnotation: "a-longer-name"}},
+		{name: "no DaemonSet annotation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := testDaemonSet(1)
+			other := orphanedWorkload("echo-everywhere-other-0", dsHostB, "other-template")
+			other.Annotations = tc.annotations
+			r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), other)
+
+			schedule(t, r, ds)
+
+			got := &runtimev1alpha1.Workload{}
+			if err := r.Get(context.Background(), client.ObjectKeyFromObject(other), got); err != nil {
+				t.Fatalf("expected the Workload left running: %v", err)
+			}
+			if owner := metav1.GetControllerOf(got); owner != nil {
+				t.Fatalf("expected no owner, got %s", owner.Name)
+			}
+			assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 1})
 		})
 	}
 }
