@@ -45,6 +45,7 @@ pub struct UdpSocket {
     pub hop_limit: u8,
     pub receive_buffer_size: u64,
     pub(crate) receive_permits: Arc<Semaphore>,
+    pub(crate) connection_changed: Arc<tokio::sync::Notify>,
     pub send_buffer_size: u32,
     pub(crate) family: SocketAddressFamily,
     pub(crate) socket_addr_check: Option<SocketAddrCheck>,
