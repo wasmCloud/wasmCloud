@@ -2,7 +2,7 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -41,20 +41,29 @@ pub struct Args {
 }
 
 fn output(command: &mut Command) -> Result<String> {
+    Ok(String::from_utf8(output_bytes(command)?)?.trim().to_owned())
+}
+
+fn output_bytes(command: &mut Command) -> Result<Vec<u8>> {
     let result = command.output()?;
     ensure!(
         result.status.success(),
         "command failed: {}",
         String::from_utf8_lossy(&result.stderr)
     );
-    Ok(String::from_utf8(result.stdout)?.trim().to_owned())
+    Ok(result.stdout)
 }
 
 fn docker(args: &[&str]) -> Result<String> {
     output(Command::new("docker").args(args))
 }
 
-fn build(args: &Args, root: &Path, artifacts: &Path) -> Result<(String, String)> {
+fn build(
+    args: &Args,
+    root: &Path,
+    artifacts: &Path,
+    interrupted: &Receiver<()>,
+) -> Result<(String, String)> {
     let toolchain = fs::read_to_string(root.join("rust-toolchain.toml"))?;
     let version = toolchain
         .lines()
@@ -62,39 +71,48 @@ fn build(args: &Args, root: &Path, artifacts: &Path) -> Result<(String, String)>
         .context("missing pinned Rust channel")?;
     let image = format!("rust:{version}-bookworm");
     eprintln!("building memory_pressure in {image}; the first build can take several minutes");
-    let status = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--memory=8g",
-            "--memory-swap=8g",
-            "--cpus=4",
-            "--mount",
-            &format!("type=bind,src={},dst=/work,readonly", root.display()),
-            "--mount",
-            &format!("type=volume,src={},dst=/target", args.target_volume),
-            "--mount",
-            &format!(
-                "type=volume,src={},dst=/usr/local/cargo/registry",
-                args.registry_volume
-            ),
-            "--workdir=/work",
-            "--env=CARGO_TARGET_DIR=/target",
-            &format!("--env=RUSTUP_TOOLCHAIN={version}"),
-            &image,
-            "cargo",
-            "bench",
-            "--no-run",
-            "--locked",
-            "--no-default-features",
-            "-p",
-            "wash-runtime",
-            "--bench",
-            "memory_pressure",
-            "--message-format=json-render-diagnostics",
-        ])
-        .stdout(File::create(artifacts.join("build.jsonl"))?)
-        .status()?;
+    let cid = artifacts.join("build.cid");
+    let _container = CidFile(cid.clone());
+    let mut process = Process(
+        Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                &format!("--cidfile={}", cid.display()),
+                "--label=wasmcloud.bench=memory_pressure",
+                "--memory=8g",
+                "--memory-swap=8g",
+                "--cpus=4",
+                "--mount",
+                &format!("type=bind,src={},dst=/work,readonly", root.display()),
+                "--mount",
+                &format!("type=volume,src={},dst=/target", args.target_volume),
+                "--mount",
+                &format!(
+                    "type=volume,src={},dst=/usr/local/cargo/registry",
+                    args.registry_volume
+                ),
+                "--workdir=/work",
+                "--env=CARGO_TARGET_DIR=/target",
+                &format!("--env=RUSTUP_TOOLCHAIN={version}"),
+                &image,
+                "cargo",
+                "bench",
+                "--no-run",
+                "--locked",
+                "--no-default-features",
+                "-p",
+                "wash-runtime",
+                "--bench",
+                "memory_pressure",
+                "--message-format=json-render-diagnostics",
+            ])
+            .stdout(File::create(artifacts.join("build.jsonl"))?)
+            .spawn()?,
+    );
+    let Completion::Exited(status) = process.wait(interrupted, None)? else {
+        anyhow::bail!("build timed out");
+    };
     ensure!(status.success(), "pressure benchmark build failed");
     let mut binary = None;
     for line in fs::read_to_string(artifacts.join("build.jsonl"))?.lines() {
@@ -125,6 +143,53 @@ impl Drop for Container {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+    }
+}
+
+struct CidFile(PathBuf);
+
+impl Drop for CidFile {
+    fn drop(&mut self) {
+        if let Ok(id) = fs::read_to_string(&self.0) {
+            let id = id.trim();
+            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                drop(Container(id.to_owned()));
+            }
+        }
+    }
+}
+
+enum Completion {
+    Exited(ExitStatus),
+    TimedOut,
+}
+
+struct Process(Child);
+
+impl Process {
+    fn wait(
+        &mut self,
+        interrupted: &Receiver<()>,
+        timeout: Option<Duration>,
+    ) -> Result<Completion> {
+        let started = Instant::now();
+        loop {
+            ensure!(interrupted.try_recv().is_err(), "pressure run interrupted");
+            if let Some(status) = self.0.try_wait()? {
+                return Ok(Completion::Exited(status));
+            }
+            if timeout.is_some_and(|timeout| started.elapsed() > timeout) {
+                return Ok(Completion::TimedOut);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -173,25 +238,20 @@ fn run_case(
     }
     create.args([image, binary, "--bench"]);
     let container = Container(output(&mut create)?);
-    let mut attached = Command::new("docker")
-        .args(["start", "--attach", &container.0])
-        .stdout(File::create(directory.join("stdout.log"))?)
-        .stderr(File::create(directory.join("stderr.log"))?)
-        .spawn()?;
-    let started = Instant::now();
-    let mut timed_out = false;
-    loop {
-        ensure!(interrupted.try_recv().is_err(), "pressure run interrupted");
-        if attached.try_wait()?.is_some() {
-            break;
-        }
-        if started.elapsed() > Duration::from_secs(args.timeout) {
-            timed_out = true;
-            docker(&["kill", &container.0])?;
-            attached.wait()?;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    let mut attached = Process(
+        Command::new("docker")
+            .args(["start", "--attach", &container.0])
+            .stdout(File::create(directory.join("stdout.log"))?)
+            .stderr(File::create(directory.join("stderr.log"))?)
+            .spawn()?,
+    );
+    let timed_out = matches!(
+        attached.wait(interrupted, Some(Duration::from_secs(args.timeout)))?,
+        Completion::TimedOut
+    );
+    if timed_out {
+        docker(&["kill", &container.0])?;
+        attached.0.wait()?;
     }
     let inspected: Value = serde_json::from_str(&docker(&["inspect", &container.0])?)?;
     let state = inspected
@@ -259,10 +319,13 @@ pub fn run(args: Args) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
+    let shutdown = {
+        let _entered = runtime.enter();
+        termination()?
+    };
     std::thread::spawn(move || {
-        if runtime.block_on(termination()).is_ok() {
-            let _ = cancel.send(());
-        }
+        runtime.block_on(shutdown);
+        let _ = cancel.send(());
     });
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -271,16 +334,22 @@ pub fn run(args: Args) -> Result<()> {
     let target = args.target_dir.canonicalize()?;
     let density = target.join("density");
     fs::create_dir_all(&density)?;
+    let aggregate = density.join("memory_pressure.json");
+    match fs::remove_file(&aggregate) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
     let artifacts = density.join(format!("memory_pressure-{stamp}"));
     fs::create_dir(&artifacts)?;
     eprintln!("pressure artifacts: {}", artifacts.display());
-    let (image, binary) = build(&args, &root, &artifacts)?;
+    let (image, binary) = build(&args, &root, &artifacts, &interrupted)?;
     fs::write(
         artifacts.join("source.patch"),
-        output(
+        output_bytes(
             Command::new("git")
                 .args(["diff", "--binary", "HEAD"])
                 .current_dir(&root),
@@ -317,10 +386,7 @@ pub fn run(args: Args) -> Result<()> {
                             run_case(&args, &artifacts, &image, &binary, &case, &interrupted)?;
                         failed += usize::from(!passed);
                         reports.push(report);
-                        fs::write(
-                            density.join("memory_pressure.json"),
-                            serde_json::to_vec_pretty(&reports)?,
-                        )?;
+                        fs::write(&aggregate, serde_json::to_vec_pretty(&reports)?)?;
                     }
                 }
             }
@@ -339,16 +405,25 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-async fn termination() -> std::io::Result<()> {
+fn termination() -> std::io::Result<impl std::future::Future<Output = ()>> {
     #[cfg(unix)]
     {
+        let mut interrupt =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
         let mut terminate =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => result,
-            _ = terminate.recv() => Ok(()),
-        }
+        Ok(async move {
+            tokio::select! {
+                _ = interrupt.recv() => (),
+                _ = terminate.recv() => (),
+            }
+        })
     }
-    #[cfg(not(unix))]
-    tokio::signal::ctrl_c().await
+    #[cfg(windows)]
+    {
+        let mut interrupt = tokio::signal::windows::ctrl_c()?;
+        Ok(async move {
+            interrupt.recv().await;
+        })
+    }
 }
