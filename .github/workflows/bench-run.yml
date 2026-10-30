@@ -15,6 +15,23 @@ on:
       artifact_id:
         required: true
         type: string
+      # What the run is called, when it is a named variant of `bench`.
+      name:
+        required: false
+        type: string
+        default: ""
+      # Environment variables preset for the bench, as a JSON object of
+      # strings. Comes from the calling workflow's own file, not from input.
+      env:
+        required: false
+        type: string
+        default: "{}"
+      # Whether results may enter the public history (pull-request refs
+      # never do).
+      publish:
+        required: false
+        type: boolean
+        default: true
     secrets:
       aws_role_arn:
         required: true
@@ -33,7 +50,7 @@ permissions: {}
 
 jobs:
   bench:
-    name: ${{ inputs.bench }}
+    name: ${{ inputs.name || inputs.bench }}
     runs-on: [self-hosted, bench, hetzner]
     timeout-minutes: 60
     permissions:
@@ -76,6 +93,23 @@ jobs:
           WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
         run: node .github/scripts/bench-preflight.mjs
 
+      - name: preset environment
+        if: ${{ inputs.env != '{}' }}
+        env:
+          PRESET: ${{ inputs.env }}
+        # Names are environment-variable names and values single lines, so
+        # nothing can end the GITHUB_ENV entry early or set another.
+        run: |
+          node -e '
+            const fs = require("fs");
+            for (const [name, value] of Object.entries(JSON.parse(process.env.PRESET))) {
+              if (!/^[A-Z][A-Z0-9_]*$/.test(name) || typeof value !== "string" || /[\r\n]/.test(value)) {
+                throw new Error(`refusing preset ${name}`);
+              }
+              fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
+              console.log(`${name}=${value}`);
+            }'
+
       - name: run cargo bench
         id: run
         run: ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}"
@@ -94,7 +128,7 @@ jobs:
       - name: upload bench artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: bench-${{ inputs.bench }}-${{ github.run_id }}
+          name: bench-${{ inputs.name || inputs.bench }}-${{ github.run_id }}
           # criterion benches write to target/criterion/, gungraun benches
           # (gungraun) write to target/gungraun/, density benches to
           # target/density/. A genuinely-empty run is a bug worth flagging
@@ -106,10 +140,11 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-      # Package results without AWS credentials. Pull-request refs keep their
-      # summary and artifact but do not enter the public history.
+      # Package results without AWS credentials. Pull-request refs and runs
+      # called with `publish: false` keep their summary and artifact but do
+      # not enter the public history.
       - name: checkout workflow tools
-        if: ${{ success() && !startsWith(inputs.ref, 'pull/') }}
+        if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
@@ -117,13 +152,13 @@ jobs:
           persist-credentials: false
 
       - name: prepare publish artifact
-        if: ${{ success() && !startsWith(inputs.ref, 'pull/') }}
+        if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
         env:
           BUNDLE_DIR: ${{ runner.temp }}/bench-publish
         run: node .bench-publish-tools/.github/scripts/bench-push-results.mjs prepare "$BUNDLE_DIR"
 
       - name: upload publish artifact
-        if: ${{ success() && !startsWith(inputs.ref, 'pull/') }}
+        if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-publish-${{ inputs.artifact_id }}-${{ github.run_id }}
@@ -137,7 +172,7 @@ jobs:
 
   publish:
     needs: bench
-    if: ${{ !startsWith(inputs.ref, 'pull/') }}
+    if: ${{ inputs.publish && !startsWith(inputs.ref, 'pull/') }}
     name: publish ${{ inputs.bench }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
