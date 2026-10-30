@@ -44,6 +44,8 @@
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
 //! | `WASH_SCALE_GUEST_MEMORY_MODE` | `enforce`, `count` or `growth`: how the guest budget is applied; a list (`enforce,growth`) runs each flavour in each | `enforce` |
 //! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | four times `WASH_SCALE_GUEST_MEMORY` |
+//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB; costs bounds checks | wasmtime's default |
+//! | `WASH_SCALE_MEMORY_GUARD` | guard after each guest memory, below wasmtime's 32 MiB | wasmtime's default |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
@@ -76,7 +78,7 @@ use futures::{StreamExt as _, stream};
 use bench_tools::density::{Report, Step, percentile, print_comparison, print_step, spread};
 use wash_runtime::engine::Engine;
 use wash_runtime::engine::guest_memory::GuestMemoryMode;
-use wash_runtime::engine::host_memory::{HostMemoryBudgets, render_bytes};
+use wash_runtime::engine::host_memory::{self, HostMemoryBudgets, render_bytes};
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
 use wash_runtime::engine::process_memory::process_footprint;
 use wash_runtime::host::http::{DynamicRouter, Ingress};
@@ -192,6 +194,19 @@ fn report_label(flavour: &str, cpus: Option<usize>, mode: GuestMemoryMode) -> St
         label
     } else {
         format!("{label}-{}", mode.as_str())
+    }
+}
+
+/// Keep runs at a reduced memory layout out of the default series too:
+/// `warm-layout1GiB+32MiB`.
+fn layout_label(label: String, layout: Option<host_memory::MemoryLayout>) -> String {
+    match layout {
+        Some(layout) => format!(
+            "{label}-layout{}+{}",
+            render_bytes(layout.reservation),
+            render_bytes(layout.guard)
+        ),
+        None => label,
     }
 }
 
@@ -320,6 +335,9 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     // budget leaves the process guard to gate the run; set lower, the run shows
     // where it binds instead.
     let mut builder = Engine::builder();
+    if let Some(layout) = settings.memory_layout {
+        builder = builder.with_memory_layout(layout);
+    }
     if let Some(cap) = settings.initial_guest_memory {
         builder = builder.with_max_initial_guest_memory_bytes(cap);
     }
@@ -535,7 +553,10 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let report = Report {
         bench: "scale_density".into(),
         flavour: Some(flavour),
-        label: report_label(flavour.name(), cpu.limit, settings.guest_mode),
+        label: layout_label(
+            report_label(flavour.name(), cpu.limit, settings.guest_mode),
+            settings.memory_layout,
+        ),
         subject: format!(
             "{}, max-guest-memory {}, pool {} memories, {}{}",
             settings.fixture,
@@ -842,6 +863,17 @@ mod tests {
         assert_eq!(
             report_label("warm", None, GuestMemoryMode::Growth),
             "warm-growth"
+        );
+        assert_eq!(layout_label("warm".into(), None), "warm");
+        assert_eq!(
+            layout_label(
+                "warm".into(),
+                Some(host_memory::MemoryLayout {
+                    reservation: 1 << 30,
+                    guard: 32 << 20,
+                })
+            ),
+            "warm-layout1GiB+32MiB"
         );
     }
 
