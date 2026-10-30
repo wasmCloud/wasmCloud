@@ -150,11 +150,6 @@ pub struct WorkloadMetadata {
     pub(crate) may_use_gc: bool,
     /// The component's linker and the link built from it; see [`LinkState`].
     link: LinkState,
-    /// Where a write after sealing lands in a release build (see [`Self::linker`]):
-    /// replaced by an empty linker on each such call,
-    /// so writes neither accumulate nor reach the component.
-    /// Boxed, so a component that never needs it pays for a pointer.
-    late_writes: Option<Box<Linker<SharedCtx>>>,
     /// The volume mounts requested by this component
     pub(crate) volume_mounts: Vec<(PathBuf, VolumeMount)>,
     /// Pinned directory handles with guest mount names and permissions.
@@ -191,8 +186,7 @@ pub struct WorkloadMetadata {
     pub(crate) compiled: Option<Arc<super::LiveCompile>>,
 }
 
-/// Where a component is in being linked, one state at a time,
-/// so the linker, the link, and whether writes still reach it cannot disagree.
+/// The component's linker, cached link, and write access in one state.
 #[derive(Clone)]
 enum LinkState {
     /// Binding and linking are under way.
@@ -217,22 +211,6 @@ enum LinkState {
     /// Resolved without a link (an import nothing satisfied).
     /// Only wasmtime's error is kept, rendered, so each use repeats it.
     Unlinked(Arc<str>),
-}
-
-/// A new, empty linker in `late_writes`, for a write after sealing.
-///
-/// - The write reaches no instance.
-/// - Shadowing is allowed, so a caller that defines the same names twice
-///   gets the no-op it was promised, not a "defined twice" error.
-/// - Takes the one field it fills,
-///   so a caller can still hold a borrow of the component's link state.
-fn scratch_linker<'a>(
-    late_writes: &'a mut Option<Box<Linker<SharedCtx>>>,
-    engine: &wasmtime::Engine,
-) -> &'a mut Linker<SharedCtx> {
-    let mut scratch = Linker::new(engine);
-    scratch.allow_shadowing(true);
-    late_writes.insert(Box::new(scratch))
 }
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
@@ -309,81 +287,36 @@ impl WorkloadMetadata {
         self.component.engine()
     }
 
-    /// Returns a mutable reference to the component's linker, to write to it.
+    /// Returns the mutable linker before workload resolution.
     ///
-    /// - Before the workload is resolved:
-    ///   copies the linker first if it is still the engine's shared one,
-    ///   so a component nothing writes to never pays for a linker of its own;
-    ///   and forgets the link [`WorkloadComponent::pre_instantiate_ref`] keeps,
-    ///   since a write may change what it links.
-    /// - Once the workload is resolved the linker is sealed (see [`Self::is_sealed`]),
-    ///   and a write reaches no instance.
-    ///   A debug build panics;
-    ///   a release build hands out an empty linker of its own and logs an error.
-    ///   [`Self::try_linker`] refuses instead.
-    ///
-    /// Plugins bind in [`HostPlugin::on_workload_item_bind`], before resolution,
-    /// which is where every plugin in this crate writes.
-    pub fn linker(&mut self) -> &mut Linker<SharedCtx> {
-        let sealed = self.is_sealed();
-        debug_assert!(
-            !sealed,
-            "linker for component {} taken for writing after the workload was resolved",
-            self.id
-        );
-        if sealed {
-            tracing::error!(
-                workload_id = %self.workload_id,
-                component_id = %self.id,
-                "linker taken for writing after the workload was resolved; the write reaches \
-                 no instance. Plugins bind in on_workload_item_bind, before resolution"
-            );
-            return scratch_linker(&mut self.late_writes, self.component.engine());
-        }
-        self.open_linker()
-    }
-
-    /// [`Self::linker`], refusing once the linker is sealed.
+    /// Copies the shared base on first write and invalidates the cached link.
+    /// Plugins bind in [`HostPlugin::on_workload_item_bind`], before resolution.
     ///
     /// # Errors
     ///
-    /// The workload is resolved and the linker sealed; see [`Self::is_sealed`].
-    pub fn try_linker(&mut self) -> anyhow::Result<&mut Linker<SharedCtx>> {
-        ensure!(
-            !self.is_sealed(),
-            "linker for component {} in workload {} is sealed; plugins must bind in \
-             on_workload_item_bind, before resolution",
-            self.id,
-            self.workload_id,
-        );
-        Ok(self.open_linker())
+    /// Returns an error if workload resolution has sealed the linker.
+    pub fn linker(&mut self) -> anyhow::Result<&mut Linker<SharedCtx>> {
+        let LinkState::Open {
+            linker,
+            pre,
+            written,
+        } = &mut self.link
+        else {
+            bail!(
+                "linker for component {} in workload {} is sealed; plugins must bind in \
+                 on_workload_item_bind, before resolution",
+                self.id,
+                self.workload_id,
+            );
+        };
+        *pre = std::sync::OnceLock::new();
+        *written = true;
+        Ok(Arc::make_mut(linker))
     }
 
-    /// Whether the linker has been sealed, which resolving the workload does:
-    /// writes to the linker no longer reach the component.
+    /// Whether workload resolution has sealed the linker against writes.
     pub fn is_sealed(&self) -> bool {
         !matches!(self.link, LinkState::Open { .. })
-    }
-
-    /// The open linker, copied from the shared base if need be,
-    /// with the kept link forgotten.
-    /// Both callers check for a sealed component first;
-    /// one that slipped through gets a [`scratch_linker`], never the sealed link reopened.
-    fn open_linker(&mut self) -> &mut Linker<SharedCtx> {
-        match &mut self.link {
-            LinkState::Open {
-                linker,
-                pre,
-                written,
-            } => {
-                *pre = std::sync::OnceLock::new();
-                *written = true;
-                Arc::make_mut(linker)
-            }
-            LinkState::Shared { .. } | LinkState::Linked(_) | LinkState::Unlinked(_) => {
-                scratch_linker(&mut self.late_writes, self.component.engine())
-            }
-        }
     }
 
     /// The link, for both component invocations and service starts:
@@ -404,7 +337,7 @@ impl WorkloadMetadata {
         }
     }
 
-    /// Seal the linker: writes no longer reach the component.
+    /// Seal the linker against further writes.
     ///
     /// - **Nothing wrote to the linker:** it is still the engine's shared base,
     ///   so it is kept, and the link is made on first use, as before.
@@ -458,7 +391,7 @@ impl WorkloadMetadata {
     ///
     /// Resolves compatible revisions to the exact instance the host registered,
     /// preserving every function and resource the plugin does not redefine.
-    /// Calling `linker().instance(...)` with a different revision creates a
+    /// Calling `linker()?.instance(...)` with a different revision creates a
     /// separate instance: it neither overrides the host's newer name nor
     /// inherits the host's remaining definitions.
     pub fn wasi_override_instance(
@@ -484,7 +417,7 @@ impl WorkloadMetadata {
             .next()
             .context("missing WASI interface name")?;
         let instance = format!("wasi:{}/{name}@{version}", interface.package);
-        Ok(self.try_linker()?.instance(&instance)?)
+        Ok(self.linker()?.instance(&instance)?)
     }
 
     /// Returns a reference to the wasmtime [`Component`].
@@ -669,7 +602,6 @@ impl WorkloadService {
                     pre: std::sync::OnceLock::new(),
                     written: false,
                 },
-                late_writes: None,
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -793,7 +725,6 @@ impl WorkloadComponent {
                     pre: std::sync::OnceLock::new(),
                     written: false,
                 },
-                late_writes: None,
                 volume_mounts,
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
@@ -1525,10 +1456,8 @@ impl ResolvedWorkload {
 
     /// Access the resolved components and their metadata.
     ///
-    /// The map remains writable for updates to existing component metadata,
-    /// but not to a component's linker: resolution seals it,
-    /// and a write after that reaches no instance
-    /// (see [`WorkloadMetadata::is_sealed`]).
+    /// The map remains writable for metadata updates, but resolution seals
+    /// each linker: [`WorkloadMetadata::linker`] then returns an error.
     /// Adding or removing components after resolution is unsupported: the
     /// component count and bindings are settled when the workload is resolved.
     pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
@@ -1933,7 +1862,7 @@ impl ResolvedWorkload {
                         e.context("failed to pre-instantiate during component linking")
                     })?;
 
-                    let mut linker_instance = match metadata.try_linker()?.instance(import_name) {
+                    let mut linker_instance = match metadata.linker()?.instance(import_name) {
                         Ok(i) => i,
                         Err(e) => {
                             trace!(name = import_name, error = %e, "error finding instance in linker, skipping");
@@ -3774,19 +3703,23 @@ impl UnresolvedWorkload {
                     // A WASI override redefines names the host already linked; the
                     // linker allows that only for the duration of this bind.
                     let overriding = !p.wasi_overrides().imports.is_empty();
-                    if overriding {
-                        workload_item.linker().allow_shadowing(true);
+                    let bound = async {
+                        if overriding {
+                            workload_item.linker()?.allow_shadowing(true);
+                        }
+                        let bound = p
+                            .on_workload_item_bind(
+                                &mut workload_item,
+                                WitInterfaces::new(&matching_interfaces),
+                            )
+                            .instrument(item_bind_span)
+                            .await;
+                        if overriding {
+                            workload_item.linker()?.allow_shadowing(false);
+                        }
+                        bound
                     }
-                    let bound = p
-                        .on_workload_item_bind(
-                            &mut workload_item,
-                            WitInterfaces::new(&matching_interfaces),
-                        )
-                        .instrument(item_bind_span)
-                        .await;
-                    if overriding {
-                        workload_item.linker().allow_shadowing(false);
-                    }
+                    .await;
                     if let Err(e) = bound {
                         tracing::error!(
                             plugin_id = plugin_id,
@@ -5059,7 +4992,7 @@ mod tests {
     /// The linked component is kept once asked for, and forgotten whenever the
     /// linker is taken mutably, so a link added afterwards is never missed.
     #[test]
-    fn pre_instantiate_ref_is_kept_until_the_linker_changes() {
+    fn pre_instantiate_ref_is_kept_until_the_linker_changes() -> anyhow::Result<()> {
         let mut component = component_from_wat(
             "pre",
             r#"(component
@@ -5074,7 +5007,7 @@ mod tests {
 
         component
             .metadata
-            .linker()
+            .linker()?
             .instance("test:pre/iface")
             .unwrap()
             .func_wrap("f", |_, (): ()| Ok(()))
@@ -5083,14 +5016,15 @@ mod tests {
         assert!(kept_link(&component));
         component.pre_instantiate_ref().unwrap();
 
-        let _ = component.metadata.linker();
+        component.metadata.linker()?;
         assert!(!kept_link(&component));
+        Ok(())
     }
 
     /// Components share the linker they start from until one is written to;
     /// the write lands on a copy of that one component's own.
     #[test]
-    fn a_shared_linker_is_copied_only_when_written() {
+    fn a_shared_linker_is_copied_only_when_written() -> anyhow::Result<()> {
         let mut a = component_from_wat(
             "a",
             r#"(component
@@ -5113,7 +5047,7 @@ mod tests {
         assert!(a.pre_instantiate_ref().is_err());
 
         b.metadata
-            .linker()
+            .linker()?
             .instance("test:cow/iface")
             .unwrap()
             .func_wrap("f", |_, (): ()| Ok((2_u32,)))
@@ -5133,7 +5067,7 @@ mod tests {
             "the component not written to keeps the shared linker"
         );
         a.metadata
-            .linker()
+            .linker()?
             .instance("test:cow/iface")
             .unwrap()
             .func_wrap("f", |_, (): ()| Ok((1_u32,)))
@@ -5160,6 +5094,7 @@ mod tests {
         assert_eq!(call(&a), 1);
         assert_eq!(call(&b), 2, "the first component's binding must survive");
         assert!(shared.instantiate_pre(a.metadata.component()).is_err());
+        Ok(())
     }
 
     fn marker_importer(id: &str) -> WorkloadComponent {
@@ -5173,7 +5108,7 @@ mod tests {
     /// made, and turns a late write into a refusal; a component that does not
     /// link is sealed the same way, keeping only its error.
     #[test]
-    fn sealing_frees_the_linker_copy_and_keeps_the_link() {
+    fn sealing_frees_the_linker_copy_and_keeps_the_link() -> anyhow::Result<()> {
         let mut a = component_from_wat(
             "a",
             r#"(component
@@ -5206,7 +5141,7 @@ mod tests {
         };
 
         a.metadata
-            .linker()
+            .linker()?
             .instance("test:cow/iface")
             .unwrap()
             .func_wrap("f", |_, (): ()| Ok((3_u32,)))
@@ -5228,11 +5163,12 @@ mod tests {
 
         let error = a
             .metadata
-            .try_linker()
+            .linker()
             .err()
             .expect("sealed linker must reject writes");
         assert!(error.to_string().contains("sealed"));
         assert!(error.to_string().contains(a.id()));
+        assert!(error.to_string().contains(a.metadata.workload_id()));
         assert!(kept_link(&a));
         assert_eq!(call(&a), 3, "a rejected write preserves the kept link");
 
@@ -5249,7 +5185,7 @@ mod tests {
         );
         unlinked
             .metadata
-            .linker()
+            .linker()?
             .instance("test:other/iface")
             .unwrap();
         let before = unlinked
@@ -5268,11 +5204,12 @@ mod tests {
             format!("{before:#}"),
             "wasmtime's own error, as before"
         );
-        assert!(unlinked.metadata.try_linker().is_err());
+        assert!(unlinked.metadata.linker().is_err());
         assert!(
             !unlinked.metadata.seal_linker(),
             "sealing again still has no link"
         );
+        Ok(())
     }
 
     /// A component nothing wrote to still shares the engine's linker, so
@@ -5289,6 +5226,7 @@ mod tests {
         let shared = Arc::clone(linker_of(&untouched));
         assert!(!untouched.metadata.seal_linker(), "no copy to let go");
         assert!(untouched.metadata.is_sealed());
+        assert!(untouched.metadata.linker().is_err());
         match &untouched.metadata.link {
             LinkState::Shared { linker, pre } => {
                 assert!(Arc::ptr_eq(linker, &shared), "the shared linker is kept");
@@ -5298,7 +5236,7 @@ mod tests {
         }
         untouched.pre_instantiate_ref().unwrap();
         assert!(kept_link(&untouched), "the first use links it");
-        assert!(untouched.metadata.try_linker().is_err());
+        assert!(untouched.metadata.linker().is_err());
     }
 
     /// The linker a component holds, for the tests that watch it being
@@ -5522,7 +5460,7 @@ mod tests {
             let calls = Arc::new(AtomicUsize::new(0));
             service
                 .metadata
-                .try_linker()?
+                .linker()?
                 .instance("test:service/probe")?
                 .func_wrap("probe", {
                     let calls = Arc::clone(&calls);
@@ -5556,7 +5494,7 @@ mod tests {
                 "service and cleanup must release the linker"
             );
             let service = resolved.service_mut().unwrap();
-            assert!(service.metadata.try_linker().is_err());
+            assert!(service.metadata.linker().is_err());
             for start in 1..=2 {
                 let ctx = crate::engine::ctx::Ctx::builder("sealed-service", service.id()).build();
                 let mut store = wasmtime::Store::new(&engine, SharedCtx::new(ctx));
@@ -5732,6 +5670,37 @@ mod tests {
             .await
             .unwrap();
         assert!(bound.is_empty(), "no entry, no binding");
+    }
+
+    #[tokio::test]
+    async fn a_sealed_linker_failure_rolls_back_the_override_plugin() -> anyhow::Result<()> {
+        let mut component = component_from_wat(
+            "fs-user",
+            r#"(component (import "wasi:filesystem/types@0.2.12" (instance)))"#,
+        );
+        component.metadata.seal_linker();
+        let plugin = Arc::new(
+            MockPlugin::new("view-plugin", vec![WitInterface::from(MARKER)], vec![])
+                .overriding("wasi:filesystem/preopens,types@0.2.0"),
+        );
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> =
+            HashMap::from([(plugin.id(), plugin.clone() as Arc<dyn HostPlugin>)]);
+        let mut workload = marker_workload(vec![component]);
+
+        let error = workload
+            .bind_plugins(&plugins, &crate::plugin::PluginBindings::new())
+            .await
+            .err()
+            .context("binding a sealed linker unexpectedly succeeded")?;
+
+        assert!(error.to_string().contains("sealed"));
+        let methods = plugin
+            .get_call_records()
+            .into_iter()
+            .map(|record| record.method)
+            .collect::<Vec<_>>();
+        assert_eq!(methods, ["on_workload_bind", "on_workload_unbind"]);
+        Ok(())
     }
 
     /// Two plugins redefining one WASI interface cannot both take effect, so

@@ -112,7 +112,7 @@ impl HostPlugin for WebGpu {
             workload_id = component_handle.id(),
             "Adding webgpu interfaces to linker for workload"
         );
-        let linker = component_handle.linker();
+        let linker = component_handle.linker()?;
 
         wasi_webgpu_wasmtime::add_to_linker(linker)?;
 
