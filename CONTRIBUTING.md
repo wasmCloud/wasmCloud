@@ -125,6 +125,8 @@ Every dependency must use a license on the allowlist in [`deny.toml`](deny.toml)
 - **`cargo deny check licenses`** runs on the same triggers and fails on any license outside the allowlist. It checks every Rust workspace, including standalone examples and templates, against the root license policy and its per-crate exceptions. Standalone workspaces are also checked for WebAssembly targets. First-party crates need license metadata unless they set `publish = false`.
 - **Dependency review** checks newly introduced dependencies on pull requests to `main` and merge groups that change Rust or Go dependency files, GitHub Actions, `deny.toml` or its policy in [`.github/dependency-review-config.yml`](.github/dependency-review-config.yml). It blocks known vulnerabilities of any severity in runtime, development, and unknown scopes, and checks licenses against the same allowlist as `deny.toml`. Each crate excepted in `deny.toml` is exempted there too, while `cargo deny` enforces its approved license. When GitHub flags an advisory that `.cargo/audit.toml` ignores, its GHSA ID goes in `allow-ghsas`. GitHub reports missing license data as a warning.
 
+How quickly findings must be fixed is in [SECURITY.md](SECURITY.md#dependency-and-code-scanning).
+
 ## Code Style and Conventions
 
 ### Rust Style Guidelines
@@ -227,10 +229,41 @@ that release. See [RELEASE_RUNBOOK.md](./RELEASE_RUNBOOK.md#release-cadence) for
 
 ## Testing
 
+### Test policy
+
+- A change that adds or changes behavior must add or update automated tests that run in CI.
+- A bug fix must include a regression test, unless one isn't feasible. If it isn't, the PR
+  description says why.
+- A change that needs no new tests says why in the PR description. Examples are documentation,
+  CI-only changes, and refactors that existing tests already cover.
+- Reviewers don't approve a PR until its tests meet this policy.
+
+### Writing tests
+
 - Write unit tests for new functionality
 - Include integration tests for CLI commands when appropriate
 - Test error cases and edge conditions
 - Ensure tests are deterministic and don't depend on external services
+
+### Tests in CI
+
+Every pull request and merge queue run starts the workflows in
+[`.github/workflows`](.github/workflows). Each one runs only the jobs that the changed files
+affect, and reports a single gate check that passes only when those jobs pass:
+
+- `gate` (`wash.yml`): `cargo test` for the workspace on Linux, macOS and Windows, the ignored
+  tests, rustfmt and clippy, and the `runtime-operator` end-to-end tests against the `wash` image.
+- `gate-audit` (`audit.yml`): `cargo audit`, `cargo deny check licenses`, and dependency review
+  of newly added dependencies.
+- `gate-runtime-operator` and `gate-runtime-gateway`: the Go tests for each module.
+- `gate-wit`, `gate-charts`, `gate-templates`, `gate-examples`, `gate-proto`,
+  `gate-test-install-scripts` and `gate-lint-workflows`: WIT package validation, Helm chart lint,
+  template and example builds, generated protobuf code, the install scripts, and workflow lint.
+
+`gate` and `gate-audit` are required checks on `main`. Maintainers don't merge a PR while any
+other gate check is failing.
+
+To run the tests locally, see [Running Tests](#running-tests).
 
 ## Documentation
 
