@@ -456,6 +456,9 @@ pub fn udp_connect(sockfd: impl AsFd, addr: SocketAddr) -> Result<(), Errno> {
 /// already has the address would lose the socket. Binding the port back
 /// keeps the address stable, which an unspecified socket relies on: its
 /// loopback half is registered under this same port.
+///
+/// macOS clears the local IP instead and refuses a second bind, so a socket
+/// bound to one address accepts datagrams for any local address afterwards.
 pub fn udp_disconnect(sockfd: impl AsFd) -> Result<(), Errno> {
     let sockfd = sockfd.as_fd();
     let before = local_address(sockfd)?;
@@ -613,6 +616,8 @@ mod tests {
                 assert_eq!(sock.local_addr().unwrap().port(), bound.port());
                 #[cfg(target_os = "linux")]
                 assert_eq!(sock.local_addr().unwrap().ip(), bound.ip());
+                #[cfg(target_os = "macos")]
+                assert!(sock.local_addr().unwrap().ip().is_unspecified());
             }
         }
     }
