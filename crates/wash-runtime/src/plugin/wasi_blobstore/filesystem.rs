@@ -429,18 +429,13 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         container: Resource<ContainerData>,
     ) -> wasmtime::Result<Result<(), ContainerError>> {
         let container_data = self.table.get(&container)?;
-        let cleared = async {
-            let mut entries = tokio::fs::read_dir(&container_data.root).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                if entry.file_type().await?.is_dir() {
-                    tokio::fs::remove_dir_all(entry.path()).await?;
-                } else {
-                    remove_file_or_directory_link(entry.path()).await?;
-                }
-            }
-            Ok::<_, std::io::Error>(())
-        }
-        .await;
+        let root = container_data.root.clone();
+        let cleared = tokio::task::spawn_blocking(move || {
+            let directory = open_container_directory(&root)?;
+            clear_directory_contents(&directory)
+        })
+        .await
+        .context("failed to join container clear task")?;
         match cleared {
             Ok(_) => Ok(Ok(())),
             Err(e) => Ok(Err(format!(
@@ -843,23 +838,50 @@ fn created_at_secs(metadata: &std::fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(not(windows))]
-use tokio::fs::remove_file as remove_file_or_directory_link;
+/// Reject a symlink at the container root and retain the directory being cleared.
+fn open_container_directory(root: &Path) -> std::io::Result<std::fs::File> {
+    use cap_primitives::fs::{open_ambient_dir, open_dir_nofollow};
 
-#[cfg(windows)]
-async fn remove_file_or_directory_link(path: impl AsRef<Path>) -> std::io::Result<()> {
-    use std::os::windows::fs::FileTypeExt as _;
+    // Strip trailing separators and `.` so `container/` and `container/.`
+    // cannot bypass the no-follow check on the container itself.
+    let root: PathBuf = root.components().collect();
+    let Some(name) = root.file_name() else {
+        // Filesystem roots, `.` and `..` already denote directories rather
+        // than a final path component that could be a symlink.
+        return open_ambient_dir(&root, cap_primitives::ambient_authority());
+    };
+    let parent = root
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent = open_ambient_dir(parent, cap_primitives::ambient_authority())?;
+    open_dir_nofollow(&parent, Path::new(name))
+}
 
-    let path = path.as_ref();
-    if tokio::fs::symlink_metadata(path)
-        .await?
-        .file_type()
-        .is_symlink_dir()
-    {
-        tokio::fs::remove_dir(path).await
-    } else {
-        tokio::fs::remove_file(path).await
+fn clear_directory_contents(directory: &std::fs::File) -> std::io::Result<()> {
+    use cap_primitives::fs;
+    #[cfg(windows)]
+    use cap_primitives::fs::FileTypeExt as _;
+
+    // Resolve every removal against the opened directory, so replacing its
+    // original path with a symlink cannot redirect deletion to another tree.
+    for entry in fs::read_base_dir(directory)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let path = Path::new(&name);
+        if file_type.is_dir() {
+            fs::remove_dir_all(directory, path)?;
+        } else {
+            #[cfg(windows)]
+            if file_type.is_symlink_dir() {
+                fs::remove_dir(directory, path)?;
+                continue;
+            }
+            fs::remove_file(directory, path)?;
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]

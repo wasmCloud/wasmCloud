@@ -472,10 +472,13 @@ async fn clearing_a_container_removes_links_without_following_them() {
         .await
         .unwrap()
         .unwrap();
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&outside, dir.path().join("source/link")).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&outside, dir.path().join("source/link")).unwrap();
+    std::fs::create_dir(dir.path().join("source/nested")).unwrap();
+    for name in ["source/link", "source/nested/link"] {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, dir.path().join(name)).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&outside, dir.path().join(name)).unwrap();
+    }
     Container::clear(&mut ctx, borrow(&container))
         .await
         .unwrap()
@@ -496,4 +499,75 @@ async fn clearing_a_container_removes_links_without_following_them() {
         .unwrap()
         .unwrap();
     Container::drop(&mut ctx, container).await.unwrap();
+}
+
+#[cfg(any(unix, windows))]
+#[tokio::test]
+#[cfg_attr(windows, ignore = "requires directory symlink privileges")]
+async fn clearing_a_symlinked_container_root_preserves_its_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir(outside.path().join("nested")).unwrap();
+    std::fs::write(outside.path().join("keep"), b"outside data").unwrap();
+    std::fs::write(outside.path().join("nested/keep"), b"nested data").unwrap();
+    let source = dir.path().join("source");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.path(), &source).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(outside.path(), &source).unwrap();
+    let mut shared = context(dir.path());
+    let mut ctx = extract_active_ctx(&mut shared);
+
+    for name in ["source", "source/", "source/."] {
+        let container = Blobstore::get_container(&mut ctx, name.into())
+            .await
+            .unwrap()
+            .unwrap();
+        let error = Container::clear(&mut ctx, borrow(&container))
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("failed to clear container"), "{error}");
+        assert_eq!(
+            std::fs::read(outside.path().join("keep")).unwrap(),
+            b"outside data"
+        );
+        assert_eq!(
+            std::fs::read(outside.path().join("nested/keep")).unwrap(),
+            b"nested data"
+        );
+        assert!(
+            std::fs::symlink_metadata(&source)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        Container::drop(&mut ctx, container).await.unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn clearing_an_opened_container_does_not_follow_a_replacement_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let moved = dir.path().join("moved");
+    for root in [source.as_path(), outside.path()] {
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("data"), b"data").unwrap();
+        std::fs::write(root.join("nested/data"), b"nested data").unwrap();
+    }
+    let directory = open_container_directory(&source).unwrap();
+    std::fs::rename(&source, &moved).unwrap();
+    std::os::unix::fs::symlink(outside.path(), &source).unwrap();
+
+    clear_directory_contents(&directory).unwrap();
+
+    assert!(std::fs::read_dir(&moved).unwrap().next().is_none());
+    assert_eq!(std::fs::read(outside.path().join("data")).unwrap(), b"data");
+    assert_eq!(
+        std::fs::read(outside.path().join("nested/data")).unwrap(),
+        b"nested data"
+    );
 }
