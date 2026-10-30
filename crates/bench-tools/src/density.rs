@@ -1,11 +1,11 @@
-//! The record both density benchmarks write (`wash-runtime`'s in-process
-//! `scale_density` and `bench-scale` over NATS), the sampling rules that
-//! decide what counts as served, one text renderer, and the named metrics
-//! `bench-tools jsonl` publishes from it.
+//! Shared density and pressure records, sampling rules, text rendering,
+//! and the named metrics `bench-tools jsonl` publishes.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+
+pub mod pressure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -39,6 +39,8 @@ impl Flavour {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Step {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pressure: Option<pressure::Sample>,
     /// Running workloads after this step, and how many this step started.
     pub workloads: usize,
     pub started: usize,
@@ -70,8 +72,8 @@ pub struct Step {
     pub cpu_percent: Option<f64>,
     pub start_cpu_secs: Option<f64>,
     pub sample_cpu_secs: Option<f64>,
-    /// Every start succeeded, nothing was refused, and the sample served
-    /// (see [`ServingEvidence`]). Only clean steps say what a workload costs.
+    /// Density: starts and serving succeeded without refusals.
+    /// Pressure: every retained store completed its writes.
     pub clean: bool,
     /// The workload count the measurements so far say the host can hold.
     pub theoretical_limit: Option<u64>,
@@ -81,7 +83,9 @@ pub struct Step {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Report {
-    /// The bench that wrote it: `scale_density` or `bench-scale`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pressure: Option<pressure::Config>,
+    /// The bench that wrote it: `scale_density`, `memory_pressure`, or `bench-scale`.
     pub bench: String,
     pub flavour: Option<Flavour>,
     /// The column heading: the flavour, and its CPU limit when it has one.
@@ -117,7 +121,15 @@ impl Report {
 
     /// Workloads running when the run stopped.
     pub fn achieved(&self) -> usize {
-        self.steps.last().map_or(0, |s| s.workloads)
+        self.last_retained().map_or(0, |s| s.workloads)
+    }
+
+    pub fn last_retained(&self) -> Option<&Step> {
+        self.steps.iter().rev().find(|step| {
+            step.pressure
+                .as_ref()
+                .is_none_or(|sample| sample.phase != pressure::Phase::Released)
+        })
     }
 
     pub fn last_clean(&self) -> Option<&Step> {
@@ -133,6 +145,9 @@ impl Report {
     }
 
     pub fn mean_starts_per_sec(&self) -> Option<f64> {
+        if self.pressure.is_some() {
+            return None;
+        }
         let rates: Vec<f64> = self.steps.iter().map(|s| s.starts_per_sec).collect();
         (!rates.is_empty()).then(|| rates.iter().sum::<f64>() / rates.len() as f64)
     }
@@ -152,6 +167,73 @@ impl Report {
     /// The figures published to the trend site, each with its unit and
     /// which direction is better. Unmeasured figures are left out.
     pub fn metrics(&self) -> Vec<Metric> {
+        if let Some(config) = &self.pressure {
+            let retained = self.last_retained();
+            return [
+                (
+                    "admitted_stores",
+                    Some(self.achieved() as f64),
+                    "stores",
+                    Better::Higher,
+                ),
+                (
+                    "completed_stores",
+                    Some(self.served() as f64),
+                    "stores",
+                    Better::Higher,
+                ),
+                (
+                    "guest_memory_bytes",
+                    retained
+                        .and_then(|s| s.guest_memory_bytes)
+                        .map(|n| n as f64),
+                    "B",
+                    Better::Lower,
+                ),
+                (
+                    "initial_memory_bytes",
+                    retained
+                        .and_then(|s| s.initial_memory_bytes)
+                        .map(|n| n as f64),
+                    "B",
+                    Better::Lower,
+                ),
+                (
+                    "cgroup_peak_bytes",
+                    (config.outcome == Some(pressure::Outcome::Completed))
+                        .then(|| {
+                            self.steps
+                                .iter()
+                                .filter_map(|s| s.pressure.as_ref()?.cgroup_peak)
+                                .max()
+                        })
+                        .flatten()
+                        .map(|n| n as f64),
+                    "B",
+                    Better::Lower,
+                ),
+                (
+                    "oom_killed",
+                    match config.outcome {
+                        Some(pressure::Outcome::Completed) => Some(0.0),
+                        Some(pressure::Outcome::ExpectedOom) => Some(1.0),
+                        Some(pressure::Outcome::Failed) | None => None,
+                    },
+                    "bool",
+                    Better::Lower,
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(name, value, unit, better)| {
+                Some(Metric {
+                    name,
+                    value: value?,
+                    unit,
+                    better,
+                })
+            })
+            .collect();
+        }
         let clean = self.last_clean();
         let count = |n: Option<u64>| n.map(|n| n as f64);
         [
@@ -359,6 +441,25 @@ fn ms(value: Option<f64>) -> String {
 
 /// One row of the live step table, on stderr; `header` first.
 pub fn print_step(header: bool, step: &Step) {
+    if let Some(sample) = &step.pressure {
+        if header {
+            eprintln!(
+                "{:>10} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                "phase", "stores", "footprint", "charged", "initial", "cgroup", "peak"
+            );
+        }
+        eprintln!(
+            "{:>10} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            sample.phase.name(),
+            step.workloads,
+            or_dash(step.footprint_bytes, render_bytes),
+            or_dash(step.guest_memory_bytes, render_bytes),
+            or_dash(step.initial_memory_bytes, render_bytes),
+            or_dash(sample.cgroup_current, render_bytes),
+            or_dash(sample.cgroup_peak, render_bytes)
+        );
+        return;
+    }
     if header {
         eprintln!(
             "{:>9} {:>8} {:>10} {:>9} {:>10} {:>13} {:>9} {:>7} {:>8} {:>8} {:>7} {:>7} {:>5} {:>8}",
@@ -427,6 +528,12 @@ pub fn print_comparison(reports: &[Report]) {
     row("guest memory mode", &|r| {
         r.guest_memory_mode.clone().unwrap_or_else(|| "-".into())
     });
+    row("pressure outcome", &|r| {
+        r.pressure
+            .as_ref()
+            .and_then(|p| p.outcome)
+            .map_or_else(|| "-".into(), |o| o.name().into())
+    });
     row("served workloads", &|r| r.served().to_string());
     row("achieved workloads", &|r| r.achieved().to_string());
     for name in names {
@@ -447,17 +554,38 @@ pub fn print_comparison(reports: &[Report]) {
         or_dash(r.baseline_footprint_bytes, render_bytes)
     });
     row("final footprint", &|r| {
-        or_dash(r.steps.last().and_then(|s| s.footprint_bytes), render_bytes)
+        or_dash(
+            r.last_retained()
+                .filter(|_| {
+                    r.pressure
+                        .as_ref()
+                        .is_none_or(|p| p.outcome == Some(pressure::Outcome::Completed))
+                })
+                .and_then(|s| s.footprint_bytes),
+            render_bytes,
+        )
+    });
+    row("last sampled footprint", &|r| {
+        or_dash(
+            r.last_retained()
+                .filter(|_| {
+                    r.pressure
+                        .as_ref()
+                        .is_some_and(|p| p.outcome != Some(pressure::Outcome::Completed))
+                })
+                .and_then(|s| s.footprint_bytes),
+            render_bytes,
+        )
     });
     row("guest memory charged", &|r| {
         or_dash(
-            r.steps.last().and_then(|s| s.guest_memory_bytes),
+            r.last_retained().and_then(|s| s.guest_memory_bytes),
             render_bytes,
         )
     });
     row("initial memory uncharged", &|r| {
         or_dash(
-            r.steps.last().and_then(|s| s.initial_memory_bytes),
+            r.last_retained().and_then(|s| s.initial_memory_bytes),
             render_bytes,
         )
     });
@@ -468,10 +596,12 @@ pub fn print_comparison(reports: &[Report]) {
         ms(r.last_clean().and_then(|s| s.start_p99_ms))
     });
     row("req/s (served)", &|r| {
-        or_dash(r.last_clean(), |s| format!("{:.0}", s.requests_per_sec))
+        or_dash(r.last_clean().filter(|_| r.pressure.is_none()), |s| {
+            format!("{:.0}", s.requests_per_sec)
+        })
     });
     row("p50 / p99 ms (served)", &|r| {
-        or_dash(r.last_clean(), |s| {
+        or_dash(r.last_clean().filter(|_| r.pressure.is_none()), |s| {
             format!("{} / {}", ms(s.request_p50_ms), ms(s.request_p99_ms))
         })
     });

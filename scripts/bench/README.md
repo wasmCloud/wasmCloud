@@ -706,6 +706,119 @@ particular runner. The bench job has no AWS permissions and no
 `pull-requests: write` permission, so a malicious comparison ref
 cannot exfiltrate the WRITE role or comment on PRs.
 
+### 9.5 Guest memory pressure test
+
+The `memory_pressure` density benchmark compares `enforce` and `growth` under
+real Linux cgroup v2 limits, with CoW both enabled and disabled. It uses the
+shared `bench_tools::density::Report`, step/comparison renderers, and JSONL and
+summary commands. Docker orchestration lives in `bench-tools`; the Rust bench
+only measures its own process. It needs Docker and enough Docker VM memory
+for an 8 GiB build container. On the Linux bench host:
+
+```bash
+CARGO_TARGET_DIR=target scripts/bench/run-bench.sh memory_pressure \
+  --memory-mib 384 768 --repeats 3
+```
+
+For a local Docker run, including on macOS, invoke the same Rust runner directly:
+
+```bash
+cargo run -p bench-tools -- memory-pressure --memory-mib 384 768 --repeats 3
+```
+
+The runner builds the locked Rust bench in the repository's pinned Rust
+toolchain image, then runs each case sequentially in a fresh container with two
+CPUs, the specified memory limit, no swap, and no network. Limits from 384 to
+2048 MiB are supported. The measured container runs the Rust executable as
+PID 1; the runner and build run outside its cgroup. Build caches use the
+named volumes `wash-pressure-target` and `wash-pressure-registry`; override them
+with `--target-volume` and `--registry-volume`. Do not rebuild into the same
+target volume while a pressure run is using its binary.
+
+The synthetic components retain every admitted store. Admission pauses for
+55 ms per 16 MiB of declared initial memory to allow guard refreshes. Four
+worker threads then start together, retaining all stores until the final
+memory sample:
+
+| Shape | Initial memory | Initial data | Request writes | Final writes |
+| --- | --- | --- | --- | --- |
+| `sparse` | One 1 MiB memory | 4 KiB | First 64 KiB | Same 64 KiB |
+| `data-heavy` | One 8 MiB memory | 8 MiB | First 64 KiB | Same 64 KiB |
+| `multiple` | Four 1 MiB memories in separate core modules | 4 KiB each | First 64 KiB of each | Same 64 KiB of each |
+| `dirty` | One 1 MiB memory | 4 KiB | First 64 KiB | Every initial page |
+
+`--dirty-mib 2` selects 2 MiB for the last shape. Running both sizes matters:
+transparent huge pages can make a 2 MiB allocation resident during admission
+with CoW disabled, while a 1 MiB allocation can remain sparse until the final
+writes. The `multiple` shape tests per-memory allowance accounting across core
+instances in a single component. These are controlled memory scenarios, not an
+end-to-end HTTP throughput benchmark; use the density benches for application
+performance and additional cold-start costs.
+
+The default matrix includes all four shapes, both modes, and both CoW settings.
+To focus on late writes, then compare a smaller initial allowance:
+
+```bash
+cargo run -p bench-tools -- memory-pressure \
+  --shapes dirty --memory-mib 384 768 --dirty-mib 2 --repeats 3
+
+cargo run -p bench-tools -- memory-pressure \
+  --shapes dirty --memory-mib 768 --guest-memory-mib 256 \
+  --initial-cap-mib 288 --repeats 3
+```
+
+`--modes enforce growth` and `--cow on off` select subsets. The initial-cap
+override applies only to `growth`. Without overrides, the real EngineBuilder
+defaults apply, including the `4 × G` initial allowance. See the runtime's
+[sizing guidance](../../crates/wash-runtime/README.md#sizing-guest-memory-in-containers)
+for the budget calculation and its physical-memory assumptions.
+
+Results use the framework's `<target>/density/memory_pressure.json` report list.
+Each run also creates a timestamped directory beside it containing the build
+log, revision and working-tree patch, image ID, requested settings, per-case
+logs, checkpoints, and Docker state/limits. `--target-dir` selects the target
+directory and otherwise follows `CARGO_TARGET_DIR`, then `target/`.
+Steps record `baseline`, `ready`, `writing`, `touched`, and
+`released`, with guest reservations, process footprint, cgroup current/peak
+memory when available, kernel, architecture, and transparent-huge-page policy.
+The `ready` sample records the actual admission stop reason. The final resident
+sample is taken while every store is still alive; successful cleanup must
+return both reservation counters to zero. A peak from an OOM case is unknown
+unless captured before the kill; the last sampled value is not its final peak.
+
+An expected pressure result is either a complete bounded run, or Docker-verified
+OOM during `dirty` writes in `growth` after admission has reserved more initial
+bytes than the container can hold. The latter demonstrates the risk being
+tested, so it is labeled `expected late-write OOM` and passes the experiment.
+Exit 137 alone is insufficient. An OOM before writing, an OOM in `enforce` or a
+sparse/data-heavy/multiple case, a timeout, a configuration mismatch, or missing
+completion/accounting evidence fails the run. A guard or eager allocation can
+bound admission early enough that `growth` survives; OOM is not required on
+every kernel. Compare admission counts and retained memory as well as the
+pass/fail result. This test demonstrates overcommit behavior; it does not
+certify application sizing or make an expected OOM acceptable in production.
+
+The runner removes every measured container, including after a timeout,
+SIGINT, or SIGTERM. Docker retains the build-cache volumes. The `bench` workflow
+offers `memory_pressure` as a dispatch-only diagnostic: it uploads the shared
+density report and raw evidence without publishing pressure cases to the trend
+site. Its cleanup stops Docker so the next bench's pre-flight sees the usual
+idle host. It is excluded from automatic release runs.
+
+The standard reporting commands consume pressure results:
+
+```bash
+cargo run -p bench-tools -- summary --bench memory_pressure --target-dir target
+cargo run -p bench-tools -- jsonl --bench memory_pressure --target-dir target
+```
+
+Only measured figures are emitted; an OOM case has no final cgroup peak.
+Classifier and schema tests run without containers:
+
+```bash
+cargo test -p bench-tools --lib
+```
+
 ## 10. Pre-flight assertions
 
 [`bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs) runs first in every CI bench job.

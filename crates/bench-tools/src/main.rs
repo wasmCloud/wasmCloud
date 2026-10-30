@@ -21,7 +21,7 @@ mod meta;
 #[command(
     name = "bench-tools",
     version,
-    about = "wasmCloud bench data processing (criterion + gungraun)"
+    about = "wasmCloud benchmark runners and reporting tools"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -39,6 +39,9 @@ enum Cmd {
     /// Render a markdown comparison delta from compare-bench.sh snapshots.
     Delta(commands::delta::Args),
 
+    /// Compare guest memory modes in bounded Docker containers.
+    MemoryPressure(commands::memory_pressure::Args),
+
     /// Report, export or compare scripts/k6bench load-test runs.
     #[command(subcommand)]
     K6(commands::k6::Cmd),
@@ -50,6 +53,7 @@ fn main() -> Result<()> {
         Cmd::Jsonl(args) => commands::jsonl::run(args),
         Cmd::Summary(args) => commands::summary::run(args),
         Cmd::Delta(args) => commands::delta::run(args),
+        Cmd::MemoryPressure(args) => commands::memory_pressure::run(args),
         Cmd::K6(cmd) => commands::k6::run(cmd),
     }
 }

@@ -15,6 +15,7 @@ on:
           - wasmtime_serve
           - gungraun_plugin
           - scale_density
+          - memory_pressure
           # scale_density with the settings in BENCH_VARIANTS below.
           - max_scale
       ref:
@@ -79,7 +80,8 @@ jobs:
       # 4 GiB + 32 MiB (WASH_SCALE_MEMORY_RESERVATION and
       # WASH_SCALE_MEMORY_GUARD; a ref without them runs plain scale_density).
       BENCH_VARIANTS: >-
-        {"max_scale": {"bench": "scale_density",
+        {"memory_pressure": {"bench": "memory_pressure", "env": {}},
+         "max_scale": {"bench": "scale_density",
                        "env": {"WASH_SCALE_MEMORY_RESERVATION": "256MiB",
                                "WASH_SCALE_MEMORY_GUARD": "64KiB"}}}
     steps:
