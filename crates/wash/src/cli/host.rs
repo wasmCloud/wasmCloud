@@ -442,10 +442,8 @@ pub struct HostCommand {
     /// small instances. The trade is overcommit: the budget no longer covers
     /// initial memory, and `--max-process-memory` refuses new instances and
     /// growth once the host is over, but cannot stop instances it already
-    /// admitted from writing the initial memory they hold. It needs
-    /// `--max-process-memory`: with that off,
-    /// nothing bounds the memory instances start with, and the host warns
-    /// at startup.
+    /// admitted from writing the initial memory they hold.
+    /// `--max-initial-guest-memory` bounds how far that overcommit goes.
     ///
     /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
     /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
@@ -465,6 +463,22 @@ pub struct HostCommand {
         default_value = "enforce"
     )]
     pub guest_memory_mode: GuestMemoryMode,
+
+    /// Under `--guest-memory-mode=growth`, the most initial memory the host
+    /// leaves uncharged across all its instances (e.g. `4GiB`). Past it, a
+    /// new instance fails to instantiate.
+    ///
+    /// This is the overcommit bound: instances may come to write all of it,
+    /// and nothing else refuses them once admitted. Unset, it is four times
+    /// `--max-guest-memory`. `off` (or `none`) leaves only
+    /// `--max-process-memory` to bound it; with both off, nothing does, and
+    /// the host warns at startup. Ignored in the other modes, which charge
+    /// initial memory to `--max-guest-memory`.
+    #[arg(
+        long = "max-initial-guest-memory",
+        env = "WASH_HOST_MAX_INITIAL_GUEST_MEMORY"
+    )]
+    pub max_initial_guest_memory: Option<String>,
 
     /// Ceiling on how large any single guest linear memory may grow
     /// (e.g. `512MiB`).
@@ -1202,7 +1216,12 @@ impl CliCommand for HostCommand {
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
-        let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
+        let process_memory_policy =
+            MemoryLimitPolicy::parse(self.max_process_memory.as_deref(), "max-process-memory")?;
+        let initial_guest_memory_policy = MemoryLimitPolicy::parse(
+            self.max_initial_guest_memory.as_deref(),
+            "max-initial-guest-memory",
+        )?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1350,13 +1369,22 @@ impl CliCommand for HostCommand {
         }
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
         match process_memory_policy {
-            ProcessMemoryPolicy::Limit(bytes) => {
+            MemoryLimitPolicy::Limit(bytes) => {
                 engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
             }
-            ProcessMemoryPolicy::Disabled => {
+            MemoryLimitPolicy::Disabled => {
                 engine_builder = engine_builder.without_max_process_memory()
             }
-            ProcessMemoryPolicy::Automatic => {}
+            MemoryLimitPolicy::Automatic => {}
+        }
+        match initial_guest_memory_policy {
+            MemoryLimitPolicy::Limit(bytes) => {
+                engine_builder = engine_builder.with_max_initial_guest_memory_bytes(bytes);
+            }
+            MemoryLimitPolicy::Disabled => {
+                engine_builder = engine_builder.without_max_initial_guest_memory()
+            }
+            MemoryLimitPolicy::Automatic => {}
         }
 
         let engine = engine_builder.build()?;
@@ -2311,16 +2339,18 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, St
         .map_err(|e| e.to_string())
 }
 
-/// The three distinct meanings of the process-memory flag.
+/// The three distinct meanings of a memory-limit flag that takes `off`:
+/// `--max-process-memory` and `--max-initial-guest-memory`.
 #[derive(Debug, PartialEq, Eq)]
-enum ProcessMemoryPolicy {
+enum MemoryLimitPolicy {
     Automatic,
     Disabled,
     Limit(u64),
 }
 
-impl ProcessMemoryPolicy {
-    fn parse(raw: Option<&str>) -> anyhow::Result<Self> {
+impl MemoryLimitPolicy {
+    /// Parse `raw`, naming `flag` in any error.
+    fn parse(raw: Option<&str>, flag: &str) -> anyhow::Result<Self> {
         let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
             return Ok(Self::Automatic);
         };
@@ -2328,10 +2358,10 @@ impl ProcessMemoryPolicy {
             return Ok(Self::Disabled);
         }
         let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
-            .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("invalid {flag}: {e}"))?;
         anyhow::ensure!(
             bytes > 0,
-            "max-process-memory must be greater than zero; use `off` for no limit"
+            "{flag} must be greater than zero; use `off` for no limit"
         );
         Ok(Self::Limit(bytes))
     }
@@ -2339,28 +2369,28 @@ impl ProcessMemoryPolicy {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod process_memory_policy_tests {
+mod memory_limit_policy_tests {
     use super::*;
     #[test]
     fn distinguishes_automatic_disabled_and_explicit_limits() -> anyhow::Result<()> {
         for raw in [None, Some(""), Some("  ")] {
             assert_eq!(
-                ProcessMemoryPolicy::parse(raw)?,
-                ProcessMemoryPolicy::Automatic
+                MemoryLimitPolicy::parse(raw, "flag")?,
+                MemoryLimitPolicy::Automatic
             );
         }
         for raw in ["off", " NONE "] {
             assert_eq!(
-                ProcessMemoryPolicy::parse(Some(raw))?,
-                ProcessMemoryPolicy::Disabled
+                MemoryLimitPolicy::parse(Some(raw), "flag")?,
+                MemoryLimitPolicy::Disabled
             );
         }
         assert_eq!(
-            ProcessMemoryPolicy::parse(Some("1GiB"))?,
-            ProcessMemoryPolicy::Limit(1 << 30)
+            MemoryLimitPolicy::parse(Some("1GiB"), "flag")?,
+            MemoryLimitPolicy::Limit(1 << 30)
         );
-        assert!(ProcessMemoryPolicy::parse(Some("0")).is_err());
-        assert!(ProcessMemoryPolicy::parse(Some("invalid")).is_err());
+        assert!(MemoryLimitPolicy::parse(Some("0"), "flag").is_err());
+        assert!(MemoryLimitPolicy::parse(Some("invalid"), "flag").is_err());
         Ok(())
     }
 }

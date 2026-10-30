@@ -1325,6 +1325,8 @@ pub struct EngineBuilder {
     max_process_memory_bytes: Option<u64>,
     max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
+    max_initial_guest_memory_bytes: Option<u64>,
+    max_initial_guest_memory_off: bool,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1445,13 +1447,39 @@ impl EngineBuilder {
     /// [`guest_memory::GuestMemoryMode::Count`].
     ///
     /// [`guest_memory::GuestMemoryMode::Growth`] keeps the ceiling for growth
-    /// but leaves the memory an instance is born with to the process guard,
-    /// for hosts packing many small instances. It needs that guard: built
-    /// with [`Self::without_max_process_memory`] as well, nothing bounds
-    /// initial memory, and the engine warns.
+    /// but leaves the memory an instance is born with uncharged, for hosts
+    /// packing many small instances, up to its own cap (see
+    /// [`Self::with_max_initial_guest_memory_bytes`]).
     #[must_use]
     pub fn with_guest_memory_mode(mut self, mode: guest_memory::GuestMemoryMode) -> Self {
         self.guest_memory_mode = mode;
+        self
+    }
+
+    /// Under [`guest_memory::GuestMemoryMode::Growth`], the most initial
+    /// memory the budget may leave uncharged across the host. Past it, a new
+    /// memory is refused. Unset, it is
+    /// [`guest_memory::DEFAULT_INITIAL_OVERCOMMIT`] times `max_guest_memory`.
+    /// Other modes charge initial memory and ignore it.
+    ///
+    /// Overrides an earlier [`Self::without_max_initial_guest_memory`].
+    #[must_use]
+    pub fn with_max_initial_guest_memory_bytes(mut self, bytes: u64) -> Self {
+        self.max_initial_guest_memory_bytes = Some(bytes);
+        self.max_initial_guest_memory_off = false;
+        self
+    }
+
+    /// Leave initial memory under [`guest_memory::GuestMemoryMode::Growth`]
+    /// unbounded by the budget, so only the process guard limits it. Built
+    /// with [`Self::without_max_process_memory`] as well, nothing bounds it,
+    /// and the engine warns.
+    ///
+    /// Overrides an earlier [`Self::with_max_initial_guest_memory_bytes`].
+    #[must_use]
+    pub fn without_max_initial_guest_memory(mut self) -> Self {
+        self.max_initial_guest_memory_bytes = None;
+        self.max_initial_guest_memory_off = true;
         self
     }
 
@@ -1937,17 +1965,29 @@ impl EngineBuilder {
             }
             None => None,
         };
-        // Growth mode hands initial memory to the process guard; without one
-        // it is bounded by nothing, which an operator choosing the mode for
-        // density on a sized host did not mean.
-        if self.guest_memory_mode == guest_memory::GuestMemoryMode::Growth
-            && process_memory.is_none()
-        {
-            tracing::warn!(
-                "guest-memory-mode is growth and max-process-memory is off: the memory an \
-                 instance starts with is charged to neither, so nothing bounds it. Set \
-                 max-process-memory, or use enforce."
-            );
+        // Growth mode leaves initial memory uncharged, bounded by its own cap
+        // and the process guard; with neither, nothing bounds it, which an
+        // operator choosing the mode for density on a sized host did not mean.
+        let max_initial_guest_memory = (!self.max_initial_guest_memory_off).then(|| {
+            self.max_initial_guest_memory_bytes.unwrap_or(
+                host_memory
+                    .max_guest_memory
+                    .saturating_mul(guest_memory::DEFAULT_INITIAL_OVERCOMMIT),
+            )
+        });
+        if self.guest_memory_mode == guest_memory::GuestMemoryMode::Growth {
+            match max_initial_guest_memory {
+                Some(cap) => tracing::info!(
+                    max_initial_guest_memory = %host_memory::render_bytes(cap),
+                    "guest-memory-mode is growth: initial memory is uncharged up to this cap"
+                ),
+                None if process_memory.is_none() => tracing::warn!(
+                    "guest-memory-mode is growth and both max-initial-guest-memory and \
+                     max-process-memory are off: nothing bounds the memory instances start \
+                     with. Set either, or use enforce."
+                ),
+                None => {}
+            }
         }
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
@@ -1994,6 +2034,10 @@ impl EngineBuilder {
                 // measures against, so they cannot drift apart.
                 let budget = match installed_heap_memory {
                     Some(ceiling) => budget.with_heap_ceiling(ceiling),
+                    None => budget,
+                };
+                let budget = match max_initial_guest_memory {
+                    Some(cap) => budget.with_initial_cap(cap),
                     None => budget,
                 };
                 match &process_memory {
