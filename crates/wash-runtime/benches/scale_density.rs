@@ -44,8 +44,8 @@
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
 //! | `WASH_SCALE_GUEST_MEMORY_MODE` | `enforce`, `count` or `growth`: how the guest budget is applied; a list (`enforce,growth`) runs each flavour in each | `enforce` |
 //! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | four times `WASH_SCALE_GUEST_MEMORY` |
-//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB; costs bounds checks | wasmtime's default |
-//! | `WASH_SCALE_MEMORY_GUARD` | guard after each guest memory, below wasmtime's 32 MiB | wasmtime's default |
+//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB; moves an isolation boundary (`THREAT_MODEL.md`) | wasmtime's default |
+//! | `WASH_SCALE_MEMORY_GUARD` | guard after each guest memory, below wasmtime's 32 MiB; moves the same boundary | wasmtime's default |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |

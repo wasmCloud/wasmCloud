@@ -32,7 +32,7 @@
 //! well short of it. Naming the budget lets the host say, at startup, whether
 //! the pool it is about to build is one the machine could actually back.
 //!
-//! # The reservation is an opt-in knob
+//! # The reservation is an opt-in knob, and a security boundary
 //!
 //! Lowering `default_heap_memory` below 4 GiB caps how far a guest may grow,
 //! but it does not shrink the slot: wasmtime still reserves 4 GiB for it.
@@ -41,15 +41,23 @@
 //! space however little memory they use.
 //!
 //! [`MemoryLayout`] shrinks it, for operators and embedders who need the
-//! scale and accept the cost:
+//! scale and accept what it changes:
 //!
-//! - **Bounds checks.** At 4 GiB with its guard, wasmtime elides bounds checks
-//!   on 32-bit memories: an out-of-bounds access faults in the guard.
-//!   Below that, it checks every load and store, which makes guest memory
-//!   access slower.
-//! - **Defence in depth.** Isolation then rests on those checks alone,
-//!   without the unmapped region behind them; a smaller guard shrinks it further.
-//! - **Heap ceiling.** No memory may grow past the reservation, so the
+//! - **It moves a security boundary.** At wasmtime's 4 GiB reservation, every
+//!   address a 32-bit memory can form lands inside its own reservation (or,
+//!   with a constant offset, the guard after it); see [`MemoryLayout`].
+//!   A guest cannot reach a sibling component's memory, by construction:
+//!   the hardware faults first.
+//!   Below that, sibling memories sit within reach of a 32-bit address, and
+//!   what keeps a guest out of them is wasmtime emitting a correct bounds
+//!   check on every load and store. A bug in those checks, unlikely as it is,
+//!   would then let one guest read or write another's memory.
+//!   That is less defence in depth, not none: the checks are wasmtime's
+//!   ordinary, tested path for memories without a large reservation.
+//! - **It costs speed.** Every guest load and store is bounds-checked
+//!   instead of elided, which makes guest memory access slower.
+//!   A smaller guard also leaves fewer static offsets folded into it.
+//! - **It caps the heap.** No memory may grow past the reservation, so the
 //!   engine lowers `default_heap_memory` to it.
 //!
 //! Left alone, the layout is wasmtime's own and none of this applies.
@@ -471,16 +479,37 @@ pub const WASMTIME_MEMORY_GUARD: u64 = 64 * 1024;
 /// The address space wasmtime lays out for each linear memory:
 /// its `memory_reservation` and `memory_guard_size`.
 ///
+/// One pool slot is a reservation followed by a guard:
+///
+/// ```text
+/// ┌────────┬───────────────┬───────┬────────┬─────
+/// │ in use │ room to grow  │ guard │ in use │ ...
+/// └────────┴───────────────┴───────┴────────┴─────
+/// ◄──────── reservation ──►◄guard─►◄ next slot
+/// ```
+///
+/// - The **reservation** is the memory's whole span: what it uses now, and
+///   the room it may grow into. It never grows past it.
+/// - The **guard** is unmapped, never accessible, and part of neither memory;
+///   wasmtime also puts one before the first slot.
+/// - At wasmtime's 4 GiB reservation, a 32-bit address cannot reach past the
+///   room to grow, which is what keeps a guest inside its own slot without
+///   bounds checks. The guard only catches constant offsets added on top.
+///
 /// [`Self::default`] is wasmtime's own, and what every engine uses unless
 /// [`crate::engine::EngineBuilder::with_memory_layout`] says otherwise.
-/// A smaller layout fits more memories in the address space, at a cost;
-/// see the module docs, "The reservation is an opt-in knob".
+/// A smaller layout fits more memories in the address space, and **moves a
+/// security boundary**: sibling memories come within reach of a 32-bit
+/// address, and isolation then relies on wasmtime's bounds checks alone.
+/// See the module docs, "The reservation is an opt-in knob, and a security
+/// boundary".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryLayout {
-    /// Address space reserved for each linear memory, and the most a pooled
-    /// memory may grow to. wasmtime's `memory_reservation`.
+    /// Each memory's whole span: what it uses, and the room it may grow into.
+    /// wasmtime's `memory_reservation`.
     pub reservation: u64,
-    /// Unmapped address space after each memory. wasmtime's `memory_guard_size`.
+    /// Unmapped space after each reservation, between it and the next slot.
+    /// wasmtime's `memory_guard_size`.
     pub guard: u64,
 }
 
