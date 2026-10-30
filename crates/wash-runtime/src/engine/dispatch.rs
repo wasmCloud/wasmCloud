@@ -1074,9 +1074,9 @@ impl Drop for ServiceClaim {
 /// item calls go to, not the instance that serves them: a component's warm set
 /// and a service's incarnations both turn over underneath it.
 ///
-/// The workload is behind an [`Arc`] because cloning a [`ResolvedWorkload`] is
-/// not cheap — it copies the service's `Linker` by value, string pool and all —
-/// and a target is expected to be cloned per dispatch.
+/// The workload is behind an [`Arc`] because a target is expected to be
+/// cloned per dispatch, and cloning a [`ResolvedWorkload`] copies every map it
+/// holds.
 #[derive(Clone)]
 pub struct DispatchTarget {
     workload: Arc<ResolvedWorkload>,
@@ -1122,10 +1122,10 @@ enum TargetItem {
     /// A component: instantiated per call, or served on a warm instance.
     Component {
         id: Arc<str>,
-        /// Resolved once, with the target, rather than per call: pre-linking a
-        /// component against its linker checks every import, which is exactly
-        /// the work `InstancePre` exists to do ahead of time. The HTTP
-        /// entrypoint captures one the same way, at the same point.
+        /// Captured once, with the target, rather than looked up per call:
+        /// the component's kept link, the work `InstancePre` exists to do
+        /// ahead of time. The HTTP entrypoint captures one the same way, at
+        /// the same point.
         pre: InstancePre<SharedCtx>,
         /// The warm set this component's calls run on, or `None` when each gets
         /// a store of its own. Read once, with `pre` and under the same lock:
@@ -1175,9 +1175,7 @@ impl DispatchTarget {
             by_operation: Mutex::default(),
         });
         Ok(Self {
-            // Copied once per target: cloning a `ResolvedWorkload` copies the
-            // service's `Linker` by value, so it is worth paying here rather
-            // than on every clone of the target.
+            // Copied once per target rather than on every clone of it.
             workload: Arc::new(workload.clone()),
             item,
             metrics,

@@ -58,11 +58,11 @@ impl HostPlugin for Native {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> Result<()> {
-        item.linker().instance("test:payload/types")?;
+        item.linker()?.instance("test:payload/types")?;
         if !interfaces.contains("test", "payload", &["native"]) {
             return Ok(());
         }
-        item.linker()
+        item.linker()?
             .instance("test:payload/native")?
             .func_new_concurrent("relay", |accessor, _, params, results| {
                 Box::pin(async move {

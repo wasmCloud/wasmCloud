@@ -25,6 +25,7 @@ rules:
     - workloads
     - workloadreplicasets
     - workloaddeployments
+    - workloaddaemonsets
     verbs:
     - create
     - delete
@@ -40,6 +41,7 @@ rules:
     - workloads/status
     - workloadreplicasets/status
     - workloaddeployments/status
+    - workloaddaemonsets/status
     verbs:
     - get
     - update
@@ -53,6 +55,7 @@ rules:
     - workloads/finalizers
     - workloadreplicasets/finalizers
     - workloaddeployments/finalizers
+    - workloaddaemonsets/finalizers
     verbs:
     - update
   - apiGroups:

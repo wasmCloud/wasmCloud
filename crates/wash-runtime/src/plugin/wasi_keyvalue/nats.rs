@@ -523,7 +523,7 @@ impl HostPlugin for NatsKeyValue {
             workload_id = component_handle.id(),
             "Adding keyvalue interfaces to linker for workload"
         );
-        let linker = component_handle.linker();
+        let linker = component_handle.linker()?;
 
         bindings::wasi::keyvalue::store::add_to_linker::<_, SharedCtx>(linker, extract_active_ctx)?;
         bindings::wasi::keyvalue::atomics::add_to_linker::<_, SharedCtx>(
