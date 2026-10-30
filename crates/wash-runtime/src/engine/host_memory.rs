@@ -229,11 +229,10 @@ pub struct MaxMemoriesDerivation {
     pub from_memory_precommit_limit: bool,
     /// Whether the engine will map copy-on-write memory images, which sets
     /// how many mappings a live memory splits into (four with images, two
-    /// without). `None` reads
-    /// `WASMTIME_MEMORY_INIT_COW` the way the engine does when its builder
-    /// names nothing; an embedder that calls
-    /// `EngineBuilder::with_memory_init_cow` passes the same value here, so
-    /// the count is sized for the mappings the engine will really make.
+    /// without). `None` reads `WASMTIME_MEMORY_INIT_COW` the way the engine
+    /// does when its builder names nothing.
+    /// `EngineBuilder::with_derived_max_memories` fills it from the builder's
+    /// own setting, so only a caller deriving a count by hand sets it.
     pub memory_init_cow: Option<bool>,
 }
 

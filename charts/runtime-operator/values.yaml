@@ -465,8 +465,8 @@ runtime:
     #   Use it to size a host: watch the reported high-water mark,
     #   then return to `enforce`.
     # - `growth` enforces like `enforce`,
-    #   but does not charge the memory an instance starts with,
-    #   only what it grows by.
+    #   but leaves up to 2 MiB of each memory's first allocation
+    #   (its initial size) uncharged.
     #   It is for hosts packing many small instances.
     #
     # `growth` overcommits.
@@ -476,7 +476,6 @@ runtime:
     # can take the host past its limit.
     # `WASH_HOST_MAX_INITIAL_GUEST_MEMORY` bounds the overcommit:
     # four times the budget, unless set in `runtime.env`.
-    # Do not turn off both it and `WASH_HOST_MAX_PROCESS_MEMORY`.
     #
     # The host derives the budget: three quarters of `limits.memory`, and
     # never less than 256MiB — so keep `limits.memory` above 342Mi, or the

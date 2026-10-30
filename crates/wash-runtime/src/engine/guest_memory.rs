@@ -30,45 +30,43 @@
 //!
 //! # Growth, for density
 //!
-//! [`GuestMemoryMode::Growth`] enforces growth like `Enforce` but does not
-//! charge a memory's first allocation: the grow from zero bytes that creates
-//! it, which for a declared memory is its initial size. A linear memory's
-//! initial size is mapped copy-on-write and backed by the kernel only as it
-//! is written, so a warm instance that declares 1 MiB and touches 70 KiB costs
-//! the host 70 KiB; charged at its declared size, a budget of three quarters
-//! of a 768 MiB container holds about 540 such instances, when the container
-//! holds several thousand. What the initial memory becomes resident is what
-//! `max_process_memory` measures, and that guard still refuses an
-//! instantiation while the process is over its limit.
+//! [`GuestMemoryMode::Growth`] enforces growth like `Enforce`,
+//! but leaves part of each memory's first allocation uncharged.
 //!
-//! The trade is overcommit. `Enforce` guarantees that everything granted fits
-//! in the budget; `Growth` does not, for initial memory. The process guard
-//! refuses new instances and growth once the process is over its limit, but
-//! it cannot stop instances already admitted from writing the initial memory
-//! they hold, so instances that each come to write all of it can take the
-//! host past its limit. The bet is that initial memory is mostly reserved
-//! and untouched (a toolchain's default stack) where growth is asked for
-//! because it is about to be used. That is why it is opt-in and `Enforce`
-//! stays the default.
+//! - **Why:** a linear memory's initial size is mapped copy-on-write
+//!   and backed by the kernel only as it is written.
+//!   A warm instance that declares 1 MiB and touches 70 KiB costs the host 70 KiB.
+//!   Charged at its declared size,
+//!   a budget of three quarters of a 768 MiB container holds about 540 such instances,
+//!   when the container holds several thousand.
+//! - **What is uncharged:** of each first allocation (a grow from zero bytes),
+//!   up to [`FIRST_ALLOCATION_UNCHARGED`]; the rest is charged as growth.
+//!   That covers a toolchain's reserved stack,
+//!   and keeps one instance from claiming a large initial memory for free.
+//! - **What counts as a first allocation:** any grow from zero bytes, whenever it happens:
+//!   - a declared memory's initial size, at instantiation;
+//!   - a zero-page memory's first `memory.grow`;
+//!   - the GC heap wasmtime creates on a guest's first GC allocation.
 //!
-//! What bounds the overcommit is a cap of its own,
-//! [`GuestMemoryBudget::with_initial_cap`]: uncharged first allocations may
-//! total that much and no more. An engine derives it as
-//! [`DEFAULT_INITIAL_OVERCOMMIT`] times the budget unless told otherwise, so
-//! the mode is bounded out of the box, in bytes an operator can read and
-//! move; it is kept apart from `in_use` so that figure stays a count of real
-//! growth. With both the cap and `max_process_memory` off, nothing bounds the
-//! memory instances start with, and the engine says so when it is built.
+//!   A memory never shrinks back to zero, so each memory has one.
+//!   Telling them apart would need the limiter to know when an instantiation is under way,
+//!   which every site that instantiates would then have to tell it.
+//! - **What bounds the total:** a cap of its own, [`GuestMemoryBudget::with_initial_cap`].
+//!   An engine derives it as [`DEFAULT_INITIAL_OVERCOMMIT`] times the budget unless told otherwise.
+//!   It is kept apart from `in_use`, so that figure stays a count of growth.
 //!
-//! Any grow from zero bytes counts as a memory's first allocation, whenever it
-//! happens: a declared memory's initial size, a zero-page memory's first
-//! `memory.grow`, a GC heap wasmtime creates on a guest's first GC
-//! allocation. Each is uncharged once per memory, because a memory never
-//! shrinks back to zero, and bounded as a declared minimum is (by the
-//! memory's maximum and the heap ceiling), so a guest gains nothing by it
-//! that it could not have declared. Telling them apart would need the limiter
-//! to know when an instantiation is under way, which every site that
-//! instantiates would then have to tell it.
+//! The trade is overcommit:
+//!
+//! - `Enforce` guarantees that everything granted fits in the budget.
+//!   `Growth` does not, for the uncharged part of initial memory.
+//! - The process guard refuses new instances and growth once the process is over its limit,
+//!   but it cannot stop admitted instances writing the initial memory they hold.
+//!   Instances that each come to write all of it can take the host past its limit,
+//!   by at most the initial cap.
+//! - The bet is that initial memory is mostly reserved and untouched (a toolchain's default stack),
+//!   where growth is asked for because it is about to be used.
+//!
+//! That is why the mode is opt-in, and `Enforce` stays the default.
 //!
 //! # What a refusal looks like to a guest
 //!
@@ -142,11 +140,16 @@ const PRESSURE_DENOMINATOR: u64 = 4;
 /// `Enforce` would.
 pub const DEFAULT_INITIAL_OVERCOMMIT: u64 = 4;
 
-/// How strictly the guest memory budget is applied.
+/// How much of each memory's first allocation [`GuestMemoryMode::Growth`]
+/// leaves uncharged; the rest is charged as growth.
 ///
-/// Non-exhaustive since `Growth` was added: that addition, and this
-/// attribute, break a consumer that matched the two earlier modes
-/// exhaustively, once; a mode added after it will not.
+/// - Enough for a toolchain's reserved stack and data:
+///   a Rust handler declares about 1 MiB (17 pages).
+/// - Small enough that one instance cannot claim a large initial memory uncharged:
+///   under `Enforce` that memory would be refused, and so its excess is here.
+pub const FIRST_ALLOCATION_UNCHARGED: u64 = 2 * 1024 * 1024;
+
+/// How strictly the guest memory budget is applied.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GuestMemoryMode {
@@ -156,9 +159,10 @@ pub enum GuestMemoryMode {
     /// Refuse growth past the budget. The default.
     #[default]
     Enforce,
-    /// Refuse growth past the budget, but do not charge the memory an
-    /// instance starts with: that is mapped lazily and measured by the
-    /// process guard. See the module docs, "Growth, for density".
+    /// Refuse growth past the budget,
+    /// but leave up to [`FIRST_ALLOCATION_UNCHARGED`] of each memory's first allocation uncharged,
+    /// bounded in total by the initial cap.
+    /// See the module docs, "Growth, for density".
     Growth,
 }
 
@@ -235,13 +239,19 @@ pub struct GuestMemoryBudget {
     /// `would_refuse`, which are this budget's own: a host whose guests sit
     /// well inside their budget should not read as having outgrown it.
     process_refused: AtomicU64,
-    /// Initial memory live on stores under [`GuestMemoryMode::Growth`] that
-    /// was admitted without a charge: declared, not resident. Reported so a
-    /// host can see what the budget is not counting.
+    /// The uncharged part of first allocations live on stores under
+    /// [`GuestMemoryMode::Growth`]: declared, not resident.
+    /// Reported so a host can see what the budget is not counting.
     initial_uncharged: AtomicU64,
     /// Most `initial_uncharged` may reach under [`GuestMemoryMode::Growth`];
-    /// `None` is no bound. See [`Self::with_initial_cap`].
-    initial_cap: Option<u64>,
+    /// `u64::MAX` until [`Self::with_initial_cap`] says otherwise.
+    initial_cap: u64,
+    /// First allocations refused because `initial_cap` was reached.
+    /// Kept out of `refused`, which is the budget's own,
+    /// so an operator can tell which limit to move.
+    initial_refused: AtomicU64,
+    /// `initial_refused` as of the last [`Self::report`].
+    reported_initial_refusals: AtomicU64,
     /// Whether `initial_cap` has refused anything yet, so the first refusal
     /// is reported loudly and the rest quietly.
     initial_crossed: AtomicBool,
@@ -270,26 +280,38 @@ impl GuestMemoryBudget {
             process: None,
             process_refused: AtomicU64::new(0),
             initial_uncharged: AtomicU64::new(0),
-            initial_cap: None,
+            initial_cap: u64::MAX,
+            initial_refused: AtomicU64::new(0),
+            reported_initial_refusals: AtomicU64::new(0),
             initial_crossed: AtomicBool::new(false),
         }
     }
 
-    /// Bound the first allocations [`GuestMemoryMode::Growth`] leaves
-    /// uncharged: once they total `initial_cap`, a new memory is refused,
-    /// which a new instance sees as a failed instantiation. Without one,
-    /// nothing but the process guard bounds them. Ignored in other modes,
-    /// which charge first allocations like any growth.
+    /// Bound what [`GuestMemoryMode::Growth`] leaves uncharged across the host.
+    ///
+    /// Once the uncharged parts of first allocations total `initial_cap`,
+    /// a new memory is refused:
+    ///
+    /// - at instantiation, the instance fails to instantiate;
+    /// - at a running guest's first `memory.grow` of a zero-page memory, it returns -1;
+    /// - for a GC heap, wasmtime reports the heap could not grow.
+    ///
+    /// Unset, only the process guard bounds them.
+    /// Ignored in other modes, which charge first allocations like any growth.
     #[must_use]
     pub fn with_initial_cap(mut self, initial_cap: u64) -> Self {
-        self.initial_cap = Some(initial_cap);
+        self.initial_cap = initial_cap;
         self
     }
 
-    /// The bound on uncharged first allocations, if any; see
-    /// [`Self::with_initial_cap`].
-    pub fn initial_cap(&self) -> Option<u64> {
+    /// The bound on uncharged first allocations; see [`Self::with_initial_cap`].
+    pub fn initial_cap(&self) -> u64 {
         self.initial_cap
+    }
+
+    /// First allocations refused for reaching the initial cap.
+    pub fn initial_refused(&self) -> u64 {
+        self.initial_refused.load(Ordering::Relaxed)
     }
 
     /// Refuse every growth while `guard` says the process is past its limit.
@@ -336,8 +358,8 @@ impl GuestMemoryBudget {
         }
     }
 
-    /// First allocations of live memories that
-    /// [`GuestMemoryMode::Growth`] admitted without charging.
+    /// The uncharged part of live memories' first allocations,
+    /// under [`GuestMemoryMode::Growth`].
     pub fn initial_uncharged(&self) -> u64 {
         self.initial_uncharged.load(Ordering::Relaxed)
     }
@@ -420,13 +442,6 @@ impl GuestMemoryBudget {
             "Guest linear memory currently charged to this host's budget",
             |b: &Arc<Self>| b.in_use()
         );
-        observe!(
-            u64_observable_gauge,
-            "guest_memory.initial_uncharged",
-            "By",
-            "First allocations of guest memories excluded from the growth budget; mapped, not resident, bytes",
-            |b: &Arc<Self>| b.initial_uncharged()
-        );
         // Kept rather than left to `max_over_time(in_use)` in the query layer:
         // the exporter samples, and a burst that begins and ends between two
         // samples is invisible to the gauge but is exactly what precedes an
@@ -462,6 +477,31 @@ impl GuestMemoryBudget {
              allowed because it is only being counted",
             |b: &Arc<Self>| b.would_refuse()
         );
+        // Growth mode's own figures, only where they mean something, so the
+        // other modes export the set they always have.
+        if self.mode == GuestMemoryMode::Growth {
+            observe!(
+                u64_observable_gauge,
+                "guest_memory.initial_uncharged",
+                "By",
+                "Uncharged part of guest memories' first allocations; mapped, not resident, bytes",
+                |b: &Arc<Self>| b.initial_uncharged()
+            );
+            observe!(
+                u64_observable_gauge,
+                "guest_memory.initial_limit",
+                "By",
+                "This host's max-initial-guest-memory cap on uncharged first allocations",
+                |b: &Arc<Self>| b.initial_cap()
+            );
+            observe!(
+                u64_observable_counter,
+                "guest_memory.initial_refused",
+                "{allocation}",
+                "Guest memory first allocations refused for reaching the initial cap",
+                |b: &Arc<Self>| b.initial_refused()
+            );
+        }
         // Named for the process, not the budget: it is the process's limit
         // that refused, and a budget without a guard never counts one.
         if self.process.is_some() {
@@ -498,6 +538,9 @@ impl GuestMemoryBudget {
     /// minute three would otherwise say so on every heartbeat for the rest of
     /// its life, and a line that never stops carries nothing.
     pub fn report(&self) {
+        if self.mode == GuestMemoryMode::Growth {
+            self.report_initial();
+        }
         let in_use = self.in_use();
         let refused = self.refused();
         let would_refuse = self.would_refuse();
@@ -513,7 +556,6 @@ impl GuestMemoryBudget {
                 in_use = %render_bytes(in_use),
                 high_water = %render_bytes(self.high_water()),
                 max_guest_memory = %render_bytes(self.cap),
-                initial_uncharged = %render_bytes(self.initial_uncharged()),
                 "guest memory budget"
             );
             return;
@@ -529,7 +571,6 @@ impl GuestMemoryBudget {
                 in_use = %render_bytes(in_use),
                 high_water = %render_bytes(self.high_water()),
                 max_guest_memory = %render_bytes(self.cap),
-                initial_uncharged = %render_bytes(self.initial_uncharged()),
                 refused,
                 would_refuse,
                 "guest memory is close to this host's budget"
@@ -541,11 +582,45 @@ impl GuestMemoryBudget {
             in_use = %render_bytes(in_use),
             high_water = %render_bytes(self.high_water()),
             max_guest_memory = %render_bytes(self.cap),
-            initial_uncharged = %render_bytes(self.initial_uncharged()),
             refused,
             would_refuse,
             "guest memory growth has been refused since the last report"
         );
+    }
+
+    /// [`Self::report`]'s part for the initial cap, under [`GuestMemoryMode::Growth`]:
+    /// the same rules, against the cap rather than the budget.
+    fn report_initial(&self) {
+        let held = self.initial_uncharged();
+        let refused = self.initial_refused();
+        let new_refusals = refused
+            > self
+                .reported_initial_refusals
+                .swap(refused, Ordering::Relaxed);
+        let pressured = held >= self.initial_cap / PRESSURE_DENOMINATOR * PRESSURE_NUMERATOR;
+        let initial_uncharged = render_bytes(held);
+        let max_initial_guest_memory = render_bytes(self.initial_cap);
+        if pressured {
+            tracing::info!(
+                %initial_uncharged,
+                %max_initial_guest_memory,
+                refused,
+                "uncharged initial guest memory is close to this host's initial cap"
+            );
+        } else if new_refusals {
+            tracing::info!(
+                %initial_uncharged,
+                %max_initial_guest_memory,
+                refused,
+                "new guest memories have been refused at the initial cap since the last report"
+            );
+        } else {
+            tracing::debug!(
+                %initial_uncharged,
+                %max_initial_guest_memory,
+                "uncharged initial guest memory"
+            );
+        }
     }
 
     /// Whether the process guard, if any, lets `bytes` more guest memory in.
@@ -574,35 +649,51 @@ impl GuestMemoryBudget {
         true
     }
 
-    /// Admit `bytes` of a memory's first allocation under
-    /// [`GuestMemoryMode::Growth`]: nothing is charged, and only the process
-    /// guard and the initial cap may refuse it.
-    fn admit_initial(&self, bytes: u64) -> bool {
+    /// Admit a memory's first allocation of `bytes` under [`GuestMemoryMode::Growth`].
+    ///
+    /// - Up to [`FIRST_ALLOCATION_UNCHARGED`] goes uncharged, within the initial cap.
+    /// - The rest is charged as growth, and refused as growth is.
+    /// - The process guard may refuse the whole of it.
+    ///
+    /// Returns the uncharged and charged parts when admitted.
+    fn admit_first_allocation(&self, bytes: u64) -> Option<(u64, u64)> {
+        let uncharged = bytes.min(FIRST_ALLOCATION_UNCHARGED);
+        let charged = bytes - uncharged;
         if !self.process_admits(bytes) {
-            return false;
+            return None;
         }
         let admitted =
             self.initial_uncharged
                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
-                    let next = held.saturating_add(bytes);
-                    self.initial_cap
-                        .is_none_or(|cap| next <= cap)
-                        .then_some(next)
+                    let next = held.saturating_add(uncharged);
+                    (next <= self.initial_cap).then_some(next)
                 });
-        match admitted {
-            Ok(_) => true,
-            Err(held) => {
-                self.refused.fetch_add(1, Ordering::Relaxed);
-                self.report_initial_refusal(bytes, held);
-                false
-            }
+        if let Err(held) = admitted {
+            self.initial_refused.fetch_add(1, Ordering::Relaxed);
+            self.report_initial_refusal(uncharged, held);
+            return None;
         }
+        if !self.charge(charged) {
+            self.release_initial(uncharged);
+            return None;
+        }
+        Some((uncharged, charged))
+    }
+
+    /// Give back `bytes` of uncharged first allocation.
+    fn release_initial(&self, bytes: u64) {
+        // Saturating, like `release`: an unbalanced release must not wrap.
+        let _ = self
+            .initial_uncharged
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                Some(held.saturating_sub(bytes))
+            });
     }
 
     /// Say that the initial cap refused a first allocation: loudly the first
     /// time, quietly after that.
     fn report_initial_refusal(&self, bytes: u64, held: u64) {
-        let cap = render_bytes(self.initial_cap.unwrap_or(u64::MAX));
+        let cap = render_bytes(self.initial_cap);
         if self.initial_crossed.swap(true, Ordering::Relaxed) {
             tracing::debug!(
                 requested = %render_bytes(bytes),
@@ -616,9 +707,9 @@ impl GuestMemoryBudget {
             requested = %render_bytes(bytes),
             initial_uncharged = %render_bytes(held),
             max_initial_guest_memory = %cap,
-            "refusing a new guest memory past this host's initial cap. A new instance that \
-             asks for one fails to instantiate. Raise --max-initial-guest-memory, or give this \
-             host fewer warm instances"
+            "refusing a new guest memory past this host's initial cap. A new instance asking \
+             for one fails to instantiate, and a running guest's memory.grow returns -1. Raise \
+             --max-initial-guest-memory, or give this host fewer warm instances"
         );
     }
 
@@ -760,7 +851,7 @@ pub struct StoreMemoryLimiter {
     budget: Option<Arc<GuestMemoryBudget>>,
     /// What this store has taken from the budget and owes back on drop.
     charged: u64,
-    /// Initial memory this store was admitted without a charge, under
+    /// The uncharged part of this store's first allocations, under
     /// [`GuestMemoryMode::Growth`]; taken off the budget's
     /// `initial_uncharged` on drop.
     uncharged: u64,
@@ -811,10 +902,11 @@ impl wasmtime::ResourceLimiter for StoreMemoryLimiter {
         // A grow from zero bytes is a memory's first allocation; see the module
         // docs, "Growth, for density".
         if budget.mode == GuestMemoryMode::Growth && current == 0 {
-            if !budget.admit_initial(growth) {
+            let Some((uncharged, charged)) = budget.admit_first_allocation(growth) else {
                 return Ok(false);
-            }
-            self.uncharged = self.uncharged.saturating_add(growth);
+            };
+            self.uncharged = self.uncharged.saturating_add(uncharged);
+            self.charged = self.charged.saturating_add(charged);
             return Ok(true);
         }
         if !budget.charge(growth) {
@@ -851,9 +943,7 @@ impl Drop for StoreMemoryLimiter {
             budget.release(self.charged);
         }
         if self.uncharged > 0 {
-            budget
-                .initial_uncharged
-                .fetch_sub(self.uncharged, Ordering::Relaxed);
+            budget.release_initial(self.uncharged);
         }
     }
 }
@@ -920,39 +1010,42 @@ mod tests {
         assert_eq!(budget.in_use(), 90 * MIB);
     }
 
-    /// Under `Growth` each memory's first allocation is admitted uncharged,
-    /// whenever it happens, and growth after it is charged and enforced.
+    /// Under `Growth`, up to `FIRST_ALLOCATION_UNCHARGED` of each memory's
+    /// first allocation goes uncharged, whenever it happens; the rest of it,
+    /// and every growth after it, is charged and enforced.
     #[test]
-    fn growth_leaves_initial_memory_to_the_process_guard() {
+    fn growth_charges_first_allocations_past_the_threshold() {
+        const FREE: u64 = FIRST_ALLOCATION_UNCHARGED;
         let budget = budget(100 * MIB, GuestMemoryMode::Growth);
         let mut a = budget.limiter();
-        assert!(a.memory_growing(0, 60 * MIB as usize, None).unwrap());
-        assert_eq!(budget.in_use(), 0, "initial memory is not charged");
-        assert_eq!(budget.initial_uncharged(), 60 * MIB);
-        assert_eq!(a.uncharged(), 60 * MIB);
-        assert_eq!(a.charged(), 0);
-
+        assert!(a.memory_growing(0, MIB as usize, None).unwrap());
+        assert_eq!(budget.in_use(), 0, "a small initial memory is not charged");
+        assert_eq!(a.uncharged(), MIB);
         assert!(
-            a.memory_growing(60 * MIB as usize, 120 * MIB as usize, None)
+            a.memory_growing(MIB as usize, 41 * MIB as usize, None)
                 .unwrap()
         );
-        assert_eq!(budget.in_use(), 60 * MIB, "growth is charged");
+        assert_eq!(budget.in_use(), 40 * MIB, "growth is charged");
 
         let mut b = budget.limiter();
+        assert!(b.memory_growing(0, 30 * MIB as usize, None).unwrap());
+        assert_eq!(b.uncharged(), FREE, "only the threshold is uncharged");
+        assert_eq!(b.charged(), 30 * MIB - FREE, "the rest is charged");
+        assert_eq!(budget.initial_uncharged(), MIB + FREE);
+
+        let mut c = budget.limiter();
         assert!(
-            b.memory_growing(0, 60 * MIB as usize, None).unwrap(),
-            "another memory's first allocation is uncharged too"
-        );
-        assert_eq!(budget.initial_uncharged(), 120 * MIB);
-        assert!(
-            !b.memory_growing(60 * MIB as usize, 120 * MIB as usize, None)
-                .unwrap(),
-            "its growth past the budget is refused"
+            !c.memory_growing(0, 50 * MIB as usize, None).unwrap(),
+            "a large first allocation is refused as growth past the budget"
         );
         assert_eq!(budget.refused(), 1);
+        assert_eq!(
+            budget.initial_uncharged(),
+            MIB + FREE,
+            "a refused first allocation gives its uncharged part back"
+        );
 
-        drop(a);
-        drop(b);
+        drop((a, b, c));
         assert_eq!(budget.in_use(), 0);
         assert_eq!(budget.initial_uncharged(), 0);
     }
@@ -1061,9 +1154,8 @@ mod tests {
         assert_eq!(budget.initial_uncharged(), 0);
     }
 
-    /// Under `Growth` the process guard is the only thing that refuses an
-    /// instantiation's initial memory: a process over its limit takes no new
-    /// instance, however much of the budget is free.
+    /// The process guard refuses a first allocation under `Growth`,
+    /// however much of the budget and the initial cap is free.
     #[test]
     fn growth_still_refuses_initial_memory_while_the_process_is_over() {
         let guard = Arc::new(ProcessMemoryGuard::new(1000 * MIB));
@@ -1073,41 +1165,90 @@ mod tests {
         );
         let mut limiter = budget.limiter();
         guard.observe(2000 * MIB);
-        assert!(!limiter.memory_growing(0, 10 * MIB as usize, None).unwrap());
+        assert!(!limiter.memory_growing(0, MIB as usize, None).unwrap());
         assert_eq!(budget.process_refused(), 1);
         assert_eq!(budget.initial_uncharged(), 0);
         guard.observe(100 * MIB);
-        assert!(limiter.memory_growing(0, 10 * MIB as usize, None).unwrap());
-        assert_eq!(budget.initial_uncharged(), 10 * MIB);
+        assert!(limiter.memory_growing(0, MIB as usize, None).unwrap());
+        assert_eq!(budget.initial_uncharged(), MIB);
         assert_eq!(budget.in_use(), 0);
     }
 
-    /// The initial cap bounds what `Growth` leaves uncharged, apart from the
-    /// budget, and makes room again as stores give their memory back.
+    /// The initial cap bounds what `Growth` leaves uncharged, counts its own
+    /// refusals apart from the budget's, and makes room again as stores give
+    /// their memory back.
     #[test]
     fn growth_refuses_first_allocations_past_the_initial_cap() {
         let budget = Arc::new(
-            GuestMemoryBudget::new(10 * MIB, GuestMemoryMode::Growth).with_initial_cap(100 * MIB),
+            GuestMemoryBudget::new(100 * MIB, GuestMemoryMode::Growth).with_initial_cap(3 * MIB),
         );
         let mut a = budget.limiter();
-        assert!(a.memory_growing(0, 60 * MIB as usize, None).unwrap());
+        assert!(a.memory_growing(0, 2 * MIB as usize, None).unwrap());
         let mut b = budget.limiter();
         assert!(
-            !b.memory_growing(0, 60 * MIB as usize, None).unwrap(),
+            !b.memory_growing(0, 2 * MIB as usize, None).unwrap(),
             "past the initial cap, though the budget is untouched"
         );
-        assert_eq!(budget.refused(), 1);
-        assert_eq!(budget.initial_uncharged(), 60 * MIB);
-        assert_eq!(budget.in_use(), 0);
-        assert!(b.memory_growing(0, 40 * MIB as usize, None).unwrap());
+        assert_eq!(budget.initial_refused(), 1);
+        assert_eq!(budget.refused(), 0, "the budget refused nothing");
+        assert_eq!(budget.initial_uncharged(), 2 * MIB);
+        assert!(b.memory_growing(0, MIB as usize, None).unwrap());
 
         drop(a);
         let mut c = budget.limiter();
         assert!(
-            c.memory_growing(0, 60 * MIB as usize, None).unwrap(),
+            c.memory_growing(0, 2 * MIB as usize, None).unwrap(),
             "a dropped store's first allocation is room again"
         );
-        assert_eq!(budget.initial_uncharged(), 100 * MIB);
+        assert_eq!(budget.initial_uncharged(), 3 * MIB);
+    }
+
+    /// Only `Growth` leaves anything uncharged: elsewhere a first allocation
+    /// is charged like any growth, and the initial cap does nothing.
+    #[test]
+    fn the_initial_cap_is_ignored_outside_growth() {
+        for mode in [GuestMemoryMode::Enforce, GuestMemoryMode::Count] {
+            let budget = Arc::new(GuestMemoryBudget::new(100 * MIB, mode).with_initial_cap(0));
+            let mut limiter = budget.limiter();
+            assert!(limiter.memory_growing(0, 10 * MIB as usize, None).unwrap());
+            assert_eq!(budget.in_use(), 10 * MIB, "{mode:?} charges it");
+            assert_eq!(budget.initial_uncharged(), 0);
+            assert_eq!(budget.initial_refused(), 0);
+        }
+    }
+
+    /// A running guest's first grow of a zero-page memory, refused at the
+    /// initial cap, sees `memory.grow` return -1 rather than a trap.
+    #[tokio::test]
+    async fn a_first_grow_refused_at_the_initial_cap_returns_minus_one() {
+        use crate::engine::ctx::{Ctx, SharedCtx};
+
+        let engine = wasmtime::Engine::default();
+        let wasm = wat::parse_str(
+            r#"(component
+                (core module $m
+                    (memory 0)
+                    (func (export "grow") (result i32) (memory.grow (i32.const 1))))
+                (core instance $m (instantiate $m))
+                (func (export "grow") (result s32) (canon lift (core func $m "grow"))))"#,
+        )
+        .unwrap();
+        let component = wasmtime::component::Component::new(&engine, wasm).unwrap();
+        let pre = wasmtime::component::Linker::new(&engine)
+            .instantiate_pre(&component)
+            .unwrap();
+        let budget = Arc::new(
+            GuestMemoryBudget::new(100 * MIB, GuestMemoryMode::Growth).with_initial_cap(0),
+        );
+        let ctx = SharedCtx::new(Ctx::builder("growth", "cap").build()).with_guest_memory(&budget);
+        let mut store = wasmtime::Store::new(&engine, ctx);
+        install_memory_limiter(&mut store);
+        let instance = pre.instantiate_async(&mut store).await.unwrap();
+        let grow = instance
+            .get_typed_func::<(), (i32,)>(&mut store, "grow")
+            .unwrap();
+        assert_eq!(grow.call_async(&mut store, ()).await.unwrap().0, -1);
+        assert_eq!(budget.initial_refused(), 1);
     }
 
     /// The upgrade-safety guarantee: a host that gains a derived budget it
@@ -1396,14 +1537,15 @@ mod tests {
 
     #[test]
     fn uncharged_initial_memory_is_exported_and_released() {
-        let budget = budget(100 * MIB, GuestMemoryMode::Growth);
-        let mut limiter = budget.limiter();
-        assert!(limiter.memory_growing(0, 60 * MIB as usize, None).unwrap());
-        let seen = collect_metrics(&budget);
-        assert_eq!(
-            seen.get("guest_memory.initial_uncharged"),
-            Some(&(60 * MIB))
+        let budget = Arc::new(
+            GuestMemoryBudget::new(100 * MIB, GuestMemoryMode::Growth).with_initial_cap(50 * MIB),
         );
+        let mut limiter = budget.limiter();
+        assert!(limiter.memory_growing(0, MIB as usize, None).unwrap());
+        let seen = collect_metrics(&budget);
+        assert_eq!(seen.get("guest_memory.initial_uncharged"), Some(&MIB));
+        assert_eq!(seen.get("guest_memory.initial_limit"), Some(&(50 * MIB)));
+        assert_eq!(seen.get("guest_memory.initial_refused"), Some(&0));
         assert_eq!(seen.get("guest_memory.in_use"), Some(&0));
         drop(limiter);
         assert_eq!(

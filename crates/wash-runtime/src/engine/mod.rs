@@ -1327,7 +1327,6 @@ pub struct EngineBuilder {
     max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     max_initial_guest_memory_bytes: Option<u64>,
-    max_initial_guest_memory_off: bool,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1338,17 +1337,22 @@ pub struct EngineBuilder {
 enum MaxMemories {
     /// [`EngineBuilder::with_max_memories`].
     Named(u32),
-    /// [`EngineBuilder::with_derived_max_memories`].
-    Derived {
-        count: u32,
-        sized_to_commit_limit: bool,
-    },
+    /// [`EngineBuilder::with_derived_max_memories`], derived when the engine is built.
+    Derived(host_memory::MaxMemoriesDerivation),
 }
 
 impl MaxMemories {
-    fn count(self) -> u32 {
+    /// The count, deriving it with the engine's copy-on-write setting
+    /// unless the derivation names its own.
+    fn count(self, memory_init_cow: Option<bool>) -> u32 {
         match self {
-            Self::Named(count) | Self::Derived { count, .. } => count,
+            Self::Named(count) => count,
+            Self::Derived(derivation) => {
+                host_memory::derive_max_memories_with(host_memory::MaxMemoriesDerivation {
+                    memory_init_cow: derivation.memory_init_cow.or(memory_init_cow),
+                    ..derivation
+                })
+            }
         }
     }
 }
@@ -1447,40 +1451,25 @@ impl EngineBuilder {
     /// sets nothing, so every engine has a ceiling unless it opts into
     /// [`guest_memory::GuestMemoryMode::Count`].
     ///
-    /// [`guest_memory::GuestMemoryMode::Growth`] keeps the ceiling for growth
-    /// but leaves the memory an instance is born with uncharged, for hosts
-    /// packing many small instances, up to its own cap (see
-    /// [`Self::with_max_initial_guest_memory_bytes`]).
+    /// [`guest_memory::GuestMemoryMode::Growth`] keeps the ceiling for growth,
+    /// but leaves part of each memory's first allocation uncharged,
+    /// for hosts packing many small instances,
+    /// up to its own cap (see [`Self::with_max_initial_guest_memory_bytes`]).
     #[must_use]
     pub fn with_guest_memory_mode(mut self, mode: guest_memory::GuestMemoryMode) -> Self {
         self.guest_memory_mode = mode;
         self
     }
 
-    /// Under [`guest_memory::GuestMemoryMode::Growth`], the most initial
-    /// memory the budget may leave uncharged across the host. Past it, a new
-    /// memory is refused. Unset, it is
-    /// [`guest_memory::DEFAULT_INITIAL_OVERCOMMIT`] times `max_guest_memory`.
-    /// Other modes charge initial memory and ignore it.
+    /// Under [`guest_memory::GuestMemoryMode::Growth`],
+    /// the most initial memory the budget may leave uncharged across the host;
+    /// past it, a new memory is refused.
     ///
-    /// Overrides an earlier [`Self::without_max_initial_guest_memory`].
+    /// - Unset, it is [`guest_memory::DEFAULT_INITIAL_OVERCOMMIT`] times `max_guest_memory`.
+    /// - Other modes charge initial memory, ignore it, and warn that it was set.
     #[must_use]
     pub fn with_max_initial_guest_memory_bytes(mut self, bytes: u64) -> Self {
         self.max_initial_guest_memory_bytes = Some(bytes);
-        self.max_initial_guest_memory_off = false;
-        self
-    }
-
-    /// Leave initial memory under [`guest_memory::GuestMemoryMode::Growth`]
-    /// unbounded by the budget, so only the process guard limits it. Built
-    /// with [`Self::without_max_process_memory`] as well, nothing bounds it,
-    /// and the engine warns.
-    ///
-    /// Overrides an earlier [`Self::with_max_initial_guest_memory_bytes`].
-    #[must_use]
-    pub fn without_max_initial_guest_memory(mut self) -> Self {
-        self.max_initial_guest_memory_bytes = None;
-        self.max_initial_guest_memory_off = true;
         self
     }
 
@@ -1513,7 +1502,8 @@ impl EngineBuilder {
     }
 
     /// [`with_max_memories`](Self::with_max_memories) at the count
-    /// [`host_memory::derive_max_memories_with`] sizes to this machine now.
+    /// [`host_memory::derive_max_memories_with`] sizes to this machine when the engine is built,
+    /// for the engine's own copy-on-write setting unless `derivation` names one.
     /// A count derived against the commit limit lets the stack and table
     /// advisories allow that limit's share, unless a full
     /// [`PoolingAllocationConfig`] replaces it. The later of the two calls
@@ -1526,10 +1516,7 @@ impl EngineBuilder {
         mut self,
         derivation: host_memory::MaxMemoriesDerivation,
     ) -> Self {
-        self.max_memories = Some(MaxMemories::Derived {
-            count: host_memory::derive_max_memories_with(derivation),
-            sized_to_commit_limit: derivation.from_memory_precommit_limit,
-        });
+        self.max_memories = Some(MaxMemories::Derived(derivation));
         self
     }
 
@@ -1571,10 +1558,7 @@ impl EngineBuilder {
     /// caller's own pooling config replaces it.
     fn sized_to_commit_limit(&self) -> bool {
         let derived = match self.max_memories {
-            Some(MaxMemories::Derived {
-                sized_to_commit_limit,
-                ..
-            }) => sized_to_commit_limit,
+            Some(MaxMemories::Derived(derivation)) => derivation.from_memory_precommit_limit,
             Some(MaxMemories::Named(_)) | None => false,
         };
         derived && self.pooling_config.is_none()
@@ -1634,21 +1618,17 @@ impl EngineBuilder {
     /// or `false`) turns it off; a base config given to [`Self::with_config`]
     /// keeps its own setting when neither says anything.
     ///
-    /// Off, each instance copies its data segments into its own pages, which
-    /// costs time and memory in proportion to them. What that buys is
-    /// mappings: a live memory splits into two instead of four, so a host
-    /// that cannot raise `vm.max_map_count` holds about half again as many
-    /// warm instances, and the map-count advisory counts it that way. So does
-    /// the derived memory count when told the same:
-    /// `host_memory::derive_max_memories` reads only the environment variable,
-    /// so an embedder that calls this passes it to
-    /// [`Self::with_derived_max_memories`] too
-    /// (`MaxMemoriesDerivation::with_memory_init_cow`). Raising the limit is
-    /// the better lever when it is available.
+    /// Off:
     ///
-    /// Under [`guest_memory::GuestMemoryMode::Growth`], the copied pages are
-    /// resident from instantiation but still uncharged, so they come out of
-    /// the initial cap's overcommit rather than staying shared.
+    /// - Each instance copies its data segments into its own pages,
+    ///   which costs time and memory in proportion to them.
+    /// - A live memory splits into two mappings instead of four,
+    ///   so a host that cannot raise `vm.max_map_count` holds about half again as many warm instances.
+    ///   Raising the limit is the better lever when it is available.
+    /// - The map-count advisory, and a count from [`Self::with_derived_max_memories`],
+    ///   follow this setting.
+    /// - Under [`guest_memory::GuestMemoryMode::Growth`], the copied pages are resident from instantiation,
+    ///   but no more charged than the rest of a first allocation.
     #[must_use]
     pub fn with_memory_init_cow(mut self, enable: bool) -> Self {
         self.memory_init_cow = Some(enable);
@@ -1803,7 +1783,7 @@ impl EngineBuilder {
                 // The builder's own knobs win over the budgets'. A memory
                 // count set here re-derives the core total, since the
                 // budgets' was derived beside a different memory count.
-                let builder_memories = self.max_memories.map(MaxMemories::count);
+                let builder_memories = self.max_memories.map(|m| m.count(memory_init_cow));
                 let memories = builder_memories.unwrap_or(host_memory.max_memories);
                 let core_instances = self.max_core_instances.unwrap_or_else(|| {
                     if builder_memories.is_some() {
@@ -2021,29 +2001,23 @@ impl EngineBuilder {
             }
             None => None,
         };
-        // Growth mode leaves initial memory uncharged, bounded by its own cap
-        // and the process guard; with neither, nothing bounds it, which an
-        // operator choosing the mode for density on a sized host did not mean.
-        let max_initial_guest_memory = (!self.max_initial_guest_memory_off).then(|| {
-            self.max_initial_guest_memory_bytes.unwrap_or(
-                host_memory
-                    .max_guest_memory
-                    .saturating_mul(guest_memory::DEFAULT_INITIAL_OVERCOMMIT),
-            )
-        });
+        // Growth mode's bound on uncharged initial memory: named, or derived.
+        let max_initial_guest_memory = self.max_initial_guest_memory_bytes.unwrap_or(
+            host_memory
+                .max_guest_memory
+                .saturating_mul(guest_memory::DEFAULT_INITIAL_OVERCOMMIT),
+        );
         if self.guest_memory_mode == guest_memory::GuestMemoryMode::Growth {
-            match max_initial_guest_memory {
-                Some(cap) => tracing::info!(
-                    max_initial_guest_memory = %host_memory::render_bytes(cap),
-                    "guest-memory-mode is growth: initial memory is uncharged up to this cap"
-                ),
-                None if process_memory.is_none() => tracing::warn!(
-                    "guest-memory-mode is growth and both max-initial-guest-memory and \
-                     max-process-memory are off: nothing bounds the memory instances start \
-                     with. Set either, or use enforce."
-                ),
-                None => {}
-            }
+            tracing::info!(
+                max_initial_guest_memory = %host_memory::render_bytes(max_initial_guest_memory),
+                "guest-memory-mode is growth: initial memory is uncharged up to this cap"
+            );
+        } else if self.max_initial_guest_memory_bytes.is_some() {
+            tracing::warn!(
+                guest_memory_mode = self.guest_memory_mode.as_str(),
+                "max-initial-guest-memory is set but has no effect: only guest-memory-mode 
+                 growth leaves initial memory uncharged"
+            );
         }
         let cache = Cache::builder()
             .max_capacity(self.compilation_cache_size.unwrap_or(100))
@@ -2092,10 +2066,7 @@ impl EngineBuilder {
                     Some(ceiling) => budget.with_heap_ceiling(ceiling),
                     None => budget,
                 };
-                let budget = match max_initial_guest_memory {
-                    Some(cap) => budget.with_initial_cap(cap),
-                    None => budget,
-                };
+                let budget = budget.with_initial_cap(max_initial_guest_memory);
                 match &process_memory {
                     Some(guard) => budget.with_process_guard(Arc::clone(guard)),
                     None => budget,
@@ -2664,6 +2635,28 @@ mod tests {
             .build()
             .expect("turning copy-on-write images off should build");
         assert!(!engine.inner().get_memory_init_cow());
+    }
+
+    // Growth mode's initial cap: derived from the budget unless named.
+    #[test]
+    fn growth_mode_caps_uncharged_initial_memory() {
+        let budgets = || host_memory::HostMemoryBudgets::resolve(Some(64 << 20), None, None, None);
+        let engine = Engine::builder()
+            .with_host_memory(budgets().unwrap())
+            .with_guest_memory_mode(guest_memory::GuestMemoryMode::Growth)
+            .build()
+            .expect("growth mode should build");
+        assert_eq!(
+            engine.guest_memory().initial_cap(),
+            (64 << 20) * guest_memory::DEFAULT_INITIAL_OVERCOMMIT
+        );
+        let engine = Engine::builder()
+            .with_host_memory(budgets().unwrap())
+            .with_guest_memory_mode(guest_memory::GuestMemoryMode::Growth)
+            .with_max_initial_guest_memory_bytes(10 << 20)
+            .build()
+            .expect("an explicit cap should build");
+        assert_eq!(engine.guest_memory().initial_cap(), 10 << 20);
     }
 
     // Unwind tables are on unless a host turns them off, and turning them off

@@ -4,7 +4,7 @@ use anyhow::{Context as _, bail};
 use clap::Args;
 use tracing::info;
 use wash_runtime::{
-    engine::{Engine, WasmProposal},
+    engine::{Engine, WasmProposal, guest_memory::GuestMemoryMode},
     observability::Meters,
     plugin::{self},
 };
@@ -433,17 +433,19 @@ pub struct HostCommand {
     /// count, then return to `enforce`. The separate `--max-process-memory`
     /// limit remains enforced in every mode.
     ///
-    /// `growth` enforces like `enforce` but does not charge the memory an
-    /// instance is born with, only what it grows by. An initial memory is
-    /// mapped lazily and costs what the guest touches, which is what
-    /// `--max-process-memory` measures; charged at its declared size instead,
-    /// a 1 MiB handler that touches 70 KiB fills the budget fifteen times
-    /// faster than it fills the container. Choose it for hosts packing many
-    /// small instances. The trade is overcommit: the budget no longer covers
-    /// initial memory, and `--max-process-memory` refuses new instances and
-    /// growth once the host is over, but cannot stop instances it already
-    /// admitted from writing the initial memory they hold.
-    /// `--max-initial-guest-memory` bounds how far that overcommit goes.
+    /// `growth` enforces like `enforce`, but leaves up to 2 MiB of each
+    /// memory's first allocation (its initial size) uncharged. Choose it for
+    /// hosts packing many small instances.
+    ///
+    /// Initial memory is mapped lazily and costs only what the guest touches,
+    /// which is what `--max-process-memory` measures. Charged at its declared
+    /// size, a 1 MiB handler that touches 70 KiB fills the budget fifteen
+    /// times faster than it fills the container.
+    ///
+    /// The trade is overcommit. `--max-process-memory` refuses new instances
+    /// and growth once the host is over, but cannot stop admitted instances
+    /// writing the initial memory they hold. `--max-initial-guest-memory`
+    /// bounds how far that goes.
     ///
     /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
     /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
@@ -465,15 +467,16 @@ pub struct HostCommand {
     pub guest_memory_mode: GuestMemoryMode,
 
     /// Under `--guest-memory-mode=growth`, the most initial memory the host
-    /// leaves uncharged across all its instances (e.g. `4GiB`). Past it, a
-    /// new instance fails to instantiate.
+    /// leaves uncharged across all its instances (e.g. `4GiB`).
     ///
     /// This is the overcommit bound: instances may come to write all of it,
-    /// and nothing else refuses them once admitted. Unset, it is four times
-    /// `--max-guest-memory`. `off` (or `none`) leaves only
-    /// `--max-process-memory` to bound it; with both off, nothing does, and
-    /// the host warns at startup. Ignored in the other modes, which charge
-    /// initial memory to `--max-guest-memory`.
+    /// and nothing else refuses them once admitted. Past it, a new instance
+    /// fails to instantiate, and a running guest's first `memory.grow` of an
+    /// empty memory returns -1.
+    ///
+    /// Unset, it is four times `--max-guest-memory`. Ignored in the other
+    /// modes, which charge initial memory to `--max-guest-memory`, and the
+    /// host warns if it is set there.
     #[arg(
         long = "max-initial-guest-memory",
         env = "WASH_HOST_MAX_INITIAL_GUEST_MEMORY"
@@ -1217,12 +1220,9 @@ impl CliCommand for HostCommand {
             self.core_instances,
         )
         .map_err(|e| anyhow::anyhow!(e))?;
-        let process_memory_policy =
-            MemoryLimitPolicy::parse(self.max_process_memory.as_deref(), "max-process-memory")?;
-        let initial_guest_memory_policy = MemoryLimitPolicy::parse(
-            self.max_initial_guest_memory.as_deref(),
-            "max-initial-guest-memory",
-        )?;
+        let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
+        let max_initial_guest_memory =
+            parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1368,24 +1368,18 @@ impl CliCommand for HostCommand {
                     .with_memory_precommit_limit(self.max_memories_from_memory_precommit_limit),
             );
         }
-        engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
+        engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode);
         match process_memory_policy {
-            MemoryLimitPolicy::Limit(bytes) => {
+            ProcessMemoryPolicy::Limit(bytes) => {
                 engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
             }
-            MemoryLimitPolicy::Disabled => {
+            ProcessMemoryPolicy::Disabled => {
                 engine_builder = engine_builder.without_max_process_memory()
             }
-            MemoryLimitPolicy::Automatic => {}
+            ProcessMemoryPolicy::Automatic => {}
         }
-        match initial_guest_memory_policy {
-            MemoryLimitPolicy::Limit(bytes) => {
-                engine_builder = engine_builder.with_max_initial_guest_memory_bytes(bytes);
-            }
-            MemoryLimitPolicy::Disabled => {
-                engine_builder = engine_builder.without_max_initial_guest_memory()
-            }
-            MemoryLimitPolicy::Automatic => {}
+        if let Some(bytes) = max_initial_guest_memory {
+            engine_builder = engine_builder.with_max_initial_guest_memory_bytes(bytes);
         }
 
         let engine = engine_builder.build()?;
@@ -2262,10 +2256,6 @@ mod policy_mode_tests {
             parse(&["--guest-memory-mode=growth"]).guest_memory_mode,
             GuestMemoryMode::Growth
         );
-        assert_eq!(
-            wash_runtime::engine::guest_memory::GuestMemoryMode::from(GuestMemoryMode::Growth),
-            wash_runtime::engine::guest_memory::GuestMemoryMode::Growth
-        );
     }
 
     #[test]
@@ -2316,19 +2306,6 @@ mod tests {
     }
 }
 
-/// CLI spelling of [`wash_runtime::engine::guest_memory::GuestMemoryMode`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum GuestMemoryMode {
-    /// Charge and report guest memory growth; allow it either way.
-    Count,
-    /// Refuse guest memory growth past `--max-guest-memory`.
-    #[default]
-    Enforce,
-    /// Refuse growth past `--max-guest-memory`, but leave the memory an
-    /// instance starts with to `--max-process-memory`.
-    Growth,
-}
-
 /// `--ip-name-lookup-grant-lifetime` from a flag or environment value, reading a
 /// blank one as unset.
 fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, String> {
@@ -2340,18 +2317,30 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, St
         .map_err(|e| e.to_string())
 }
 
-/// The three distinct meanings of a memory-limit flag that takes `off`:
-/// `--max-process-memory` and `--max-initial-guest-memory`.
+/// `--max-initial-guest-memory`, reading a blank value as unset.
+fn parse_max_initial_guest_memory(raw: Option<&str>) -> anyhow::Result<Option<u64>> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
+        .map_err(|e| anyhow::anyhow!("invalid max-initial-guest-memory: {e}"))?;
+    anyhow::ensure!(
+        bytes > 0,
+        "max-initial-guest-memory must be greater than zero"
+    );
+    Ok(Some(bytes))
+}
+
+/// The three distinct meanings of the process-memory flag.
 #[derive(Debug, PartialEq, Eq)]
-enum MemoryLimitPolicy {
+enum ProcessMemoryPolicy {
     Automatic,
     Disabled,
     Limit(u64),
 }
 
-impl MemoryLimitPolicy {
-    /// Parse `raw`, naming `flag` in any error.
-    fn parse(raw: Option<&str>, flag: &str) -> anyhow::Result<Self> {
+impl ProcessMemoryPolicy {
+    fn parse(raw: Option<&str>) -> anyhow::Result<Self> {
         let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
             return Ok(Self::Automatic);
         };
@@ -2359,10 +2348,10 @@ impl MemoryLimitPolicy {
             return Ok(Self::Disabled);
         }
         let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
-            .map_err(|e| anyhow::anyhow!("invalid {flag}: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("invalid max-process-memory: {e}"))?;
         anyhow::ensure!(
             bytes > 0,
-            "{flag} must be greater than zero; use `off` for no limit"
+            "max-process-memory must be greater than zero; use `off` for no limit"
         );
         Ok(Self::Limit(bytes))
     }
@@ -2370,59 +2359,51 @@ impl MemoryLimitPolicy {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod memory_limit_policy_tests {
+mod process_memory_policy_tests {
     use super::*;
     #[test]
     fn distinguishes_automatic_disabled_and_explicit_limits() -> anyhow::Result<()> {
         for raw in [None, Some(""), Some("  ")] {
             assert_eq!(
-                MemoryLimitPolicy::parse(raw, "flag")?,
-                MemoryLimitPolicy::Automatic
+                ProcessMemoryPolicy::parse(raw)?,
+                ProcessMemoryPolicy::Automatic
             );
         }
         for raw in ["off", " NONE "] {
             assert_eq!(
-                MemoryLimitPolicy::parse(Some(raw), "flag")?,
-                MemoryLimitPolicy::Disabled
+                ProcessMemoryPolicy::parse(Some(raw))?,
+                ProcessMemoryPolicy::Disabled
             );
         }
         assert_eq!(
-            MemoryLimitPolicy::parse(Some("1GiB"), "flag")?,
-            MemoryLimitPolicy::Limit(1 << 30)
+            ProcessMemoryPolicy::parse(Some("1GiB"))?,
+            ProcessMemoryPolicy::Limit(1 << 30)
         );
-        assert!(MemoryLimitPolicy::parse(Some("0"), "flag").is_err());
-        assert!(MemoryLimitPolicy::parse(Some("invalid"), "flag").is_err());
+        assert!(ProcessMemoryPolicy::parse(Some("0")).is_err());
+        assert!(ProcessMemoryPolicy::parse(Some("invalid")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn max_initial_guest_memory_reads_blank_as_unset() -> anyhow::Result<()> {
+        for raw in [None, Some(""), Some("  ")] {
+            assert_eq!(parse_max_initial_guest_memory(raw)?, None);
+        }
+        assert_eq!(parse_max_initial_guest_memory(Some("4GiB"))?, Some(4 << 30));
+        assert!(parse_max_initial_guest_memory(Some("0")).is_err());
+        assert!(parse_max_initial_guest_memory(Some("off")).is_err());
         Ok(())
     }
 }
 
-/// Parse the guest mode, treating a blank environment value as unset.
+/// Parse the guest mode with the runtime's own parser,
+/// treating a blank environment value as unset.
 fn parse_guest_memory_mode(raw: &str) -> Result<GuestMemoryMode, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(GuestMemoryMode::default());
     }
-    // The runtime's parser, shared with every other place a mode is named.
-    use wash_runtime::engine::guest_memory::GuestMemoryMode as Runtime;
-    match raw.parse::<Runtime>()? {
-        Runtime::Count => Ok(GuestMemoryMode::Count),
-        Runtime::Enforce => Ok(GuestMemoryMode::Enforce),
-        Runtime::Growth => Ok(GuestMemoryMode::Growth),
-        other => Err(format!(
-            "guest-memory-mode {} is not one this wash supports",
-            other.as_str()
-        )),
-    }
-}
-
-impl From<GuestMemoryMode> for wash_runtime::engine::guest_memory::GuestMemoryMode {
-    fn from(mode: GuestMemoryMode) -> Self {
-        match mode {
-            GuestMemoryMode::Count => Self::Count,
-            GuestMemoryMode::Enforce => Self::Enforce,
-            GuestMemoryMode::Growth => Self::Growth,
-        }
-    }
+    raw.parse()
 }
 
 /// CLI spelling of [`wash_runtime::sockets::policy::EgressMode`].
