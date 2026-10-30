@@ -47,6 +47,7 @@ func readyDeployment(prevSetName string) *runtimev1alpha1.WorkloadDeployment {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: testNamespace,
 			Name:      testDeploymentName,
+			UID:       "wd-uid",
 		},
 		Spec: runtimev1alpha1.WorkloadDeploymentSpec{
 			WorkloadReplicaSetSpec: runtimev1alpha1.WorkloadReplicaSetSpec{
@@ -150,16 +151,35 @@ func newScaleReconciler(t *testing.T, objs ...client.Object) *WorkloadDeployment
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithIndex(&runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentNameIndex,
+		WithIndex(&runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentOwnerIndex,
 			func(obj client.Object) []string {
-				if name, ok := isOwnedByController(obj, deploymentGvk); ok {
-					return []string{name}
+				if ownerUID, ok := isOwnedByController(obj, deploymentGvk); ok {
+					return []string{ownerUID}
 				}
 				return nil
 			}).
 		Build()
 
 	return &WorkloadDeploymentReconciler{Client: c, Scheme: s}
+}
+
+// Deleting and re-applying a Deployment reuses its name. The old ReplicaSets
+// are the garbage collector's to remove, and their replicas aren't this one's.
+func TestReconcileScale_PredecessorReplicaSetIsNotCounted(t *testing.T) {
+	wd := readyDeployment("")
+	old := availableReplicaSet("predecessor-rs")
+	old.OwnerReferences[0].UID = "deleted-wd-uid"
+	r := newScaleReconciler(t, wd, availableReplicaSet(testReplicaSetName), old)
+
+	if err := r.reconcileScale(context.Background(), wd); err != nil {
+		t.Fatalf("reconcileScale: %v", err)
+	}
+	if wd.Status.Replicas.Current != testReplicas {
+		t.Fatalf("expected only this Deployment's replicas counted, got %d", wd.Status.Replicas.Current)
+	}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(old), &runtimev1alpha1.WorkloadReplicaSet{}); err != nil {
+		t.Fatalf("expected the old ReplicaSet left for the garbage collector: %v", err)
+	}
 }
 
 // Regression coverage for reconcileScale used to return nil on a fresh

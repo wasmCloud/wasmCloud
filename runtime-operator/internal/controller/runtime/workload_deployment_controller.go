@@ -21,7 +21,7 @@ import (
 
 const (
 	workloadDeploymentReconcileInterval = 1 * time.Minute
-	workloadDeploymentNameIndex         = "workload.deployment.name"
+	workloadDeploymentOwnerIndex        = "workload.deployment.owner"
 	// workloadDeploymentNameLabel is stamped onto the ReplicaSets a deployment
 	// owns and exposed via the /scale subresource's selector so HPA/KEDA can
 	// identify the deployment's workloads.
@@ -40,9 +40,15 @@ func (r *WorkloadDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.R
 }
 
 func (r *WorkloadDeploymentReconciler) reconcileArtifacts(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
-	for _, configArtifact := range deployment.Spec.Artifacts {
+	return checkArtifactsPublished(ctx, r.Client, deployment.Namespace, deployment.Spec.Artifacts)
+}
+
+// checkArtifactsPublished returns a status-unknown error until every
+// referenced Artifact exists and is published.
+func checkArtifactsPublished(ctx context.Context, kubeClient client.Client, namespace string, artifactsFrom []runtimev1alpha1.WorkloadDeploymentArtifact) error {
+	for _, configArtifact := range artifactsFrom {
 		artifact := &runtimev1alpha1.Artifact{}
-		if err := r.Get(ctx, client.ObjectKey{Name: configArtifact.ArtifactFrom.Name, Namespace: deployment.Namespace}, artifact); err != nil {
+		if err := kubeClient.Get(ctx, client.ObjectKey{Name: configArtifact.ArtifactFrom.Name, Namespace: namespace}, artifact); err != nil {
 			if client.IgnoreNotFound(err) == nil {
 				return condition.ErrStatusUnknown(fmt.Errorf("artifact %s not found", configArtifact.ArtifactFrom.Name))
 			}
@@ -192,7 +198,7 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 
 	// Delete any ReplicaSet except current & previous
 	replicaSets := &runtimev1alpha1.WorkloadReplicaSetList{}
-	if err := r.List(ctx, replicaSets, client.InNamespace(deployment.Namespace), client.MatchingFields{workloadDeploymentNameIndex: deployment.Name}); err != nil {
+	if err := r.List(ctx, replicaSets, client.InNamespace(deployment.Namespace), client.MatchingFields{workloadDeploymentOwnerIndex: string(deployment.UID)}); err != nil {
 		return err
 	}
 	for _, rs := range replicaSets.Items {
@@ -291,9 +297,9 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentNameIndex, func(rawObj client.Object) []string {
-		if ownerName, ok := isOwnedByController(rawObj, deploymentGvk); ok {
-			return []string{ownerName}
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentOwnerIndex, func(rawObj client.Object) []string {
+		if ownerUID, ok := isOwnedByController(rawObj, deploymentGvk); ok {
+			return []string{ownerUID}
 		}
 
 		return []string{}

@@ -192,6 +192,8 @@ pub struct WorkloadMetadata {
 
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
 pub const WORKLOAD_DEPLOYMENT_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-deployment";
+/// Kubernetes annotation set by the runtime-operator for the parent WorkloadDaemonSet.
+pub const WORKLOAD_DAEMONSET_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-daemonset";
 /// Kubernetes annotation set by the runtime-operator for the parent WorkloadReplicaSet.
 pub const WORKLOAD_REPLICASET_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-replicaset-name";
 /// Alternate WorkloadReplicaSet annotation key.
@@ -224,8 +226,9 @@ impl WorkloadMetadata {
         &self.workload_name
     }
 
-    /// Returns the stable workload name across replicas, if a deployment or
-    /// replicaset annotation was supplied by the orchestrator. Falls back to `workload_name`.
+    /// Returns the stable workload name across replicas, if a deployment,
+    /// daemonset or replicaset annotation was supplied by the orchestrator.
+    /// Falls back to `workload_name`.
     pub fn stable_workload_name(&self) -> &str {
         let non_empty = |key: &str| {
             self.annotations
@@ -237,6 +240,9 @@ impl WorkloadMetadata {
 
         if let Some(deployment) = non_empty(WORKLOAD_DEPLOYMENT_ANNOTATION) {
             return deployment;
+        }
+        if let Some(daemonset) = non_empty(WORKLOAD_DAEMONSET_ANNOTATION) {
+            return daemonset;
         }
         if let Some(replicaset) = non_empty(WORKLOAD_REPLICASET_ANNOTATION)
             .or_else(|| non_empty(WORKLOAD_REPLICASET_LEGACY_ANNOTATION))
@@ -7626,7 +7632,24 @@ mod tests {
         let comp = create_test_component("c").with_annotations(annotations);
         assert_eq!(comp.stable_workload_name(), "my-deployment");
 
-        // 2. Blank deployment annotation falls back to replicaset
+        // 2. Blank deployment annotation falls back to daemonset
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
+            "   ".to_string(),
+        );
+        annotations.insert(
+            WORKLOAD_DAEMONSET_ANNOTATION.to_string(),
+            "my-daemonset".to_string(),
+        );
+        annotations.insert(
+            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
+            "my-replicaset".to_string(),
+        );
+        let comp = create_test_component("c").with_annotations(annotations);
+        assert_eq!(comp.stable_workload_name(), "my-daemonset");
+
+        // Without a daemonset, a blank deployment annotation falls back to replicaset
         let mut annotations = HashMap::new();
         annotations.insert(
             WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),

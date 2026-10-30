@@ -298,7 +298,8 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 				log.FromContext(ctx).V(1).Info("status patch built from a stale read was rejected; requeueing")
 				return reconcile.Result{RequeueAfter: time.Second}, nil
 			}
-			return reconcile.Result{}, err
+			// The object finished deleting during this pass.
+			return reconcile.Result{}, client.IgnoreNotFound(err)
 		}
 	}
 

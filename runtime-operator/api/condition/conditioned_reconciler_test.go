@@ -529,3 +529,29 @@ func TestConditionedReconcilerOptimisticLock(t *testing.T) {
 		}
 	}
 }
+
+// An object that finishes deleting during a pass has no status left to write,
+// which is not a failure.
+func TestConditionedReconcilerObjectDeletedDuringPass(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 to scheme: %v", err)
+	}
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+
+	obj := &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName}}
+	kubeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(obj).
+		WithStatusSubresource(obj).
+		Build()
+
+	r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+	r.SetCondition(testCondition, func(ctx context.Context, _ *conditionedResource) error {
+		return kubeClient.Delete(ctx, obj)
+	})
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+}
