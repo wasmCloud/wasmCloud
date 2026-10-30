@@ -457,11 +457,12 @@ pub fn udp_connect(sockfd: impl AsFd, addr: SocketAddr) -> Result<(), Errno> {
 /// keeps the address stable, which an unspecified socket relies on: its
 /// loopback half is registered under this same port.
 pub fn udp_disconnect(sockfd: impl AsFd) -> Result<(), Errno> {
-    let before = local_address(&sockfd)?;
-    dissolve(&sockfd)?;
-    let after = local_address(&sockfd)?;
+    let sockfd = sockfd.as_fd();
+    let before = local_address(sockfd)?;
+    dissolve(sockfd)?;
+    let after = local_address(sockfd)?;
     if after.port() == 0 && before.port() != 0 {
-        bind(&sockfd, &SocketAddr::new(after.ip(), before.port()))?;
+        bind(sockfd, &SocketAddr::new(after.ip(), before.port()))?;
     }
     Ok(())
 }
