@@ -484,7 +484,7 @@ func TestDaemonSetSchedule_StatusFollowsADelete(t *testing.T) {
 
 	now := metav1.Now()
 	ds.DeletionTimestamp = &now
-	ds.Finalizers = []string{"foregroundDeletion"}
+	ds.Finalizers = []string{metav1.FinalizerDeleteDependents}
 	if err := r.reconcileReady(context.Background(), ds); !condition.IsStatusUnknown(err) {
 		t.Fatalf("expected Ready to drop as the delete starts, got %v", err)
 	}
@@ -521,7 +521,7 @@ func TestDaemonSetSchedule_DeleteReportsWithoutArtifacts(t *testing.T) {
 
 	now := metav1.Now()
 	ds.DeletionTimestamp = &now
-	ds.Finalizers = []string{"foregroundDeletion"}
+	ds.Finalizers = []string{metav1.FinalizerDeleteDependents}
 	ds.Spec.Artifacts = []runtimev1alpha1.WorkloadDeploymentArtifact{{
 		Name:         "gone",
 		ArtifactFrom: corev1.LocalObjectReference{Name: "gone"},
@@ -554,7 +554,7 @@ func TestDaemonSetSchedule_DeletingDaemonSetLeavesOrphans(t *testing.T) {
 			ds := testDaemonSet(1)
 			now := metav1.Now()
 			ds.DeletionTimestamp = &now
-			ds.Finalizers = []string{"orphan"}
+			ds.Finalizers = []string{metav1.FinalizerOrphanDependents}
 			hash := ds.Spec.Template.Hash()
 			orphan := orphanedWorkload(daemonSetWorkloadName(testDaemonSetName, dsHostA, hash, 0), dsHostA, hash)
 			if tc.terminating {
@@ -643,7 +643,7 @@ func TestDaemonSetSchedule_DeletingDaemonSetStartsNothing(t *testing.T) {
 	ds := testDaemonSet(1)
 	now := metav1.Now()
 	ds.DeletionTimestamp = &now
-	ds.Finalizers = []string{"foregroundDeletion"}
+	ds.Finalizers = []string{metav1.FinalizerDeleteDependents}
 	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA))
 
 	if err := r.reconcileSchedule(context.Background(), ds); !errors.Is(err, condition.ErrNoop()) {

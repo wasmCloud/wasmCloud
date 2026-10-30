@@ -47,6 +47,11 @@ func (r *WorkloadReplicaSetReconciler) Reconcile(ctx context.Context, req ctrl.R
 }
 
 func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
+	// The garbage collector is removing or orphaning this ReplicaSet's Workloads.
+	if !replicaSet.DeletionTimestamp.IsZero() {
+		return condition.ErrNoop()
+	}
+
 	if replicaSet.Spec.Replicas == nil {
 		return nil
 	}
@@ -112,6 +117,10 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 }
 
 func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
+	if !replicaSet.DeletionTimestamp.IsZero() {
+		return condition.ErrNoop()
+	}
+
 	expectedReplicas := 0
 	if replicaSet.Spec.Replicas != nil {
 		expectedReplicas = int(*replicaSet.Spec.Replicas)
@@ -140,7 +149,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 }
 
 func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
-	if !replicaSet.Status.AllTrue(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp, runtimev1alpha1.WorkloadReplicaSetConditionScaleDown) {
+	deleting := !replicaSet.DeletionTimestamp.IsZero()
+	if !deleting && !replicaSet.Status.AllTrue(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp, runtimev1alpha1.WorkloadReplicaSetConditionScaleDown) {
 		return fmt.Errorf("scaling in progress")
 	}
 
@@ -189,6 +199,10 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 		workloadReplicaSetUIDLabel:  string(replicaSet.UID),
 	}.String()
 
+	if deleting {
+		return condition.ErrStatusUnknown(fmt.Errorf("replicaset is being deleted"))
+	}
+
 	if unavailableCount > 0 {
 		return fmt.Errorf("%d workloads are not available", unavailableCount)
 	}
@@ -201,6 +215,10 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 }
 
 func (r *WorkloadReplicaSetReconciler) reconcileCleanup(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
+	if !replicaSet.DeletionTimestamp.IsZero() {
+		return nil
+	}
+
 	if !replicaSet.Status.AllTrue(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp, runtimev1alpha1.WorkloadReplicaSetConditionScaleDown) {
 		// wait until scaling is done
 		return nil
