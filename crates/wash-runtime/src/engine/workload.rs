@@ -982,28 +982,46 @@ impl ResolvedWorkload {
         let Some(service) = self.service.as_ref() else {
             bail!("service unexpectedly missing during execution");
         };
-        let mut store = self
-            .service_store_recipe(&service.metadata)
-            .await?
-            .build()
-            .await?;
-        let instance = pre
+        let recipe = self.service_store_recipe(&service.metadata).await?;
+        let mut store = recipe.build().await?;
+        let mut instance = pre
             .instantiate_async(&mut store)
             .await
             .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))?;
         let handle = tokio::spawn(async move {
             loop {
-                if let Err(e) = instance.wasi_cli_run().call_run(&mut store).await {
-                    error!(err = %e, retries = max_restarts, "service execution failed");
-                    if max_restarts == 0 {
-                        warn!("max restarts reached, service will not be restarted");
+                match instance.wasi_cli_run().call_run(&mut store).await {
+                    Ok(Ok(())) => {
+                        info!("service exited successfully");
                         break;
                     }
-                } else {
-                    info!("service exited successfully");
+                    Ok(Err(())) => error!(retries = max_restarts, "service exited with error"),
+                    Err(e) => {
+                        error!(err = ?e, retries = max_restarts, "service execution failed");
+                        crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
+                    }
+                }
+                if max_restarts == 0 {
+                    warn!("max restarts reached, service will not be restarted");
                     break;
                 }
                 max_restarts = max_restarts.saturating_sub(1);
+                store = match recipe.build().await {
+                    Ok(fresh) => fresh,
+                    Err(e) => {
+                        error!(err = ?e, "failed to rebuild service store; giving up");
+                        break;
+                    }
+                };
+                instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                }) {
+                    Ok(instance) => instance,
+                    Err(e) => {
+                        error!(err = ?e, "failed to instantiate service; giving up");
+                        break;
+                    }
+                };
             }
         });
 
@@ -1044,17 +1062,15 @@ impl ResolvedWorkload {
                 self.service_store_recipe(&service.metadata).await?
             };
             let mut store = recipe.build().await?;
+            let mut instance = pre
+                .instantiate_async(&mut store)
+                .await
+                .map_err(|e| {
+                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                })
+                .context("failed to instantiate P3 service")?;
             let handle = tokio::spawn(async move {
                 loop {
-                    let instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
-                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
-                    }) {
-                        Ok(i) => i,
-                        Err(e) => {
-                            error!(err = %e, "failed to instantiate P3 service");
-                            break;
-                        }
-                    };
                     let result = store
                         .run_concurrent(async move |accessor| {
                             instance.wasi_cli_run().call_run(accessor).await
@@ -1091,6 +1107,15 @@ impl ResolvedWorkload {
                             break;
                         }
                     }
+                    instance = match pre.instantiate_async(&mut store).await.map_err(|e| {
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                    }) {
+                        Ok(instance) => instance,
+                        Err(e) => {
+                            error!(err = ?e, "failed to instantiate P3 service; giving up");
+                            break;
+                        }
+                    };
                 }
             });
 
@@ -1164,6 +1189,10 @@ impl ResolvedWorkload {
         let service_calls = Arc::clone(&self.service_calls);
         let (ingresses, http_tx, messaging_tx) =
             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
+        let first = crate::host::trigger_service::PreparedTriggerDriver::instantiate(
+            &mut store, &pre, ingresses,
+        )
+        .await?;
         if let Some(http_tx) = http_tx {
             self.http_handler()?
                 .on_service_http_resolved(self.id(), &ingress_routes, http_tx)
@@ -1179,18 +1208,14 @@ impl ResolvedWorkload {
                 })?;
         }
 
-        // Supervise the driver: on a fault (e.g. a guest trap in `cli/run` or a
-        // handler), re-instantiate into the same store, rebuild the ingresses, and
-        // re-register their handlers (swapping the stale senders) until the restart
-        // budget is exhausted. A clean exit (every channel closed) stops it.
-        // A property of what the component exports, not of an incarnation.
+        // Each restart gets a fresh store and replaces the ingress senders.
         let needs_handler = serves_http || serves_messaging;
         let handle = tokio::spawn(async move {
-            let mut first = Some(ingresses);
+            let mut first = Some(first);
             let mut restarts = max_restarts;
             loop {
-                let ingresses = match first.take() {
-                    Some(ingresses) => ingresses,
+                let result = match first.take() {
+                    Some(first) => first.run(&mut store, cli_run_error).await,
                     None => {
                         let (ingresses, http_tx, messaging_tx) =
                             build_trigger_ingresses(serves_http, serves_messaging, &service_calls);
@@ -1242,17 +1267,16 @@ impl ResolvedWorkload {
                                 );
                             }
                         }
-                        ingresses
+                        crate::host::trigger_service::run_trigger_driver(
+                            &mut store,
+                            &pre,
+                            ingresses,
+                            cli_run_error,
+                        )
+                        .await
                     }
                 };
-                match crate::host::trigger_service::run_trigger_driver(
-                    &mut store,
-                    &pre,
-                    ingresses,
-                    cli_run_error,
-                )
-                .await
-                {
+                match result {
                     Ok(()) => {
                         info!("trigger service exited");
                         break;
@@ -8094,3 +8118,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "workload_lifecycle_tests.rs"]
+mod lifecycle_tests;

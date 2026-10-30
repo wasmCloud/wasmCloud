@@ -8,14 +8,29 @@ The report is a `bench_tools::density::Report` per flavour, shared with
 evidence to estimate a limit, and `-` means a reading was not taken (a
 spin-down, a CPU share). Neither means the capacity is infinite: an idle
 workload uses no CPU, so CPU bounds rates, not counts. `WASH_SCALE_REPORT_JSON`
-writes the reports, with unknowns as `null`; in CI (`bench.yml`, bench
-`scale_density`) it is `<target>/density/scale_density.json`, which `bench-tools
+writes the reports, including `guest_memory_mode`, with unknowns as `null`; in
+CI (`bench.yml`, bench `scale_density`) it is
+`<target>/density/scale_density.json`, which `bench-tools
 jsonl` publishes to the trend site as `served_workloads`, `binding_limit`,
 `marginal_bytes_per_workload` and the other figures `Report::metrics` names.
 
 If a baseline or step process-footprint reading is unavailable, the runtime
 benchmark stops with a measurement error instead of recording 0 B or making a
 capacity claim from it.
+
+The default enforce-mode series keeps its existing name. Count and growth
+runs append `-count` or `-growth` to the label, so their results publish as
+separate series.
+`WASH_SCALE_GUEST_MEMORY_MODE` takes a list, and `scripts/bench/run-bench.sh`
+runs `enforce,growth`, so CI publishes both series.
+
+- Count mode measures guest bytes,
+  but does not treat the guest budget as a binding limit.
+- Growth mode charges only growth beyond each memory's first allocation,
+  so a retained charge of zero does not measure its capacity.
+  What binds it instead is the cap on uncharged initial memory
+  (`WASH_SCALE_INITIAL_GUEST_MEMORY`), which it reports as
+  max-initial-guest-memory.
 
 Warm runs need the P3 fixture. `WASH_SCALE_FIXTURE=p2` runs scale-to-zero
 only, because a P2 HTTP instance cannot stay warm.
@@ -55,7 +70,8 @@ footprint there.
 | Limit | Formula | Binds for |
 | --- | --- | --- |
 | max-process-memory | `n + (limit - F) / marginal`, where `marginal = (F - F_first) / (n - n_first)` over the clean steps | both |
-| max-guest-memory | `max_guest_memory / (guest charged / n)` | warm (? when no retained charge is measurable) |
+| max-guest-memory | `max_guest_memory / (guest charged / n)` | warm in enforce or growth mode (? when no retained charge is measurable); omitted in count mode |
+| max-initial-guest-memory | `initial cap / (initial memory uncharged / n)` | warm in growth mode only |
 | pool core instances | `core instance total / (core instances in use / n)` | warm |
 | pool memories | `memory total / (memories in use / n)` | warm |
 | cpu | unbounded idle capacity: an idle workload uses no CPU | neither |
@@ -75,7 +91,8 @@ footprint there.
   (`derive_max_memories`): half the usable address space at one 4 GiB +
   32 MiB reservation each, and no more than nine tenths of `vm.max_map_count`
   holds at six mappings per warm component (two for its pooled stack, four for
-  its memory). That is 9,829 on a default Linux. A warm workload holds one
+  its memory, or two with `WASMTIME_MEMORY_INIT_COW=false`). That is 9,829 on
+  a default Linux, 14,744 with images off. A warm workload holds one
   linear memory, one fiber stack and one component instance, from totals of
   the same size; its four core instances and two tables draw on totals sized
   as multiples of that count, so they do not bind first. Windows, 32-bit
