@@ -61,6 +61,7 @@ fn nats_blob_iface(name: &str, iface: &str) -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: HashMap::from([("backend".to_string(), "nats".to_string())]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 

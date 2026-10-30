@@ -896,6 +896,7 @@ fn build_workload_host_interfaces(
                     version: None,
                     config: workload_config.clone(),
                     name: None,
+                    plugin_secrets: Vec::new(),
                 });
             }
         }
@@ -1181,6 +1182,7 @@ mod tests {
             version: None,
             config: HashMap::new(),
             name: None,
+            plugin_secrets: Vec::new(),
         }
     }
 

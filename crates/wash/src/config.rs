@@ -915,7 +915,13 @@ fn plugin_bindings_from(
     // `wasmcloud:nats`, the one plugin with a non-empty schema, refuses the
     // self-contained manifest dev exists to run.
     let mut bindings = wash_runtime::plugin::PluginBindings::new()
-        .with_default_workload_config(default_policy.into());
+        .with_default_workload_config(default_policy.into())
+        .with_secret_catalog(config.secret_sources.iter().filter_map(
+            |(name, entry)| match entry {
+                SecretEntry::Plugin(source) => Some((name.as_str().into(), source.clone())),
+                SecretEntry::Static(_) => None,
+            },
+        ));
     for entry in entries {
         bindings = bindings.with_plugin(entry.to_binding_set(
             config,
@@ -1863,6 +1869,7 @@ pub fn example_config() -> Config {
                 version: Some(semver::Version::new(0, 2, 0)),
                 config: HashMap::new(),
                 name: None,
+                plugin_secrets: Vec::new(),
             }],
             data_nats_url: url::Url::parse("nats://127.0.0.1:4222").ok(),
             wasi_keyvalue_redis_url: url::Url::parse("redis://127.0.0.1:6379").ok(),
@@ -3240,6 +3247,38 @@ host:
             .to_spec(&config, Path::new("."), None)
             .unwrap_err();
         assert!(format!("{err:#}").contains("billing-db"), "{err:#}");
+    }
+
+    /// Every plugin-backed entry reaches the host's catalog, named by a plugin
+    /// or not, since a workload's own interface may name it; a static entry
+    /// does not.
+    #[test]
+    fn plugin_secrets_reach_the_catalog_workloads_name() {
+        let yaml = r#"
+secrets:
+  billing-db:
+    plugin: vault-secrets
+    keys:
+      url: apps/billing/pg-url
+    workloads: all
+  local:
+    inline:
+      token: abc
+host:
+  plugins:
+    - id: wasmcloud-nats
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let bindings = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .unwrap();
+        let names: Vec<&str> = bindings
+            .secret_catalog()
+            .keys()
+            .map(|name| name.as_str())
+            .collect();
+        assert_eq!(names, ["billing-db"]);
     }
 
     #[test]

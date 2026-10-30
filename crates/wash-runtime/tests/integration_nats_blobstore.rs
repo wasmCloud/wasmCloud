@@ -111,6 +111,7 @@ async fn setup() -> Result<TestHarness> {
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -131,6 +132,7 @@ async fn setup() -> Result<TestHarness> {
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
             ],
             volumes: vec![],

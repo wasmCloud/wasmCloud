@@ -150,6 +150,7 @@ fn http_workload(
                 version: Some(semver::Version::parse("0.2.2").unwrap()),
                 config,
                 name: None,
+                plugin_secrets: Vec::new(),
             }],
             volumes: vec![],
         },

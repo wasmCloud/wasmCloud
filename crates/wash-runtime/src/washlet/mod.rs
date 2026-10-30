@@ -1998,6 +1998,14 @@ impl From<types::v2::WitInterface> for crate::wit::WitInterface {
             } else {
                 Some(wi.name)
             },
+            plugin_secrets: wi
+                .plugin_secrets
+                .into_iter()
+                .map(|secret| crate::plugin::PluginSecretFrom {
+                    name: secret.name.into(),
+                    keys: secret.keys.into_iter().collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -2102,6 +2110,7 @@ impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
             friendly_name: hb.friendly_name,
             http_port: hb.http_port.into(),
             environment: hb.environment,
+            features: hb.features,
         }
     }
 }
@@ -2115,6 +2124,14 @@ impl From<crate::wit::WitInterface> for types::v2::WitInterface {
             interfaces: wi.interfaces.into_iter().collect(),
             config: wi.config,
             name: wi.name.unwrap_or_default(),
+            plugin_secrets: wi
+                .plugin_secrets
+                .into_iter()
+                .map(|secret| types::v2::PluginSecretRef {
+                    name: secret.name.into_string(),
+                    keys: secret.keys.into_iter().collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -2191,6 +2208,51 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    /// A start request's plugin secret references reach the runtime as names
+    /// and renames, and go back onto the wire unchanged.
+    #[test]
+    fn plugin_secret_refs_cross_the_wire() {
+        let wire = types::v2::WitInterface {
+            namespace: "wasi".to_string(),
+            package: "config".to_string(),
+            interfaces: vec!["store".to_string()],
+            plugin_secrets: vec![
+                types::v2::PluginSecretRef {
+                    name: "billing-db".to_string(),
+                    keys: std::collections::HashMap::new(),
+                },
+                types::v2::PluginSecretRef {
+                    name: "billing-api".to_string(),
+                    keys: std::collections::HashMap::from([(
+                        "api-token".to_string(),
+                        "token".to_string(),
+                    )]),
+                },
+            ],
+            ..Default::default()
+        };
+        let runtime = crate::wit::WitInterface::from(wire.clone());
+        assert_eq!(
+            runtime.plugin_secrets,
+            vec![
+                crate::plugin::PluginSecretFrom {
+                    name: "billing-db".into(),
+                    keys: Default::default(),
+                },
+                crate::plugin::PluginSecretFrom {
+                    name: "billing-api".into(),
+                    keys: [("api-token".to_string(), "token".to_string())].into(),
+                },
+            ]
+        );
+        assert_eq!(types::v2::WitInterface::from(runtime), wire);
+    }
+
+    #[test]
+    fn host_heartbeat_advertises_plugin_secret_refs() {
+        assert!(crate::types::HOST_FEATURES.contains(&crate::types::FEATURE_PLUGIN_SECRET_REFS));
+    }
 
     #[test]
     fn cluster_host_id_matches_the_inner_builder() -> anyhow::Result<()> {

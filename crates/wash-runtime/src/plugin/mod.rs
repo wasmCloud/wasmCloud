@@ -198,10 +198,13 @@ pub use bindings::{
 /// Plugin-backed `secrets:` entries, resolved through another plugin at bind.
 mod secret_source;
 pub use secret_source::{
-    BindingName, CatalogName, HostSecretSource, PluginId, RequestingWorkload, SecretConsumer,
-    SecretKey, SecretRequest, SecretSourceError, SecretValue, WorkloadGrant, WorkloadSelector,
+    BindingName, CatalogName, HostSecretSource, PluginId, PluginSecretFrom, RequestingWorkload,
+    SecretConsumer, SecretKey, SecretRequest, SecretSourceError, SecretValue, WorkloadGrant,
+    WorkloadSelector,
 };
-pub(crate) use secret_source::{resolve_plugin_secrets, validate_plugin_secrets};
+pub(crate) use secret_source::{
+    resolve_plugin_secrets, resolve_workload_secrets, validate_plugin_secrets,
+};
 
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]

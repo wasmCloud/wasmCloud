@@ -57,6 +57,7 @@ async fn density_fixture_retains_warm_instances_and_releases_cold_ones() -> Resu
                             version: Some(semver::Version::new(0, 3, 0)),
                             config: [("host".into(), hostname)].into(),
                             name: None,
+                            plugin_secrets: Vec::new(),
                         }],
                         volumes: vec![],
                     },

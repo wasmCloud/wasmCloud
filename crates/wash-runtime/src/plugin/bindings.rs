@@ -408,6 +408,18 @@ impl BindingSchema {
         self.aliases.contains_key(&folded) || self.ownership.contains_key(&self.canonical(key))
     }
 
+    /// Whether `a` and `b` are one key to this plugin: by [`Self::canonical`]
+    /// where it [identifies](Self::identifies) them, else only if spelled the
+    /// same.
+    #[must_use]
+    pub fn same_key(&self, a: &str, b: &str) -> bool {
+        if self.identifies(a) {
+            self.canonical(a) == self.canonical(b)
+        } else {
+            a == b
+        }
+    }
+
     /// Classify `keys`, keeping the strictest answer where one is already
     /// there.
     ///
@@ -984,17 +996,10 @@ impl PluginBindingSet {
                 // chose — `wasi:config` hands `interface.config` to the
                 // component verbatim — are two settings, and folding them
                 // would refuse a manifest that is fine.
-                let matched = if schema.identifies(key) {
-                    let canonical = schema.canonical(key);
-                    config
-                        .iter()
-                        .find(|(k, _)| schema.canonical(k) == canonical)
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                } else {
-                    config
-                        .get_key_value(key.as_str())
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                };
+                let matched = config
+                    .iter()
+                    .find(|(k, _)| schema.same_key(key, k))
+                    .map(|(k, v)| (k.clone(), v.clone()));
                 match matched {
                     Some((spelling, existing)) if &existing != value => anyhow::bail!(
                         // Named by the spelling the plugin itself uses, so one
@@ -1764,6 +1769,9 @@ pub struct PluginBindings {
     /// from `dev.plugins` would still resolve under the field default of
     /// `deny`.
     undeclared: WorkloadConfigPolicy,
+    /// The plugin-backed `secrets:` entries a workload's own interfaces may
+    /// name.
+    secret_catalog: BTreeMap<CatalogName, crate::config_source::PluginSecretSource>,
 }
 
 impl PluginBindings {
@@ -1789,6 +1797,26 @@ impl PluginBindings {
     /// The plugin ids something is declared for, sorted.
     pub fn plugin_ids(&self) -> impl Iterator<Item = &str> {
         self.plugins.keys().map(String::as_str)
+    }
+
+    /// Serve these plugin-backed `secrets:` entries to the workloads they
+    /// grant, by the name an interface's [`PluginSecretFrom`] uses.
+    ///
+    /// [`PluginSecretFrom`]: crate::plugin::PluginSecretFrom
+    #[must_use]
+    pub fn with_secret_catalog(
+        mut self,
+        catalog: impl IntoIterator<Item = (CatalogName, crate::config_source::PluginSecretSource)>,
+    ) -> Self {
+        self.secret_catalog = catalog.into_iter().collect();
+        self
+    }
+
+    /// The plugin-backed `secrets:` entries a workload may name.
+    pub fn secret_catalog(
+        &self,
+    ) -> &BTreeMap<CatalogName, crate::config_source::PluginSecretSource> {
+        &self.secret_catalog
     }
 
     /// The policy a plugin nobody declared an entry for resolves under.
@@ -1886,6 +1914,7 @@ mod tests {
             version: None,
             config: map(config),
             name: name.map(str::to_string),
+            plugin_secrets: Vec::new(),
         }
     }
 

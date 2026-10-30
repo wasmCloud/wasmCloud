@@ -112,6 +112,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -128,6 +129,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     ),
                     config: HashMap::new(),
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
             ],
             volumes: vec![],

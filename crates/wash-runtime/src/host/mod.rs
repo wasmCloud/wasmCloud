@@ -540,6 +540,7 @@ impl Host {
                 version,
                 config: HashMap::new(),
                 name: None,
+                plugin_secrets: Vec::new(),
             })
         };
 
@@ -582,6 +583,7 @@ impl Host {
                 version: None,
                 config: HashMap::new(),
                 name: None,
+                plugin_secrets: Vec::new(),
             });
         }
 
@@ -1130,6 +1132,10 @@ impl HostApi for Host {
             workload_count,
             imports,
             exports,
+            features: crate::types::HOST_FEATURES
+                .iter()
+                .map(|f| f.to_string())
+                .collect(),
         })
     }
 
@@ -1997,6 +2003,22 @@ impl HostBuilder {
             plugin
                 .validate_bindings(&declared)
                 .with_context(|| format!("invalid `host.plugins` declaration for '{id}'"))?;
+        }
+        // Warned, not refused: nothing may name the entry, and a bind that does
+        // fails on its own. A secret a plugin's binding reads was checked above.
+        for (name, entry) in self.plugin_bindings.secret_catalog() {
+            if self
+                .plugins
+                .get(entry.plugin.as_str())
+                .is_none_or(|p| p.secret_source().is_none())
+            {
+                warn!(
+                    secret = %name,
+                    plugin_id = %entry.plugin,
+                    "a `secrets:` entry names a plugin that is not registered or does not export \
+                     wasmcloud:host/secret-source; a workload naming it will fail to start"
+                );
+            }
         }
 
         Ok(Host {
