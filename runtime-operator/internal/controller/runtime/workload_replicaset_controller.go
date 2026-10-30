@@ -21,7 +21,7 @@ import (
 const (
 	workloadReplicaSetReconcileInterval    = 1 * time.Minute
 	workloadReplicaSetReplicaGracePeriod   = 1 * time.Minute
-	workloadReplicaSetNameIndex            = "workload.replicaset.name"
+	workloadReplicaSetOwnerIndex           = "workload.replicaset.owner"
 	workloadReplicaSetHashIndex            = "workload.replicaset.hash"
 	workloadReplicaSetGenerationAnnotation = "runtime.wasmcloud.dev/workload-replica-set-generation"
 	workloadReplicaSetNameAnnotation       = "runtime.wasmcloud.dev/workload-replicaset-name"
@@ -30,6 +30,9 @@ const (
 	// owns and exposed via its /scale subresource's selector. Its value is
 	// ownerLabelValue(name), since an RS name can exceed 63 characters.
 	workloadReplicaSetNameLabel = "runtime.wasmcloud.dev/workload-replicaset"
+	// workloadReplicaSetUIDLabel narrows that selector to this ReplicaSet, since
+	// a deleted one's Workloads keep the same name label until they are gone.
+	workloadReplicaSetUIDLabel = "runtime.wasmcloud.dev/workload-replicaset-uid"
 )
 
 // WorkloadReplicaSetReconciler reconciles a WorkloadReplicaSet object
@@ -54,8 +57,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -79,11 +82,12 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 			annotations[workloadDeploymentNameAnnotation] = replicaSet.Labels[workloadDeploymentNameLabel]
 		}
 
-		workloadLabels := make(map[string]string, len(replicaSet.Spec.Template.Labels)+1)
+		workloadLabels := make(map[string]string, len(replicaSet.Spec.Template.Labels)+2)
 		for k, v := range replicaSet.Spec.Template.Labels {
 			workloadLabels[k] = v
 		}
 		workloadLabels[workloadReplicaSetNameLabel] = ownerLabelValue(replicaSet.Name)
+		workloadLabels[workloadReplicaSetUIDLabel] = string(replicaSet.UID)
 
 		workload := &runtimev1alpha1.Workload{
 			ObjectMeta: metav1.ObjectMeta{
@@ -119,8 +123,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -151,8 +155,8 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -180,7 +184,10 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 
 	replicaSet.Status.Replicas = replicaStatus
 	replicaSet.Status.CurrentReplicas = currentReplicas
-	replicaSet.Status.Selector = labels.Set{workloadReplicaSetNameLabel: ownerLabelValue(replicaSet.Name)}.String()
+	replicaSet.Status.Selector = labels.Set{
+		workloadReplicaSetNameLabel: ownerLabelValue(replicaSet.Name),
+		workloadReplicaSetUIDLabel:  string(replicaSet.UID),
+	}.String()
 
 	if unavailableCount > 0 {
 		return fmt.Errorf("%d workloads are not available", unavailableCount)
@@ -213,7 +220,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx con
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
 		},
 	); err != nil {
 		return err
@@ -248,8 +255,8 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetNameIndex: replicaSet.Name,
-			workloadReplicaSetHashIndex: replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
+			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
 		},
 	); err != nil {
 		return err
@@ -326,9 +333,9 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetNameIndex, func(rawObj client.Object) []string {
-		if ownerName, ok := isOwnedByController(rawObj, replicaSetGvk); ok {
-			return []string{ownerName}
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, func(rawObj client.Object) []string {
+		if ownerUID, ok := controllerUID(rawObj, replicaSetGvk); ok {
+			return []string{ownerUID}
 		}
 
 		return []string{}
@@ -338,7 +345,7 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	}
 
 	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, func(rawObj client.Object) []string {
-		if _, ok := isOwnedByController(rawObj, replicaSetGvk); !ok {
+		if _, ok := controllerUID(rawObj, replicaSetGvk); !ok {
 			return []string{}
 		}
 
