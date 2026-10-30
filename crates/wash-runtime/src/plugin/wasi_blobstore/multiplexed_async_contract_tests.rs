@@ -591,7 +591,7 @@ async fn exercise_listing(host: &HostAccessor) {
 }
 
 #[tokio::test]
-async fn async_list_objects_streams_names_in_order() {
+async fn async_list_objects_streams_the_backend_listing() {
     let backend: BlobId = Arc::new(InMemoryBackend::new());
     let ctx = ctx_with_default(&backend);
     with_host(ctx, async |host| exercise_listing(host).await).await;
