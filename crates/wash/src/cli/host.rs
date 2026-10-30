@@ -490,7 +490,7 @@ pub struct HostCommand {
     /// wasmtime's own default of 4 GiB — which is what every host has run to
     /// date, and why an instance count has never implied a byte count.
     ///
-    /// Every slot reserves wasmtime's 4 GiB plus a 32 MiB guard whether or
+    /// By default, every slot reserves 4 GiB plus a 32 MiB guard whether or
     /// not anything grows into it. Lowering this below 4 GiB caps guest heaps
     /// but does not shrink the reservation; `--memory-reservation` does. It
     /// cannot go past the reservation: the pooling allocator refuses a ceiling
@@ -504,22 +504,23 @@ pub struct HostCommand {
     ///
     /// Each memory's pool slot is this reservation,
     /// followed by `--memory-guard-size` of unmapped guard.
-    /// A memory never grows past its reservation,
-    /// so `--default-heap-memory` is lowered to it.
+    /// With pooling, a memory never grows past its reservation,
+    /// so the default pool's `--default-heap-memory` is lowered to it.
+    /// Without pooling, wasmtime may relocate a memory to grow beyond it;
+    /// the guest and process memory budgets still apply.
     ///
-    /// At 4 GiB, a 32-bit memory cannot form an address past its own reservation:
-    /// a stray access faults in its own unused room, and wasmtime skips bounds checks.
+    /// At 4 GiB, the reservation covers a 32-bit dynamic index, and the guard
+    /// covers many constant offsets. Larger offsets still need bounds checks.
     /// Smaller fits more memories in the address space
     /// (about 16,000 fit at 4 GiB), and costs:
     ///
-    /// SECURITY: it moves an isolation boundary. A sibling component's memory
-    /// comes within reach of a 32-bit address, and only wasmtime's bounds check
-    /// on every load and store keeps each guest out. A bug in those checks,
-    /// unlikely as it is, would expose another guest's memory:
-    /// less defence in depth, not none.
+    /// SECURITY: it moves an isolation boundary. A smaller reservation puts
+    /// sibling memories within a 32-bit dynamic index's reach. Isolation relies
+    /// more on software bounds checks, whose bugs could expose another guest's
+    /// memory. This reduces defense in depth.
     ///
-    /// Speed: every guest load and store is checked. The host warns at startup
-    /// while it is set.
+    /// Speed: more explicit bounds checks can slow guest memory access.
+    /// The host warns at startup when the layout is below the defaults.
     #[arg(long = "memory-reservation", env = "WASH_HOST_MEMORY_RESERVATION")]
     pub memory_reservation: Option<String>,
 
@@ -531,8 +532,8 @@ pub struct HostCommand {
     /// whose constant offset carries it past the reservation, so wasmtime can
     /// skip checking those offsets.
     ///
-    /// Smaller shrinks each slot, and moves the same isolation boundary as
-    /// `--memory-reservation` (see there); at `0`, every access is checked in full.
+    /// Smaller shrinks each slot and protects fewer constant offsets, requiring
+    /// more explicit bounds checks, including at `0`.
     #[arg(long = "memory-guard-size", env = "WASH_HOST_MEMORY_GUARD_SIZE")]
     pub memory_guard_size: Option<String>,
 

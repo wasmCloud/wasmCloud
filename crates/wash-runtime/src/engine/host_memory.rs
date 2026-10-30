@@ -43,22 +43,19 @@
 //! [`MemoryLayout`] shrinks it, for operators and embedders who need the
 //! scale and accept what it changes:
 //!
-//! - **It moves a security boundary.** At wasmtime's 4 GiB reservation, every
-//!   address a 32-bit memory can form lands inside its own reservation (or,
-//!   with a constant offset, the guard after it); see [`MemoryLayout`].
-//!   A guest cannot reach a sibling component's memory, by construction:
-//!   the hardware faults first.
-//!   Below that, sibling memories sit within reach of a 32-bit address, and
-//!   what keeps a guest out of them is wasmtime emitting a correct bounds
-//!   check on every load and store. A bug in those checks, unlikely as it is,
-//!   would then let one guest read or write another's memory.
-//!   That is less defence in depth, not none: the checks are wasmtime's
-//!   ordinary, tested path for memories without a large reservation.
-//! - **It costs speed.** Every guest load and store is bounds-checked
-//!   instead of elided, which makes guest memory access slower.
-//!   A smaller guard also leaves fewer static offsets folded into it.
-//! - **It caps the heap.** No memory may grow past the reservation, so the
-//!   engine lowers `default_heap_memory` to it.
+//! - **It moves a security boundary.** Wasmtime's 4 GiB reservation covers
+//!   a 32-bit dynamic index, and the guard covers many constant offsets.
+//!   Larger offsets still need bounds checks at the defaults. With a smaller
+//!   reservation, sibling memories come within the dynamic index's reach;
+//!   a smaller guard protects fewer constant offsets. Isolation relies more
+//!   on software bounds checks, whose bugs could expose another guest's memory.
+//!   This reduces defense in depth.
+//! - **It can cost speed.** Smaller reservations and guards require more
+//!   explicit bounds checks, which can slow guest memory access.
+//! - **With pooling, it caps the heap.** No pooled memory may grow past the
+//!   reservation, so the engine lowers the default pool's `default_heap_memory`
+//!   to it. Without pooling, wasmtime may relocate a memory to grow beyond
+//!   its initial reservation; the guest and process memory budgets still apply.
 //!
 //! Left alone, the layout is wasmtime's own and none of this applies.
 
@@ -488,24 +485,25 @@ pub const WASMTIME_MEMORY_GUARD: u64 = 64 * 1024;
 /// ◄──────── reservation ──►◄guard─►◄ next slot
 /// ```
 ///
-/// - The **reservation** is the memory's whole span: what it uses now, and
-///   the room it may grow into. It never grows past it.
+/// - The **reservation** is the memory's initial span: what it uses now, and
+///   the room it may grow into. Pooled memories never grow past it. Without
+///   pooling, wasmtime may relocate a memory to grow beyond it.
 /// - The **guard** is unmapped, never accessible, and part of neither memory;
 ///   wasmtime also puts one before the first slot.
-/// - At wasmtime's 4 GiB reservation, a 32-bit address cannot reach past the
-///   room to grow, which is what keeps a guest inside its own slot without
-///   bounds checks. The guard only catches constant offsets added on top.
+/// - Wasmtime's 4 GiB reservation covers a 32-bit dynamic index. The guard
+///   covers many constant offsets added to it; larger offsets still need
+///   bounds checks even at the default layout.
 ///
 /// [`Self::default`] is wasmtime's own, and what every engine uses unless
 /// [`crate::engine::EngineBuilder::with_memory_layout`] says otherwise.
-/// A smaller layout fits more memories in the address space, and **moves a
-/// security boundary**: sibling memories come within reach of a 32-bit
-/// address, and isolation then relies on wasmtime's bounds checks alone.
+/// A smaller layout fits more memories in the address space and **moves a
+/// security boundary**: less hardware protection means isolation relies more
+/// on wasmtime's software bounds checks.
 /// See the module docs, "The reservation is an opt-in knob, and a security
 /// boundary".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryLayout {
-    /// Each memory's whole span: what it uses, and the room it may grow into.
+    /// Each memory's initial span: what it uses, and the room it may grow into.
     /// wasmtime's `memory_reservation`.
     pub reservation: u64,
     /// Unmapped space after each reservation, between it and the next slot.
@@ -523,8 +521,8 @@ impl Default for MemoryLayout {
 }
 
 impl MemoryLayout {
-    /// Whether this is smaller than wasmtime's default in either part,
-    /// which is what costs bounds checks and guard-page protection.
+    /// Whether either part is below wasmtime's default, reducing hardware
+    /// protection and potentially requiring more explicit bounds checks.
     pub fn is_reduced(&self) -> bool {
         self.reservation < WASMTIME_MEMORY_RESERVATION || self.guard < WASMTIME_MEMORY_GUARD
     }
@@ -540,10 +538,9 @@ impl MemoryLayout {
 ///
 /// A ceiling above the reservation does not make a bigger slot in practice:
 /// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
-/// `memory_reservation`, and the engine never raises the reservation (see
-/// [`pool_heap_ceiling_advisory`]). So every pool that builds has slots of
-/// exactly the reservation plus the guard; the larger figure is only what
-/// such a pool would have needed.
+/// `memory_reservation` (see [`pool_heap_ceiling_advisory`]). Every pool that
+/// builds has slots of exactly the reservation plus the guard; the larger
+/// figure is only what such a pool would have needed.
 pub fn pool_slot_bytes(max_memory_size: u64, layout: MemoryLayout) -> u64 {
     max_memory_size
         .max(layout.reservation)
@@ -1352,13 +1349,7 @@ fn accessible_pool_commit_advisory(
     )
 }
 
-/// What to say when the heap ceiling is past wasmtime's memory reservation,
-/// if it is.
-///
-/// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
-/// `memory_reservation`, and the engine leaves the reservation at wasmtime's
-/// default (see the module docs), so the engine will not start. The error
-/// wasmtime gives names neither knob.
+/// Explain why a pool's heap ceiling cannot exceed its configured reservation.
 fn pool_heap_ceiling_advisory(max_memory_size: u64, layout: MemoryLayout) -> Option<String> {
     (max_memory_size > layout.reservation).then(|| {
         format!(
@@ -1441,7 +1432,8 @@ fn pool_reservation_advisory(
     let remedy = format!(
         "Lower max-memories (or WASMTIME_POOLING_TOTAL_MEMORIES). Lowering \
          default-heap-memory will not help: every slot reserves the {} memory reservation \
-         plus a {} guard however small its heap; memory-reservation shrinks both, at a cost.",
+         plus a {} guard however small its heap. A smaller memory-reservation shrinks each \
+         slot but reduces hardware protection.",
         render_bytes(layout.reservation),
         render_bytes(layout.guard),
     );

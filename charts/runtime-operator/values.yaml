@@ -442,16 +442,17 @@ runtime:
     #
     # - Each memory's pool slot is this reservation,
     #   followed by `memoryGuardSize` of unmapped guard.
-    # - No memory grows past it, so `defaultHeapMemory` is lowered to it.
+    # - With pooling, no memory grows past it, so `defaultHeapMemory` is lowered to it.
+    #   Without pooling, memories may relocate and grow beyond it;
+    #   the guest and process memory budgets still apply.
     # - Smaller fits more warm instances in the node's address space
     #   (about 16,000 at 4GiB each).
-    # - SECURITY: smaller moves an isolation boundary.
-    #   At 4GiB, a 32-bit guest memory cannot address
-    #   a sibling component's memory at all.
-    #   Below it, only wasmtime's bounds checks keep each guest out;
-    #   a bug in them, unlikely as it is, would expose another guest's memory.
-    #   Less defence in depth, not none.
-    # - Smaller also bounds-checks every guest load and store, which is slower.
+    # - SECURITY: smaller moves an isolation boundary and reduces defense in depth.
+    #   At 4GiB, the reservation covers a 32-bit dynamic index;
+    #   the guard covers many constant offsets. Larger offsets still need checks.
+    #   Smaller layouts rely more on software bounds checks,
+    #   whose bugs could expose another guest's memory.
+    # - More explicit bounds checks can slow guest memory access.
     memoryReservation: ""
     # -- Unmapped guard after each guest memory's reservation,
     # between it and the next slot; never accessible to a guest.
@@ -461,7 +462,7 @@ runtime:
     # as `memoryReservation`.
     memoryGuardSize: ""
     # -- Linear memories the pooling allocator keeps room for, the count that
-    # sizes the pool: each reserves 4 GiB of address space plus a guard, and
+    # sizes the pool: by default, each reserves 4 GiB plus a guard, and
     # the fiber-stack, component-instance, core-instance, table and GC heap
     # totals follow from it. Empty lets the host derive it from the node: half its
     # address space and 90% of `vm.max_map_count` at six mappings per warm

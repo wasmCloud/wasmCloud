@@ -283,8 +283,7 @@ struct InstalledPool {
 }
 
 impl InstalledPool {
-    /// Address space the pool reserves. Keyed on the memory count, not the
-    /// instance count, and never less than wasmtime's reservation per slot.
+    /// Address space reserved by the installed memory layout and pool totals.
     fn reservation(&self) -> u64 {
         host_memory::pool_slab_bytes(self.max_memory_size, self.totals.memories, self.layout)
     }
@@ -539,34 +538,51 @@ impl std::error::Error for SharedError {
     }
 }
 
-/// Turns a compile failure into something an operator can act on.
-///
-/// The pooling allocator refuses a component whose minimum linear memory
-/// exceeds `--default-heap-memory` with a message that is precise and useless:
-/// it mixes decimal and hex, names no flag, and — once it has been re-wrapped
-/// on the way up and truncated at the CRD boundary — reaches a `kubectl`-only
-/// operator as nothing at all. The refusal is correct; only the explanation is
-/// missing, and every number it needs is already here.
-fn explain_compile_failure(e: wasmtime::Error, default_heap_memory: u64) -> anyhow::Error {
-    use host_memory::render_bytes;
+/// Explain a pool refusal using its installed heap ceiling and reservation.
+fn explain_compile_failure(
+    e: wasmtime::Error,
+    heap_ceiling: u64,
+    memory_reservation: u64,
+) -> anyhow::Error {
+    use host_memory::{parse_bytes, render_bytes};
 
     let text = format!("{e:#}");
     let Some(required) = parse_pooling_minimum(&text) else {
         return anyhow::Error::from(e);
     };
-    // Round up to the next power of two at or above the requirement: the pool
-    // sizes slots in whole memories, so the next size that certainly fits is
-    // the useful advice, not the bare minimum.
     let suggested = required
         .checked_next_power_of_two()
         .unwrap_or(required)
         .max(4 * host_memory::MIB);
+    // Suggested settings must parse back to the exact byte count.
+    let setting = |bytes| {
+        let rendered = render_bytes(bytes);
+        if parse_bytes(&rendered) == Ok(bytes) {
+            rendered
+        } else {
+            format!("{bytes}B")
+        }
+    };
+    let advice = if required > memory_reservation {
+        format!(
+            "--memory-reservation is {}. Raise it to at least {} \
+             (chart: runtime.resources.memoryReservation), and ensure --default-heap-memory \
+             permits that size (chart: runtime.resources.defaultHeapMemory).",
+            render_bytes(memory_reservation),
+            setting(suggested),
+        )
+    } else {
+        format!(
+            "Raise --default-heap-memory to at least {} \
+             (chart: runtime.resources.defaultHeapMemory).",
+            setting(suggested.min(memory_reservation)),
+        )
+    };
     anyhow::Error::from(e).context(format!(
-        "the component needs {} of linear memory but --default-heap-memory is {}. \
-         Raise it to at least {} (chart: runtime.resources.defaultHeapMemory).",
+        "the component needs {} of linear memory but the pooling allocator's \
+         per-memory ceiling is {}. {advice}",
         render_bytes(required),
-        render_bytes(default_heap_memory),
-        render_bytes(suggested),
+        render_bytes(heap_ceiling),
     ))
 }
 
@@ -939,7 +955,11 @@ impl Engine {
 
     /// See [`explain_compile_failure`].
     fn explain_compile_failure(&self, e: wasmtime::Error) -> anyhow::Error {
-        explain_compile_failure(e, self.effective_heap_memory())
+        explain_compile_failure(
+            e,
+            self.effective_heap_memory(),
+            self.inner.get_memory_reservation(),
+        )
     }
 
     /// The linear-memory ceiling a compile failure was actually measured
@@ -1627,15 +1647,18 @@ impl EngineBuilder {
     /// address space, which is what caps warm instances on a large host
     /// (about 16,000 at the default). Below the default it:
     ///
-    /// - **moves a security boundary.** At the default, a 32-bit memory cannot
-    ///   form an address outside its own slot and guard, so a guest cannot
-    ///   reach a sibling component's memory by construction. Below it, that
-    ///   rests on wasmtime emitting a correct bounds check on every access;
-    ///   a bug there, unlikely as it is, would expose a sibling's memory.
-    ///   Less defence in depth, not none.
-    /// - makes every guest load and store bounds-checked, which is slower;
-    /// - no memory may grow past the reservation, so `default_heap_memory`
-    ///   is lowered to it.
+    /// - **moves a security boundary.** The default reservation covers a
+    ///   32-bit dynamic index; the guard covers many constant offsets. Larger
+    ///   offsets still need bounds checks at the defaults. A smaller layout
+    ///   reduces hardware protection and relies more on software bounds checks,
+    ///   whose bugs could expose a sibling's memory;
+    /// - can slow guest memory access by requiring more explicit bounds checks;
+    /// - with pooling, no memory may grow past the reservation, so the default
+    ///   pool's `default_heap_memory` is lowered to it.
+    ///
+    /// Without pooling, this is an initial reservation, not a heap ceiling:
+    /// wasmtime may relocate a memory to grow beyond it. The guest and process
+    /// memory budgets still apply.
     ///
     /// The engine warns at startup when the layout is below wasmtime's default.
     /// A count from [`Self::with_derived_max_memories`] follows this layout.
@@ -1804,13 +1827,8 @@ impl EngineBuilder {
             .or_else(host_memory::memory_init_cow_from_env);
         let assumed_memory_init_cow = memory_init_cow.or((!has_custom_config).then_some(true));
 
-        // The pooling allocator can be more efficient for workloads with many short-lived instances.
-        // Read back from the installed pool: the environment and a
-        // caller-supplied config both override what was asked for.
-        // The per-memory layout, and the heap ceiling it allows: no memory may
-        // grow past its reservation, so a layout the caller names lowers the
-        // ceiling to it. Left alone, a ceiling past the default reservation is
-        // still refused, and the advisories say so.
+        // Pooled memories cannot outgrow the reservation. Custom pooling
+        // configs and environment overrides supply their own heap ceiling.
         let layout = self.memory_layout.unwrap_or_default();
         let heap_ceiling = match self.memory_layout {
             Some(layout) => host_memory.default_heap_memory.min(layout.reservation),
@@ -1821,10 +1839,9 @@ impl EngineBuilder {
                 memory_reservation = %host_memory::render_bytes(layout.reservation),
                 memory_guard = %host_memory::render_bytes(layout.guard),
                 default_heap_memory = %host_memory::render_bytes(heap_ceiling),
-                "guest memory layout is below wasmtime's default, which moves a security \
-                 boundary: sibling components' memories are now within reach of a 32-bit \
-                 address, and only wasmtime's bounds checks keep each guest out of the others'. \
-                 Every guest load and store is checked, which is slower"
+                "guest memory layout is below wasmtime's default, reducing hardware \
+                 protection and relying more on software bounds checks for guest isolation; \
+                 this may slow guest memory access"
             );
         }
         let mut installed_pool: Option<InstalledPool> = None;
@@ -2441,26 +2458,27 @@ fn new_pooling_config(
 mod tests {
     use super::*;
 
-    /// The refusal is correct and its text is the only place the number
-    /// appears; discarding it is what left a `kubectl`-only operator with
-    /// "ready=0 unavailable=1" and nothing else.
+    /// Heap refusals name the installed ceiling and a size that fits.
     #[test]
     fn a_heap_floor_refusal_names_the_flag_and_both_sizes() {
         let raw = wasmtime::Error::msg(
             "module memory does not fit in pooling allocator requirements: memory has a \
              minimum byte size of 2424832 which exceeds the limit of 0x100000",
         );
-        let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
+        let explained = format!(
+            "{:#}",
+            explain_compile_failure(raw, 1024 * 1024, host_memory::WASMTIME_MEMORY_RESERVATION)
+        );
         assert!(explained.contains("2.3MiB"), "{explained}");
         assert!(
-            explained.contains("--default-heap-memory is 1MiB"),
+            explained.contains("per-memory ceiling is 1MiB"),
             "{explained}"
         );
         assert!(
-            explained.contains("Raise it to at least 4MiB"),
+            explained.contains("Raise --default-heap-memory to at least 4MiB"),
             "{explained}"
         );
-        // And the original text is still underneath it.
+        assert!(!explained.contains("--memory-reservation"), "{explained}");
         assert!(explained.contains("pooling allocator"), "{explained}");
     }
 
@@ -2475,7 +2493,11 @@ mod tests {
         ] {
             let explained = format!(
                 "{:#}",
-                explain_compile_failure(wasmtime::Error::msg(text), 1024 * 1024,)
+                explain_compile_failure(
+                    wasmtime::Error::msg(text),
+                    1024 * 1024,
+                    host_memory::WASMTIME_MEMORY_RESERVATION,
+                )
             );
             assert_eq!(explained, text, "should not have been annotated");
         }
@@ -2490,15 +2512,41 @@ mod tests {
             "memory has a minimum byte size of {} which exceeds the limit of 0x100000",
             u64::MAX
         ));
-        let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
+        let explained = format!(
+            "{:#}",
+            explain_compile_failure(raw, 1024 * 1024, host_memory::WASMTIME_MEMORY_RESERVATION)
+        );
         assert!(explained.contains("Raise it to at least"), "{explained}");
     }
 
     #[test]
     fn an_unrelated_compile_failure_is_left_alone() {
         let raw = wasmtime::Error::msg("expected a WebAssembly component");
-        let explained = format!("{:#}", explain_compile_failure(raw, 1024 * 1024));
+        let explained = format!(
+            "{:#}",
+            explain_compile_failure(raw, 1024 * 1024, host_memory::WASMTIME_MEMORY_RESERVATION)
+        );
         assert_eq!(explained, "expected a WebAssembly component");
+    }
+
+    #[test]
+    fn heap_refusal_advice_stays_within_the_memory_reservation() {
+        for (reservation, suggested) in [(3 * host_memory::MIB, "3MiB"), (2_500_000, "2500000B")] {
+            let raw = wasmtime::Error::msg(
+                "memory has a minimum byte size of 2424832 which exceeds the limit of 0x100000",
+            );
+            let explained = format!(
+                "{:#}",
+                explain_compile_failure(raw, host_memory::MIB, reservation)
+            );
+            assert!(
+                explained.contains(&format!(
+                    "Raise --default-heap-memory to at least {suggested}"
+                )),
+                "{explained}"
+            );
+            assert!(!explained.contains("--memory-reservation"), "{explained}");
+        }
     }
 
     fn volume_only_workload(volumes: Vec<crate::types::Volume>) -> Workload {
@@ -2741,6 +2789,81 @@ mod tests {
         if let Some(heap) = engine.installed_heap_memory {
             assert_eq!(heap, 256 << 20);
         }
+    }
+
+    #[test]
+    fn a_memory_reservation_refusal_names_both_flags_and_recovers() -> anyhow::Result<()> {
+        use host_memory::{HostMemoryBudgets, MIB, MemoryLayout};
+
+        let bytes = wat::parse_str(
+            "(component (core module $m (memory 32)) (core instance (instantiate $m)))",
+        )?;
+        let budgets = HostMemoryBudgets::resolve(None, Some(4 * MIB), Some(2), None)
+            .map_err(anyhow::Error::msg)?;
+        let build = |reservation| {
+            Engine::builder()
+                .with_pooling_allocator(true)
+                .with_host_memory(budgets)
+                .with_memory_layout(MemoryLayout {
+                    reservation,
+                    guard: 0,
+                })
+                .build()
+        };
+        let engine = build(MIB)?;
+        if engine.pool_totals().is_none() {
+            return Ok(());
+        }
+        let Err(error) = engine.compile(&bytes) else {
+            panic!("a 2 MiB minimum must exceed a 1 MiB reservation");
+        };
+        let explained = format!("{error:#}");
+        for expected in [
+            "per-memory ceiling is 1MiB",
+            "--memory-reservation is 1MiB",
+            "Raise it to at least 4MiB",
+            "runtime.resources.memoryReservation",
+            "ensure --default-heap-memory permits that size",
+            "runtime.resources.defaultHeapMemory",
+        ] {
+            assert!(explained.contains(expected), "{explained}");
+        }
+        build(4 * MIB)?.compile(&bytes)?;
+        Ok(())
+    }
+
+    #[test]
+    fn an_unpooled_memory_can_outgrow_its_reservation_within_the_budget() -> anyhow::Result<()> {
+        use guest_memory::install_memory_limiter;
+        use host_memory::{HostMemoryBudgets, MIB, MemoryLayout};
+
+        for builder in [
+            Engine::builder().with_pooling_allocator(false),
+            Engine::builder().with_config(wasmtime::Config::new()),
+        ] {
+            let engine = builder
+                .with_host_memory(
+                    HostMemoryBudgets::resolve(Some(2 * MIB), None, None, None)
+                        .map_err(anyhow::Error::msg)?,
+                )
+                .with_memory_layout(MemoryLayout {
+                    reservation: MIB,
+                    guard: 0,
+                })
+                .build()?;
+            assert!(engine.pool_totals().is_none());
+            let ctx = ctx::SharedCtx::new(ctx::Ctx::builder("memory", "reservation").build())
+                .with_guest_memory(engine.guest_memory());
+            let mut store = wasmtime::Store::new(engine.inner(), ctx);
+            install_memory_limiter(&mut store);
+            let memory = wasmtime::Memory::new(&mut store, wasmtime::MemoryType::new(16, None))?;
+            memory.grow(&mut store, 16)?;
+            assert_eq!(memory.data_size(&store) as u64, 2 * MIB);
+            assert_eq!(engine.guest_memory().in_use(), 2 * MIB);
+            assert!(memory.grow(&mut store, 1).is_err());
+            assert_eq!(engine.guest_memory().in_use(), 2 * MIB);
+        }
+        Ok(())
     }
 
     // Unwind tables are on unless a host turns them off, and turning them off
