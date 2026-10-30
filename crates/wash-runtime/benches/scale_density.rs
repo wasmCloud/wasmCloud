@@ -524,6 +524,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         refusals_before = refusals_now;
         let served = serving.observe(answered.ok, answered.failed, warm_failed);
         steps.push(Step {
+            pressure: None,
             workloads: started,
             started: newly,
             starts_per_sec: newly as f64 / step_secs.max(f64::EPSILON),
@@ -595,6 +596,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
 
     let estimate = Estimate::from_steps(&settings, cpu.cores, baseline, &pool_baseline, &steps);
     let report = Report {
+        pressure: None,
         bench: "scale_density".into(),
         flavour: Some(flavour),
         label: layout_label(

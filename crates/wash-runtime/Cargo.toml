@@ -374,6 +374,10 @@ harness = false
 name = "scale_density"
 harness = false
 
+[[bench]]
+name = "memory_pressure"
+harness = false
+
 # Requires `--features host-component-plugins`, plus valgrind and a
 # version-matched gungraun-runner on PATH.
 [[bench]]
