@@ -424,6 +424,9 @@ pub fn print_comparison(reports: &[Report]) {
         reports.iter().flat_map(|r| r.limits.keys()).collect();
     row("", &|r| r.label.clone());
     row("cores", &|r| r.cores.to_string());
+    row("guest memory mode", &|r| {
+        r.guest_memory_mode.clone().unwrap_or_else(|| "-".into())
+    });
     row("served workloads", &|r| r.served().to_string());
     row("achieved workloads", &|r| r.achieved().to_string());
     for name in names {
@@ -449,6 +452,12 @@ pub fn print_comparison(reports: &[Report]) {
     row("guest memory charged", &|r| {
         or_dash(
             r.steps.last().and_then(|s| s.guest_memory_bytes),
+            render_bytes,
+        )
+    });
+    row("initial memory uncharged", &|r| {
+        or_dash(
+            r.steps.last().and_then(|s| s.initial_memory_bytes),
             render_bytes,
         )
     });

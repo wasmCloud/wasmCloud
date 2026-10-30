@@ -77,7 +77,10 @@ impl Estimate {
             let initial_per = per(reading(last.initial_memory_bytes) / workloads);
             limits.insert(
                 "max-initial-guest-memory".into(),
-                initial_per.map(|per| settings.initial_cap() / per),
+                settings
+                    .initial_guest_memory
+                    .zip(initial_per)
+                    .map(|(cap, per)| cap / per),
             );
         }
         Self {

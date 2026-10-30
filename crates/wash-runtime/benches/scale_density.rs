@@ -329,6 +329,11 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         .with_max_process_memory_bytes(settings.memory_limit)
         .with_guest_memory_mode(settings.guest_mode)
         .build()?;
+    // The cap the engine actually applies, so the estimate cannot drift from it.
+    let settings = Settings {
+        initial_guest_memory: Some(engine.guest_memory().initial_cap()),
+        ..settings
+    };
     let guard = engine
         .process_memory()
         .cloned()
@@ -519,10 +524,9 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         flavour: Some(flavour),
         label: report_label(flavour.name(), cpu.limit, settings.guest_mode),
         subject: format!(
-            "{}, max-guest-memory {}, guest-memory-mode {}, pool {} memories, {}{}",
+            "{}, max-guest-memory {}, pool {} memories, {}{}",
             settings.fixture,
             render_bytes(settings.guest_memory),
-            settings.guest_mode.as_str(),
             settings.max_memories,
             match (cpu.limit, cpu.pinned) {
                 (Some(n), true) => format!("{n} pinned cores"),
@@ -774,6 +778,7 @@ mod tests {
             "WASH_SCALE_GUEST_MEMORY" => Some("10MiB".into()),
             "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
             "WASH_SCALE_GUEST_MEMORY_MODE" => Some("growth".into()),
+            "WASH_SCALE_INITIAL_GUEST_MEMORY" => Some("40MiB".into()),
             _ => None,
         })?;
         let step = Step {
@@ -785,8 +790,7 @@ mod tests {
             ..Default::default()
         };
         let estimate = Estimate::from_steps(&settings, 1, 0, &None, &[step]);
-        // The default cap is four times the 10 MiB budget; each workload
-        // leaves 4 MiB uncharged.
+        // A 40 MiB cap, and each workload leaves 4 MiB uncharged.
         assert_eq!(estimate.limits["max-initial-guest-memory"], Some(10));
         assert_eq!(estimate.binding(), Some(10));
         Ok(())

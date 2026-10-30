@@ -8,8 +8,9 @@ The report is a `bench_tools::density::Report` per flavour, shared with
 evidence to estimate a limit, and `-` means a reading was not taken (a
 spin-down, a CPU share). Neither means the capacity is infinite: an idle
 workload uses no CPU, so CPU bounds rates, not counts. `WASH_SCALE_REPORT_JSON`
-writes the reports, including `guest_memory_mode`, with unknowns as `null`; in CI (`bench.yml`, bench
-`scale_density`) it is `<target>/density/scale_density.json`, which `bench-tools
+writes the reports, including `guest_memory_mode`, with unknowns as `null`; in
+CI (`bench.yml`, bench `scale_density`) it is
+`<target>/density/scale_density.json`, which `bench-tools
 jsonl` publishes to the trend site as `served_workloads`, `binding_limit`,
 `marginal_bytes_per_workload` and the other figures `Report::metrics` names.
 

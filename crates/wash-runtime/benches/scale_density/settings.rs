@@ -8,7 +8,7 @@ use std::{
 };
 use wash_runtime::{
     engine::{
-        guest_memory::{self, GuestMemoryMode},
+        guest_memory::GuestMemoryMode,
         host_memory::{self, parse_bytes},
     },
     wit::WitInterface,
@@ -38,9 +38,8 @@ pub(super) struct Settings {
     pub(super) guest_mode: GuestMemoryMode,
     /// One run per entry, each in a child told only its own mode.
     pub(super) guest_modes: Vec<GuestMemoryMode>,
-    /// Under `growth`, the cap on uncharged initial memory. Unset, the
-    /// engine's own default (`DEFAULT_INITIAL_OVERCOMMIT` times
-    /// `guest_memory`).
+    /// Under `growth`, the cap on uncharged initial memory.
+    /// Unset, the engine's own default, read back from the engine once it is built.
     pub(super) initial_guest_memory: Option<u64>,
     pub(super) max_components: Option<usize>,
     pub(super) max_duration: Option<Duration>,
@@ -56,15 +55,6 @@ pub(super) struct Settings {
 }
 
 impl Settings {
-    /// The initial cap the engine will apply under `growth`: the knob, or
-    /// the engine's default for this budget.
-    pub(super) fn initial_cap(&self) -> u64 {
-        self.initial_guest_memory.unwrap_or(
-            self.guest_memory
-                .saturating_mul(guest_memory::DEFAULT_INITIAL_OVERCOMMIT),
-        )
-    }
-
     pub(super) fn validate_flavour(&self, flavour: Flavour) -> Result<()> {
         if flavour == Flavour::Warm && self.fixture != "http_handler_p3" {
             bail!(
@@ -96,7 +86,7 @@ impl Settings {
         };
         // The runtime's own parser, the one `wash --guest-memory-mode` uses,
         // once per entry of a list (`enforce,growth`).
-        let guest_modes: Vec<GuestMemoryMode> = match var(GUEST_MEMORY_MODE) {
+        let mut guest_modes: Vec<GuestMemoryMode> = match var(GUEST_MEMORY_MODE) {
             None => vec![GuestMemoryMode::Enforce],
             Some(list) => list
                 .split(',')
@@ -106,6 +96,13 @@ impl Settings {
                 })
                 .collect::<Result<_>>()?,
         };
+        // A mode named twice would publish the same series twice.
+        let mut seen = Vec::new();
+        guest_modes.retain(|mode| {
+            let first = !seen.contains(mode);
+            seen.push(*mode);
+            first
+        });
         // `split` yields at least one entry, so the default is never reached.
         let guest_mode = guest_modes.first().copied().unwrap_or_default();
         let initial_guest_memory = var("WASH_SCALE_INITIAL_GUEST_MEMORY")
