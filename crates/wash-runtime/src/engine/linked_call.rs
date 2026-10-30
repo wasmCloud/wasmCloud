@@ -645,12 +645,9 @@ async fn invoke_ephemeral_linked_export(
 ///
 /// Args are extracted in the caller store, so each source stream begins pumping
 /// under the caller's long-lived runtime; the call then runs in a throwaway
-/// store, where result streams are extracted before the store is torn down. The
-/// store-driving task is **detached** (leaked after initial [`AbortOnDropHandle`]
-/// wrapping): it must outlive
-/// this call to keep producing into result streams while the caller consumes
-/// them. It self-terminates when a result stream's consumer is dropped — which
-/// closes the pump channel — so caller cancellation still reclaims the store.
+/// store, where result streams are extracted before the store is torn down.
+/// The task outlives the reply to drain result streams. Dropping a consumer
+/// closes its pump channel, allowing the task to release the store.
 async fn invoke_ephemeral_relocated(
     accessor: &Accessor<SharedCtx>,
     params: &[Val],
@@ -810,11 +807,8 @@ async fn invoke_ephemeral_relocated(
         .ok_or_else(|| wasmtime::format_err!("ephemeral store produced no results in time"))?
         .map_err(|_| wasmtime::format_err!("ephemeral store dropped before producing results"))??;
 
-    // Results are in hand; the task must keep running to feed any result streams,
-    // so detach it (cancellation past this point is handled by the result-stream
-    // consumers closing their pump channels). The drain is bounded from inside
-    // that task.
-    std::mem::forget(task);
+    // The task drains result streams after the reply, without retaining a join handle.
+    detach_after_reply(task);
 
     // Inject results into the caller store; result-stream producers pull from
     // the still-draining ephemeral store.
@@ -827,6 +821,10 @@ async fn invoke_ephemeral_relocated(
     );
 
     Ok(())
+}
+
+fn detach_after_reply<T>(task: AbortOnDropHandle<T>) {
+    drop(task.detach());
 }
 
 /// Run a plain-value async linked call.

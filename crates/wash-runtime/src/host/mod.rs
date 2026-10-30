@@ -3676,6 +3676,41 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn p3_start_traps_report_error_and_unbind_plugins() -> anyhow::Result<()> {
+        let plugin = Arc::new(BindRecordingPlugin::default());
+        let host = host_with(Arc::clone(&plugin));
+        let mut request = service_fails_after_bind_request("p3-start-trap");
+        request
+            .workload
+            .service
+            .as_mut()
+            .expect("service missing")
+            .bytes = wat::parse_str(
+            r#"(component
+          (import "test:probe/marker@0.1.0" (instance))
+          (core module $m
+            (func $start unreachable) (start $start)
+            (func (export "run") (result i32) i32.const 0)
+            (func (export "callback") (param i32 i32 i32) (result i32) i32.const 0))
+          (core instance $m (instantiate $m))
+          (func $run async (result (result)) (canon lift (core func $m "run")
+            async (callback (core func $m "callback"))))
+          (instance $cli (export "run" (func $run)))
+          (export "wasi:cli/run@0.3.0" (instance $cli)))"#,
+        )?
+        .into();
+        let response = host.workload_start(request).await?;
+        assert_eq!(
+            response.workload_status.workload_state,
+            WorkloadState::Error
+        );
+        assert!(response.workload_status.message.contains("unreachable"));
+        assert_eq!(plugin.bound(), vec!["p3-start-trap"]);
+        assert_eq!(plugin.unbound(), vec!["p3-start-trap"]);
+        Ok(())
+    }
+
     /// Stopping a workload that failed to start is a no-op beyond dropping the
     /// id: the failure path already released it. In particular the plugin must
     /// not be unbound a second time.

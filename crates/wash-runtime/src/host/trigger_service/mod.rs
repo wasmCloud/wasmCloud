@@ -58,6 +58,8 @@ use crate::host::job_registry::JobRegistry;
 mod capability;
 mod http;
 mod messaging;
+#[cfg(test)]
+mod tests;
 
 #[cfg(feature = "host-component-plugins")]
 pub use capability::{CapabilityCall, CapabilityFunc, CapabilityJob, LifecycleReplay};
@@ -483,88 +485,111 @@ impl TriggerService {
 /// Drive a trigger service on `store` to completion: instantiate `pre`, then
 /// co-drive `cli/run` (optional) with every ingress under `run_concurrent`,
 /// serving until each ingress channel closes (clean exit, `Ok`) or the store
-/// faults (`Err`, e.g. a guest trap). Reusable across restarts — a supervisor
-/// re-instantiates into the same store and re-runs this.
+/// faults (`Err`, e.g. a guest trap). Each incarnation needs a fresh store.
 pub(crate) async fn run_trigger_driver(
     store: &mut Store<SharedCtx>,
     pre: &InstancePre<SharedCtx>,
     ingresses: Vec<Ingress>,
     cli_run_error: CliRunError,
 ) -> anyhow::Result<()> {
-    let instance = pre
-        .instantiate_async(&mut *store)
+    PreparedTriggerDriver::instantiate(store, pre, ingresses)
+        .await?
+        .run(store, cli_run_error)
         .await
-        .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))
-        .context("failed to instantiate trigger service")?;
-    // `cli/run` is optional: a service exports it (its long-running work), but a
-    // pure capability host component plugin need not — in which case there is
-    // simply no run loop to co-drive.
-    let mut command = match Command::new(&mut *store, &instance) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            tracing::debug!(err = %e, "no wasi:cli/run export to co-drive");
+}
+
+/// Bound exports and ingresses for one service incarnation.
+pub(crate) struct PreparedTriggerDriver {
+    command: Option<Command>,
+    ingresses: Vec<PreparedIngress>,
+}
+
+impl PreparedTriggerDriver {
+    pub(crate) async fn instantiate(
+        store: &mut Store<SharedCtx>,
+        pre: &InstancePre<SharedCtx>,
+        ingresses: Vec<Ingress>,
+    ) -> anyhow::Result<Self> {
+        let instance = pre
+            .instantiate_async(&mut *store)
+            .await
+            .map_err(|e| crate::engine::pool_usage::explain_instantiate_failure(store.data(), e))
+            .context("failed to instantiate trigger service")?;
+        let command = if instance
+            .get_export_index(&mut *store, None, "wasi:cli/run@0.3.0")
+            .is_some()
+        {
+            Some(
+                Command::new(&mut *store, &instance)
+                    .context("failed to bind the service's wasi:cli/run export")?,
+            )
+        } else {
             None
+        };
+        // Build each ingress's binding view before entering run_concurrent.
+        let mut prepared = Vec::with_capacity(ingresses.len());
+        for ingress in ingresses {
+            prepared.push(
+                ingress
+                    .prepare(&mut *store, &instance)
+                    .map_err(|e| e.context("failed to prepare trigger service ingress"))?,
+            );
         }
-    };
-    // Build each ingress's binding view before entering run_concurrent.
-    let mut prepared = Vec::with_capacity(ingresses.len());
-    for ingress in ingresses {
-        prepared.push(
-            ingress
-                .prepare(&mut *store, &instance)
-                .map_err(|e| e.context("failed to prepare trigger service ingress"))?,
-        );
+
+        Ok(Self {
+            command,
+            ingresses: prepared,
+        })
     }
 
-    // Drive serving in a loop. A proxied-resource drop needs top-level store
-    // access (`resource_drop_async`), which is unavailable inside
-    // `run_concurrent`; when one is pending, a serve loop returns `FlushDrops`,
-    // we step out here to free it, and re-enter. In-flight tasks are preserved
-    // across `run_concurrent` calls (the concurrent state lives on the store), so
-    // re-entering resumes them. Without host component plugins there are no
-    // proxied resources, so serving runs to channel-close in a single pass.
-    let mut serve_again = true;
-    while serve_again {
-        let outcomes = store
-            .run_concurrent(async |accessor| {
-                // Spawn the cli/run co-driver once (first entry only).
-                if let Some(command) = command.take()
-                    && let Err(e) = accessor.spawn(RunTask {
-                        command,
-                        on_error: cli_run_error,
-                    })
-                {
-                    tracing::error!(err = %e, "failed to spawn cli/run co-driver task");
-                }
-                // `join_all` steps out only once EVERY ingress serve returns, so a
-                // `FlushDrops` is prompt only when the Capability ingress is served
-                // alone. That holds today: a plugin store carries exactly one
-                // Capability ingress and no Http/Messaging ingress, and service
-                // stores (which carry those) have no resource registry and never
-                // flush.
-                futures::future::join_all(prepared.iter_mut().map(|p| p.serve(accessor))).await
-            })
-            .await
-            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
-            .context("trigger service driver exited")?;
-        // Every channel closed → clean stop, unless an ingress asked to flush a
-        // proxied-resource drop (which needs top-level store access), in which
-        // case free it and re-serve to resume the preserved in-flight tasks.
+    pub(crate) async fn run(
+        self,
+        store: &mut Store<SharedCtx>,
+        cli_run_error: CliRunError,
+    ) -> anyhow::Result<()> {
+        let Self {
+            mut command,
+            ingresses: mut prepared,
+        } = self;
+        // Proxy drops need top-level store access. Re-enter after flushing them;
+        // in-flight guest tasks stay on the store.
+        let mut serve_again = true;
+        while serve_again {
+            let outcomes = store
+                .run_concurrent(async |accessor| {
+                    // Spawn the cli/run co-driver once (first entry only).
+                    if let Some(command) = command.take()
+                        && let Err(e) = accessor.spawn(RunTask {
+                            command,
+                            on_error: cli_run_error,
+                        })
+                    {
+                        tracing::error!(err = %e, "failed to spawn cli/run co-driver task");
+                    }
+                    // Capability stores have one ingress, so proxy drops can flush
+                    // without waiting for other ingress channels to close.
+                    futures::future::join_all(prepared.iter_mut().map(|p| p.serve(accessor))).await
+                })
+                .await
+                .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
+                .context("trigger service driver exited")?;
+            // Closed channels end the driver; proxy drops only pause it.
+            #[cfg(feature = "host-component-plugins")]
+            {
+                flush_pending_resource_drops(&mut *store).await;
+                serve_again = outcomes.contains(&ServeOutcome::FlushDrops);
+            }
+            #[cfg(not(feature = "host-component-plugins"))]
+            {
+                let _ = outcomes;
+                serve_again = false;
+            }
+        }
+        // Teardown: drop every resource the plugin still owns.
         #[cfg(feature = "host-component-plugins")]
-        {
-            flush_pending_resource_drops(&mut *store).await;
-            serve_again = outcomes.contains(&ServeOutcome::FlushDrops);
-        }
-        #[cfg(not(feature = "host-component-plugins"))]
-        {
-            let _ = outcomes;
-            serve_again = false;
-        }
+        drain_plugin_resources(&mut *store).await;
+        Ok(())
     }
-    // Teardown: drop every resource the plugin still owns.
-    #[cfg(feature = "host-component-plugins")]
-    drain_plugin_resources(&mut *store).await;
-    Ok(())
 }
 
 /// What a `wasi:cli/run` that returns an error does to the incarnation running
