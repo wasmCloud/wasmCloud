@@ -479,6 +479,26 @@ async fn clearing_a_container_removes_links_without_following_them() {
         #[cfg(windows)]
         std::os::windows::fs::symlink_dir(&outside, dir.path().join(name)).unwrap();
     }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside.join("keep"), dir.path().join("source/file-link"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.join("missing"), dir.path().join("source/dangling"))
+            .unwrap();
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(
+            outside.join("keep"),
+            dir.path().join("source/file-link"),
+        )
+        .unwrap();
+        std::os::windows::fs::symlink_dir(
+            outside.join("missing"),
+            dir.path().join("source/dangling"),
+        )
+        .unwrap();
+    }
     Container::clear(&mut ctx, borrow(&container))
         .await
         .unwrap()
