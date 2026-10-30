@@ -50,7 +50,7 @@ func testDaemonSet(replicas int32) *runtimev1alpha1.WorkloadDaemonSet {
 			UID:       "ds-uid",
 		},
 		Spec: runtimev1alpha1.WorkloadDaemonSetSpec{
-			Replicas: &replicas,
+			ReplicasPerHost: &replicas,
 			Template: runtimev1alpha1.WorkloadReplicaTemplate{
 				Spec: runtimev1alpha1.WorkloadSpec{
 					HostSelector: map[string]string{testHostGroupLabel: testHostGroup},
@@ -187,6 +187,51 @@ func TestDaemonSetSchedule_StaleCacheDoesNotDuplicate(t *testing.T) {
 	}
 
 	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 2})
+}
+
+// A Workload left behind by --cascade=orphan holds a slot's name. The
+// re-created DaemonSet adopts it instead of counting a local copy.
+func TestDaemonSetSchedule_AdoptsOrphanInSlot(t *testing.T) {
+	ds := testDaemonSet(1)
+	orphan := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: testDaemonSetNamespace,
+			Name:      daemonSetWorkloadName(testDaemonSetName, dsHostA, ds.Spec.Template.Hash(), 0),
+		},
+		Spec: runtimev1alpha1.WorkloadSpec{HostID: dsHostA},
+	}
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), orphan)
+
+	schedule(t, r, ds)
+
+	byHost := workloadsByHost(t, r)
+	assertPerHost(t, byHost, map[string]int{dsHostA: 1})
+	if byHost[dsHostA][0].Name != orphan.Name {
+		t.Fatalf("expected the orphan adopted, got %s", byHost[dsHostA][0].Name)
+	}
+}
+
+func TestDaemonSetSchedule_SlotOwnedByAnotherControllerFails(t *testing.T) {
+	ds := testDaemonSet(1)
+	controller := true
+	foreign := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: testDaemonSetNamespace,
+			Name:      daemonSetWorkloadName(testDaemonSetName, dsHostA, ds.Spec.Template.Hash(), 0),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: runtimev1alpha1.GroupVersion.String(),
+				Kind:       "WorkloadReplicaSet",
+				Name:       "someone-else",
+				UID:        "other-uid",
+				Controller: &controller,
+			}},
+		},
+	}
+	r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA), foreign)
+
+	if err := r.reconcileSchedule(context.Background(), ds); err == nil {
+		t.Fatal("expected an error for a slot another controller owns")
+	}
 }
 
 // The ReplicaSet and Deployment annotations name the workload on the host,
@@ -352,7 +397,7 @@ func TestDaemonSetSchedule_ScaleDownPerHost(t *testing.T) {
 	schedule(t, r, ds)
 
 	one := int32(1)
-	ds.Spec.Replicas = &one
+	ds.Spec.ReplicasPerHost = &one
 	schedule(t, r, ds)
 
 	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 1, dsHostB: 1})
@@ -396,9 +441,10 @@ func TestDaemonSetSchedule_RollingUpdateOneHostAtATime(t *testing.T) {
 	if countNew(byHost[dsHostA]) != 1 || countNew(byHost[dsHostB]) != 1 {
 		t.Fatalf("expected ds-host-a updated and ds-host-b updating, got %v", byHost)
 	}
-	// The pass that retired ds-host-a's old instance already reports it gone.
-	if ds.Status.Hosts[0].HostID != dsHostA || ds.Status.Hosts[0].Outdated != 0 {
-		t.Fatalf("expected ds-host-a outdated=0 in the same pass, got %+v", ds.Status.Hosts)
+	// The pass that retired ds-host-a's old instance already reports it
+	// done, so only ds-host-b is listed as needing attention.
+	if len(ds.Status.Hosts) != 1 || ds.Status.Hosts[0].HostID != dsHostB {
+		t.Fatalf("expected only ds-host-b in status.hosts, got %+v", ds.Status.Hosts)
 	}
 
 	markAllAvailable(t, r)
@@ -408,6 +454,9 @@ func TestDaemonSetSchedule_RollingUpdateOneHostAtATime(t *testing.T) {
 	assertPerHost(t, byHost, map[string]int{dsHostA: 1, dsHostB: 1})
 	if ds.Status.UpdatedHosts != 2 || ds.Status.ReadyHosts != 2 {
 		t.Fatalf("expected both hosts updated and ready, got %+v", ds.Status)
+	}
+	if len(ds.Status.Hosts) != 0 {
+		t.Fatalf("expected no hosts needing attention, got %+v", ds.Status.Hosts)
 	}
 	ds.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDaemonSetConditionSchedule))
 	if err := r.reconcileReady(context.Background(), ds); err != nil {

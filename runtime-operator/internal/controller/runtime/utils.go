@@ -32,10 +32,7 @@ func translatePullPolicy(policy corev1.PullPolicy) runtimev2.ImagePullPolicy {
 }
 
 func randHash() string {
-	h := fnv.New32a()
-	uuid := uuid.NewUUID()
-	_, _ = h.Write([]byte(uuid))
-	return rand.SafeEncodeString(fmt.Sprint(h.Sum32()))
+	return shortHash(string(uuid.NewUUID()))
 }
 
 // shortHash is an 8-10 character, name-safe hash of s.

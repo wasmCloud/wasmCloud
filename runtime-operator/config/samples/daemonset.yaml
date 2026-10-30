@@ -4,7 +4,7 @@ metadata:
   name: hello-everywhere
 spec:
   # Instances on each matching host.
-  replicas: 1
+  replicasPerHost: 1
   template:
     spec:
       # Run on every host in the chart's default hostgroup.

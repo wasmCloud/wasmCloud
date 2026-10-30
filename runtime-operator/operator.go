@@ -11,8 +11,7 @@ import (
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	runtime_controllers "go.wasmcloud.dev/runtime-operator/v2/internal/controller/runtime"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
-	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
@@ -156,14 +155,23 @@ func NewEmbeddedOperator(
 
 	// An upgrade that skipped the chart's crds/ has no WorkloadDaemonSet CRD.
 	// Its informer would never sync and take every other controller down.
-	daemonSetGK := schema.GroupKind{Group: runtimev1alpha1.GroupVersion.Group, Kind: "WorkloadDaemonSet"}
-	_, err = mgr.GetRESTMapper().RESTMapping(daemonSetGK, runtimev1alpha1.GroupVersion.Version)
+	daemonSetCRD := &crdWatch{
+		gv:   runtimev1alpha1.GroupVersion,
+		kind: "WorkloadDaemonSet",
+	}
+	if daemonSetCRD.discovery, err = discovery.NewDiscoveryClientForConfig(mgr.GetConfig()); err != nil {
+		return nil, err
+	}
+	installed, err := daemonSetCRD.installed()
 	switch {
-	case meta.IsNoMatchError(err):
-		mgr.GetLogger().Info("WorkloadDaemonSet CRD is not installed, skipping its controller",
-			"fix", "apply the chart's CRDs and restart the operator")
 	case err != nil:
 		return nil, err
+	case !installed:
+		mgr.GetLogger().Error(nil, "WorkloadDaemonSet CRD is not installed, its controller is off; "+
+			"the operator restarts once the CRD is applied")
+		if err = mgr.Add(daemonSetCRD); err != nil {
+			return nil, err
+		}
 	default:
 		if err = (&runtime_controllers.WorkloadDaemonSetReconciler{
 			Client:            mgr.GetClient(),
