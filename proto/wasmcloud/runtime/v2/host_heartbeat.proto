@@ -54,4 +54,9 @@ message HostHeartbeat {
   // `spec.environment` field, and the scheduler uses it to enforce
   // per-tenant isolation.
   string environment = 18;
+
+  // Start-request features this host acts on, which an older host would
+  // ignore. A scheduler places a workload that uses one only on a host that
+  // lists it.
+  repeated string features = 19;
 }
