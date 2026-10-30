@@ -3,10 +3,10 @@
 # bench output to a log file under $CARGO_TARGET_DIR so bench-push-results.mjs can
 # archive it next to the bench data.
 #
-# Two harness types share this script:
+# Benchmark families share this script:
 #   - criterion benches (http_invoke, service_http, wasmtime_baseline,
 #     wasmtime_serve) write to $CARGO_TARGET_DIR/criterion/.
-#   - density benches (scale_density) write a list of
+#   - density benches (scale_density, memory_pressure) write a list of
 #     bench_tools::density::Report to $CARGO_TARGET_DIR/density/<bench>.json,
 #     which `bench-tools jsonl` and `summary` read.
 #   - gungraun benches (gungraun, gungraun_plugin) write to $CARGO_TARGET_DIR/gungraun/
@@ -38,7 +38,8 @@ bench="${1:?bench name required}"
 # An explicit caller override still wins. Installing a binary on PATH alone
 # does not replace Rust's older bundled wasm32-wasip2 linker.
 export CARGO_TARGET_WASM32_WASIP2_LINKER="${CARGO_TARGET_WASM32_WASIP2_LINKER:-/usr/local/bin/wasm-component-ld}"
-if ! linker_version=$("$CARGO_TARGET_WASM32_WASIP2_LINKER" --version); then
+linker_version="not needed"
+if [[ "$bench" != memory_pressure ]] && ! linker_version=$("$CARGO_TARGET_WASM32_WASIP2_LINKER" --version); then
   echo "cannot run the fixture linker at ${CARGO_TARGET_WASM32_WASIP2_LINKER}; run ansible-playbook provision.yml --tags wasm-component-ld" >&2
   exit 1
 fi
@@ -87,7 +88,7 @@ touch "$marker"
 # xtask dir because compare-bench.sh checks out arbitrary refs: refs that
 # predate the xtask crate build their fixtures during `cargo bench`
 # themselves, so the explicit step is skipped for them.
-if [ -d xtask ]; then
+if [[ "$bench" != memory_pressure ]] && [ -d xtask ]; then
   echo "building wasm test fixtures via xtask" | tee -a "$log"
   cargo xtask build-fixtures 2>&1 | tee -a "$log"
 fi
@@ -142,8 +143,13 @@ case "$bench" in
     ;;
 esac
 
-"${prefix[@]}" cargo bench -p wash-runtime "${features[@]}" --bench "$bench" 2>&1 \
-  | tee -a "$log"
+if [[ "$bench" == memory_pressure ]]; then
+  cargo run -p bench-tools --quiet -- memory-pressure --target-dir "$CARGO_TARGET_DIR" "${@:2}" 2>&1 \
+    | tee -a "$log"
+else
+  "${prefix[@]}" cargo bench -p wash-runtime "${features[@]}" --bench "$bench" 2>&1 \
+    | tee -a "$log"
+fi
 
 echo "WASMCLOUD_BENCH_LOG=${log}" >> "${GITHUB_OUTPUT:-/dev/null}"
 echo "WASMCLOUD_BENCH_MARKER=${marker}" >> "${GITHUB_OUTPUT:-/dev/null}"

@@ -23,6 +23,7 @@ serde_json = { workspace = true, default-features = true }
 # `formatting` + `std` (default) for OffsetDateTime::now_utc() + .format().
 time = { version = "0.3", default-features = false, features = ["formatting", "macros", "std"] }
 walkdir = "2.5"
+tokio = { workspace = true, features = ["rt", "signal"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

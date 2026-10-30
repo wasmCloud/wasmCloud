@@ -708,20 +708,29 @@ cannot exfiltrate the WRITE role or comment on PRs.
 
 ### 9.5 Guest memory pressure test
 
-[`guest-memory-pressure.py`](guest-memory-pressure.py) compares `enforce` and
-`growth` under real Linux cgroup v2 limits, with CoW both enabled and disabled.
-It needs Docker, Python 3.11+, and enough Docker VM memory for an 8 GiB build
-container. From the repository root:
+The `memory_pressure` density benchmark compares `enforce` and `growth` under
+real Linux cgroup v2 limits, with CoW both enabled and disabled. It uses the
+shared `bench_tools::density::Report`, step/comparison renderers, and JSONL and
+summary commands. Docker orchestration lives in `bench-tools`; the Rust bench
+only measures its own process. It needs Docker and enough Docker VM memory
+for an 8 GiB build container. On the Linux bench host:
 
 ```bash
-python3 scripts/bench/guest-memory-pressure.py --memory-mib 384 768 --repeats 3
+CARGO_TARGET_DIR=target scripts/bench/run-bench.sh memory_pressure \
+  --memory-mib 384 768 --repeats 3
 ```
 
-The script builds the locked Rust example in the repository's pinned Rust
+For a local Docker run, including on macOS, invoke the same Rust runner directly:
+
+```bash
+cargo run -p bench-tools -- memory-pressure --memory-mib 384 768 --repeats 3
+```
+
+The runner builds the locked Rust bench in the repository's pinned Rust
 toolchain image, then runs each case sequentially in a fresh container with two
 CPUs, the specified memory limit, no swap, and no network. Limits from 384 to
 2048 MiB are supported. The measured container runs the Rust executable as
-PID 1; the Python driver and build run outside its cgroup. Build caches use the
+PID 1; the runner and build run outside its cgroup. Build caches use the
 named volumes `wash-pressure-target` and `wash-pressure-registry`; override them
 with `--target-volume` and `--registry-volume`. Do not rebuild into the same
 target volume while a pressure run is using its binary.
@@ -750,10 +759,10 @@ The default matrix includes all four shapes, both modes, and both CoW settings.
 To focus on late writes, then compare a smaller initial allowance:
 
 ```bash
-python3 scripts/bench/guest-memory-pressure.py \
+cargo run -p bench-tools -- memory-pressure \
   --shapes dirty --memory-mib 384 768 --dirty-mib 2 --repeats 3
 
-python3 scripts/bench/guest-memory-pressure.py \
+cargo run -p bench-tools -- memory-pressure \
   --shapes dirty --memory-mib 768 --guest-memory-mib 256 \
   --initial-cap-mib 288 --repeats 3
 ```
@@ -764,10 +773,12 @@ defaults apply, including the `4 × G` initial allowance. See the runtime's
 [sizing guidance](../../crates/wash-runtime/README.md#sizing-guest-memory-in-containers)
 for the budget calculation and its physical-memory assumptions.
 
-Each run creates a new directory under `target/guest-memory-pressure/` (or
-`--output`). It contains the build log, source hashes and revision, image ID,
-settings, per-case stdout JSONL and stderr, Docker state and limits, and combined
-`results.json`. Samples report `baseline`, `ready`, `writing`, `touched`, and
+Results use the framework's `<target>/density/memory_pressure.json` report list.
+Each run also creates a timestamped directory beside it containing the build
+log, revision and working-tree patch, image ID, requested settings, per-case
+logs, checkpoints, and Docker state/limits. `--target-dir` selects the target
+directory and otherwise follows `CARGO_TARGET_DIR`, then `target/`.
+Steps record `baseline`, `ready`, `writing`, `touched`, and
 `released`, with guest reservations, process footprint, cgroup current/peak
 memory when available, kernel, architecture, and transparent-huge-page policy.
 The `ready` sample records the actual admission stop reason. The final resident
@@ -787,12 +798,25 @@ every kernel. Compare admission counts and retained memory as well as the
 pass/fail result. This test demonstrates overcommit behavior; it does not
 certify application sizing or make an expected OOM acceptable in production.
 
-The driver removes every measured container, including after a timeout or
-interruption. Docker retains the build-cache volumes. Lightweight result
-classification tests do not start containers:
+The runner removes every measured container, including after a timeout,
+SIGINT, or SIGTERM. Docker retains the build-cache volumes. The `bench` workflow
+offers `memory_pressure` as a dispatch-only diagnostic: it uploads the shared
+density report and raw evidence without publishing pressure cases to the trend
+site. Its cleanup stops Docker so the next bench's pre-flight sees the usual
+idle host. It is excluded from automatic release runs.
+
+The standard reporting commands consume pressure results:
 
 ```bash
-python3 -m unittest discover -s scripts/bench -p test_guest_memory_pressure.py
+cargo run -p bench-tools -- summary --bench memory_pressure --target-dir target
+cargo run -p bench-tools -- jsonl --bench memory_pressure --target-dir target
+```
+
+Only measured figures are emitted; an OOM case has no final cgroup peak.
+Classifier and schema tests run without containers:
+
+```bash
+cargo test -p bench-tools --lib
 ```
 
 ## 10. Pre-flight assertions

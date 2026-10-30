@@ -172,6 +172,14 @@ fn render_density<W: Write>(
     )?;
     writeln!(out, "|---|---|---:|---|---|---|")?;
     for report in reports {
+        let stop = report
+            .pressure
+            .as_ref()
+            .and_then(|p| p.outcome)
+            .map_or_else(
+                || report.stop.clone(),
+                |outcome| format!("{}; {}", outcome.name(), report.stop),
+            );
         for metric in report.metrics() {
             writeln!(
                 out,
@@ -181,7 +189,7 @@ fn render_density<W: Write>(
                 metric.value,
                 metric.unit,
                 metric.better.as_str(),
-                report.stop,
+                stop,
             )?;
         }
     }

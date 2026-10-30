@@ -10,9 +10,6 @@ target/
 # scripts/k6bench run output
 bench-results/
 
-# Python script caches
-__pycache__/
-
 # Ignore build artifacts
 wash.exe
 /runtime-gateway/runtime-gateway
