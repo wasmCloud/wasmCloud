@@ -44,7 +44,7 @@ async fn p2_attempts(exit: Exit, max_restarts: u64) -> anyhow::Result<usize> {
     let calls = Arc::new(AtomicUsize::new(0));
     service
         .metadata
-        .linker()
+        .linker()?
         .instance("test:probe/host@0.1.0")?
         .func_wrap("probe", {
             let calls = Arc::clone(&calls);
@@ -222,7 +222,7 @@ async fn p3_commands_run_after_initialization() -> anyhow::Result<()> {
         let ran = Arc::new(tokio::sync::Notify::new());
         service
             .metadata
-            .linker()
+            .linker()?
             .instance("test:probe/host@0.1.0")?
             .func_wrap("probe", {
                 let ran = Arc::clone(&ran);
