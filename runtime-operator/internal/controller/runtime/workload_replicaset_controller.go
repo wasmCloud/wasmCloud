@@ -2,11 +2,15 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -36,7 +40,25 @@ const (
 type WorkloadReplicaSetReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
+	Recorder   events.EventRecorder
 	reconciler condition.AnyConditionedReconciler
+}
+
+// recordRefusedCreate records a Workload create that the API server refused
+// on the ReplicaSet and on the WorkloadDeployment that owns it, where the
+// user is looking.
+func (r *WorkloadReplicaSetReconciler) recordRefusedCreate(replicaSet *runtimev1alpha1.WorkloadReplicaSet, err error) {
+	recordRefused(r.Recorder, replicaSet, nil, "Create", "Workload create refused", err)
+	if owner := metav1.GetControllerOf(replicaSet); owner != nil &&
+		owner.APIVersion == runtimev1alpha1.GroupVersion.String() && owner.Kind == "WorkloadDeployment" {
+		deployment := &runtimev1alpha1.WorkloadDeployment{ObjectMeta: metav1.ObjectMeta{
+			Name:      owner.Name,
+			Namespace: replicaSet.Namespace,
+			UID:       owner.UID,
+		}}
+		recordRefused(r.Recorder, deployment, replicaSet, "Create",
+			fmt.Sprintf("WorkloadReplicaSet %s: Workload create refused", replicaSet.Name), err)
+	}
 }
 
 func (r *WorkloadReplicaSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -100,7 +122,18 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		}
 
 		if err := r.Create(ctx, workload); err != nil {
-			return err
+			// Each attempt names a new Workload, and a refusal may mention the
+			// name: the API server quotes it, a webhook may use it anywhere.
+			// Left in, the ScaleUp message would change every pass, and a
+			// changed condition is requeued a second later: the create, and its
+			// events, would repeat each second.
+			refused := isRefused(err)
+			msg := strings.ReplaceAll(err.Error(), fmt.Sprintf(" %q", workload.Name), "")
+			err = errors.New(strings.ReplaceAll(msg, workload.Name, "<new Workload>"))
+			if refused {
+				r.recordRefusedCreate(replicaSet, err)
+			}
+			return fmt.Errorf("creating Workload: %w", err)
 		}
 	}
 
@@ -136,6 +169,10 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 }
 
 func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
+	if failed, ok := firstFailed(&replicaSet.Status.ConditionedStatus,
+		runtimev1alpha1.WorkloadReplicaSetConditionScaleUp, runtimev1alpha1.WorkloadReplicaSetConditionScaleDown); ok {
+		return fmt.Errorf("%s: %s", failed.Type, failed.Message)
+	}
 	if !replicaSet.Status.AllTrue(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp, runtimev1alpha1.WorkloadReplicaSetConditionScaleDown) {
 		return fmt.Errorf("scaling in progress")
 	}
@@ -313,6 +350,9 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		&runtimev1alpha1.WorkloadReplicaSet{},
 		workloadReplicaSetReconcileInterval)
 
+	// WorkloadDeployment reads these conditions and must tell a current one
+	// from one an earlier spec left behind.
+	reconciler.TrackGeneration()
 	reconciler.SetCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp, r.reconcileScaleUp)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleDown, r.reconcileScaleDown)
 	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
@@ -326,28 +366,12 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetNameIndex, func(rawObj client.Object) []string {
-		if ownerName, ok := isOwnedByController(rawObj, replicaSetGvk); ok {
-			return []string{ownerName}
-		}
-
-		return []string{}
-	})
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetNameIndex, replicaSetNameIndexValue(replicaSetGvk))
 	if err != nil {
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, func(rawObj client.Object) []string {
-		if _, ok := isOwnedByController(rawObj, replicaSetGvk); !ok {
-			return []string{}
-		}
-
-		if generation, ok := rawObj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]; ok {
-			return []string{generation}
-		}
-
-		return []string{}
-	})
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, replicaSetHashIndexValue(replicaSetGvk))
 	if err != nil {
 		return err
 	}
@@ -357,4 +381,31 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		Owns(&runtimev1alpha1.Workload{}).
 		Named("workload-replicaset").
 		Complete(r)
+}
+
+// replicaSetNameIndexValue indexes a Workload by the ReplicaSet that controls it.
+func replicaSetNameIndexValue(replicaSetGvk schema.GroupVersionKind) client.IndexerFunc {
+	return func(rawObj client.Object) []string {
+		if ownerName, ok := isOwnedByController(rawObj, replicaSetGvk); ok {
+			return []string{ownerName}
+		}
+
+		return []string{}
+	}
+}
+
+// replicaSetHashIndexValue indexes a ReplicaSet's Workload by the template hash
+// it was created from.
+func replicaSetHashIndexValue(replicaSetGvk schema.GroupVersionKind) client.IndexerFunc {
+	return func(rawObj client.Object) []string {
+		if _, ok := isOwnedByController(rawObj, replicaSetGvk); !ok {
+			return []string{}
+		}
+
+		if generation, ok := rawObj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]; ok {
+			return []string{generation}
+		}
+
+		return []string{}
+	}
 }

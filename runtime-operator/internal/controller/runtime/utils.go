@@ -8,13 +8,16 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/config/configfile"
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -65,6 +68,33 @@ func isOwnedByController(rawObj client.Object, gvk schema.GroupVersionKind) (str
 	}
 
 	return "", false
+}
+
+// isRefused reports whether the API server turned a write away, as admission
+// (a webhook, a ValidatingAdmissionPolicy, a ResourceQuota) or validation does,
+// rather than failing it in a way that a retry may get past.
+func isRefused(err error) bool {
+	return apierrors.IsForbidden(err) || apierrors.IsInvalid(err)
+}
+
+// recordRefused records a Warning on regarding for a write the API server
+// refused; related names the object the refused write was for, if any.
+func recordRefused(recorder events.EventRecorder, regarding, related runtime.Object, action, note string, err error) {
+	if recorder == nil {
+		return
+	}
+	recorder.Eventf(regarding, related, corev1.EventTypeWarning, "Failed"+action, action, "%s: %v", note, err)
+}
+
+// firstFailed returns the first of condTypes that is False, so a parent can
+// say why a child is stuck rather than only that it is not ready yet.
+func firstFailed(status *condition.ConditionedStatus, condTypes ...condition.ConditionType) (condition.Condition, bool) {
+	for _, ct := range condTypes {
+		if c := status.GetCondition(ct); c.Status == condition.ConditionFalse {
+			return c, true
+		}
+	}
+	return condition.Condition{}, false
 }
 
 func gvkForType(obj client.Object, scheme *runtime.Scheme) (schema.GroupVersionKind, error) {

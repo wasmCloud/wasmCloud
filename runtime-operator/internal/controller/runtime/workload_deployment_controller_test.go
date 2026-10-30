@@ -3,14 +3,17 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -115,8 +118,8 @@ func availableReplicaSet(name string) *runtimev1alpha1.WorkloadReplicaSet {
 // unavailableReplicaSet returns an RS that has been reconciled at least once
 // but whose workloads are not yet running (Status.Replicas reports
 // Unavailable, Ready condition is absent).
-func unavailableReplicaSet(name string) *runtimev1alpha1.WorkloadReplicaSet {
-	rs := baseReplicaSet(name)
+func unavailableReplicaSet() *runtimev1alpha1.WorkloadReplicaSet {
+	rs := baseReplicaSet(testReplicaSetName)
 	rs.Status.Replicas = &runtimev1alpha1.ReplicaSetStatus{
 		Expected:    testReplicas,
 		Current:     testReplicas,
@@ -138,6 +141,13 @@ func ptrTrue() *bool { b := true; return &b }
 
 func newScaleReconciler(t *testing.T, objs ...client.Object) *WorkloadDeploymentReconciler {
 	t.Helper()
+	return newScaleReconcilerWith(t, interceptor.Funcs{}, objs...)
+}
+
+// newScaleReconcilerWith is newScaleReconciler with funcs intercepting its
+// client's calls.
+func newScaleReconcilerWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *WorkloadDeploymentReconciler {
+	t.Helper()
 	s := newScaleTestScheme(t)
 
 	// Mirror SetupWithManager's index, reconcileScale's List() call uses
@@ -157,6 +167,7 @@ func newScaleReconciler(t *testing.T, objs ...client.Object) *WorkloadDeployment
 				}
 				return nil
 			}).
+		WithInterceptorFuncs(funcs).
 		Build()
 
 	return &WorkloadDeploymentReconciler{Client: c, Scheme: s}
@@ -173,7 +184,7 @@ func TestReconcileScale_FreshDeploy_RSNotAvailable_ReturnsUnknown(t *testing.T) 
 	// the underlying Workload was still unplaced. Lock in that an RS
 	// with Unavailable=1 keeps reconcileScale in the Unknown path.
 	wd := readyDeployment("" /* no previous RS */)
-	rs := unavailableReplicaSet(testReplicaSetName)
+	rs := unavailableReplicaSet()
 	r := newScaleReconciler(t, wd, rs)
 
 	err := r.reconcileScale(context.Background(), wd)
@@ -251,7 +262,7 @@ func TestReconcileScale_RollingUpdate_CurrentNotAvailable_ReturnsUnknown(t *test
 	// running, causing the downtime that RollingUpdate is supposed to
 	// prevent.
 	wd := readyDeployment(testPrevSetName)
-	current := unavailableReplicaSet(testReplicaSetName)
+	current := unavailableReplicaSet()
 	prev := availableReplicaSet(testPrevSetName)
 	r := newScaleReconciler(t, wd, current, prev)
 
@@ -297,5 +308,154 @@ func TestReconcileScale_RollingUpdate_CurrentAvailable_DeletesPrev(t *testing.T)
 		client.ObjectKey{Namespace: testNamespace, Name: testPrevSetName}, got)
 	if !apierrors.IsNotFound(getErr) {
 		t.Fatalf("expected previous ReplicaSet to be deleted (NotFound), got err=%v obj=%+v", getErr, got)
+	}
+}
+
+// A current ReplicaSet that cannot scale up never becomes available, so its
+// reason lands on the deployment's Scale and Ready conditions.
+func TestDeploymentConditionsCarryReplicaSetFailure(t *testing.T) {
+	wd := readyDeployment("")
+	rs := unavailableReplicaSet()
+	rs.Status.SetConditions(condition.ErrorCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp,
+		"Reconcile", errors.New("creating Workload: denied by policy require-team-label")))
+	r := newScaleReconciler(t, wd, rs)
+
+	err := r.reconcileScale(context.Background(), wd)
+	if err == nil || condition.IsStatusUnknown(err) || !strings.Contains(err.Error(), "require-team-label") {
+		t.Fatalf("scale = %v, want a failure carrying the ReplicaSet's ScaleUp message", err)
+	}
+
+	wd.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact),
+		condition.ErrorCondition(runtimev1alpha1.WorkloadDeploymentConditionScale, "Reconcile", err),
+	)
+	// Ready stays Unknown, since a failing Sync is a normal rollout step, but
+	// says which condition is holding it and why.
+	ready := r.reconcileReady(context.Background(), wd)
+	if !condition.IsStatusUnknown(ready) || !strings.Contains(ready.Error(), "require-team-label") {
+		t.Fatalf("ready = %v, want Unknown carrying the Scale message", ready)
+	}
+}
+
+// A refused WorkloadReplicaSet create is recorded on the deployment.
+func TestDeployRecordsRefusedReplicaSetCreate(t *testing.T) {
+	wd := readyDeployment("")
+	wd.Status.CurrentReplicaSet = nil
+	wd.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact),
+		condition.UnknownCondition(runtimev1alpha1.WorkloadDeploymentConditionSync, "Reconcile", "no Active Replicas"),
+	)
+	s := newScaleTestScheme(t)
+	recorder := events.NewFakeRecorder(4)
+	r := &WorkloadDeploymentReconciler{
+		Client:   fake.NewClientBuilder().WithScheme(s).WithObjects(wd).WithInterceptorFuncs(refuseCreates).Build(),
+		Scheme:   s,
+		Recorder: recorder,
+	}
+
+	if err := r.reconcileDeploy(context.Background(), wd); err == nil || !strings.Contains(err.Error(), "require-team-label") {
+		t.Fatalf("deploy = %v, want the refusal", err)
+	}
+	got := drainEvents(recorder)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "Warning FailedCreate") || !strings.Contains(got[0], "require-team-label") {
+		t.Fatalf("events = %q, want one FailedCreate carrying the refusal", got)
+	}
+}
+
+// A ReplicaSet's conditions count only when computed for its current spec: a
+// failure left by an older one, such as a replica count that a quota refused
+// before it was lowered, is not reported, nor is an older Ready trusted. Until
+// the ReplicaSet catches up, Scale keeps what it said, so it does not flicker.
+func TestDeploymentReadsOnlyCurrentReplicaSetConditions(t *testing.T) {
+	at := func(c condition.Condition, generation int64) condition.Condition {
+		c.ObservedGeneration = generation
+		return c
+	}
+	scaleUp := func(generation int64) condition.Condition {
+		return at(condition.ReadyCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp), generation)
+	}
+	scaleDown := func(generation int64) condition.Condition {
+		return at(condition.ReadyCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleDown), generation)
+	}
+	ready := func(generation int64) condition.Condition {
+		return at(condition.ReadyCondition(condition.TypeReady), generation)
+	}
+	for _, tc := range []struct {
+		name       string
+		conditions []condition.Condition
+		wantNoop   bool
+		wantFailed string
+	}{
+		{
+			name: "stale ScaleUp failure",
+			conditions: []condition.Condition{at(condition.ErrorCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp,
+				"Reconcile", errors.New("creating Workload: exceeded quota")), 1), scaleDown(1), ready(1)},
+			wantNoop: true,
+		},
+		{
+			name:       "stale Ready",
+			conditions: []condition.Condition{scaleUp(1), scaleDown(1), ready(1)},
+			wantNoop:   true,
+		},
+		{
+			// A failing ScaleUp ends each ReplicaSet pass, so the conditions
+			// after it can stay a generation behind for as long as it fails.
+			name: "current ScaleUp failure, stale Ready",
+			conditions: []condition.Condition{at(condition.ErrorCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp,
+				"Reconcile", errors.New("creating Workload: exceeded quota")), 2), scaleDown(1), ready(1)},
+			wantFailed: "exceeded quota",
+		},
+		{
+			name: "current ScaleDown failure",
+			conditions: []condition.Condition{scaleUp(2), at(condition.ErrorCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleDown,
+				"Reconcile", errors.New("deleting Workload: denied by policy")), 2), at(condition.UnknownCondition(condition.TypeReady, "Reconcile", "scaling"), 2)},
+			wantFailed: "denied by policy",
+		},
+	} {
+		wd := readyDeployment("")
+		rs := baseReplicaSet(testReplicaSetName)
+		rs.Generation = 2
+		rs.Status.SetConditions(tc.conditions...)
+		r := newScaleReconciler(t, wd, rs)
+
+		err := r.reconcileScale(context.Background(), wd)
+		switch {
+		case tc.wantNoop:
+			if !errors.Is(err, condition.ErrNoop()) {
+				t.Errorf("%s: scale = %v, want it left as it was", tc.name, err)
+			}
+		default:
+			if err == nil || condition.IsStatusUnknown(err) || !strings.Contains(err.Error(), tc.wantFailed) {
+				t.Errorf("%s: scale = %v, want a failure carrying %q", tc.name, err, tc.wantFailed)
+			}
+		}
+	}
+}
+
+// The current ReplicaSet is written only when the replica count differs, so a
+// refusing policy is not asked again, and recorded again, every reconcile.
+func TestScaleUpdatesReplicaSetOnlyOnChange(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		replicas   int32
+		wantUpdate bool
+	}{
+		{name: "unchanged", replicas: testReplicas},
+		{name: "changed", replicas: testReplicas + 1, wantUpdate: true},
+	} {
+		wd := readyDeployment("")
+		wd.Spec.Replicas = &tc.replicas
+		updates := 0
+		r := newScaleReconcilerWith(t, interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				updates++
+				return c.Update(ctx, obj, opts...)
+			},
+		}, wd, availableReplicaSet(testReplicaSetName))
+
+		_ = r.reconcileScale(context.Background(), wd)
+		if got := updates > 0; got != tc.wantUpdate {
+			t.Errorf("%s: updated = %v, want %v", tc.name, got, tc.wantUpdate)
+		}
 	}
 }

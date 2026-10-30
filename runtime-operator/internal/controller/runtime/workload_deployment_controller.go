@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -32,6 +33,7 @@ const (
 type WorkloadDeploymentReconciler struct {
 	client.Client
 	Scheme     *runtime.Scheme
+	Recorder   events.EventRecorder
 	reconciler condition.AnyConditionedReconciler
 }
 
@@ -143,7 +145,10 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 		return err
 	}
 	if err := r.Create(ctx, newReplicaSet); err != nil {
-		return err
+		if isRefused(err) {
+			recordRefused(r.Recorder, deployment, nil, "Create", "WorkloadReplicaSet create refused", err)
+		}
+		return fmt.Errorf("creating WorkloadReplicaSet: %w", err)
 	}
 
 	if deployment.Spec.DeployPolicy != runtimev1alpha1.WorkloadDeployPolicyRecreate {
@@ -181,10 +186,14 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 	}
 
 	// If all we touched was the replica-count, update-it
-	if deployment.Spec.Replicas != nil {
+	if deployment.Spec.Replicas != nil &&
+		(currentReplica.Spec.Replicas == nil || *currentReplica.Spec.Replicas != *deployment.Spec.Replicas) {
 		currentReplica.Spec.Replicas = deployment.Spec.Replicas
 		if err := r.Update(ctx, currentReplica); err != nil {
-			return err
+			if isRefused(err) {
+				recordRefused(r.Recorder, deployment, currentReplica, "Update", "WorkloadReplicaSet update refused", err)
+			}
+			return fmt.Errorf("updating WorkloadReplicaSet %s: %w", curSetName, err)
 		}
 	}
 
@@ -231,6 +240,38 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 	deployment.Status.CurrentReplicas = currentReplicas
 	deployment.Status.Selector = labels.Set{workloadDeploymentNameLabel: deployment.Name}.String()
 
+	// A ReplicaSet that cannot scale will not become available on its own,
+	// so its reason is surfaced here rather than left on a generated name.
+	// Only a failure computed for its current spec counts: a refusal of a
+	// replica count since lowered describes nothing now. This comes before
+	// the wait below, because a failing condition can be what keeps the ones
+	// after it from catching up.
+	for _, ct := range []condition.ConditionType{
+		runtimev1alpha1.WorkloadReplicaSetConditionScaleUp,
+		runtimev1alpha1.WorkloadReplicaSetConditionScaleDown,
+	} {
+		c := currentReplica.Status.GetCondition(ct)
+		if c.Status == condition.ConditionFalse && c.ObservedGeneration == currentReplica.Generation {
+			return fmt.Errorf("WorkloadReplicaSet %s %s: %s", curSetName, c.Type, c.Message)
+		}
+	}
+
+	// Until the ReplicaSet has caught up with its spec, which is one
+	// reconcile, Scale keeps saying what it said, so a replica change does not
+	// flicker it. A ReplicaSet with no conditions yet has never been
+	// reconciled, and falls through to the gate below.
+	if len(currentReplica.Status.Conditions) > 0 {
+		for _, ct := range []condition.ConditionType{
+			runtimev1alpha1.WorkloadReplicaSetConditionScaleUp,
+			runtimev1alpha1.WorkloadReplicaSetConditionScaleDown,
+			condition.TypeReady,
+		} {
+			if currentReplica.Status.GetCondition(ct).ObservedGeneration != currentReplica.Generation {
+				return condition.ErrNoop()
+			}
+		}
+	}
+
 	// Gate Scale on the active ReplicaSet actually being available, so
 	// WorkloadDeployment.Ready==True implies the underlying Workload is
 	// running on a host. Without this, fresh deploys flip Ready=True the
@@ -261,11 +302,18 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 }
 
 func (r *WorkloadDeploymentReconciler) reconcileReady(_ context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
-	if !deployment.Status.AllTrue(
+	conditions := []condition.ConditionType{
 		runtimev1alpha1.WorkloadDeploymentConditionArtifact,
 		runtimev1alpha1.WorkloadDeploymentConditionSync,
 		runtimev1alpha1.WorkloadDeploymentConditionDeploy,
-		runtimev1alpha1.WorkloadDeploymentConditionScale) {
+		runtimev1alpha1.WorkloadDeploymentConditionScale,
+	}
+	// Unknown either way: Sync fails on every rollout until the new
+	// ReplicaSet exists, which is progress rather than failure.
+	if failed, ok := firstFailed(&deployment.Status.ConditionedStatus, conditions...); ok {
+		return condition.ErrStatusUnknown(fmt.Errorf("%s: %s", failed.Type, failed.Message))
+	}
+	if !deployment.Status.AllTrue(conditions...) {
 		return condition.ErrStatusUnknown(fmt.Errorf("deployment is not synced, deployed or scaled"))
 	}
 	return nil
