@@ -20,6 +20,8 @@ organization.
 
 ## Report A Vulnerability
 
+CRA stewardship: This project is supported under the Linux Foundation CRA stewardship framework, as described at https://www.linuxfoundation.org/security. Security vulnerabilities should be reported through the mechanisms described below, which we will coordinate with our CRA steward. For actively exploited vulnerabilities and severe incidents that may require CRA escalation, please use the project's emergency security reporting mechanisms as appropriate.
+
 We are extremely grateful for security researchers and users who report vulnerabilities to the
 wasmCloud community. All reports are thoroughly investigated by a set of wasmCloud maintainers.
 
@@ -59,7 +61,8 @@ Each report will be reviewed and receipt acknowledged within **3 business days**
 security review process described below.
 
 Vulnerability information shared with the security team stays within the wasmCloud project and will
-not be shared with others unless it is necessary to fix the issue. Information is shared only on a
+not be shared with others unless it is necessary to fix the issue or to [escalate it to the CRA
+steward](CONTRIBUTING.md#escalating-to-the-cra-steward). Information is shared only on a
 need-to-know basis.
 
 We ask that vulnerability reporters act in good faith by not disclosing the issue to others. We
