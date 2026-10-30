@@ -7,6 +7,7 @@
 //! and read it back correctly — exercising the TempFileOutputStream-based write path.
 
 use anyhow::{Context, Result};
+use futures::StreamExt as _;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use testcontainers::{
     GenericImage, ImageExt,
@@ -158,6 +159,33 @@ impl TestHarness {
     }
 }
 
+/// Sends a request to the blobstore fixture, which answers a `/op/...` path
+/// with a blobstore operation or, on any other path, writes the body as
+/// `hi.txt` and reads it back.
+async fn blobstore_request(
+    client: &reqwest::Client,
+    addr: SocketAddr,
+    path: &str,
+) -> Result<(u16, String)> {
+    let response = timeout(
+        Duration::from_secs(10),
+        client
+            .post(format!("http://{addr}{path}"))
+            .header("HOST", "foo")
+            .body("hello")
+            .send(),
+    )
+    .await
+    .context("HTTP request timed out")?
+    .context("Failed to make HTTP request")?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .context("Failed to read response body")?;
+    Ok((status, body))
+}
+
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn test_nats_blobstore_roundtrip() -> Result<()> {
@@ -192,6 +220,72 @@ async fn test_nats_blobstore_roundtrip() -> Result<()> {
 
     harness.cleanup().await?;
     println!("NATS blobstore round-trip test passed");
+    Ok(())
+}
+
+/// A deleted object stays absent through the plugin's `has-object`,
+/// `object-info` and listing, although NATS keeps its tombstone.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_nats_blobstore_deleted_object_is_absent() -> Result<()> {
+    let harness = setup().await?;
+    let client = reqwest::Client::new();
+
+    // The fixture writes `hi.txt` and reads it back.
+    let (status, body) = blobstore_request(&client, harness.addr, "/").await?;
+    assert_eq!((status, body.as_str()), (200, "hello"));
+
+    // With the object present, the plugin reports and lists it.
+    for (path, expected) in [("/op/has-object", "true"), ("/op/list", "hi.txt")] {
+        let (status, body) = blobstore_request(&client, harness.addr, path).await?;
+        assert_eq!(
+            (status, body.as_str()),
+            (200, expected),
+            "{path} must see the object while it exists"
+        );
+    }
+
+    let store = async_nats::jetstream::new(harness.nats_client.clone())
+        .get_object_store("my-container-real")
+        .await
+        .context("Failed to open the object store")?;
+    store
+        .delete("hi.txt")
+        .await
+        .context("Failed to delete the object")?;
+
+    // The premise: NATS keeps the deleted object's metadata as a tombstone,
+    // which `info` returns with `deleted: true`.
+    assert!(
+        store
+            .info("hi.txt")
+            .await
+            .context("Failed to read the tombstone")?
+            .deleted,
+        "NATS must keep a deleted object's tombstone"
+    );
+
+    let (status, body) = blobstore_request(&client, harness.addr, "/op/has-object").await?;
+    assert_eq!(
+        (status, body.as_str()),
+        (200, "false"),
+        "has-object must treat a deleted object as absent"
+    );
+
+    let (status, body) = blobstore_request(&client, harness.addr, "/op/object-info").await?;
+    assert_eq!(
+        status, 500,
+        "object-info must treat a deleted object as absent: {body}"
+    );
+
+    let (status, body) = blobstore_request(&client, harness.addr, "/op/list").await?;
+    assert_eq!(
+        (status, body.as_str()),
+        (200, ""),
+        "a listing must omit tombstones"
+    );
+
+    harness.cleanup().await?;
     Ok(())
 }
 
@@ -240,7 +334,6 @@ async fn test_nats_blobstore_large_payload() -> Result<()> {
     let mut response_bytes_read: u64 = 0;
     let mut chunk_index: usize = 0;
     let mut stream = response.bytes_stream();
-    use futures::StreamExt;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.context("Failed to read response chunk")?;

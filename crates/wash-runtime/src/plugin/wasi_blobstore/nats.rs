@@ -109,6 +109,14 @@ pub struct StreamObjectNamesHandle {
     pub objects: List,
 }
 
+/// Whether `name` is an object of `store` now. NATS's object store keeps a
+/// deleted object's metadata, its tombstone, which `info` still returns with
+/// `deleted: true`, so presence checks that flag, as the multiplexed NATS
+/// backend does.
+async fn present(store: &ObjectStore, name: &str) -> bool {
+    matches!(store.info(name).await, Ok(info) if !info.deleted)
+}
+
 /// NATS blobstore plugin
 #[derive(Clone)]
 pub struct NatsBlobstore {
@@ -512,10 +520,7 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
         name: ObjectName,
     ) -> wasmtime::Result<Result<bool, ContainerError>> {
         let container_data = self.table.get(&container)?;
-        match container_data.store.info(name.as_str()).await {
-            Ok(_) => Ok(Ok(true)),
-            Err(_) => Ok(Ok(false)),
-        }
+        Ok(Ok(present(&container_data.store, name.as_str()).await))
     }
 
     #[instrument(name = "wasi.blobstore.object_info", skip(self, container))]
@@ -526,13 +531,13 @@ impl<'a> bindings::wasi::blobstore::container::HostContainer for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<ObjectMetadata, ContainerError>> {
         let container_data = self.table.get(&container)?;
         match container_data.store.info(name.as_str()).await {
-            Ok(info) => Ok(Ok(ObjectMetadata {
+            Ok(info) if !info.deleted => Ok(Ok(ObjectMetadata {
                 name: info.name,
                 container: container_data.name.clone(),
                 created_at: 0,
                 size: info.size as u64,
             })),
-            Err(_) => Ok(Err(format!("object '{name}' does not exist"))),
+            _ => Ok(Err(format!("object '{name}' does not exist"))),
         }
     }
 

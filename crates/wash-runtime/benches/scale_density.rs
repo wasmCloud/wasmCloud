@@ -47,7 +47,7 @@
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
 //! | `WASH_SCALE_START_CONCURRENCY` | concurrent starts | available parallelism |
 //! | `WASH_SCALE_SAMPLE` | requests per step, spread across the set | `200` |
-//! | `WASH_SCALE_CORE_INSTANCES` | pool slots | sized from address space and `vm.max_map_count` |
+//! | `WASH_SCALE_MAX_MEMORIES` | pool linear memories, the count that sizes the pool (`WASH_SCALE_CORE_INSTANCES` is an older name for it) | what the runtime derives from address space and `vm.max_map_count` |
 //! | `WASH_SCALE_FIXTURE` | `p3` or `p2` HTTP handler | `p3` |
 //! | `WASH_SCALE_CPUS` | cores the host may use; a list (`1,2,4`) runs each flavour at each | all |
 //! | `WASH_SCALE_REPORT_JSON` | also write every flavour's results as JSON here | unset |
@@ -296,7 +296,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
             HostMemoryBudgets::resolve(
                 Some(settings.guest_memory),
                 None,
-                Some(settings.core_instances),
+                Some(settings.max_memories),
                 None,
             )
             .map_err(|e| anyhow::anyhow!(e))?,
@@ -492,10 +492,10 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         flavour: Some(flavour),
         label: label(flavour.name(), cpu.limit),
         subject: format!(
-            "{}, max-guest-memory {}, pool {} core instances, {}{}",
+            "{}, max-guest-memory {}, pool {} memories, {}{}",
             settings.fixture,
             render_bytes(settings.guest_memory),
-            settings.core_instances,
+            settings.max_memories,
             match (cpu.limit, cpu.pinned) {
                 (Some(n), true) => format!("{n} pinned cores"),
                 (Some(n), false) => format!("{n} workers"),

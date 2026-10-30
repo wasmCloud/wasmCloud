@@ -212,3 +212,167 @@ fn parse_benchmark_throughput(path: &Path) -> Result<Option<Throughput>> {
 pub fn dir_from_target(target_dir: &Path) -> PathBuf {
     target_dir.join("criterion")
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs::{self, FileTimes};
+    use std::time::{Duration, SystemTime};
+
+    fn fixture(
+        root: &Path,
+        group: &str,
+        param: &str,
+        throughput: Option<Throughput>,
+    ) -> Result<PathBuf> {
+        let dir = root.join(group).join(param).join("new");
+        fs::create_dir_all(&dir)?;
+        let estimate = json!({"point_estimate": 1000.0, "confidence_interval": {"lower_bound": 900.0, "upper_bound": 1100.0}});
+        let path = dir.join("estimates.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(
+                &json!({"mean": estimate, "median": estimate, "std_dev": estimate}),
+            )?,
+        )?;
+        fs::write(
+            dir.join("benchmark.json"),
+            serde_json::to_vec(&json!({"throughput": throughput}))?,
+        )?;
+        Ok(path)
+    }
+
+    #[test]
+    fn walks_only_current_estimates_in_stable_order() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        fixture(root.path(), "z-group", "p2", Some(Throughput::Elements(8)))?;
+        fixture(
+            root.path(),
+            "a-group",
+            "p3",
+            Some(Throughput::BytesDecimal(1024)),
+        )?;
+        let excluded = fixture(root.path(), "report", "aggregate", None)?;
+        fs::write(excluded, b"not json")?;
+        let base = root.path().join("a-group/p3/base");
+        fs::create_dir_all(&base)?;
+        fs::write(base.join("estimates.json"), b"not json")?;
+        fs::write(root.path().join("estimates.json"), b"not json")?;
+        fs::create_dir_all(root.path().join("a-group/empty/new/estimates.json"))?;
+        let rows = walk(root.path(), None)?;
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.group.as_str(), r.param.as_str()))
+                .collect::<Vec<_>>(),
+            [("a-group", "p3"), ("z-group", "p2")]
+        );
+        let mut rows = rows.into_iter();
+        let first = rows
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing first benchmark"))?;
+        assert!(matches!(
+            first.throughput,
+            Some(Throughput::BytesDecimal(1024))
+        ));
+        assert_eq!(first.estimates.mean.point_estimate, 1000.0);
+        assert_eq!(first.estimates.mean.confidence_interval.lower_bound, 900.0);
+        let second = rows
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing second benchmark"))?;
+        assert!(matches!(second.throughput, Some(Throughput::Elements(8))));
+        Ok(())
+    }
+
+    #[test]
+    fn marker_excludes_equal_and_older_results_without_parsing_them() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let marker = root.path().join("marker");
+        fs::write(&marker, [])?;
+        let cutoff = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&marker)?
+            .set_times(FileTimes::new().set_modified(cutoff))?;
+        for (param, seconds) in [("old", -10), ("equal", 0), ("fresh", 10)] {
+            let path = fixture(root.path(), "group", param, None)?;
+            if seconds <= 0 {
+                fs::write(&path, b"stale malformed output")?;
+            }
+            let modified = if seconds < 0 {
+                cutoff - Duration::from_secs(10)
+            } else {
+                cutoff + Duration::from_secs(seconds as u64)
+            };
+            fs::File::options()
+                .write(true)
+                .open(path)?
+                .set_times(FileTimes::new().set_modified(modified))?;
+        }
+        let rows = walk(root.path(), Some(&marker))?;
+        assert_eq!(rows.len(), 1);
+        assert!(rows.iter().all(|row| row.param == "fresh"));
+        assert!(walk(root.path(), Some(&root.path().join("missing-marker")))?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn throughput_is_optional_but_malformed_metadata_is_an_error() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = fixture(root.path(), "group", "param", None)?;
+        let metadata = path.with_file_name("benchmark.json");
+        fs::remove_file(&metadata)?;
+        assert!(
+            walk(root.path(), None)?
+                .iter()
+                .all(|r| r.throughput.is_none())
+        );
+        fs::write(&metadata, b"{}")?;
+        assert!(
+            walk(root.path(), None)?
+                .iter()
+                .all(|r| r.throughput.is_none())
+        );
+        fs::write(&metadata, br#"{"throughput":{"Bytes":16}}"#)?;
+        assert!(
+            walk(root.path(), None)?
+                .iter()
+                .all(|r| matches!(r.throughput, Some(Throughput::Bytes(16))))
+        );
+        fs::write(&metadata, b"broken metadata")?;
+        let error = walk(root.path(), None).expect_err("invalid benchmark metadata must fail");
+        assert!(error.to_string().contains("benchmark.json"));
+        fs::remove_file(&metadata)?;
+        fs::write(&path, b"broken estimates")?;
+        assert!(
+            walk(root.path(), None)
+                .expect_err("invalid estimates must fail")
+                .to_string()
+                .contains("estimates.json")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_missing_and_invalid_paths_are_distinct() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        assert!(walk(root.path(), None)?.is_empty());
+        assert!(walk(&root.path().join("missing"), None)?.is_empty());
+        assert!(derive_group_param(root.path(), &root.path().join("too-shallow")).is_err());
+        assert!(
+            derive_group_param(
+                root.path(),
+                &root
+                    .path()
+                    .with_extension("outside")
+                    .join("group/param/new/estimates.json")
+            )
+            .is_err()
+        );
+        assert!(parse_estimates(&root.path().join("missing.json")).is_err());
+        assert_eq!(dir_from_target(root.path()), root.path().join("criterion"));
+        Ok(())
+    }
+}

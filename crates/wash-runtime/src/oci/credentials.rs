@@ -198,7 +198,7 @@ mod tests {
 
     /// Helpers that never return time their lookups out without keeping the
     /// limiter's permits, and are not started again while they run.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(start_paused = true)]
     async fn hung_helpers_do_not_exhaust_the_limiter() {
         let cache: &'static Coalescer<String, RegistryAuth> = Box::leak(Box::new(Coalescer::new(
             16,
@@ -208,27 +208,34 @@ mod tests {
         )));
         let runs = Arc::new(AtomicUsize::new(0));
         let mut releases = Vec::new();
-        // Twice the limiter's permits, each for a different registry. The
-        // helpers block until released, so each lookup must time out.
+        // Start twice the limiter's capacity. Helpers stay blocked after timeout.
         for n in 0..8 {
             let (release, wait) = std::sync::mpsc::channel::<()>();
+            let (started, startup) = std::sync::mpsc::channel();
             releases.push(release);
             let runs = Arc::clone(&runs);
-            let err = cached_credentials_within(
+            let lookup = tokio::spawn(cached_credentials_within(
                 cache,
                 format!("hung-{n}"),
-                Duration::from_millis(20),
+                DOCKER_HELPER_TIMEOUT,
                 move || {
                     runs.fetch_add(1, Ordering::SeqCst);
+                    let _ = started.send(());
                     let _ = wait.recv();
                     Ok(RegistryAuth::Anonymous)
                 },
-            )
-            .await
-            .unwrap_err();
+            ));
+            // The blocking wait prevents automatic clock advancement during startup.
+            tokio::task::spawn_blocking(move || startup.recv_timeout(Duration::from_secs(10)))
+                .await
+                .expect("startup wait task finishes")
+                .expect("helper starts");
+            tokio::time::advance(DOCKER_HELPER_TIMEOUT + Duration::from_secs(1)).await;
+            let err = lookup.await.expect("lookup task finishes").unwrap_err();
             assert!(err.to_string().contains("did not finish"), "{err:#}");
         }
         assert_eq!(runs.load(Ordering::SeqCst), 8);
+        tokio::time::resume();
 
         // A registry whose helper still runs does not start another.
         let again =

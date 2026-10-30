@@ -35,6 +35,9 @@ pub mod inspect;
 pub mod new;
 pub mod oci;
 pub mod signal;
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+pub(crate) mod test_support;
 pub mod update;
 pub mod wit;
 

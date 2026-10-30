@@ -329,9 +329,11 @@ pub struct HostCommand {
     ///
     /// A messaging-triggered component gets a fresh instance per message, so
     /// this equally bounds instances. Unset, it is derived from the host's
-    /// installed instance and memory limits. The stock pool derives 666,
+    /// installed instance and memory limits. A pool of 1000 memories derives 666,
     /// leaving capacity for HTTP-triggered work, warm pools, and long-lived
-    /// services; independent pool overrides can lower that default.
+    /// services; the larger pool an unset `--max-memories` derives from the
+    /// machine (9,829 memories on a default Linux) reaches the cap of 4096.
+    /// Independent pool overrides can lower that default.
     /// Components also acquire pool resources according to their memory and
     /// table requirements, so compositions can reach a resource limit before
     /// the message cap. Raising `--max-memories` raises the pool; with pooling
@@ -362,8 +364,8 @@ pub struct HostCommand {
     ///
     /// Unset, this is a quarter of whatever `--wasmcloud-messaging-max-in-flight`
     /// resolved to, so the two cannot contradict each other: the pool-derived
-    /// 666 of a stock host gives 166, and the pinned 128 of a host with pooling
-    /// disabled gives 32.
+    /// 666 of a pool of 1000 linear memories gives 166, the 4096 cap gives
+    /// 1024, and the pinned 128 of a host with pooling disabled gives 32.
     #[arg(
         long = "wasmcloud-messaging-max-in-flight-per-component",
         env = "WASH_WASMCLOUD_MESSAGING_MAX_IN_FLIGHT_PER_COMPONENT"
@@ -470,14 +472,24 @@ pub struct HostCommand {
     /// GC heaps it admits, one count for all: a component instance of the
     /// usual shape takes one of each.
     ///
-    /// Unset, this is wasmtime's default of 1000, or the `--core-instances`
-    /// count when only that is given. Multiplied by one
-    /// memory's reservation (4 GiB plus a 32 MiB guard, whatever
-    /// `--default-heap-memory` is) it is the pool's address-space reservation,
-    /// so it is the knob that sizes the pool. The core-instance and table
-    /// totals are multiples of it, since a component spends several of each
-    /// and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set any
-    /// total on its own.
+    /// Unset, this uses the `--core-instances` count when that is given.
+    /// Otherwise it is derived from the machine: half the usable address
+    /// space and at most 90% of `vm.max_map_count`, allowing six mappings per
+    /// warm component (two for its stack, four for its memory). The floor is
+    /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
+    /// accounting or a finite data-size limit keep: there the stack and
+    /// table pools are committed at startup rather than reserved, 2.6 GiB at
+    /// the floor (on Windows only the tables are, about 625 MiB), and
+    /// `--set-max-memories-from-memory-precommit-limit` is how such a host
+    /// asks to be sized past it. With a 65,530 mapping limit and 47-bit
+    /// address space, Linux derives 9,829 memories.
+    ///
+    /// Multiplied by one memory's reservation (4 GiB plus a 32 MiB guard,
+    /// whatever `--default-heap-memory` is) it is the pool's address-space
+    /// reservation, so it is the knob that sizes the pool. The core-instance
+    /// and table totals are multiples of it, since a component spends several
+    /// of each and neither reserves anything; `WASMTIME_POOLING_TOTAL_*` set
+    /// any total on its own.
     #[arg(long = "max-memories", env = "WASH_MAX_MEMORIES")]
     pub max_memories: Option<u32>,
 
@@ -497,6 +509,46 @@ pub struct HostCommand {
     /// total.
     #[arg(long = "core-instances", env = "WASH_CORE_INSTANCES")]
     pub core_instances: Option<u32>,
+
+    /// Set `--max-memories` from the memory precommit limit on a platform
+    /// that precommits the stack and table pools, instead of keeping 1000.
+    ///
+    /// wasmtime's pooling allocator is three pools, all sized by
+    /// `--max-memories`: the linear memories, whose 4 GiB reservations are
+    /// address space and never committed, and the fiber stacks (2 MiB each)
+    /// and tables (four of 160 KiB per memory), which are mapped read-write
+    /// when the engine is built (on Windows, only the tables; stacks are
+    /// mapped as they are used). Most kernels charge nothing for those
+    /// mappings until a page is touched. Windows, Linux with
+    /// `vm.overcommit_memory=2` and a process under a finite `RLIMIT_DATA`
+    /// precommit them: the whole mapping is charged against the limit on
+    /// such memory (`CommitLimit` in `/proc/meminfo`, `RLIMIT_DATA`, or RAM
+    /// plus page file on Windows) the moment it is made, about 2.6 MiB per
+    /// memory on Linux and 640 KiB on Windows, touched or not. So on those
+    /// platforms an unset `--max-memories` stays at 1000 (2.6 GiB on Linux)
+    /// rather than the machine's derived count (25 GiB at a default Linux's
+    /// 9,829).
+    ///
+    /// With this on, the host instead works out how many memories' stacks
+    /// and tables fit in a quarter of that precommit limit (capped by the
+    /// container's limit, or by physical memory where there is none, so swap
+    /// and the page file never raise it), at the sizes the pool will install:
+    /// `WASMTIME_POOLING_TABLE_ELEMENTS` sizes each table, and a
+    /// `WASMTIME_POOLING_TOTAL_STACKS` or `WASMTIME_POOLING_TOTAL_TABLES`
+    /// total comes off the top rather than growing with the count. It takes
+    /// the smallest of that, the address-space bound and the mapping bound,
+    /// never below 1000: the same rule every other platform follows. The
+    /// quarter is fixed, like the other derivation shares, because the
+    /// commit limit is shared with every other process and with this host's
+    /// own heap; a host that wants another count sets `--max-memories`.
+    /// Elsewhere, and whenever `--max-memories` or `--core-instances` is set
+    /// (either one turns the derivation off), this changes nothing.
+    #[arg(
+        long = "set-max-memories-from-memory-precommit-limit",
+        env = "WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT",
+        default_value_t = false
+    )]
+    pub max_memories_from_memory_precommit_limit: bool,
 
     /// How long a pooled HTTP connect waits for a slot before failing with a
     /// connect timeout (e.g. `5s`, `500ms`).
@@ -1128,7 +1180,8 @@ impl CliCommand for HostCommand {
         // in a flag, and reporting it after a NATS dial has already failed
         // buries the actionable error under an unrelated one. The resolved
         // numbers are reported later, by the engine that installs them.
-        let host_memory = wash_runtime::engine::host_memory::HostMemoryBudgets::resolve_strs(
+        use wash_runtime::engine::host_memory as hm;
+        let host_memory = hm::HostMemoryBudgets::resolve_strs(
             self.max_guest_memory.as_deref(),
             self.default_heap_memory.as_deref(),
             self.max_memories,
@@ -1273,6 +1326,14 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
+        // A host runs one engine, so a pool count nobody named is sized to the
+        // machine rather than left at the engine's library default.
+        if self.max_memories.is_none() && self.core_instances.is_none() {
+            engine_builder = engine_builder.with_derived_max_memories(
+                hm::MaxMemoriesDerivation::default()
+                    .with_memory_precommit_limit(self.max_memories_from_memory_precommit_limit),
+            );
+        }
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
@@ -1637,6 +1698,109 @@ impl CliCommand for HostCommand {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used)]
+mod tls_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        host: HostCommand,
+    }
+
+    fn host() -> HostCommand {
+        TestCli::parse_from(["wash-host"]).host
+    }
+
+    #[test]
+    fn outbound_identity_requires_both_files_for_public_callers() {
+        for (cert, key, expected) in [
+            (
+                Some("client.pem"),
+                None,
+                "--http-client-cert-path needs --http-client-key-path",
+            ),
+            (
+                None,
+                Some("client.key"),
+                "--http-client-key-path needs --http-client-cert-path",
+            ),
+        ] {
+            let mut host = host();
+            host.http_client_cert_path = cert.map(PathBuf::from);
+            host.http_client_key_path = key.map(PathBuf::from);
+            assert_eq!(host.client_tls_options().unwrap_err().to_string(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn outbound_tls_loads_static_and_rotating_identities() -> anyhow::Result<()> {
+        wash_runtime::init_crypto();
+        let dir = tempfile::tempdir()?;
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
+        let cert_path = dir.path().join("client.pem");
+        let key_path = dir.path().join("client.key");
+        std::fs::write(&cert_path, cert.pem())?;
+        std::fs::write(&key_path, signing_key.serialize_pem())?;
+        let mut host = host();
+        host.egress_handler()?;
+        host.http_client_cert_path = Some(cert_path.clone());
+        host.http_client_key_path = Some(key_path.clone());
+        host.http_client_ca_paths = vec![cert_path];
+        let options = host.client_tls_options()?;
+        assert_eq!(options.extra_ca_paths, host.http_client_ca_paths);
+        assert!(options.client_identity.is_some());
+        host.egress_handler()?;
+        host.http_client_identity_refresh = Some(std::time::Duration::from_secs(60));
+        host.egress_handler()?;
+        host.http_client_identity_refresh = Some(std::time::Duration::ZERO);
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid --http-client-identity-refresh"),
+            "{error:#}"
+        );
+        std::fs::write(key_path, "not a private key")?;
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load the outbound client identity"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_tls_reports_missing_identity_and_ca_files() -> anyhow::Result<()> {
+        wash_runtime::init_crypto();
+        let dir = tempfile::tempdir()?;
+        let mut host = host();
+        host.http_client_identity_refresh = Some(std::time::Duration::from_secs(1));
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error.to_string().contains("needs --http-client-cert-path"),
+            "{error:#}"
+        );
+        host.http_client_identity_refresh = None;
+        host.http_client_ca_paths = vec![dir.path().join("missing.pem")];
+        let error = host.egress_handler().err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load --http-client-ca-path CA certificates"),
+            "{error:#}"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod nats_tests {
     use clap::Parser;
 
@@ -1783,7 +1947,7 @@ host:
     }
 
     fn config_from(yaml: &str) -> crate::config::Config {
-        serde_yaml_ng::from_str(yaml).expect("config must parse")
+        serde_saphyr::from_str(yaml).expect("config must parse")
     }
 
     fn nats_bindings(
@@ -1941,7 +2105,7 @@ host:
     /// An unparseable policy is a config error, named as one.
     #[test]
     fn the_workload_config_value_is_typed() {
-        serde_yaml_ng::from_str::<crate::config::Config>(
+        serde_saphyr::from_str::<crate::config::Config>(
             "host:\n  plugins:\n    - id: wasmcloud-nats\n      workloadConfig: sometimes\n",
         )
         .expect_err("`sometimes` is not a policy");
@@ -1949,6 +2113,7 @@ host:
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod shutdown_tests {
     use std::path::PathBuf;
     use std::time::Duration;
@@ -2015,6 +2180,7 @@ mod shutdown_tests {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod policy_mode_tests {
     use clap::Parser;
 
@@ -2069,6 +2235,7 @@ mod policy_mode_tests {
 }
 
 #[cfg(all(test, feature = "host-component-plugins"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::host_plugin_registry_credentials;
 
@@ -2142,6 +2309,7 @@ impl ProcessMemoryPolicy {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod process_memory_policy_tests {
     use super::*;
     #[test]

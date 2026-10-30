@@ -1,0 +1,29 @@
+name: Release binary SBOM
+description: Attest the generated dependency inventory of a released wash binary
+inputs:
+  artifact:
+    description: Canary artifact name
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Set stage
+      shell: bash
+      run: echo "STAGE=binary-sboms" >> "${GITHUB_ENV}"
+
+    - name: Attest binary SBOM
+      id: attest
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        # The Windows archive contains the same executable and shares its inventory.
+        subject-path: ./artifacts/${{ inputs.artifact }}*/${{ inputs.artifact }}*
+        sbom-path: ./artifacts/sboms/${{ inputs.artifact }}.spdx.json
+
+    - name: Stage binary SBOM bundle
+      shell: bash
+      env:
+        ARTIFACT: ${{ inputs.artifact }}
+        BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+      run: |
+        set -euo pipefail
+        cp "${BUNDLE_PATH}" "./artifacts/sboms/${ARTIFACT}.sbom.sigstore.json"
