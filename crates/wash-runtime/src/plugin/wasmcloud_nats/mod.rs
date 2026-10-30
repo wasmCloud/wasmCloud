@@ -15,6 +15,8 @@ pub(super) mod macros;
 mod plugin;
 pub(super) mod policy;
 mod subscriber;
+#[cfg(test)]
+mod test_server;
 pub(super) mod warm;
 
 pub use plugin::{ComponentData, WasmcloudNats};
