@@ -280,7 +280,8 @@ func daemonSetWorkloadName(daemonSetName, hostID, templateHash string, slot int)
 // matchingHosts returns the schedulable Hosts that spec selects, keyed by
 // HostID with their last Ready transition, and the matching Hosts that are
 // not schedulable right now but still exist. Instances on a retained Host
-// are left alone.
+// are left alone. A Host lacking a feature spec uses matches neither: an
+// instance there would start without it.
 func (r *WorkloadDaemonSetReconciler) matchingHosts(ctx context.Context, namespace string, spec *runtimev1alpha1.WorkloadSpec) (map[string]time.Time, map[string]bool, error) {
 	environmentFilter, err := hostEnvironmentFilter(r.AllowSharedHosts, namespace, spec)
 	if err != nil {
@@ -300,12 +301,14 @@ func (r *WorkloadDaemonSetReconciler) matchingHosts(ctx context.Context, namespa
 		return nil, nil, err
 	}
 
+	features := requiredHostFeatures(spec)
 	desired := make(map[string]time.Time)
 	retained := make(map[string]bool)
 	for i := range hostList.Items {
 		host := &hostList.Items[i]
 		switch {
 		case host.HostID == "":
+		case len(missingHostFeatures(host, features)) > 0:
 		case isSchedulable(host):
 			desired[host.HostID] = host.Status.GetCondition(condition.TypeReady).LastTransitionTime.Time
 		case host.DeletionTimestamp.IsZero():
@@ -552,7 +555,8 @@ var hostPlacementChanged = predicate.Funcs{
 		return isSchedulable(oldHost) != isSchedulable(newHost) ||
 			oldHost.HostID != newHost.HostID ||
 			oldHost.Environment != newHost.Environment ||
-			!maps.Equal(oldHost.Labels, newHost.Labels)
+			!maps.Equal(oldHost.Labels, newHost.Labels) ||
+			!slices.Equal(oldHost.Status.Features, newHost.Status.Features)
 	},
 }
 

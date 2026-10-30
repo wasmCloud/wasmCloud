@@ -392,6 +392,7 @@ func TestReconcileReporting(t *testing.T) {
 		OsArch:            testOSArch,
 		OsKernel:          testOSKernel,
 		Version:           testVersion,
+		Features:          []string{runtimev1alpha1.HostFeaturePluginSecretRefs},
 	}
 	data, err := protojson.Marshal(hb)
 	if err != nil {
@@ -424,6 +425,9 @@ func TestReconcileReporting(t *testing.T) {
 	if host.Status.OSName != testOSName || host.Status.OSArch != testOSArch ||
 		host.Status.OSKernel != testOSKernel || host.Status.Version != testVersion {
 		t.Errorf("OS/version fields not mapped: %+v", host.Status)
+	}
+	if !host.HasFeature(runtimev1alpha1.HostFeaturePluginSecretRefs) {
+		t.Errorf("Features = %v, want the heartbeat's", host.Status.Features)
 	}
 	if host.Status.LastSeen.IsZero() {
 		t.Errorf("LastSeen must be set after a successful heartbeat")
