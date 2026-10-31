@@ -43,17 +43,16 @@ const (
 	testHostGroup       = "default"
 )
 
-// requiredHostStatusKeys are the status fields the Host CRD marks as required.
-// The heartbeat handler's status write is rejected unless every one of these
-// keys is present in the patched object.
-var requiredHostStatusKeys = []string{
+// hostStatusMeasuredKeys are the status fields reconcileReporting writes
+// from measured data. hostStatusPatch must never set them.
+var hostStatusMeasuredKeys = []string{
 	"version", "osName", "osArch", "osKernel",
 	"systemCPUUsage", "systemMemoryTotal", "systemMemoryFree",
 }
 
-func patchStatusKeys(t *testing.T, status *runtimev1alpha1.HostStatus) map[string]json.RawMessage {
+func patchStatusKeys(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
-	raw, err := hostStatusPatch(status)
+	raw, err := hostStatusPatch()
 	if err != nil {
 		t.Fatalf("hostStatusPatch: %v", err)
 	}
@@ -66,49 +65,18 @@ func patchStatusKeys(t *testing.T, status *runtimev1alpha1.HostStatus) map[strin
 	return p.Status
 }
 
-// TestHostStatusPatch_EmptyStatusInjectsRequiredKeys ensures that lastSeen is always
-// populated in the patch, even for an empty status. Other keys required are also tested
-// to ensure the patch is valid for the CRD.
-func TestHostStatusPatch_EmptyStatusInjectsRequiredKeys(t *testing.T) {
-	keys := patchStatusKeys(t, &runtimev1alpha1.HostStatus{})
+// TestHostStatusPatch_OnlyLastSeen ensures the heartbeat patch carries only
+// lastSeen, so it never clobbers fields owned by reconcileReporting or the
+// ConditionedReconciler.
+func TestHostStatusPatch_OnlyLastSeen(t *testing.T) {
+	keys := patchStatusKeys(t)
 
 	if _, ok := keys["lastSeen"]; !ok {
 		t.Errorf("lastSeen must always be present in the patch")
 	}
-	for _, k := range requiredHostStatusKeys {
-		if _, ok := keys[k]; !ok {
-			t.Errorf("required key %q missing from patch for empty status", k)
-		}
-	}
-	// Conditions and the optional counts must never be in this patch — they are
-	// owned by the ConditionedReconciler / reconcileReporting respectively.
-	for _, k := range []string{"conditions", "componentCount", "workloadCount"} {
+	for _, k := range append(hostStatusMeasuredKeys, "conditions", "componentCount", "workloadCount") {
 		if _, ok := keys[k]; ok {
 			t.Errorf("patch must not include %q", k)
-		}
-	}
-}
-
-// TestHostStatusPatch_ReportedFieldsPreserved ensures already-reported values
-// are omitted from the patch so the heartbeat handler never clobbers real data
-// written by reconcileReporting — only lastSeen is refreshed.
-func TestHostStatusPatch_ReportedFieldsPreserved(t *testing.T) {
-	keys := patchStatusKeys(t, &runtimev1alpha1.HostStatus{
-		Version:           testVersion,
-		OSName:            testOSName,
-		OSArch:            testOSArch,
-		OSKernel:          testOSKernel,
-		SystemCPUUsage:    testCPUUsage,
-		SystemMemoryTotal: 16000,
-		SystemMemoryFree:  8000,
-	})
-
-	if _, ok := keys["lastSeen"]; !ok {
-		t.Errorf("lastSeen must always be present in the patch")
-	}
-	for _, k := range requiredHostStatusKeys {
-		if _, ok := keys[k]; ok {
-			t.Errorf("reported field %q must be omitted to avoid clobbering its real value", k)
 		}
 	}
 }
@@ -172,13 +140,15 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	}
 
 	// host.Status is empty here, exactly as it is the first time the heartbeat
-	// handler patches a host that reconcileReporting has not polled yet.
-	patch, err := hostStatusPatch(&host.Status)
+	// handler patches a host that reconcileReporting has not polled yet. The
+	// seven measured fields are optional now, so the API server must accept
+	// this patch leaving them unset.
+	patch, err := hostStatusPatch()
 	if err != nil {
 		t.Fatalf("hostStatusPatch: %v", err)
 	}
 	if err := c.Status().Patch(ctx, host, client.RawPatch(types.MergePatchType, patch)); err != nil {
-		t.Fatalf("status patch rejected by API server (required-field regression?): %v", err)
+		t.Fatalf("status patch rejected by API server (optional-field regression?): %v", err)
 	}
 
 	got := &runtimev1alpha1.Host{}
@@ -188,8 +158,8 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	if got.Status.LastSeen.IsZero() {
 		t.Errorf("expected lastSeen to be set after patch")
 	}
-	if got.Status.OSArch == "" || got.Status.Version == "" {
-		t.Errorf("expected required string fields to be defaulted, got %+v", got.Status)
+	if got.Status.OSArch != "" || got.Status.Version != "" {
+		t.Errorf("expected unmeasured fields to stay empty rather than be defaulted, got %+v", got.Status)
 	}
 
 	// A second patch after the host has reported real values must preserve them
@@ -199,7 +169,7 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	if err := c.Status().Update(ctx, got); err != nil {
 		t.Fatalf("seed reported status: %v", err)
 	}
-	patch2, err := hostStatusPatch(&got.Status)
+	patch2, err := hostStatusPatch()
 	if err != nil {
 		t.Fatalf("hostStatusPatch (reported): %v", err)
 	}
@@ -876,8 +846,8 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 }
 
 // TestHeartbeatHandler_PreservesReportedStatus is the call-site counterpart to
-// TestHostStatusPatch_ReportedFieldsPreserved: the placeholders must come from
-// the stored status, so a heartbeat leaves what reconcileReporting measured.
+// TestHostStatusPatch_ReportedFieldsPreserved: a heartbeat must leave what
+// reconcileReporting measured untouched.
 func TestHeartbeatHandler_PreservesReportedStatus(t *testing.T) {
 	c, ctx := startHostEnvtest(t)
 	ns := createTestNamespace(t, ctx, c, "host-heartbeat-status")

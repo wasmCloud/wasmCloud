@@ -35,7 +35,6 @@ const (
 	// the host finalizer can fan out to assigned workloads without
 	// scanning every Workload in the cluster.
 	workloadByHostIDIndex = "status.hostId"
-	statusUnknown         = "unknown"
 )
 
 // HostReconciler reconciles a Host object
@@ -386,11 +385,9 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 		}
 	}
 
-	// Patching the status subresource to update the LastSeen timestamp in case
-	// the other fields reported are not yet available (such as system/OS information).
-	// Built from the stored status: hostStatusPatch supplies the CRD's required
-	// fields only where they are still empty, and `host` carries a zero status.
-	statusPatch, err := hostStatusPatch(&existing.Status)
+	// Patch only LastSeen on the status subresource. The measured system/OS
+	// fields are written by reconcileReporting and must not be touched here.
+	statusPatch, err := hostStatusPatch()
 	if err != nil {
 		log.Error(err, "failed to build Host status patch", "host", req.FriendlyName, "hostID", req.Id)
 		return
@@ -412,28 +409,7 @@ func hostSpecChanged(existing, next *runtimev1alpha1.Host) bool {
 
 // hostStatusPatch builds a JSON merge patch for the Host status subresource
 // that always refreshes LastSeen.
-func hostStatusPatch(status *runtimev1alpha1.HostStatus) ([]byte, error) {
+func hostStatusPatch() ([]byte, error) {
 	s := map[string]any{"lastSeen": metav1.Now()}
-	if status.Version == "" {
-		s["version"] = statusUnknown
-	}
-	if status.OSName == "" {
-		s["osName"] = statusUnknown
-	}
-	if status.OSArch == "" {
-		s["osArch"] = statusUnknown
-	}
-	if status.OSKernel == "" {
-		s["osKernel"] = statusUnknown
-	}
-	if status.SystemCPUUsage == "" {
-		s["systemCPUUsage"] = "0"
-	}
-	if status.SystemMemoryTotal == 0 {
-		s["systemMemoryTotal"] = 0
-	}
-	if status.SystemMemoryFree == 0 {
-		s["systemMemoryFree"] = 0
-	}
 	return json.Marshal(map[string]any{"status": s})
 }
