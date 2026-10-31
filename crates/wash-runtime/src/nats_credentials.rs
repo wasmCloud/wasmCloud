@@ -75,6 +75,7 @@ impl Credentials {
     /// [`Self::connect_options`], with each file read once beforehand within
     /// [`FIRST_READ_WAIT`]. A slow mount then fails here, legibly, rather
     /// than as a connect timeout, and later connects fall back on what was read.
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     pub(crate) async fn primed_connect_options(self) -> anyhow::Result<async_nats::ConnectOptions> {
         Ok(match self.presenter()? {
             Some(presenter) => {
@@ -199,6 +200,7 @@ impl Presenter {
     }
 
     /// Reads and parses every file once, waiting up to [`FIRST_READ_WAIT`].
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     async fn prime(&self) -> anyhow::Result<()> {
         tokio::try_join!(
             prime(self.credentials.as_ref(), "credentials", credentials_key),
@@ -259,6 +261,7 @@ impl<T: Clone> Source<T> {
         })
     }
 
+    #[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
     fn file(source: &Option<Self>) -> Option<&SecretFile> {
         match source {
             Some(Self::File(file)) => Some(file),
@@ -284,6 +287,7 @@ impl<T: Clone> Source<T> {
 const READ_WAIT: Duration = Duration::from_secs(2);
 
 /// How long the read before a connection's first connect may take.
+#[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
 const FIRST_READ_WAIT: Duration = Duration::from_secs(10);
 
 /// A file reread on every connect, with at most one read in flight.
@@ -405,6 +409,7 @@ async fn read_file<T>(
     }
 }
 
+#[cfg_attr(not(feature = "wasmcloud-nats"), allow(dead_code))]
 async fn prime<T>(
     file: Option<&SecretFile>,
     what: &str,
