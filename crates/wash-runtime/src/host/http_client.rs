@@ -57,6 +57,7 @@ use tracing::{debug, warn};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi_http::{Error as HttpError, RequestOptions, WasiBody};
 
+use crate::host::client_auth_report::ReportClientAuth;
 use crate::host::http::{RequestIoFuture, SendResult};
 
 /// Error type carried by the request body handed to the pooled client.
@@ -329,6 +330,18 @@ impl ClientTlsOptions {
             None => builder.with_no_client_auth(),
         };
 
+        // Wrap whatever rustls installed above so that a request this host
+        // cannot satisfy is reported rather than declined in silence. Purely
+        // observational: the resolver underneath still decides what is
+        // presented, and resumption is untouched.
+        let mut config = config;
+        config.client_auth_cert_resolver = match self.client_identity {
+            Some(_) => Arc::new(ReportClientAuth::wrapping(Arc::clone(
+                &config.client_auth_cert_resolver,
+            ))),
+            None => Arc::new(ReportClientAuth::absent()),
+        };
+
         Ok(Arc::new(config))
     }
 
@@ -338,6 +351,11 @@ impl ClientTlsOptions {
     /// Uses the same trust roots as [`Self::build`] and ignores
     /// [`Self::client_identity`]. Session resumption is disabled so each new
     /// connection consults the resolver.
+    ///
+    /// The resolver is wrapped in
+    /// [`ReportClientAuth`](crate::host::client_auth_report::ReportClientAuth),
+    /// so a peer whose request it cannot satisfy is reported rather than
+    /// declined in silence.
     pub fn build_with_resolver(
         &self,
         resolver: Arc<dyn rustls::client::ResolvesClientCert>,
@@ -345,7 +363,7 @@ impl ClientTlsOptions {
         let roots = self.root_store()?;
         let mut config = rustls::ClientConfig::builder()
             .with_root_certificates(roots)
-            .with_client_cert_resolver(resolver);
+            .with_client_cert_resolver(Arc::new(ReportClientAuth::wrapping(resolver)));
         config.resumption = rustls::client::Resumption::disabled();
         Ok(Arc::new(config))
     }
