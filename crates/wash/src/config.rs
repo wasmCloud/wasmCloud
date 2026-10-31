@@ -587,6 +587,11 @@ pub struct HostPluginConfig {
     /// implemented.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
+    /// Host directories preopened into a component plugin's store, e.g. model
+    /// weights a plugin serves from. Omitted or empty gives the plugin no
+    /// filesystem.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<PluginVolumeConfig>,
 }
 
 /// One named binding under a `host.plugins` entry: the operator's config for
@@ -598,6 +603,21 @@ pub struct PluginBindingConfig {
     /// through the same `configs:`/`secrets:` catalogs as everything else.
     #[serde(flatten)]
     pub environment: EnvironmentLayer,
+}
+
+/// A host directory a component plugin sees in its own store. Config-file
+/// spelling of [`wash_runtime::plugin::PluginVolume`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginVolumeConfig {
+    /// Directory on the host. Relative paths resolve against the directory
+    /// `wash` runs in, like a plugin's `file`.
+    pub host_path: PathBuf,
+    /// Absolute path the plugin sees the directory at.
+    pub mount_path: String,
+    /// Whether the plugin may only read from the directory.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// Config-file spelling of
@@ -665,6 +685,9 @@ impl HostPluginConfig {
         }
         if !self.ports.is_empty() {
             set.push("ports");
+        }
+        if !self.volumes.is_empty() {
+            set.push("volumes");
         }
         if set.is_empty() {
             return Ok(());
@@ -779,6 +802,15 @@ impl HostPluginConfig {
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
             allowed_host_loopback_ports: self.allowed_host_loopback_ports.clone().into(),
             ports: self.ports.clone().into(),
+            volumes: self
+                .volumes
+                .iter()
+                .map(|v| wash_runtime::plugin::PluginVolume {
+                    host_path: v.host_path.clone(),
+                    mount_path: v.mount_path.clone(),
+                    read_only: v.read_only,
+                })
+                .collect(),
         })
     }
 
@@ -2818,6 +2850,62 @@ dev:
                 .workload_config(),
             wash_runtime::plugin::WorkloadConfigPolicy::Deny,
         );
+    }
+
+    /// A component plugin's volumes reach its spec as written, `readOnly`
+    /// defaulting to read-write like a workload's mount.
+    #[test]
+    fn host_plugin_volumes_parse_from_yaml_and_convert_to_spec() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-llm
+      file: ./build/llm_plugin.wasm
+      volumes:
+        - hostPath: ./models
+          mountPath: /models
+          readOnly: true
+        - hostPath: /var/cache/llm
+          mountPath: /cache
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let spec = config.host().plugins[0].to_spec_unresolved().unwrap();
+        assert_eq!(
+            &*spec.volumes,
+            &[
+                wash_runtime::plugin::PluginVolume {
+                    host_path: "./models".into(),
+                    mount_path: "/models".into(),
+                    read_only: true,
+                },
+                wash_runtime::plugin::PluginVolume {
+                    host_path: "/var/cache/llm".into(),
+                    mount_path: "/cache".into(),
+                    read_only: false,
+                },
+            ]
+        );
+    }
+
+    /// A native plugin's store is the workload's, so a volume declared on its
+    /// entry would preopen nothing.
+    #[test]
+    fn a_native_entry_refuses_volumes() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: wasmcloud-nats
+      volumes:
+        - hostPath: ./models
+          mountPath: /models
+"#;
+        let config: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let err = config
+            .host()
+            .to_plugin_bindings(&config, Path::new("."), None)
+            .expect_err("volumes on a native entry must be refused")
+            .to_string();
+        assert!(err.contains("`volumes`"), "got: {err}");
     }
 
     /// A native entry may declare egress, but not component lifecycle fields.
