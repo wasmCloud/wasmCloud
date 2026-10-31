@@ -44,6 +44,8 @@
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
 //! | `WASH_SCALE_GUEST_MEMORY_MODE` | `enforce`, `count` or `growth`: how the guest budget is applied; a list (`enforce,growth`) runs each flavour in each | `enforce` |
 //! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | four times `WASH_SCALE_GUEST_MEMORY` |
+//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB, or a list (`default,256MiB`; `default` is wasmtime's layout) whose reduced entries run warm only, in the first mode; moves an isolation boundary (`THREAT_MODEL.md`) | wasmtime's default |
+//! | `WASH_SCALE_MEMORY_GUARD` | guard after each guest memory, below wasmtime's 32 MiB; moves the same boundary | wasmtime's default |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
@@ -76,7 +78,7 @@ use futures::{StreamExt as _, stream};
 use bench_tools::density::{Report, Step, percentile, print_comparison, print_step, spread};
 use wash_runtime::engine::Engine;
 use wash_runtime::engine::guest_memory::GuestMemoryMode;
-use wash_runtime::engine::host_memory::{HostMemoryBudgets, render_bytes};
+use wash_runtime::engine::host_memory::{self, HostMemoryBudgets, render_bytes};
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
 use wash_runtime::engine::process_memory::process_footprint;
 use wash_runtime::host::http::{DynamicRouter, Ingress};
@@ -136,11 +138,30 @@ fn main() -> Result<()> {
     }
 
     let mut reports = Vec::new();
-    for &mode in &settings.guest_modes {
-        for &cpus in &settings.cpus {
-            for &flavour in &flavours {
-                eprintln!("\n== {} ==", report_label(flavour.name(), cpus, mode));
-                reports.push(run_child(flavour, cpus, mode)?);
+    for &layout in &settings.memory_layouts {
+        // A reduced layout only moves how many warm memories fit, so it runs
+        // warm, in the first mode: scale-to-zero holds no memories.
+        let (modes, flavours) = match layout {
+            Some(_) => (
+                settings.guest_modes.get(..1).unwrap_or_default(),
+                flavours
+                    .iter()
+                    .copied()
+                    .filter(|&f| f == Flavour::Warm)
+                    .collect::<Vec<_>>(),
+            ),
+            None => (&settings.guest_modes[..], flavours.clone()),
+        };
+        for &mode in modes {
+            for &cpus in &settings.cpus {
+                for &flavour in &flavours {
+                    let name = layout_label(report_label(flavour.name(), cpus, mode), layout);
+                    eprintln!(
+                        "
+== {name} =="
+                    );
+                    reports.push(run_child(flavour, cpus, mode, layout)?);
+                }
             }
         }
     }
@@ -152,17 +173,27 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run one flavour in one guest memory mode in a fresh copy of this binary,
+/// Run one flavour in one guest memory mode and layout in a fresh copy of this binary,
 /// and read back its report.
-fn run_child(flavour: Flavour, cpus: Option<usize>, mode: GuestMemoryMode) -> Result<Report> {
-    let name = report_label(flavour.name(), cpus, mode);
+fn run_child(
+    flavour: Flavour,
+    cpus: Option<usize>,
+    mode: GuestMemoryMode,
+    layout: Option<host_memory::MemoryLayout>,
+) -> Result<Report> {
+    let name = layout_label(report_label(flavour.name(), cpus, mode), layout);
     let report = tempfile::NamedTempFile::new()?;
     let mut child = std::process::Command::new(std::env::current_exe()?);
     child
         .env(CHILD_FLAVOUR, flavour.name())
         .env(CHILD_REPORT, report.path())
-        // One mode per child, in place of the list the parent was given.
-        .env(GUEST_MEMORY_MODE, mode.as_str());
+        // One mode and one layout per child, in place of the lists the
+        // parent was given.
+        .env(GUEST_MEMORY_MODE, mode.as_str())
+        .env(
+            MEMORY_RESERVATION,
+            layout.map_or_else(|| "default".into(), |l| l.reservation.to_string()),
+        );
     if let Some(cpus) = cpus {
         child.env(CHILD_CPUS, cpus.to_string());
     }
@@ -192,6 +223,19 @@ fn report_label(flavour: &str, cpus: Option<usize>, mode: GuestMemoryMode) -> St
         label
     } else {
         format!("{label}-{}", mode.as_str())
+    }
+}
+
+/// Keep runs at a reduced memory layout out of the default series too:
+/// `warm-layout1GiB+32MiB`.
+fn layout_label(label: String, layout: Option<host_memory::MemoryLayout>) -> String {
+    match layout {
+        Some(layout) => format!(
+            "{label}-layout{}+{}",
+            render_bytes(layout.reservation),
+            render_bytes(layout.guard)
+        ),
+        None => label,
     }
 }
 
@@ -320,6 +364,9 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     // budget leaves the process guard to gate the run; set lower, the run shows
     // where it binds instead.
     let mut builder = Engine::builder();
+    if let Some(layout) = settings.memory_layout {
+        builder = builder.with_memory_layout(layout);
+    }
     if let Some(cap) = settings.initial_guest_memory {
         builder = builder.with_max_initial_guest_memory_bytes(cap);
     }
@@ -535,7 +582,10 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let report = Report {
         bench: "scale_density".into(),
         flavour: Some(flavour),
-        label: report_label(flavour.name(), cpu.limit, settings.guest_mode),
+        label: layout_label(
+            report_label(flavour.name(), cpu.limit, settings.guest_mode),
+            settings.memory_layout,
+        ),
         subject: format!(
             "{}, max-guest-memory {}, pool {} memories, {}{}",
             settings.fixture,
@@ -833,6 +883,41 @@ mod tests {
     }
 
     #[test]
+    fn a_list_of_memory_reservations_runs_each_in_turn() -> Result<()> {
+        let settings = |reservations: Option<&str>, guard: Option<&str>| {
+            Settings::from_values(|key| match key {
+                "WASH_SCALE_MEMORY_LIMIT" | "WASH_SCALE_GUEST_MEMORY" => Some("1GiB".into()),
+                "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
+                MEMORY_RESERVATION => reservations.map(Into::into),
+                "WASH_SCALE_MEMORY_GUARD" => guard.map(Into::into),
+                _ => None,
+            })
+        };
+        assert_eq!(settings(None, None)?.memory_layouts, [None]);
+        let sweep = settings(Some("default, 256MiB, default"), Some("64KiB"))?;
+        assert_eq!(
+            sweep.memory_layouts,
+            [
+                None,
+                Some(host_memory::MemoryLayout {
+                    reservation: 256 << 20,
+                    guard: 64 << 10,
+                })
+            ],
+            "`default` ignores the guard, and a repeat runs once"
+        );
+        assert_eq!(sweep.memory_layout, None);
+        let one = settings(Some("268435456"), None)?;
+        assert_eq!(
+            one.memory_layout.map(|l| l.reservation),
+            Some(256 << 20),
+            "a child is told its reservation in bytes"
+        );
+        assert!(settings(Some("default,lots"), None).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn memory_modes_publish_distinct_series() {
         assert_eq!(report_label("warm", None, GuestMemoryMode::Enforce), "warm");
         assert_eq!(
@@ -842,6 +927,17 @@ mod tests {
         assert_eq!(
             report_label("warm", None, GuestMemoryMode::Growth),
             "warm-growth"
+        );
+        assert_eq!(layout_label("warm".into(), None), "warm");
+        assert_eq!(
+            layout_label(
+                "warm".into(),
+                Some(host_memory::MemoryLayout {
+                    reservation: 1 << 30,
+                    guard: 32 << 20,
+                })
+            ),
+            "warm-layout1GiB+32MiB"
         );
     }
 

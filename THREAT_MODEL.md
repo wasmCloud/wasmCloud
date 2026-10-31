@@ -95,6 +95,7 @@ Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator 
 | `--socket-egress=count` | 5 | Raw socket egress is counted, not enforced. |
 | `--guest-memory-mode=count` | 6 | Total guest memory is counted, not enforced. |
 | `--guest-memory-mode=growth` | 6 | Up to 2 MiB of each memory's first allocation (an instance's initial memory) is not charged to the budget. `--max-process-memory` refuses new instances and growth once the host is over its limit, but cannot stop admitted instances writing the initial memory they hold. The host is overcommitted by however much of it they come to touch, up to `--max-initial-guest-memory`: four times `--max-guest-memory` unless set, so by default about three times a container limit the budget was derived from. |
+| `--memory-reservation` below 4 GiB, `--memory-guard-size` below 32 MiB | 6 | Reduces hardware defense in depth. The default 4 GiB reservation covers a 32-bit dynamic index, and the 32 MiB guard covers many constant offsets; larger offsets still need bounds checks at the defaults. Smaller layouts rely more on software bounds checks for isolation, whose bugs could expose a sibling's memory. More explicit checks can slow guest memory access. |
 | `--deny-special-ranges=false` | 5 | Loopback, link-local and metadata addresses become reachable. |
 | `--http-local-routing` | 3 | Any workload can claim a hostname and receive its neighbors' requests, in plaintext. |
 | `--wasi-webgpu` | 1 | The GPU and its driver sit outside wasmtime's isolation. |

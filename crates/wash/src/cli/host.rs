@@ -490,13 +490,52 @@ pub struct HostCommand {
     /// wasmtime's own default of 4 GiB — which is what every host has run to
     /// date, and why an instance count has never implied a byte count.
     ///
-    /// Every slot reserves wasmtime's 4 GiB plus a 32 MiB guard whether or
+    /// By default, every slot reserves 4 GiB plus a 32 MiB guard whether or
     /// not anything grows into it. Lowering this below 4 GiB caps guest heaps
-    /// but does not shrink the reservation. It cannot go past 4 GiB: the
-    /// pooling allocator refuses a ceiling larger than its reservation, and
-    /// the host will not start.
+    /// but does not shrink the reservation; `--memory-reservation` does. It
+    /// cannot go past the reservation: the pooling allocator refuses a ceiling
+    /// larger than it, and the host will not start.
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
+
+    /// Address space reserved for each guest linear memory (e.g. `1GiB`):
+    /// the memory itself, plus the room it may grow into.
+    /// Defaults to wasmtime's 4 GiB.
+    ///
+    /// Each memory's pool slot is this reservation,
+    /// followed by `--memory-guard-size` of unmapped guard.
+    /// With pooling, a memory never grows past its reservation,
+    /// so the default pool's `--default-heap-memory` is lowered to it.
+    /// Without pooling, wasmtime may relocate a memory to grow beyond it;
+    /// the guest and process memory budgets still apply.
+    ///
+    /// At 4 GiB, the reservation covers a 32-bit dynamic index, and the guard
+    /// covers many constant offsets. Larger offsets still need bounds checks.
+    /// Smaller fits more memories in the address space
+    /// (about 16,000 fit at 4 GiB), and costs:
+    ///
+    /// SECURITY: it moves an isolation boundary. A smaller reservation puts
+    /// sibling memories within a 32-bit dynamic index's reach. Isolation relies
+    /// more on software bounds checks, whose bugs could expose another guest's
+    /// memory. This reduces defense in depth.
+    ///
+    /// Speed: more explicit bounds checks can slow guest memory access.
+    /// The host warns at startup when the layout is below the defaults.
+    #[arg(long = "memory-reservation", env = "WASH_HOST_MEMORY_RESERVATION")]
+    pub memory_reservation: Option<String>,
+
+    /// Unmapped guard after each guest memory's reservation (e.g. `64KiB`),
+    /// never accessible to a guest. Defaults to wasmtime's 32 MiB.
+    ///
+    /// It separates one memory's reservation from the next, and is not part of
+    /// either: a slot is `--memory-reservation` plus this. It catches an access
+    /// whose constant offset carries it past the reservation, so wasmtime can
+    /// skip checking those offsets.
+    ///
+    /// Smaller shrinks each slot and protects fewer constant offsets, requiring
+    /// more explicit bounds checks, including at `0`.
+    #[arg(long = "memory-guard-size", env = "WASH_HOST_MEMORY_GUARD_SIZE")]
+    pub memory_guard_size: Option<String>,
 
     /// Linear memories the pooling allocator keeps room for, whatever
     /// triggers them, and with them the fiber stacks, component instances and
@@ -1223,6 +1262,10 @@ impl CliCommand for HostCommand {
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         let max_initial_guest_memory =
             parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
+        let memory_layout = parse_memory_layout(
+            self.memory_reservation.as_deref(),
+            self.memory_guard_size.as_deref(),
+        )?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1360,6 +1403,9 @@ impl CliCommand for HostCommand {
         });
         engine_builder = engine_builder.with_socket_policy(Arc::clone(&socket_policy));
         engine_builder = engine_builder.with_host_memory(host_memory);
+        if let Some(layout) = memory_layout {
+            engine_builder = engine_builder.with_memory_layout(layout);
+        }
         // A host runs one engine, so a pool count nobody named is sized to the
         // machine rather than left at the engine's library default.
         if self.max_memories.is_none() && self.core_instances.is_none() {
@@ -2317,6 +2363,36 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, St
         .map_err(|e| e.to_string())
 }
 
+/// `--memory-reservation` and `--memory-guard-size`, reading a blank value as
+/// unset; either one set lays memories out with the other at wasmtime's default.
+fn parse_memory_layout(
+    reservation: Option<&str>,
+    guard: Option<&str>,
+) -> anyhow::Result<Option<wash_runtime::engine::host_memory::MemoryLayout>> {
+    use wash_runtime::engine::host_memory::{MemoryLayout, parse_bytes};
+    let parse = |raw: Option<&str>, flag: &str| -> anyhow::Result<Option<u64>> {
+        raw.map(str::trim)
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| parse_bytes(raw).map_err(|e| anyhow::anyhow!("invalid {flag}: {e}")))
+            .transpose()
+    };
+    let reservation = parse(reservation, "memory-reservation")?;
+    let guard = parse(guard, "memory-guard-size")?;
+    if reservation.is_none() && guard.is_none() {
+        return Ok(None);
+    }
+    let default = MemoryLayout::default();
+    let layout = MemoryLayout {
+        reservation: reservation.unwrap_or(default.reservation),
+        guard: guard.unwrap_or(default.guard),
+    };
+    anyhow::ensure!(
+        layout.reservation > 0,
+        "memory-reservation must be greater than zero"
+    );
+    Ok(Some(layout))
+}
+
 /// `--max-initial-guest-memory`, reading a blank value as unset.
 fn parse_max_initial_guest_memory(raw: Option<&str>) -> anyhow::Result<Option<u64>> {
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
@@ -2392,6 +2468,29 @@ mod process_memory_policy_tests {
         assert_eq!(parse_max_initial_guest_memory(Some("4GiB"))?, Some(4 << 30));
         assert!(parse_max_initial_guest_memory(Some("0")).is_err());
         assert!(parse_max_initial_guest_memory(Some("off")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_memory_layout_is_named_by_either_flag() -> anyhow::Result<()> {
+        use wash_runtime::engine::host_memory::MemoryLayout;
+        assert_eq!(parse_memory_layout(None, Some(" "))?, None);
+        let default = MemoryLayout::default();
+        assert_eq!(
+            parse_memory_layout(Some("1GiB"), None)?,
+            Some(MemoryLayout {
+                reservation: 1 << 30,
+                guard: default.guard,
+            })
+        );
+        assert_eq!(
+            parse_memory_layout(None, Some("0"))?,
+            Some(MemoryLayout {
+                reservation: default.reservation,
+                guard: 0,
+            })
+        );
+        assert!(parse_memory_layout(Some("0"), None).is_err());
         Ok(())
     }
 }
