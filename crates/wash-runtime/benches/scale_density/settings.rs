@@ -26,6 +26,10 @@ pub(super) fn parse_flavour(name: &str) -> Result<Flavour> {
 /// The guest memory mode, or a comma-separated list of modes to run in turn.
 pub(super) const GUEST_MEMORY_MODE: &str = "WASH_SCALE_GUEST_MEMORY_MODE";
 
+/// Each guest memory's reservation, or a comma-separated list to run in turn;
+/// `default` is wasmtime's own layout.
+pub(super) const MEMORY_RESERVATION: &str = "WASH_SCALE_MEMORY_RESERVATION";
+
 /// What a run was told, from the environment.
 #[derive(Debug, Clone)]
 pub(super) struct Settings {
@@ -47,8 +51,11 @@ pub(super) struct Settings {
     /// Unset, as many as the host has cores.
     pub(super) start_concurrency: Option<usize>,
     pub(super) sample: usize,
-    /// The per-memory layout, when one is named; `None` is wasmtime's default.
+    /// A run's per-memory layout: the first of `memory_layouts`, and the only
+    /// one a child sees. `None` is wasmtime's default.
     pub(super) memory_layout: Option<host_memory::MemoryLayout>,
+    /// One set of runs per entry, each in a child told only its own layout.
+    pub(super) memory_layouts: Vec<Option<host_memory::MemoryLayout>>,
     /// Linear memories the pool holds; the count that sizes the pool.
     pub(super) max_memories: u32,
     pub(super) fixture: &'static str,
@@ -118,10 +125,12 @@ impl Settings {
                 .map(|v| parse_bytes(v.trim()).map_err(|e| anyhow::anyhow!("{key}={v}: {e}")))
                 .transpose()
         };
-        let memory_layout = match (
-            bytes("WASH_SCALE_MEMORY_RESERVATION")?,
-            bytes("WASH_SCALE_MEMORY_GUARD")?,
-        ) {
+        // One layout per reservation listed, all with the same guard:
+        // - `default` is wasmtime's layout, guard and all;
+        // - a size reserves that, with the guard named or wasmtime's;
+        // - unset is one run, at wasmtime's layout unless a guard is named.
+        let guard = bytes("WASH_SCALE_MEMORY_GUARD")?;
+        let layout = |reservation: Option<u64>| match (reservation, guard) {
             (None, None) => None,
             (reservation, guard) => {
                 let default = host_memory::MemoryLayout::default();
@@ -131,6 +140,27 @@ impl Settings {
                 })
             }
         };
+        let mut memory_layouts = match var(MEMORY_RESERVATION) {
+            None => vec![layout(None)],
+            Some(list) => list
+                .split(',')
+                .map(|entry| match entry.trim() {
+                    "default" => Ok(None),
+                    size => parse_bytes(size)
+                        .map(|bytes| layout(Some(bytes)))
+                        .map_err(|e| anyhow::anyhow!("{MEMORY_RESERVATION}={list}: {e}")),
+                })
+                .collect::<Result<Vec<_>>>()?,
+        };
+        // A layout named twice would publish the same series twice.
+        let mut seen = Vec::new();
+        memory_layouts.retain(|layout| {
+            let first = !seen.contains(layout);
+            seen.push(*layout);
+            first
+        });
+        // `split` yields at least one entry, so the default is never reached.
+        let memory_layout = memory_layouts.first().copied().flatten();
         // `WASH_SCALE_CORE_INSTANCES` named this count before the pool's
         // totals were derived from its memory count; still read.
         let max_memories = match number("WASH_SCALE_MAX_MEMORIES")? {
@@ -158,6 +188,7 @@ impl Settings {
             guest_modes,
             initial_guest_memory,
             memory_layout,
+            memory_layouts,
             max_components: number("WASH_SCALE_MAX_COMPONENTS")?,
             max_duration: match number("WASH_SCALE_MAX_SECS")? {
                 Some(0) => None,
