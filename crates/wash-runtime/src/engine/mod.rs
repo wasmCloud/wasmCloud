@@ -1007,6 +1007,46 @@ impl Engine {
         Ok((compiled, Some(entry)))
     }
 
+    /// The compiles `workload` loads, held so initializing it compiles nothing,
+    /// or `None` if initializing it could compile, open files or build a
+    /// service's linker.
+    pub(crate) fn pin_compiled_components(
+        &self,
+        workload: &Workload,
+    ) -> Option<Vec<Arc<LiveCompile>>> {
+        if !workload.volumes.is_empty() || workload.service.is_some() {
+            return None;
+        }
+        workload
+            .components
+            .iter()
+            .map(|c| self.pin_compile(c.digest.as_deref()?))
+            .collect()
+    }
+
+    /// `digest`'s live compile, recording a cached one as live; never compiles.
+    fn pin_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
+        if let Some(live) = self.live_compile(digest) {
+            return Some(live);
+        }
+        // Outside the live map's lock: a cache read can run cache housekeeping.
+        let CacheValue(component) = self.cache.get(&CacheKey(digest.to_string()))?;
+        let mut live = self
+            .live_compiles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
+            return Some(existing);
+        }
+        let entry = Arc::new(LiveCompile {
+            digest: digest.to_string(),
+            component,
+            live: Arc::downgrade(&self.live_compiles),
+        });
+        live.insert(digest.to_string(), Arc::downgrade(&entry));
+        Some(entry)
+    }
+
     fn live_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
         self.live_compiles
             .lock()
@@ -3009,6 +3049,109 @@ mod tests {
             .load_live_component(&bytes, None::<&str>)
             .expect("load without a digest");
         assert!(untracked.is_none(), "nothing to share without a digest");
+    }
+
+    fn component_workload(digest: Option<&str>, volumes: Vec<crate::types::Volume>) -> Workload {
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        Workload {
+            components: vec![crate::types::Component {
+                name: "c".into(),
+                digest: digest.map(str::to_string),
+                bytes: bytes.into(),
+                ..Default::default()
+            }],
+            ..volume_only_workload(volumes)
+        }
+    }
+
+    /// A workload is pinned only once its digest is compiled, and the pin keeps
+    /// that compile: initializing after a cache eviction compiles nothing.
+    #[test]
+    fn a_pinned_workload_initializes_without_compiling() {
+        use std::sync::atomic::Ordering;
+        const DIGEST: &str = "sha256:pinned-image";
+
+        let engine = Engine::builder().build().expect("engine should build");
+        let workload = component_workload(Some(DIGEST), vec![]);
+        assert!(engine.pin_compiled_components(&workload).is_none());
+
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        engine
+            .load_component_bytes(&bytes, Some(DIGEST))
+            .expect("compile");
+        let pins = engine
+            .pin_compiled_components(&workload)
+            .expect("a compiled digest is pinned");
+        engine.cache.invalidate_all();
+        engine.cache.run_pending_tasks();
+
+        let initialized = engine
+            .initialize_workload("w", workload)
+            .expect("initialize");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        drop((pins, initialized));
+        assert!(
+            engine.live_compiles.lock().unwrap().is_empty(),
+            "a pin outlived its holders"
+        );
+    }
+
+    /// A workload that could compile, open files or build a service's linker
+    /// is never pinned, and a failed pin leaves nothing behind.
+    #[test]
+    fn a_workload_that_could_block_is_not_pinned() {
+        const DIGEST: &str = "sha256:compiled-image";
+
+        let engine = Engine::builder().build().expect("engine should build");
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        engine
+            .load_component_bytes(&bytes, Some(DIGEST))
+            .expect("compile");
+
+        assert!(
+            engine
+                .pin_compiled_components(&component_workload(None, vec![]))
+                .is_none()
+        );
+        assert!(
+            engine
+                .pin_compiled_components(&component_workload(Some(DIGEST), vec![empty_dir("a")]))
+                .is_none()
+        );
+
+        let with_service = Workload {
+            service: Some(crate::types::Service {
+                bytes: bytes.clone().into(),
+                digest: Some(DIGEST.into()),
+                local_resources: Default::default(),
+                max_restarts: 0,
+            }),
+            ..component_workload(Some(DIGEST), vec![])
+        };
+        assert!(engine.pin_compiled_components(&with_service).is_none());
+
+        let mixed = Workload {
+            components: [Some(DIGEST), Some("sha256:not-compiled")]
+                .map(|digest| crate::types::Component {
+                    name: "c".into(),
+                    digest: digest.map(str::to_string),
+                    bytes: bytes.clone().into(),
+                    ..Default::default()
+                })
+                .into(),
+            ..volume_only_workload(vec![])
+        };
+        assert!(engine.pin_compiled_components(&mixed).is_none());
+        assert!(
+            engine.live_compiles.lock().unwrap().is_empty(),
+            "a failed pin left a live entry"
+        );
+
+        assert!(
+            engine
+                .pin_compiled_components(&component_workload(Some(DIGEST), vec![]))
+                .is_some()
+        );
     }
 
     // A scheduler placing N replicas of one image sends N starts carrying one

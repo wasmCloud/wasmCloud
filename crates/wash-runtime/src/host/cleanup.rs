@@ -5,13 +5,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use tokio::sync::RwLock;
 use tokio_util::task::TaskTracker;
 
 use super::{Host, HostWorkload, Reservation};
 use crate::engine::workload::WorkloadResources;
 
-type Workloads = Arc<RwLock<HashMap<String, HostWorkload>>>;
+type Workloads = Arc<std::sync::RwLock<super::WorkloadMap>>;
 pub(super) type WorkloadRecoveries = Arc<Mutex<HashMap<String, Arc<WorkloadRecovery>>>>;
 
 /// How long a recovery waits before retrying a failed teardown, doubling each
@@ -75,7 +74,7 @@ impl WorkloadRecovery {
             return Ok(());
         }
         {
-            let mut workloads = workloads.write().await;
+            let mut workloads = super::write_workloads(workloads);
             match workloads.get(workload_id) {
                 // Left as it is: the reason is published as the workload's
                 // `Error` below, the same as when the start's own cleanup
@@ -110,7 +109,7 @@ impl WorkloadRecovery {
         )
         .await
         .context("interrupted workload cleanup timed out")??;
-        let mut workloads = workloads.write().await;
+        let mut workloads = super::write_workloads(workloads);
         let failure = match workloads.get(workload_id) {
             Some(HostWorkload::Stopping(held)) if *held == self.reservation => None,
             Some(HostWorkload::Failing(held, reason)) if *held == self.reservation => {
