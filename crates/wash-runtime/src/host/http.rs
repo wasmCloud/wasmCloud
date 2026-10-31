@@ -496,7 +496,7 @@ pub trait Router: Send + Sync + 'static {
 
 /// Router that routes requests by 'Host' header, configured via WitInterface config
 ///
-/// Requests read an ArcSwap snapshot without taking the writers' mutex.
+/// Requests read an ArcSwap snapshot without taking any of the writers' locks.
 /// Persistent maps and replica sets share unchanged nodes between snapshots,
 /// so an update copies paths through those structures instead of the entire
 /// touched shard or replica set. Path buckets remain a small ordered vector.
@@ -504,13 +504,31 @@ pub struct DynamicRouter {
     /// Maps a hostname to the path-scoped buckets registered under it, split
     /// across shards by hostname. Updates copy persistent tree paths.
     hosts: Box<[RouteShard; ROUTE_SHARDS]>,
+    /// One writer lock per `hosts` shard. A writer holds it across its
+    /// load-copy-store of that shard, so two writers to one shard never copy
+    /// the same snapshot and lose an edit, and an edit of one shard never
+    /// takes another shard's lock. It lives outside [`RouteShard`] because a
+    /// waiting writer writes the lock word: inside the shard, a burst of
+    /// writers to one hostname would keep taking the cache line that every
+    /// request for that hostname loads. Requests never take it.
+    route_writers: Box<[std::sync::Mutex<()>; ROUTE_SHARDS]>,
     /// Maps workload_id -> every route (primary + aliases, each with its path
     /// prefix) registered for it, so `on_workload_unbind` can remove all
-    /// entries cleanly. Writers hold it across their whole update, which keeps
-    /// it and `hosts` in step and serializes writers, so a writer's
-    /// load-copy-store of a shard never races another; requests never take it.
-    workload_to_host: std::sync::Mutex<HashMap<String, Vec<IngressRoute>>>,
+    /// entries cleanly. Split across shards by workload id. A register or
+    /// unregister holds its workload's shard across its whole update, so a
+    /// workload's record and its routes change together, even when a
+    /// restart's register and a stop's unregister of it overlap. Which of
+    /// the two lands last is up to the callers. Requests never take it.
+    workload_to_host: Box<[WorkloadShard; ROUTE_SHARDS]>,
 }
+
+/// What [`DynamicRouter`] records for each workload: every route it registered.
+type WorkloadRoutes = HashMap<String, Vec<IngressRoute>>;
+
+/// One shard of [`DynamicRouter`]'s workload map. Only writers touch it, so
+/// unlike [`RouteShard`] it is not given cache lines of its own.
+#[derive(Default)]
+struct WorkloadShard(std::sync::Mutex<WorkloadRoutes>);
 
 /// One shard of [`DynamicRouter`]'s hostname table.
 ///
@@ -535,14 +553,17 @@ struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
 /// off the `ArcSwap` and cache lines that requests for other hostnames load,
 /// and keep each shard's tree a level or two shallower. 256 keeps an empty
 /// router small: 32 KiB of 128-byte shards, plus one ~48-byte `Arc` per shard
-/// for its empty map (an empty `imbl::HashMap` allocates no root node).
+/// for its empty map (an empty `imbl::HashMap` allocates no root node). The
+/// writer locks and the workload map use the same count and add under 24 KiB
+/// (an empty `HashMap` allocates nothing).
 const ROUTE_SHARDS: usize = 256;
 
 impl Default for DynamicRouter {
     fn default() -> Self {
         Self {
             hosts: Box::new(std::array::from_fn(|_| RouteShard::default())),
-            workload_to_host: Default::default(),
+            route_writers: Box::new(std::array::from_fn(|_| std::sync::Mutex::default())),
+            workload_to_host: Box::new(std::array::from_fn(|_| WorkloadShard::default())),
         }
     }
 }
@@ -605,36 +626,63 @@ impl PartialEq for PathBucket {
 
 impl Eq for PathBucket {}
 
-/// Take the writers' lock whether or not a writer panicked holding it: no
+/// Take one of the writers' locks whether or not a writer panicked holding it:
 /// snapshots already published remain valid. An interrupted multi-shard update
 /// can be partial; poisoning alone must not make unrelated routes unavailable.
 fn lock_routes<G>(result: std::sync::LockResult<G>) -> G {
     result.unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The shard `host` lives in. FNV-1a rather than the maps' SipHash: it runs on
-/// every request, the shard index needs spread rather than DoS resistance (a
-/// probe cannot change which shard a registered name lives in), and it folds
-/// ASCII case so a request's mixed-case Host needs no lowercased copy to pick
-/// its shard.
-fn shard_index(host: &str) -> usize {
-    let hash = host.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+/// The shard `key` lives in: a hostname's in [`DynamicRouter`]'s `hosts` and
+/// `route_writers`, a workload id's in its `workload_to_host`. FNV-1a rather
+/// than the maps' SipHash: it runs on every request, the shard index needs
+/// spread rather than DoS resistance (a probe cannot change which shard a
+/// registered name lives in), and it folds ASCII case so a request's
+/// mixed-case Host needs no lowercased copy to pick its shard. For workload
+/// ids the folding only puts ids that differ in case in one shard.
+fn shard_index(key: &str) -> usize {
+    let hash = key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte.to_ascii_lowercase())).wrapping_mul(0x0100_0000_01b3)
     });
     // `usize` is at least 32 bits wide, plenty to pick one of 256 shards.
     (hash % ROUTE_SHARDS as u64) as usize
 }
 
+/// Slot `index` of one of [`DynamicRouter`]'s per-shard arrays. A
+/// [`shard_index`] is always in range, so the first slot is only a fallback
+/// that keeps the lookup free of a panicking index.
+fn shard_slot<T>(slots: &[T; ROUTE_SHARDS], index: usize) -> &T {
+    let [first, ..] = slots;
+    slots.get(index).unwrap_or(first)
+}
+
+/// A writer holds the lock a test tried to take without waiting.
+#[cfg(test)]
+#[derive(Debug, PartialEq)]
+struct WouldBlock;
+
 impl DynamicRouter {
     fn shard(&self, index: usize) -> &arc_swap::ArcSwap<HostBuckets> {
-        let [first, ..] = &*self.hosts;
-        &self.hosts.get(index).unwrap_or(first).0
+        &shard_slot(&self.hosts, index).0
+    }
+
+    /// The writer lock for `hosts` shard `index`.
+    fn route_writer(&self, index: usize) -> &std::sync::Mutex<()> {
+        shard_slot(&self.route_writers, index)
+    }
+
+    /// The workload map shard that records `workload_id`.
+    fn workload_shard(&self, workload_id: &str) -> &std::sync::Mutex<WorkloadRoutes> {
+        &shard_slot(&self.workload_to_host, shard_index(workload_id)).0
     }
 
     /// Apply `edit` to every route in `routes`, copying each touched shard
-    /// once and publishing it with one store. Callers hold `workload_to_host`,
-    /// which serializes writers, so nothing can store a shard between this
-    /// load and store.
+    /// once and publishing it with one store. Each shard is copied and stored
+    /// under its own writer lock, so no other writer can store that shard
+    /// between this load and store, while writers to other shards carry on.
+    /// Only one shard's writer lock is held at a time, and nothing waits while
+    /// holding one, so writers cannot deadlock on these locks. `edit` runs
+    /// under that lock and must not take a workload map shard.
     fn edit_shards(
         &self,
         routes: &[IngressRoute],
@@ -648,6 +696,7 @@ impl DynamicRouter {
                 continue;
             };
             let shard = self.shard(*index);
+            let _writer = lock_routes(self.route_writer(*index).lock());
             let mut table = HostBuckets::clone(&shard.load());
             for (_, route) in group {
                 edit(&mut table, route);
@@ -661,8 +710,13 @@ impl DynamicRouter {
     /// routes) maps so [`Router::on_workload_unbind`] can later remove every
     /// entry cleanly. Idempotent: re-registering the same workload (e.g. a
     /// service restart) leaves the tables unchanged.
+    ///
+    /// Holds `workload_id`'s workload map shard for the whole update, so its
+    /// record and its routes change together (see `workload_to_host`). A
+    /// start whose workload id shares that shard waits for it, also while this
+    /// update waits on a busy hostname's writer lock.
     fn register_routes(&self, workload_id: &str, routes: &[IngressRoute]) {
-        let mut workloads = lock_routes(self.workload_to_host.lock());
+        let mut workloads = lock_routes(self.workload_shard(workload_id).lock());
         workloads.insert(workload_id.to_string(), routes.to_vec());
         self.edit_shards(routes, |table, route| {
             let buckets = Arc::make_mut(table.entry(Arc::from(route.host.as_str())).or_default());
@@ -687,9 +741,11 @@ impl DynamicRouter {
     }
 
     /// Remove every route `workload_id` registered, dropping emptied buckets
-    /// and hostnames. A no-op for a workload that registered none.
+    /// and hostnames. A no-op for a workload that registered none. Holds
+    /// `workload_id`'s workload map shard for the whole update, as
+    /// [`Self::register_routes`] does.
     fn unregister_routes(&self, workload_id: &str) {
-        let mut workloads = lock_routes(self.workload_to_host.lock());
+        let mut workloads = lock_routes(self.workload_shard(workload_id).lock());
         let Some(routes) = workloads.remove(workload_id) else {
             return;
         };
@@ -719,6 +775,59 @@ impl DynamicRouter {
     #[cfg(test)]
     fn host_buckets(&self, host: &str) -> Option<Arc<Vec<PathBucket>>> {
         self.shard(shard_index(host)).load().get(host).cloned()
+    }
+
+    /// Whether no hostname and no workload is registered.
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.hosts.iter().all(|shard| shard.0.load().is_empty())
+            && self
+                .workload_to_host
+                .iter()
+                .all(|shard| lock_routes(shard.0.lock()).is_empty())
+    }
+
+    /// The routes the workload map records for `workload_id`.
+    #[cfg(test)]
+    fn recorded_routes(&self, workload_id: &str) -> Option<Vec<IngressRoute>> {
+        lock_routes(self.workload_shard(workload_id).lock())
+            .get(workload_id)
+            .cloned()
+    }
+
+    /// [`Self::recorded_routes`] without waiting: [`WouldBlock`] while a
+    /// writer holds `workload_id`'s workload map shard.
+    #[cfg(test)]
+    fn try_recorded_routes(
+        &self,
+        workload_id: &str,
+    ) -> Result<Option<Vec<IngressRoute>>, WouldBlock> {
+        match self.workload_shard(workload_id).try_lock() {
+            Ok(workloads) => Ok(workloads.get(workload_id).cloned()),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                Ok(poisoned.into_inner().get(workload_id).cloned())
+            }
+            Err(std::sync::TryLockError::WouldBlock) => Err(WouldBlock),
+        }
+    }
+
+    /// The locks a writer registering `workload_id` on `host` holds while it
+    /// edits that hostname's shard. Bind the result: the locks are released
+    /// when it drops.
+    #[cfg(test)]
+    #[must_use]
+    fn hold_writer_locks(&self, workload_id: &str, host: &str) -> impl Sized {
+        (
+            lock_routes(self.workload_shard(workload_id).lock()),
+            self.hold_route_writer(host),
+        )
+    }
+
+    /// The writer lock of `host`'s shard alone, as an edit of that shard
+    /// holds it.
+    #[cfg(test)]
+    fn hold_route_writer(&self, host: &str) -> std::sync::MutexGuard<'_, ()> {
+        lock_routes(self.route_writer(shard_index(host)).lock())
     }
 
     /// Resolve `(host, path)` to one workload reachable at `scope`, spreading
@@ -6523,8 +6632,7 @@ mod tests {
         for i in 1..100 {
             router.on_workload_unbind(&format!("w{i}")).await.unwrap();
         }
-        assert!(router.hosts.iter().all(|shard| shard.0.load().is_empty()));
-        assert!(router.workload_to_host.lock().unwrap().is_empty());
+        assert!(router.is_empty());
     }
 
     /// A request matches against the snapshot it loaded from the table, so a
@@ -6614,11 +6722,238 @@ mod tests {
             for index in 0..100_000 {
                 router.unregister_routes(&format!("w{index}"));
             }
-            assert!(lock_routes(router.workload_to_host.lock()).is_empty());
+            assert!(router.is_empty());
             eprintln!(
                 "replicas={replicas}: register={registered:?}, register+remove={:?}",
                 began.elapsed()
             );
+        }
+    }
+
+    /// A writer waits only for writers on its own hostname's shard. With the
+    /// locks a writer of `w1.scale.test` holds mid-edit taken, a register on
+    /// `w2.scale.test` (another shard) finishes, and a register on
+    /// `w1.scale.test` waits inside its update until those locks are released.
+    #[test]
+    fn a_writer_waits_only_for_writers_on_its_own_shard() {
+        use std::sync::mpsc::{self, TryRecvError};
+        use std::time::{Duration, Instant};
+
+        assert_ne!(shard_index("w1.scale.test"), shard_index("w2.scale.test"));
+        assert_ne!(shard_index("held"), shard_index("free"));
+        assert_ne!(shard_index("held"), shard_index("other"));
+        let router = Arc::new(DynamicRouter::default());
+        let register = |workload_id: &'static str, host: &'static str| {
+            let router = Arc::clone(&router);
+            let (done, finished) = mpsc::channel();
+            // Not a scoped thread: a register that never returns must fail
+            // this test, not hang it at the join.
+            std::thread::spawn(move || {
+                router.register_routes(workload_id, &[IngressRoute::ingress(host)]);
+                let _ = done.send(());
+            });
+            finished
+        };
+
+        let held = router.hold_writer_locks("held", "w1.scale.test");
+        let other_shard = register("free", "w2.scale.test").recv_timeout(Duration::from_secs(10));
+        let same_shard = register("other", "w1.scale.test");
+        // Judge only once the register is inside its update: there it holds
+        // its own map shard while it waits on `w1.scale.test`'s writer, so its
+        // record stops reading as absent.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while router.try_recorded_routes("other") == Ok(None) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        // A register that does not wait for the writer is done well within this.
+        std::thread::sleep(Duration::from_millis(50));
+        let while_held = (router.try_recorded_routes("other"), same_shard.try_recv());
+        drop(held);
+        let after_release = same_shard.recv_timeout(Duration::from_secs(10));
+
+        assert_eq!(
+            other_shard,
+            Ok(()),
+            "a register on another shard waited for the held writer"
+        );
+        assert_eq!(
+            while_held,
+            (Err(WouldBlock), Err(TryRecvError::Empty)),
+            "a register on the held writer's shard did not wait inside its update"
+        );
+        assert_eq!(after_release, Ok(()));
+        assert_eq!(
+            router
+                .select_workload("w2.scale.test", "/", RouteScope::Ingress)
+                .unwrap(),
+            "free"
+        );
+        assert_eq!(
+            router
+                .select_workload("w1.scale.test", "/", RouteScope::Ingress)
+                .unwrap(),
+            "other"
+        );
+    }
+
+    /// A workload's record and its routes change together: an unregister that
+    /// waits on the first hostname shard it edits still holds the workload's
+    /// map shard, so no one can see the record gone while its routes still
+    /// serve it, or register the workload again in between.
+    #[test]
+    fn a_workloads_record_and_routes_change_together() {
+        use std::time::{Duration, Instant};
+
+        let routes: Vec<_> = (0..8)
+            .map(|i| IngressRoute::ingress(format!("r{i}.race.test")))
+            .collect();
+        // `edit_shards` edits shards in index order, so the lowest is first.
+        let first = routes
+            .iter()
+            .min_by_key(|route| shard_index(&route.host))
+            .unwrap();
+        let router = Arc::new(DynamicRouter::default());
+        router.register_routes("w", &routes);
+
+        let writer = router.hold_route_writer(&first.host);
+        let (done, unregistered) = std::sync::mpsc::channel();
+        {
+            let router = Arc::clone(&router);
+            // Not joined: an unregister that never returns must fail this
+            // test, not hang it.
+            std::thread::spawn(move || {
+                router.unregister_routes("w");
+                let _ = done.send(());
+            });
+        }
+        // Wait for the unregister to take the map shard (or, in a design that
+        // releases it early, to drop the record).
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while matches!(router.try_recorded_routes("w"), Ok(Some(_))) && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        // Give a design that frees the map shard before its shard edits the
+        // time to do so; the right one keeps it until `writer` is dropped.
+        std::thread::sleep(Duration::from_millis(50));
+        let mid_edit = router.try_recorded_routes("w");
+        drop(writer);
+        let finished = unregistered.recv_timeout(Duration::from_secs(10));
+
+        assert_eq!(
+            mid_edit,
+            Err(WouldBlock),
+            "the workload map shard was free while its unregister was mid-edit"
+        );
+        assert_eq!(finished, Ok(()), "the unregister never finished");
+        assert!(router.is_empty());
+    }
+
+    /// Writers on one hostname's shard take turns: none of 4000 replicas
+    /// registered at once from 8 threads is lost to another writer's store.
+    #[test]
+    fn concurrent_registers_on_one_hostname_lose_no_replica() {
+        let router = DynamicRouter::default();
+        let route = IngressRoute::ingress("shared.race.test");
+        std::thread::scope(|scope| {
+            for thread in 0..8 {
+                let (router, route) = (&router, &route);
+                scope.spawn(move || {
+                    for index in 0..500 {
+                        router.register_routes(
+                            &format!("t{thread}-{index}"),
+                            std::slice::from_ref(route),
+                        );
+                    }
+                });
+            }
+        });
+        let buckets = router.host_buckets("shared.race.test").unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].workloads.len(), 4000);
+    }
+
+    /// A register and an unregister of one workload that overlap, as when a
+    /// service restart races a stop, leave the workload map and the shards
+    /// agreeing: every route serves the workload exactly when the map still
+    /// records it.
+    #[test]
+    fn racing_register_and_unregister_of_one_workload_agree() {
+        let routes: Vec<_> = (0..8)
+            .map(|i| IngressRoute::ingress(format!("r{i}.race.test")))
+            .collect();
+        for _ in 0..500 {
+            let router = DynamicRouter::default();
+            router.register_routes("w", &routes);
+            let start = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    start.wait();
+                    router.unregister_routes("w");
+                });
+                scope.spawn(|| {
+                    start.wait();
+                    router.register_routes("w", &routes);
+                });
+            });
+            let recorded = router.recorded_routes("w").is_some();
+            for route in &routes {
+                assert_eq!(
+                    router
+                        .select_workload(&route.host, "/", RouteScope::Ingress)
+                        .is_ok(),
+                    recorded,
+                    "{} disagrees with the workload map",
+                    route.host
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "prints route write throughput by thread count; run with --ignored --nocapture"]
+    fn routing_write_scaling_across_threads() {
+        const REGISTERS: usize = 100_000;
+        for replicas in [false, true] {
+            for threads in [1, 2, 4, 8] {
+                let router = DynamicRouter::default();
+                let began = std::time::Instant::now();
+                std::thread::scope(|scope| {
+                    for thread in 0..threads {
+                        let router = &router;
+                        scope.spawn(move || {
+                            for index in 0..REGISTERS / threads {
+                                let host = if replicas {
+                                    "shared.scale.test".to_string()
+                                } else {
+                                    format!("t{thread}-w{index}.scale.test")
+                                };
+                                router.register_routes(
+                                    &format!("t{thread}-w{index}"),
+                                    &[IngressRoute::ingress(host)],
+                                );
+                            }
+                        });
+                    }
+                });
+                let rate = REGISTERS as f64 / began.elapsed().as_secs_f64();
+                eprintln!("replicas={replicas} threads={threads}: {rate:.0} registers/s");
+
+                // CI runs ignored tests, so check that no registration was lost.
+                let recorded: usize = router
+                    .workload_to_host
+                    .iter()
+                    .map(|shard| lock_routes(shard.0.lock()).len())
+                    .sum();
+                let routed: usize = if replicas {
+                    router
+                        .host_buckets("shared.scale.test")
+                        .map_or(0, |buckets| buckets.iter().map(|b| b.workloads.len()).sum())
+                } else {
+                    router.hosts.iter().map(|shard| shard.0.load().len()).sum()
+                };
+                assert_eq!(recorded, REGISTERS, "a registration left no record");
+                assert_eq!(routed, REGISTERS, "a registration left no route");
+            }
         }
     }
 
