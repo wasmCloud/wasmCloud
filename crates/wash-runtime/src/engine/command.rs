@@ -125,17 +125,29 @@ impl ResolvedWorkload {
             cli.stderr(stderr);
         }
 
-        let mut store = self.new_store(component_id).await?;
+        // A core start function can call wasi:cli/exit while the component
+        // or one of its linked siblings is being instantiated, so building
+        // and instantiating the store can end the command just like run.
+        let mut store = match self.new_store(component_id).await {
+            Ok(store) => store,
+            Err(error) => return setup_failure(error),
+        };
         // Only replace CLI state; keep the resolved filesystem and network
         // contexts and their retained directory handles intact.
         *store.data_mut().active_ctx.ctx.cli() = std::mem::take(cli.build().cli());
         let result = if p3 {
-            let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
+            let command = match wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
                 .instantiate_async(&mut store)
                 .await
-                .map_err(|e| {
-                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
-                })?;
+            {
+                Ok(command) => command,
+                Err(e) => {
+                    return setup_failure(
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                            .into(),
+                    );
+                }
+            };
             store
                 .run_concurrent(async move |accessor| {
                     command.wasi_cli_run().call_run(accessor).await
@@ -143,12 +155,18 @@ impl ResolvedWorkload {
                 .await
                 .and_then(|result| result)
         } else {
-            let command = wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
+            let command = match wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
                 .instantiate_async(&mut store)
                 .await
-                .map_err(|e| {
-                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
-                })?;
+            {
+                Ok(command) => command,
+                Err(e) => {
+                    return setup_failure(
+                        crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
+                            .into(),
+                    );
+                }
+            };
             command.wasi_cli_run().call_run(&mut store).await
         };
         match result {
@@ -160,4 +178,20 @@ impl ResolvedWorkload {
             },
         }
     }
+}
+
+/// Classify a failure to build or instantiate a command's store.
+///
+/// An exit there is a normal outcome and a guest trap is a command trap, as
+/// they are from run. Anything else, such as pool exhaustion or a run export
+/// of the wrong type, is the host failing to set the command up, so it is
+/// returned as it is rather than reported as a trap.
+fn setup_failure(error: anyhow::Error) -> anyhow::Result<CommandOutcome> {
+    if let Some(exit) = error.downcast_ref::<wasmtime_wasi::I32Exit>() {
+        return Ok(CommandOutcome { exit_code: exit.0 });
+    }
+    if error.is::<wasmtime::Trap>() {
+        return Err(error.context("command trapped"));
+    }
+    Err(error)
 }
