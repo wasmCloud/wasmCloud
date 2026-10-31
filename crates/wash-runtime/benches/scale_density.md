@@ -23,6 +23,13 @@ runs append `-count` or `-growth` to the label, so their results publish as
 separate series.
 `WASH_SCALE_GUEST_MEMORY_MODE` takes a list, and `scripts/bench/run-bench.sh`
 runs `enforce,growth`, so CI publishes both series.
+`WASH_SCALE_MEMORY_RESERVATION` takes a list too, and `run-bench.sh` runs
+`default,1GiB,256MiB,64MiB`:
+
+- `default` runs every flavour and mode at wasmtime's layout.
+- Each reduced reservation runs warm only, in the first mode, as
+  `warm-layout<reservation>+<guard>`: scale-to-zero holds no memories.
+- A reduced reservation moves an isolation boundary; see `THREAT_MODEL.md`.
 
 - Count mode measures guest bytes,
   but does not treat the guest budget as a binding limit.

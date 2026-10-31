@@ -44,7 +44,7 @@
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
 //! | `WASH_SCALE_GUEST_MEMORY_MODE` | `enforce`, `count` or `growth`: how the guest budget is applied; a list (`enforce,growth`) runs each flavour in each | `enforce` |
 //! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | four times `WASH_SCALE_GUEST_MEMORY` |
-//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB; moves an isolation boundary (`THREAT_MODEL.md`) | wasmtime's default |
+//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB, or a list (`default,256MiB`; `default` is wasmtime's layout) whose reduced entries run warm only, in the first mode; moves an isolation boundary (`THREAT_MODEL.md`) | wasmtime's default |
 //! | `WASH_SCALE_MEMORY_GUARD` | guard after each guest memory, below wasmtime's 32 MiB; moves the same boundary | wasmtime's default |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
@@ -138,11 +138,30 @@ fn main() -> Result<()> {
     }
 
     let mut reports = Vec::new();
-    for &mode in &settings.guest_modes {
-        for &cpus in &settings.cpus {
-            for &flavour in &flavours {
-                eprintln!("\n== {} ==", report_label(flavour.name(), cpus, mode));
-                reports.push(run_child(flavour, cpus, mode)?);
+    for &layout in &settings.memory_layouts {
+        // A reduced layout only moves how many warm memories fit, so it runs
+        // warm, in the first mode: scale-to-zero holds no memories.
+        let (modes, flavours) = match layout {
+            Some(_) => (
+                settings.guest_modes.get(..1).unwrap_or_default(),
+                flavours
+                    .iter()
+                    .copied()
+                    .filter(|&f| f == Flavour::Warm)
+                    .collect::<Vec<_>>(),
+            ),
+            None => (&settings.guest_modes[..], flavours.clone()),
+        };
+        for &mode in modes {
+            for &cpus in &settings.cpus {
+                for &flavour in &flavours {
+                    let name = layout_label(report_label(flavour.name(), cpus, mode), layout);
+                    eprintln!(
+                        "
+== {name} =="
+                    );
+                    reports.push(run_child(flavour, cpus, mode, layout)?);
+                }
             }
         }
     }
@@ -154,17 +173,27 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Run one flavour in one guest memory mode in a fresh copy of this binary,
+/// Run one flavour in one guest memory mode and layout in a fresh copy of this binary,
 /// and read back its report.
-fn run_child(flavour: Flavour, cpus: Option<usize>, mode: GuestMemoryMode) -> Result<Report> {
-    let name = report_label(flavour.name(), cpus, mode);
+fn run_child(
+    flavour: Flavour,
+    cpus: Option<usize>,
+    mode: GuestMemoryMode,
+    layout: Option<host_memory::MemoryLayout>,
+) -> Result<Report> {
+    let name = layout_label(report_label(flavour.name(), cpus, mode), layout);
     let report = tempfile::NamedTempFile::new()?;
     let mut child = std::process::Command::new(std::env::current_exe()?);
     child
         .env(CHILD_FLAVOUR, flavour.name())
         .env(CHILD_REPORT, report.path())
-        // One mode per child, in place of the list the parent was given.
-        .env(GUEST_MEMORY_MODE, mode.as_str());
+        // One mode and one layout per child, in place of the lists the
+        // parent was given.
+        .env(GUEST_MEMORY_MODE, mode.as_str())
+        .env(
+            MEMORY_RESERVATION,
+            layout.map_or_else(|| "default".into(), |l| l.reservation.to_string()),
+        );
     if let Some(cpus) = cpus {
         child.env(CHILD_CPUS, cpus.to_string());
     }
@@ -850,6 +879,41 @@ mod tests {
         );
         assert_eq!(both.guest_mode, GuestMemoryMode::Enforce);
         assert!(settings(Some("enforce,sideways")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_list_of_memory_reservations_runs_each_in_turn() -> Result<()> {
+        let settings = |reservations: Option<&str>, guard: Option<&str>| {
+            Settings::from_values(|key| match key {
+                "WASH_SCALE_MEMORY_LIMIT" | "WASH_SCALE_GUEST_MEMORY" => Some("1GiB".into()),
+                "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
+                MEMORY_RESERVATION => reservations.map(Into::into),
+                "WASH_SCALE_MEMORY_GUARD" => guard.map(Into::into),
+                _ => None,
+            })
+        };
+        assert_eq!(settings(None, None)?.memory_layouts, [None]);
+        let sweep = settings(Some("default, 256MiB, default"), Some("64KiB"))?;
+        assert_eq!(
+            sweep.memory_layouts,
+            [
+                None,
+                Some(host_memory::MemoryLayout {
+                    reservation: 256 << 20,
+                    guard: 64 << 10,
+                })
+            ],
+            "`default` ignores the guard, and a repeat runs once"
+        );
+        assert_eq!(sweep.memory_layout, None);
+        let one = settings(Some("268435456"), None)?;
+        assert_eq!(
+            one.memory_layout.map(|l| l.reservation),
+            Some(256 << 20),
+            "a child is told its reservation in bytes"
+        );
+        assert!(settings(Some("default,lots"), None).is_err());
         Ok(())
     }
 
