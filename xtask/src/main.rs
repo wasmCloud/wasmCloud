@@ -1,3 +1,5 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+#![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 //! Workspace task runner (the cargo-xtask pattern).
 //!
 //! Run via the `cargo xtask <task>` alias defined in `/.cargo/config.toml`.
@@ -13,6 +15,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
+mod coverage;
 mod e2e_images;
 mod fixtures;
 mod protos;
@@ -28,6 +31,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Task {
+    /// Collect, report, and check native Rust coverage (or run one stage).
+    Coverage {
+        #[command(subcommand)]
+        task: Option<coverage::Task>,
+    },
     /// Build the wash-runtime wasm test fixtures into
     /// `crates/wash-runtime/tests/wasm/`.
     BuildFixtures {
@@ -54,6 +62,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let workspace = workspace_dir().context("failed to locate workspace root")?;
     match cli.task {
+        Task::Coverage { task } => coverage::run(&workspace, task),
         Task::BuildFixtures { names } => build_fixtures(&workspace, &names),
         Task::E2eImages => e2e_images::run(&workspace),
         Task::GenerateProtos => protos::run(&workspace),

@@ -53,6 +53,7 @@ pub(crate) fn note_guest_fault(data: &SharedCtx, err: &wasmtime::Error) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

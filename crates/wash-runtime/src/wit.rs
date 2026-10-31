@@ -483,6 +483,7 @@ impl From<String> for WitInterface {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
 
     /// `WitInterface` is `?`-logged on several bind paths, and after binding

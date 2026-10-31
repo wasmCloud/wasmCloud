@@ -1076,6 +1076,7 @@ pub(crate) fn build_metric_exporter() -> anyhow::Result<opentelemetry_otlp::Metr
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

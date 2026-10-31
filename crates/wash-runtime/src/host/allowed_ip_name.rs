@@ -298,6 +298,7 @@ fn validate_domain(domain: &str) -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

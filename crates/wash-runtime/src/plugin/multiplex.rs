@@ -433,12 +433,14 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
 
     /// Test-only view of the current pool size.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     async fn pool_len(&self) -> usize {
         self.pool.lock().await.len()
     }
 
     /// Test-only count of pooled connections for one backend type.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     async fn pool_count_for(&self, backend_type: &str) -> usize {
         let prefix = format!("{backend_type}\u{0}");
         self.pool
@@ -520,6 +522,7 @@ fn enforce_limit<Id>(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;

@@ -1,3 +1,5 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+#![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 // Increase the default recursion limit
 #![recursion_limit = "256"]
 
@@ -408,6 +410,7 @@ fn find_project_root() -> PathBuf {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use wash_runtime::observability::MeterKind;

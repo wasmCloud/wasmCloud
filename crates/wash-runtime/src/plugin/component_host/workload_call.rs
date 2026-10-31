@@ -1148,6 +1148,7 @@ pub(super) fn install_host_workload(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

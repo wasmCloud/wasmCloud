@@ -49,6 +49,7 @@ pub(crate) mod multiplexed;
 pub(crate) mod multiplexed_async;
 pub(crate) mod nats;
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod pool_share_tests;
 
 use std::sync::Arc;
@@ -906,6 +907,7 @@ impl ComponentGates {
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn bindings(&self, identity: &AdmissionIdentity) -> usize {
         self.inner
             .lock()
@@ -1561,6 +1563,7 @@ impl Admission {
 
     /// How long this gate waits before shedding.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn wait(&self) -> Duration {
         self.wait
     }
@@ -1823,6 +1826,7 @@ pub(crate) fn parse_admission_group(raw: Option<&str>) -> Option<&str> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::{
         MsgError, declares_async_messaging, exports_messaging_handler, parse_admission_group,

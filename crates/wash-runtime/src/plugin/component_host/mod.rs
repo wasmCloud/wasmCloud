@@ -2150,6 +2150,7 @@ fn introspect_interfaces<'a>(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::collections::HashSet;
     use std::sync::Mutex;

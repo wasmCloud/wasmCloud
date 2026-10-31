@@ -4,10 +4,11 @@ name: tools-bump
 # release. The pinned versions live in .github/tool-versions.env:
 #   - wasm-tools (bytecodealliance/wasm-tools), consumed by wit.yml
 #   - protoc (protocolbuffers/protobuf), consumed by the setup-protoc action
+#   - cargo-llvm-cov (taiki-e/cargo-llvm-cov), consumed by coverage.yml
 #
 # Why this exists: Dependabot's `github-actions` ecosystem tracks `uses:`
 # refs (the action SHA), not arbitrary `with:` inputs or versions fetched
-# at runtime. Both tools are installed by version string rather than a
+# at runtime. These tools are installed by version string rather than a
 # pinned `uses:`, so they're invisible to Dependabot and we maintain them
 # with a small custom updater.
 #
@@ -68,7 +69,7 @@ jobs:
             dependencies
             github-actions
           body: |
-            Bumps the CI pipeline's pinned tool versions (wasm-tools, protoc) to upstream's latest stable releases.
+            Bumps the CI pipeline's pinned tool versions (wasm-tools, protoc, cargo-llvm-cov) to upstream's latest stable releases.
 
             ${{ steps.update.outputs.body }}
 

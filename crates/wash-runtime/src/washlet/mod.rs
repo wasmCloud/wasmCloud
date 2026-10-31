@@ -2185,6 +2185,7 @@ impl From<types::v2::ImagePullPolicy> for crate::oci::OciPullPolicy {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
 
     use super::*;

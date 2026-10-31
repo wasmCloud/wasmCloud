@@ -138,6 +138,7 @@ pub fn rewrite_sentinel(addr: SocketAddr) -> SocketAddr {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

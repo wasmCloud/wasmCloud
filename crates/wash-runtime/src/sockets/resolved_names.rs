@@ -138,6 +138,7 @@ impl ResolvedNames {
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn permits(&self, policy: &[AllowedHost], addr: SocketAddr) -> bool {
         self.permitted_until(policy, addr).is_some()
     }
@@ -164,6 +165,7 @@ impl ResolvedNames {
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn permits_at(&self, policy: &[AllowedHost], addr: SocketAddr, now: Instant) -> bool {
         self.permitted_until_at(policy, addr, now).is_some()
     }
@@ -193,6 +195,7 @@ impl ResolvedNames {
     }
 
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn len(&self) -> (usize, usize) {
         let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(inner.by_newest.len(), inner.names.len());
@@ -414,6 +417,7 @@ pub(crate) fn lookup_blocking(host: &url::Host) -> std::io::Result<Lookup> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

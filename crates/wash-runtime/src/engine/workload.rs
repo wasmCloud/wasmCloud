@@ -4511,6 +4511,7 @@ impl std::fmt::Display for IdFlavor {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

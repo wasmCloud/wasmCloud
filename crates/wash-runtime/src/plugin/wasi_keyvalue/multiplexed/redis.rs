@@ -258,6 +258,7 @@ impl BackendProvider<KvId> for RedisProvider {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
