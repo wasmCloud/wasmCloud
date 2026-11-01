@@ -305,6 +305,7 @@ fn template(engine: &crate::engine::Engine, id: &str) -> ComponentCtxTemplate {
         loopback: Arc::new(std::sync::Mutex::new(loopback::Network::default())),
         socket_policy: Arc::new(crate::sockets::policy::SocketPolicy::default()),
         guest_memory: Arc::clone(engine.guest_memory()),
+        hostcall_fuel: engine.hostcall_fuel(),
         trap_hint_logged: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         #[cfg(feature = "wasi-tls")]
         tls_provider: None,
@@ -610,5 +611,36 @@ async fn ephemeral_store_recipe_names_missing_components() -> anyhow::Result<()>
     assert_eq!(store.data().active_ctx.component_id.as_ref(), "ghost");
     assert!(store.data().contexts.contains_key("missing"));
     assert!(store.data().exporter_instances.contains_key("missing"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn linked_store_applies_the_engine_hostcall_fuel() -> anyhow::Result<()> {
+    let default = crate::engine::Engine::builder()
+        .with_pooling_allocator(false)
+        .build()?;
+    let configured = crate::engine::Engine::builder()
+        .with_pooling_allocator(false)
+        .with_hostcall_fuel(4096)
+        .build()?;
+    for (engine, expected) in [
+        (
+            &default,
+            wasmtime::Store::new(default.inner(), ()).hostcall_fuel(),
+        ),
+        (&configured, 4096),
+    ] {
+        let store = new_store_from_templates(
+            engine.inner(),
+            engine.stream_payloads(),
+            &crate::host::HostRef::detached(),
+            &template(engine, "caller"),
+            &[],
+            &[],
+            false,
+        )
+        .await?;
+        assert_eq!(store.hostcall_fuel(), expected);
+    }
     Ok(())
 }

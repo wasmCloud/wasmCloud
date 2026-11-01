@@ -1376,6 +1376,16 @@ pub struct DevConfig {
     /// tail-call.
     #[serde(default)]
     pub wasm_proposals: Vec<String>,
+
+    /// The most bytes a guest may transfer to the host in one call
+    /// (e.g. `256MiB`).
+    ///
+    /// This is wasmtime's [`Store::set_hostcall_fuel`]. Unset, it is
+    /// wasmtime's default.
+    ///
+    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostcall_fuel: Option<String>,
 }
 
 impl DevConfig {
@@ -1554,6 +1564,22 @@ impl DevConfig {
         for proposal in &self.wasm_proposals {
             if let Err(err) = proposal.parse::<wash_runtime::engine::WasmProposal>() {
                 errors.push(format!("dev.wasm_proposals: {err}"));
+            }
+        }
+
+        if let Some(raw) = self
+            .hostcall_fuel
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+        {
+            match wash_runtime::engine::host_memory::parse_bytes(raw) {
+                Err(err) => errors.push(format!("dev.hostcall_fuel: {err}")),
+                Ok(0) => errors.push("dev.hostcall_fuel must be greater than zero".to_string()),
+                Ok(bytes) if usize::try_from(bytes).is_err() => {
+                    errors.push("dev.hostcall_fuel does not fit in usize".to_string())
+                }
+                Ok(_) => {}
             }
         }
 
@@ -2234,6 +2260,23 @@ workload:
     #[test]
     fn dev_default_is_valid() {
         assert!(DevConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn dev_hostcall_fuel_is_validated() {
+        let cfg = |raw: &str| DevConfig {
+            hostcall_fuel: Some(raw.to_string()),
+            ..Default::default()
+        };
+        assert!(cfg("256MiB").validate().is_ok());
+        assert!(cfg("  ").validate().is_ok());
+        let err = cfg("0").validate().unwrap_err().to_string();
+        assert!(
+            err.contains("dev.hostcall_fuel must be greater than zero"),
+            "{err}"
+        );
+        let err = cfg("abc").validate().unwrap_err().to_string();
+        assert!(err.contains("dev.hostcall_fuel"), "{err}");
     }
 
     #[test]

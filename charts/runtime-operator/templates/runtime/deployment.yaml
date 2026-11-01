@@ -31,7 +31,7 @@
 {{- /* A host group's own `resources` replaces the chart-wide block wholesale
        (no merge), and carries the host knobs `defaultHeapMemory`,
        `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`,
-       `guestMemoryMode` and `maxConcurrentStarts` alongside
+       `guestMemoryMode`, `maxConcurrentStarts` and `hostcallFuel` alongside
        the Kubernetes requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- /* Probes, unlike `resources`, merge per field: a group naming one timing
@@ -272,6 +272,10 @@ spec:
             - name: WASH_MAX_CONCURRENT_STARTS
               value: "{{ $starts }}"
             {{- end }}
+            {{- with $resources.hostcallFuel }}
+            - name: WASH_HOSTCALL_FUEL
+              value: "{{ . }}"
+            {{- end }}
             {{- with $top.Values.runtime.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -484,7 +488,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with omit $resources "defaultHeapMemory" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" }}
+          {{- with omit $resources "defaultHeapMemory" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" "hostcallFuel" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

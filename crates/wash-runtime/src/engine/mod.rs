@@ -398,6 +398,11 @@ pub struct Engine {
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
     /// Every store this engine builds carries a limiter drawing on it.
     pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
+    /// The most bytes a guest may transfer to the host in one call
+    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
+    ///
+    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    pub(crate) hostcall_fuel: Option<usize>,
     /// The whole process's footprint against `max_process_memory`, sampled on
     /// its own thread. The guest budget refuses growth while it is over.
     /// `None` when the guard was switched off.
@@ -607,6 +612,14 @@ impl Engine {
     /// holding and what the budget has refused.
     pub fn guest_memory(&self) -> &Arc<guest_memory::GuestMemoryBudget> {
         &self.guest_memory
+    }
+
+    /// The most bytes a guest may transfer to the host in one call
+    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
+    ///
+    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    pub fn hostcall_fuel(&self) -> Option<usize> {
+        self.hostcall_fuel
     }
 
     /// The process's memory footprint against `max_process_memory`, for an
@@ -922,6 +935,7 @@ impl Engine {
         service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        service.metadata.hostcall_fuel = self.hostcall_fuel;
         service.metadata.compiled = compiled;
 
         let world = service.world();
@@ -1104,6 +1118,7 @@ impl Engine {
         workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
+        workload_component.metadata.hostcall_fuel = self.hostcall_fuel;
         workload_component.metadata.compiled = compiled;
         // From the source alone. A component wasmtime cannot cost
         // (`resources_required` is `None`) imports a core module, which no
@@ -1329,6 +1344,7 @@ pub struct EngineBuilder {
     max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     max_initial_guest_memory_bytes: Option<u64>,
+    hostcall_fuel: Option<usize>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1472,6 +1488,16 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_max_initial_guest_memory_bytes(mut self, bytes: u64) -> Self {
         self.max_initial_guest_memory_bytes = Some(bytes);
+        self
+    }
+
+    /// The most bytes a guest may transfer to the host in one call
+    /// (wasmtime's [`Store::set_hostcall_fuel`]). Unset, it is wasmtime's default.
+    ///
+    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    #[must_use]
+    pub fn with_hostcall_fuel(mut self, fuel: usize) -> Self {
+        self.hostcall_fuel = Some(fuel);
         self
     }
 
@@ -2075,6 +2101,7 @@ impl EngineBuilder {
                 }
                 .into_metered()
             },
+            hostcall_fuel: self.hostcall_fuel,
             process_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,

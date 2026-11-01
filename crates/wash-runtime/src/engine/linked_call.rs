@@ -86,6 +86,11 @@ pub(crate) struct ComponentCtxTemplate {
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// The host-wide guest memory budget this component's stores draw on.
     guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// The most bytes a guest may transfer to the host in one call
+    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
+    ///
+    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    hostcall_fuel: Option<usize>,
     /// The workload deploy's trap-hint flag.
     trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(feature = "wasi-tls")]
@@ -103,6 +108,7 @@ impl ComponentCtxTemplate {
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
             guest_memory: metadata.guest_memory.clone(),
+            hostcall_fuel: metadata.hostcall_fuel,
             trap_hint_logged: metadata.trap_hint_logged.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
@@ -407,6 +413,9 @@ pub(crate) async fn new_store_from_templates(
     // means a supervisor restart, which beats carrying a wedged call forever.
     arm_epoch_deadline(&mut store, AbandonedCallPolicy::Trap);
     crate::engine::guest_memory::install_memory_limiter(&mut store);
+    if let Some(fuel) = active.hostcall_fuel {
+        store.set_hostcall_fuel(fuel);
+    }
 
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {

@@ -104,6 +104,18 @@ impl CliCommand for DevCommand {
                 .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
             engine_builder = engine_builder.with_wasm_proposal(proposal);
         }
+        if let Some(raw) = dev_config
+            .hostcall_fuel
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+        {
+            let fuel = wash_runtime::engine::host_memory::parse_bytes(raw)
+                .map_err(|e| anyhow::anyhow!("invalid dev.hostcall_fuel: {e}"))?;
+            anyhow::ensure!(fuel > 0, "dev.hostcall_fuel must be greater than zero");
+            let fuel = usize::try_from(fuel).context("dev.hostcall_fuel does not fit in usize")?;
+            engine_builder = engine_builder.with_hostcall_fuel(fuel);
+        }
         // Raised before any ceiling is computed from it: every allowance below
         // is a share of the soft descriptor limit. `wash dev` applies it for
         // the same reason `wash host` does — both own their process.
