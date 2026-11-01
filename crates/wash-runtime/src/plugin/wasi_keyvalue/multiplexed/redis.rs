@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use redis::AsyncCommands;
 
 use crate::plugin::PluginEgressPolicy;
 use crate::plugin::multiplex::BackendProvider;
+use crate::plugin::wasi_keyvalue::redis::{Connection, ConnectionSettings};
 
 use super::{KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError};
 
@@ -19,10 +19,11 @@ use super::{KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError};
 /// label selects the redis URL (and DB, via the url) — or an optional,
 /// operator-set [`prefix`](Self::prefix). The `open(identifier)` bucket name does
 /// NOT namespace keys, so a guest can open an externally-created keyspace simply
-/// by pointing its label at the right redis. Holds a shared multiplexed
-/// connection (pooled per url+prefix by the provider).
+/// by pointing its label at the right redis. Holds a shared, self-healing
+/// connection (pooled per url, prefix and connection settings by the provider):
+/// see `wasi_keyvalue::redis::Connection`.
 pub struct RedisBackend {
-    conn: redis::aio::MultiplexedConnection,
+    conn: Connection,
     /// Optional operator-configured key prefix, default none.
     /// Lets a deployment namespace within a shared DB or match an external key
     /// convention. It is operator-set, not guest-controlled, so a guest cannot
@@ -65,27 +66,29 @@ impl KvBackend for RedisBackend {
     }
 
     async fn get(&self, _bucket: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        let mut conn = self.conn.clone();
-        conn.get::<_, Option<Vec<u8>>>(self.key(key))
+        self.conn
+            .query_read(redis::cmd("GET").arg(self.key(key)))
             .await
             .map_err(Self::err)
     }
 
     async fn set(&self, _bucket: &str, key: &str, value: Vec<u8>) -> Result<(), StoreError> {
-        let mut conn = self.conn.clone();
-        conn.set::<_, _, ()>(self.key(key), value)
+        self.conn
+            .query(redis::cmd("SET").arg(self.key(key)).arg(value))
             .await
             .map_err(Self::err)
     }
 
     async fn delete(&self, _bucket: &str, key: &str) -> Result<(), StoreError> {
-        let mut conn = self.conn.clone();
-        conn.del::<_, ()>(self.key(key)).await.map_err(Self::err)
+        self.conn
+            .query(redis::cmd("DEL").arg(self.key(key)))
+            .await
+            .map_err(Self::err)
     }
 
     async fn exists(&self, _bucket: &str, key: &str) -> Result<bool, StoreError> {
-        let mut conn = self.conn.clone();
-        conn.exists::<_, bool>(self.key(key))
+        self.conn
+            .query_read(redis::cmd("EXISTS").arg(self.key(key)))
             .await
             .map_err(Self::err)
     }
@@ -95,20 +98,18 @@ impl KvBackend for RedisBackend {
         _bucket: &str,
         cursor: Option<u64>,
     ) -> Result<KeyResponse, StoreError> {
-        let mut conn = self.conn.clone();
         // SCAN the connection's keyspace under the (escaped) operator prefix.
         // With no prefix the pattern is `*`. The whole DB follows
         // flat-keyspace semantics; the guest's `list-keys` prefix is applied
         // host-side, so it never reaches this pattern.
         let prefix = self.prefix.as_deref().unwrap_or("");
         let pattern = format!("{}*", Self::glob_escape(prefix));
-        let (next, raw): (u64, Vec<Vec<u8>>) = redis::cmd("SCAN")
-            .arg(cursor.unwrap_or(0))
-            .arg("MATCH")
-            .arg(&pattern)
-            .arg("COUNT")
-            .arg(LIST_KEYS_BATCH_SIZE)
-            .query_async(&mut conn)
+        // The cursor the guest sees carries the redis cursor and the
+        // generation of the connection that issued it, and is refused after
+        // a reconnect (see `Connection::scan_page`).
+        let (next, raw): (u64, Vec<Vec<u8>>) = self
+            .conn
+            .scan_page::<Vec<u8>>(cursor.unwrap_or(0), &pattern, LIST_KEYS_BATCH_SIZE)
             .await
             .map_err(Self::err)?;
         let strip = prefix.as_bytes();
@@ -127,9 +128,13 @@ impl KvBackend for RedisBackend {
 
     async fn increment(&self, _bucket: &str, key: &str, delta: i64) -> Result<i64, StoreError> {
         // INCRBY is a native, signed, atomic increment (negative delta
-        // decrements); it errors on overflow, which we propagate.
-        let mut conn = self.conn.clone();
-        conn.incr(self.key(key), delta).await.map_err(Self::err)
+        // decrements); it errors on overflow, which we propagate. It is sent
+        // once: if the connection drops under it, it may already have run, so
+        // a retry could add twice. The error surfaces instead.
+        self.conn
+            .query(redis::cmd("INCRBY").arg(self.key(key)).arg(delta))
+            .await
+            .map_err(Self::err)
     }
 
     async fn get_many(
@@ -140,14 +145,13 @@ impl KvBackend for RedisBackend {
         if keys.is_empty() {
             return Ok(vec![]);
         }
-        let mut conn = self.conn.clone();
         let redis_keys: Vec<String> = keys.iter().map(|k| self.key(k)).collect();
         // Explicit MGET: the `mget` helper downgrades to `GET` for a single key,
         // and an absent single key then returns `nil`, which decodes to an
         // *empty* vec. MGET always returns one slot per key (nil → `None`).
-        let values: Vec<Option<Vec<u8>>> = redis::cmd("MGET")
-            .arg(redis_keys.as_slice())
-            .query_async(&mut conn)
+        let values: Vec<Option<Vec<u8>>> = self
+            .conn
+            .query_read(redis::cmd("MGET").arg(redis_keys.as_slice()))
             .await
             .map_err(Self::err)?;
         Ok(keys
@@ -165,12 +169,12 @@ impl KvBackend for RedisBackend {
         if key_values.is_empty() {
             return Ok(());
         }
-        let mut conn = self.conn.clone();
         let pairs: Vec<(String, Vec<u8>)> = key_values
             .into_iter()
             .map(|(k, v)| (self.key(&k), v))
             .collect();
-        conn.mset::<_, _, ()>(pairs.as_slice())
+        self.conn
+            .query(redis::cmd("MSET").arg(pairs.as_slice()))
             .await
             .map_err(Self::err)
     }
@@ -179,9 +183,9 @@ impl KvBackend for RedisBackend {
         if keys.is_empty() {
             return Ok(());
         }
-        let mut conn = self.conn.clone();
         let redis_keys: Vec<String> = keys.iter().map(|k| self.key(k)).collect();
-        conn.del::<_, ()>(redis_keys.as_slice())
+        self.conn
+            .query(redis::cmd("DEL").arg(redis_keys.as_slice()))
             .await
             .map_err(Self::err)
     }
@@ -192,9 +196,11 @@ impl KvBackend for RedisBackend {
         key: &str,
         value: Vec<u8>,
     ) -> Result<bool, StoreError> {
-        // SETNX is an atomic insert-if-absent.
-        let mut conn = self.conn.clone();
-        conn.set_nx::<_, _, bool>(self.key(key), value)
+        // SETNX is an atomic insert-if-absent. Sent once, like INCRBY: if the
+        // first attempt ran before the connection dropped, a retry would
+        // report the key as already present.
+        self.conn
+            .query(redis::cmd("SETNX").arg(self.key(key)).arg(value))
             .await
             .map_err(Self::err)
     }
@@ -203,6 +209,9 @@ impl KvBackend for RedisBackend {
 /// Provider for [`RedisBackend`], selected by `config.backend = "redis"`.
 /// Requires `config.url` (e.g. `redis://127.0.0.1:6379`); optional `config.prefix`
 /// namespaces keys within the connection's keyspace (default none → flat).
+/// The optional `backend-reconnect-num-retries`, `backend-reconnect-max-delay-ms`,
+/// `backend-connection-timeout-ms` and `backend-response-timeout-ms` tune the
+/// connection (see `ConnectionSettings`). All of these are operator-owned.
 #[derive(Default)]
 pub struct RedisProvider;
 
@@ -211,9 +220,16 @@ impl BackendProvider<KvId> for RedisProvider {
     fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
         // Pool by url AND prefix: two interfaces with the same url but different
         // prefixes are different logical stores and must not share an instance.
+        // The connection settings are part of the key too, so a binding with a
+        // tighter timeout never inherits another's connection. A config whose
+        // settings do not parse is not pooled; `instantiate` reports why.
         let url = config.get("url")?;
         let prefix = config.get("prefix").map(String::as_str).unwrap_or("");
-        Some(format!("{url}\u{0}{prefix}"))
+        let settings = ConnectionSettings::from_config(config).ok()?;
+        Some(format!(
+            "{url}\u{0}{prefix}\u{0}{}",
+            settings.pool_key_suffix()
+        ))
     }
     fn backend_type(&self) -> &'static str {
         "redis"
@@ -227,8 +243,8 @@ impl BackendProvider<KvId> for RedisProvider {
         let url = config
             .get("url")
             .ok_or_else(|| anyhow::anyhow!("redis keyvalue backend requires a 'url' config"))?;
-        let client = redis::Client::open(url.as_str())?;
-        let conn = client.get_multiplexed_async_connection().await?;
+        let settings = ConnectionSettings::from_config(config)?;
+        let conn = Connection::connect(redis::Client::open(url.as_str())?, settings).await?;
         let prefix = config.get("prefix").filter(|p| !p.is_empty()).cloned();
         Ok(Arc::new(RedisBackend { conn, prefix }))
     }
@@ -280,5 +296,116 @@ mod tests {
         assert!(format!("{err:#}").contains("evil.example"), "{err:#}");
         assert!(check("redis://cache.internal:6380", &policy).is_err());
         assert!(check("redis+unix:///var/run/redis.sock", &policy).is_err());
+    }
+
+    fn cfg(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn bindings_with_different_connection_settings_do_not_share_a_connection() {
+        let base = [("url", "redis://h:6379"), ("prefix", "p")];
+        let plain = RedisProvider.pool_key(&cfg(&base)).unwrap();
+        let tight = RedisProvider
+            .pool_key(&cfg(&[
+                base[0],
+                base[1],
+                ("backend-response-timeout-ms", "50"),
+            ]))
+            .unwrap();
+        let tight_v1 = RedisProvider
+            .pool_key(&cfg(&[
+                base[0],
+                base[1],
+                ("BACKEND_RESPONSE_TIMEOUT_MS", "50"),
+            ]))
+            .unwrap();
+        assert_ne!(plain, tight);
+        assert_eq!(tight, tight_v1, "a spelling is not a different setting");
+
+        // Settings that do not parse are never pooled; instantiate says why.
+        let bad = cfg(&[base[0], ("backend-connection-timeout-ms", "soon")]);
+        assert_eq!(RedisProvider.pool_key(&bad), None);
+    }
+
+    #[tokio::test]
+    async fn invalid_connection_settings_fail_instantiate_before_connecting() {
+        // Nothing listens on the url; the refusal must come from the config.
+        let err = RedisProvider
+            .instantiate(
+                &cfg(&[
+                    ("url", "redis://127.0.0.1:1"),
+                    ("backend-reconnect-num-retries", "lots"),
+                ]),
+                None,
+            )
+            .await
+            .err()
+            .expect("an invalid setting is refused")
+            .to_string();
+        assert!(err.contains("backend-reconnect-num-retries"), "{err}");
+    }
+
+    /// A workload under `workloadConfig: deny` cannot set a connection setting,
+    /// even when the operator lists no `hostOwnedKeys`: the plugin claims them.
+    #[test]
+    fn deny_refuses_a_workload_that_sets_a_connection_setting() {
+        use crate::plugin::{HostPlugin, PluginBindingSet, WorkloadConfigPolicy};
+
+        let plugins: [Box<dyn HostPlugin>; 2] = [
+            Box::new(crate::plugin::wasi_keyvalue::MultiplexedKeyValue::new()),
+            Box::new(crate::plugin::wasi_keyvalue::MultiplexedAsyncKeyValue::new()),
+        ];
+        for plugin in plugins {
+            let set = PluginBindingSet::new(plugin.id())
+                .with_binding("cache", cfg(&[("url", "redis://cache.internal:6379")]))
+                .with_workload_config(WorkloadConfigPolicy::Deny);
+            let schema = plugin.binding_schema();
+            for key in [
+                "backend-reconnect-num-retries",
+                "BACKEND_RECONNECT_MAX_DELAY_MS",
+                "backend_connection_timeout_ms",
+                "backend-response-timeout-ms",
+            ] {
+                let err = set
+                    .resolve(
+                        "cache",
+                        &cfg(&[("backend", "redis"), (key, "1")]),
+                        &schema,
+                        crate::plugin::bindings::never_narrows(),
+                    )
+                    .unwrap_err()
+                    .to_string();
+                assert!(err.contains(key), "{}: {err}", plugin.id());
+                assert!(
+                    err.contains("belong to the operator"),
+                    "{}: {err}",
+                    plugin.id()
+                );
+            }
+
+            // The operator may still set them for the binding.
+            let operator = PluginBindingSet::new(plugin.id())
+                .with_binding(
+                    "cache",
+                    cfg(&[
+                        ("url", "redis://cache.internal:6379"),
+                        ("backend-response-timeout-ms", "250"),
+                    ]),
+                )
+                .with_workload_config(WorkloadConfigPolicy::Deny);
+            let resolved = operator
+                .resolve(
+                    "cache",
+                    &cfg(&[("backend", "redis")]),
+                    &schema,
+                    crate::plugin::bindings::never_narrows(),
+                )
+                .unwrap();
+            assert_eq!(resolved.get("backend-response-timeout-ms").unwrap(), "250");
+        }
     }
 }
