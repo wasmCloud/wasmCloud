@@ -754,10 +754,28 @@ runtime:
       #                   entry sets. The built-ins claim the keys that decide
       #                   what a binding reaches: `wasmcloud-nats` its servers,
       #                   credentials, and grants; the multiplexed keyvalue
-      #                   plugins `url`, `root`, and `prefix`, blobstore `url`
-      #                   and `root`, messaging `url`; `wasmcloud-postgres` a
+      #                   plugins `url`, `root`, and `prefix`, plus the redis
+      #                   connection settings below, blobstore `url` and
+      #                   `root`, messaging `url`; `wasmcloud-postgres` a
       #                   named import's `url`, and the databases the unnamed
       #                   import may select as a comma-separated `database`.
+      #
+      #                   Redis keyvalue connection settings (the v1 redis
+      #                   provider's names; any case, `_` or `-`), set on a
+      #                   binding's `config`:
+      #                     backend-reconnect-num-retries   redials of a
+      #                       dropped connection before the waiting call
+      #                       fails (default 3, max 1000)
+      #                     backend-reconnect-max-delay-ms  longest pause
+      #                       between redials (default 300, max 600000)
+      #                     backend-connection-timeout-ms   cap on one
+      #                       connection attempt (default 3000, 1 to 600000)
+      #                     backend-response-timeout-ms     cap on one
+      #                       command's reply (default none: a large SCAN or
+      #                       MGET can be slow, and a timed-out command still
+      #                       runs on the server; 1 to 600000)
+      #                   A binding with different settings gets its own
+      #                   connection rather than sharing a pooled one.
       #
       #                   A value on the entry's own `config` is shared by every
       #                   workload binding that label: one `root` or redis

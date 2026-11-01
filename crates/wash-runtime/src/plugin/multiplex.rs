@@ -45,14 +45,28 @@ use crate::wit::WitInterface;
 pub const BACKEND_CONFIG_KEY: &str = "backend";
 
 /// The keys that decide what a keyvalue backend reaches: its address (`url`,
-/// `root`) and the slice of a shared redis it reads (`prefix`). Each package
-/// claims only the keys its providers read; all are the operator's under
-/// `workloadConfig: deny`. `backend` stays the workload's, and an operator can
-/// lock it with `hostOwnedKeys`.
+/// `root`) and the slice of a shared redis it reads (`prefix`), plus how the
+/// redis provider holds that connection (its reconnect retries and delay, and
+/// its connect and response timeouts). Each package claims only the keys its
+/// providers read; all are the operator's under `workloadConfig: deny`.
+/// `backend` stays the workload's, and an operator can lock it with
+/// `hostOwnedKeys`.
+///
+/// The redis connection settings are the operator's because they spend host
+/// resources against an endpoint the operator approved: a workload that could
+/// raise them could keep host tasks redialing for minutes.
 ///
 /// A value on a plugin entry's own `config` is shared by every workload that
 /// binds that label; per-label `bindings` are what keep tenants apart.
-pub const KEYVALUE_HOST_OWNED_KEYS: &[&str] = &["url", "root", "prefix"];
+pub const KEYVALUE_HOST_OWNED_KEYS: &[&str] = &[
+    "url",
+    "root",
+    "prefix",
+    "backend-reconnect-num-retries",
+    "backend-reconnect-max-delay-ms",
+    "backend-connection-timeout-ms",
+    "backend-response-timeout-ms",
+];
 
 /// The blobstore providers' address keys. See [`KEYVALUE_HOST_OWNED_KEYS`].
 pub const BLOBSTORE_HOST_OWNED_KEYS: &[&str] = &["url", "root"];
