@@ -414,12 +414,13 @@ runtime:
   # remove it to leave host memory uncapped.
   #
   # `defaultHeapMemory`, `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`,
-  # `coreInstances`, `guestMemoryMode` and `maxConcurrentStarts` are host knobs
-  # rather than Kubernetes resource fields; the chart strips them out of the
-  # container's `resources` block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
-  # `WASH_MAX_MEMORIES` / `WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT` /
-  # `WASH_CORE_INSTANCES` / `WASH_GUEST_MEMORY_MODE` /
-  # `WASH_MAX_CONCURRENT_STARTS` for the host. Leaving them empty uses the
+  # `coreInstances`, `guestMemoryMode`, `maxConcurrentStarts` and `hostcallFuel`
+  # are host knobs rather than Kubernetes resource fields; the chart strips them
+  # out of the container's `resources` block and sets them as
+  # `WASH_DEFAULT_HEAP_MEMORY` / `WASH_MAX_MEMORIES` /
+  # `WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT` / `WASH_CORE_INSTANCES` /
+  # `WASH_GUEST_MEMORY_MODE` / `WASH_MAX_CONCURRENT_STARTS` /
+  # `WASH_HOSTCALL_FUEL` for the host. Leaving them empty uses the
   # host's own defaults.
   #
   # The simplest way to change host sizing for the whole release:
@@ -506,6 +507,14 @@ runtime:
     # explicitly on a host group that is requested far below the node it lands
     # on.
     maxConcurrentStarts: ""
+    # -- The most bytes a guest may transfer to the host in one call
+    # (e.g. `256MiB`).
+    #
+    # This is wasmtime's [`Store::set_hostcall_fuel`]. Unset, it is
+    # wasmtime's default.
+    #
+    # [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    hostcallFuel: ""
   # -- Probes for host containers, rendered for a host group with
   # `probes.endpoint` enabled or one that serves HTTP
   # (`hostGroups[].http.enabled`). A host group sets its own with
@@ -1054,6 +1063,7 @@ runtime:
       #   maxMemories: "200"
       #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
+      #   hostcallFuel: "256MiB"
       # -- Per-host-group probes. Merged field by field over
       # `runtime.probes`, so a group can retune one timing and inherit the
       # rest:

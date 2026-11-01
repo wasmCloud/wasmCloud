@@ -2055,6 +2055,9 @@ fn build_plugin_store(
         crate::engine::abandon::AbandonedCallPolicy::WarnThenTrap,
     );
     crate::engine::guest_memory::install_memory_limiter(&mut store);
+    if let Some(fuel) = engine.hostcall_fuel() {
+        store.set_hostcall_fuel(fuel);
+    }
     store
 }
 
@@ -2252,6 +2255,25 @@ mod tests {
             policy.decide(SocketAddrUse::TcpConnect, sentinel),
             AddrDecision::Deny(DenyReason::HostLoopbackNotPermitted)
         ));
+    }
+
+    #[tokio::test]
+    async fn plugin_store_applies_the_engine_hostcall_fuel() {
+        let engine = Engine::builder().with_hostcall_fuel(4096).build().unwrap();
+        let store_context = PluginStoreContext {
+            allowed_hosts: Arc::from([]),
+            allowed_ip_name_lookups: Arc::from([]),
+            host_ref: None,
+            network: crate::host::ports::NetworkHandle::new(),
+            socket_policy: Arc::default(),
+        };
+        let store = build_plugin_store(
+            &engine,
+            "hostcall-fuel-plugin",
+            &HashMap::new(),
+            &store_context,
+        );
+        assert_eq!(store.hostcall_fuel(), 4096);
     }
 
     #[tokio::test]

@@ -171,6 +171,11 @@ pub struct WorkloadMetadata {
     /// [`Default`] here is an unmetered budget, so a metadata built outside an
     /// engine is neither charged nor limited.
     pub(crate) guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
+    /// The most bytes a guest may transfer to the host in one call
+    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
+    ///
+    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    pub(crate) hostcall_fuel: Option<usize>,
     /// Set once this workload deploy has logged the remediation hint for a
     /// known guest toolchain trap. One flag is shared by every component of a
     /// deploy, so a redeploy starts with a fresh one.
@@ -615,6 +620,7 @@ impl WorkloadService {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                hostcall_fuel: None,
                 trap_hint_logged: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
@@ -738,6 +744,7 @@ impl WorkloadComponent {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
+                hostcall_fuel: None,
                 trap_hint_logged: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
@@ -5550,6 +5557,60 @@ mod tests {
             components,
             vec![WitInterface::from(MARKER)],
         )
+    }
+
+    #[test]
+    fn engine_hostcall_fuel_reaches_component_and_service_metadata() {
+        let engine = crate::engine::Engine::builder()
+            .with_pooling_allocator(false)
+            .without_max_process_memory()
+            .with_hostcall_fuel(4096)
+            .build()
+            .unwrap();
+        let bytes = bytes::Bytes::from(wat::parse_str("(component)").unwrap());
+        // A service is refused unless it exports an interface with `run`.
+        let service = bytes::Bytes::from(
+            wat::parse_str(
+                r#"(component
+                  (core module $m (func (export "run")))
+                  (core instance $i (instantiate $m))
+                  (func $run (canon lift (core func $i "run")))
+                  (instance $cli (export "run" (func $run)))
+                  (export "wasi:cli/run@0.2.0" (instance $cli)))"#,
+            )
+            .unwrap(),
+        );
+        let unresolved = engine
+            .initialize_workload(
+                "hostcall-fuel",
+                crate::types::Workload {
+                    namespace: "ns".into(),
+                    name: "hostcall-fuel".into(),
+                    annotations: Default::default(),
+                    service: Some(crate::types::Service {
+                        bytes: service,
+                        digest: None,
+                        local_resources: Default::default(),
+                        max_restarts: 0,
+                    }),
+                    components: vec![crate::types::Component {
+                        name: "component".into(),
+                        bytes,
+                        ..Default::default()
+                    }],
+                    host_interfaces: vec![],
+                    volumes: vec![],
+                },
+            )
+            .unwrap();
+        assert_eq!(unresolved.components.len(), 1);
+        for component in unresolved.components.values() {
+            assert_eq!(component.metadata.hostcall_fuel, Some(4096));
+        }
+        assert_eq!(
+            unresolved.service.as_ref().unwrap().metadata.hostcall_fuel,
+            Some(4096)
+        );
     }
 
     fn marker_plugin() -> HashMap<&'static str, Arc<dyn HostPlugin>> {
