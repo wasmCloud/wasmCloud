@@ -1,6 +1,6 @@
 //! Real-guest fixture for the `wasmcloud:nats@0.1.3` surface.
 //!
-//! Both handlers are `async fn`s that await imported NATS calls from inside
+//! Every handler is an `async fn` that awaits imported NATS calls from inside
 //! the delivery — the shape a sync-signature package cannot express, since a
 //! sync export cannot be lifted with the async canonical ABI and cannot await
 //! a P3 import.
@@ -17,6 +17,7 @@ wit_bindgen::generate!({
 
 use exports::wasmcloud::nats::core_handler::Guest as CoreGuest;
 use exports::wasmcloud::nats::jetstream_handler::Guest as JsGuest;
+use exports::wasmcloud::nats::kv_handler::Guest as KvGuest;
 use wasi::clocks::monotonic_clock;
 use wasmcloud::nats::core;
 use wasmcloud::nats::jetstream::{self, MessageHandle};
@@ -456,6 +457,27 @@ impl CoreGuest for Component {
         core::publish(message(&subject, format!("echo:{body}")))
             .await
             .map_err(|e| label(&e))
+    }
+}
+
+impl KvGuest for Component {
+    /// Reports each change on `test.results` before answering, so a refused
+    /// event is still observable. A value starting with `fail:` is refused.
+    async fn handle_event(bucket: String, entry: kv::Entry) -> Result<(), String> {
+        let value = String::from_utf8_lossy(&entry.value).to_string();
+        let operation = match entry.operation {
+            kv::KvOperation::Put => "put",
+            kv::KvOperation::Delete => "delete",
+            kv::KvOperation::Purge => "purge",
+        };
+        let report = format!("kv:{bucket}:{}:{operation}:{value}", entry.key);
+        core::publish(message("test.results", report))
+            .await
+            .map_err(|e| label(&e))?;
+        if value.starts_with(FAIL_MARKER) {
+            return Err(format!("kv handler failed on `{}`", entry.key));
+        }
+        Ok(())
     }
 }
 
