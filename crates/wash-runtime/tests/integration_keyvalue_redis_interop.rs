@@ -192,6 +192,8 @@ struct RedisProxy {
     generation: watch::Sender<u64>,
     /// Connections the proxy is carrying right now.
     live: Arc<AtomicUsize>,
+    /// Connections the proxy has accepted, one per connection attempt.
+    accepted: Arc<AtomicUsize>,
 }
 
 impl RedisProxy {
@@ -200,10 +202,13 @@ impl RedisProxy {
         let url = format!("redis://{}", listener.local_addr()?);
         let upstream = Arc::new(AtomicU16::new(upstream_port));
         let live = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::new(AtomicUsize::new(0));
         let (generation, _) = watch::channel(0u64);
         let (target, cuts, carried) = (upstream.clone(), generation.clone(), live.clone());
+        let attempts = accepted.clone();
         tokio::spawn(async move {
             while let Ok((mut client, _)) = listener.accept().await {
+                attempts.fetch_add(1, Ordering::SeqCst);
                 let port = target.load(Ordering::SeqCst);
                 let mut cut = cuts.subscribe();
                 let carried = carried.clone();
@@ -226,7 +231,12 @@ impl RedisProxy {
             upstream,
             generation,
             live,
+            accepted,
         })
+    }
+
+    fn accepted(&self) -> usize {
+        self.accepted.load(Ordering::SeqCst)
     }
 
     /// Drop every connection the proxy carries, and wait until each is
@@ -663,6 +673,7 @@ async fn redis_backend_redials_within_its_settings_and_recovers() -> Result<()> 
     // schedule: four attempts with pauses of 25-50, 50-100 and 100-200ms,
     // under 400ms. Eight schedules in turn would take at least 1.4s, and a
     // backoff that ignored the maximum would take seconds.
+    let before = proxy.accepted();
     let started = std::time::Instant::now();
     let calls = (0..8).map(|_| backend.get(BUCKET, "k"));
     for result in futures::future::join_all(calls).await {
@@ -670,6 +681,21 @@ async fn redis_backend_redials_within_its_settings_and_recovers() -> Result<()> 
     }
     let elapsed = started.elapsed();
     assert!(elapsed < Duration::from_secs(1), "failing took {elapsed:?}");
+    // One redial served all eight: the first attempt and three retries.
+    assert_eq!(
+        proxy.accepted() - before,
+        4,
+        "the callers shared one redial"
+    );
+
+    // A call that arrives after that redial failed does not take its outcome:
+    // it starts a redial of its own.
+    let before = proxy.accepted();
+    backend
+        .get(BUCKET, "k")
+        .await
+        .expect_err("redis is still stopped");
+    assert_eq!(proxy.accepted() - before, 4, "a later call redials afresh");
 
     redis.start().await?;
     proxy.point_at(wait_until_ready(&redis).await?);
@@ -677,6 +703,185 @@ async fn redis_backend_redials_within_its_settings_and_recovers() -> Result<()> 
         .set(BUCKET, "k", b"back".to_vec())
         .await
         .map_err(|e| anyhow::anyhow!("set once redis is back: {e:?}"))?;
+
+    Ok(())
+}
+
+/// A raw connection straight to the container, not through the proxy.
+async fn direct(
+    redis: &ContainerAsync<GenericImage>,
+    password: Option<&str>,
+) -> Result<redis::aio::MultiplexedConnection> {
+    let port = redis.get_host_port_ipv4(6379).await?;
+    let auth = password.map(|p| format!(":{p}@")).unwrap_or_default();
+    Ok(
+        redis::Client::open(format!("redis://{auth}127.0.0.1:{port}"))?
+            .get_multiplexed_async_connection()
+            .await?,
+    )
+}
+
+/// A failover that demotes the old primary in place leaves the backend's
+/// connection open, and every write on it is refused with `READONLY`. That
+/// reply drops the connection, so the next write redials and reaches the new
+/// primary. The `READONLY` write itself is not retried.
+#[tokio::test]
+#[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+async fn redis_backend_follows_a_failover_that_keeps_its_connection_open() -> Result<()> {
+    let old = start_redis().await?;
+    let new = start_redis().await?;
+    let proxy = RedisProxy::start(old.get_host_port_ipv4(6379).await?).await?;
+    let backend = backend_behind(&proxy).await?;
+    backend
+        .set(BUCKET, "k", b"before".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("set before the failover: {e:?}"))?;
+
+    // Demote the old primary in place (its "primary" is unreachable, so it
+    // stays a read-only replica), and send new connections to the new one.
+    redis::cmd("REPLICAOF")
+        .arg("127.0.0.1")
+        .arg(1)
+        .query_async::<()>(&mut direct(&old, None).await?)
+        .await?;
+    proxy.point_at(new.get_host_port_ipv4(6379).await?);
+
+    let err = backend
+        .set(BUCKET, "k", b"after".to_vec())
+        .await
+        .expect_err("the demoted server refuses the write");
+    assert!(format!("{err:?}").contains("READONLY"), "{err:?}");
+    backend
+        .set(BUCKET, "k", b"after".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("set after the failover: {e:?}"))?;
+    let on_new: Option<Vec<u8>> = direct(&new, None).await?.get("k").await?;
+    assert_eq!(on_new.as_deref(), Some(b"after".as_slice()));
+
+    Ok(())
+}
+
+/// A server `timeout` closes a connection that sits quiet. The next write is
+/// checked with a `PING` first (after 5s of quiet), which finds the
+/// connection dead and redials, so the write succeeds instead of failing on
+/// the closed connection.
+#[tokio::test]
+#[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+async fn redis_backend_writes_after_the_server_closes_an_idle_connection() -> Result<()> {
+    let redis = start_redis().await?;
+    let proxy = RedisProxy::start(redis.get_host_port_ipv4(6379).await?).await?;
+    let backend = backend_behind(&proxy).await?;
+    redis::cmd("CONFIG")
+        .arg("SET")
+        .arg("timeout")
+        .arg(1)
+        .query_async::<()>(&mut direct(&redis, None).await?)
+        .await?;
+    backend
+        .set(BUCKET, "k", b"1".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("set before going quiet: {e:?}"))?;
+
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    backend
+        .set(BUCKET, "k", b"2".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("set after the server closed it: {e:?}"))?;
+    let value: Option<Vec<u8>> = direct(&redis, None).await?.get("k").await?;
+    assert_eq!(value.as_deref(), Some(b"2".as_slice()));
+
+    Ok(())
+}
+
+/// A response timeout means the server is slow, not gone: the call fails
+/// once, without a retry, and the connection is kept, so a list-keys cursor
+/// issued before it still continues.
+#[tokio::test]
+#[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+async fn redis_backend_keeps_its_connection_through_a_response_timeout() -> Result<()> {
+    let redis = start_redis().await?;
+    let mut raw = direct(&redis, None).await?;
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        redis.get_host_port_ipv4(6379).await?
+    );
+    let backend = backend_with(&url, &[("backend-response-timeout-ms", "200")]).await?;
+
+    let many: Vec<(String, String)> = (0..5_000)
+        .map(|i| (format!("page-{i}"), "v".to_string()))
+        .collect();
+    raw.mset::<_, _, ()>(&many).await?;
+    let cursor = backend
+        .list_keys(BUCKET, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("first page: {e:?}"))?
+        .cursor
+        .context("5000 keys take more than one SCAN page")?;
+
+    // Hold every client's commands for a second.
+    redis::cmd("CLIENT")
+        .arg("PAUSE")
+        .arg(1_000)
+        .arg("ALL")
+        .query_async::<()>(&mut raw)
+        .await?;
+    let started = std::time::Instant::now();
+    backend
+        .get(BUCKET, "page-0")
+        .await
+        .expect_err("the reply takes longer than the response timeout");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(900),
+        "the call failed after {elapsed:?}, not at its timeout"
+    );
+
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    backend
+        .list_keys(BUCKET, Some(cursor))
+        .await
+        .map_err(|e| anyhow::anyhow!("the cursor continues on the same connection: {e:?}"))?;
+
+    Ok(())
+}
+
+/// A redial the server refuses at `AUTH` fails the call, and is not kept: once
+/// the password is right again, the next call redials and succeeds.
+#[tokio::test]
+#[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+async fn redis_backend_recovers_from_a_redial_refused_at_auth() -> Result<()> {
+    let redis = start_redis().await?;
+    let mut raw = direct(&redis, None).await?;
+    let requirepass = |password: &'static str| {
+        redis::cmd("CONFIG")
+            .arg("SET")
+            .arg("requirepass")
+            .arg(password)
+            .clone()
+    };
+    // A connection already made stays authenticated when the password changes.
+    requirepass("first").query_async::<()>(&mut raw).await?;
+    let proxy = RedisProxy::start(redis.get_host_port_ipv4(6379).await?).await?;
+    let url = proxy.url.replacen("redis://", "redis://:first@", 1);
+    let backend = backend_at(&url).await?;
+    backend
+        .set(BUCKET, "k", b"1".to_vec())
+        .await
+        .map_err(|e| anyhow::anyhow!("set with the right password: {e:?}"))?;
+
+    requirepass("second").query_async::<()>(&mut raw).await?;
+    proxy.cut().await;
+    backend
+        .get(BUCKET, "k")
+        .await
+        .expect_err("the redial is refused at AUTH");
+
+    requirepass("first").query_async::<()>(&mut raw).await?;
+    let value = backend
+        .get(BUCKET, "k")
+        .await
+        .map_err(|e| anyhow::anyhow!("get once the password is right again: {e:?}"))?;
+    assert_eq!(value.as_deref(), Some(b"1".as_slice()));
 
     Ok(())
 }
