@@ -42,6 +42,17 @@ impl BucketHandle {
     fn prefixed_key(&self, key: &str) -> String {
         format!("{}:{}", self.prefix, key)
     }
+
+    /// The values of `keys` (not empty), one slot per key, `None` where a key
+    /// is absent.
+    async fn get_many(&self, keys: &[String]) -> redis::RedisResult<Vec<Option<Vec<u8>>>> {
+        let redis_keys: Vec<String> = keys.iter().map(|k| self.prefixed_key(k)).collect();
+        // Explicit MGET: the `mget` helper downgrades to `GET` for one key,
+        // which decodes an absent key as an empty vec rather than one `None`.
+        self.conn
+            .query_read(redis::cmd("MGET").arg(redis_keys.as_slice()))
+            .await
+    }
 }
 
 /// Redis-based keyvalue plugin
@@ -1036,20 +1047,12 @@ impl<'a> bindings::wasi::keyvalue::batch::Host for ActiveCtx<'a> {
         plugin.record_operation("get_many");
 
         let bucket_handle = self.table.get(&bucket)?;
-        let conn = bucket_handle.conn.clone();
 
         if keys.is_empty() {
             return Ok(Ok(vec![]));
         }
 
-        let redis_keys: Vec<String> = keys.iter().map(|k| bucket_handle.prefixed_key(k)).collect();
-
-        // Explicit MGET: the `mget` helper downgrades to `GET` for one key,
-        // which decodes an absent key as an empty vec rather than one `None`.
-        let values: Vec<Option<Vec<u8>>> = match conn
-            .query_read(redis::cmd("MGET").arg(redis_keys.as_slice()))
-            .await
-        {
+        let values = match bucket_handle.get_many(&keys).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!("Redis error getting keys: {}", e);
@@ -1361,5 +1364,253 @@ mod tests {
                 "{key} is not host-owned"
             );
         }
+    }
+
+    #[test]
+    fn settings_whose_redial_could_take_too_long_are_refused() {
+        // 1001 attempts that each run into a 3s connect timeout.
+        let err = ConnectionSettings::from_config(&config(&[(RECONNECT_NUM_RETRIES_KEY, "1000")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("together"), "{err}");
+
+        // One attempt may take the whole budget, but not two.
+        ConnectionSettings::from_config(&config(&[
+            (RECONNECT_NUM_RETRIES_KEY, "0"),
+            (CONNECTION_TIMEOUT_MS_KEY, "600000"),
+        ]))
+        .unwrap();
+        ConnectionSettings::from_config(&config(&[
+            (RECONNECT_NUM_RETRIES_KEY, "1"),
+            (CONNECTION_TIMEOUT_MS_KEY, "600000"),
+        ]))
+        .unwrap_err();
+
+        let worst = ConnectionSettings::default().worst_case_redial_ms();
+        // Four 3s attempts and pauses of at most 50, 100 and 200ms.
+        assert_eq!(worst, 4 * 3_000 + 50 + 100 + 200);
+    }
+
+    #[test]
+    fn list_keys_cursors_round_trip_and_stay_json_safe() {
+        for generation in [0, 1, 7, GENERATION_MASK, GENERATION_MASK + 1, u64::MAX] {
+            for next in [1, 12_345, CURSOR_MASK] {
+                let token = encode_cursor(generation, next).unwrap();
+                assert!(token < 1 << 53, "{token} does not fit a JSON number");
+                assert_eq!(decode_cursor(token, generation).unwrap(), next);
+            }
+            assert_eq!(
+                encode_cursor(generation, 0).unwrap(),
+                0,
+                "zero ends a listing"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cursor_from_another_connection_is_refused() {
+        let token = encode_cursor(1, 99).unwrap();
+        let err = decode_cursor(token, 2).unwrap_err().to_string();
+        assert!(err.contains("first page"), "{err}");
+        // The generation a token carries wraps, after 4096 reconnects.
+        assert_eq!(decode_cursor(token, 1 + GENERATION_MASK + 1).unwrap(), 99);
+    }
+
+    #[test]
+    fn an_untagged_cursor_is_sent_as_it_is() {
+        assert_eq!(decode_cursor(12_345, 7).unwrap(), 12_345);
+    }
+
+    #[test]
+    fn a_scan_cursor_too_large_to_carry_is_refused() {
+        let err = encode_cursor(0, CURSOR_MASK + 1).unwrap_err().to_string();
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn readonly_and_dead_connections_are_dropped_but_slow_ones_are_not() {
+        use std::io::{Error, ErrorKind};
+
+        let readonly = redis::RedisError::from((
+            redis::ErrorKind::ReadOnly,
+            "READONLY",
+            "You can't write against a read only replica.".to_string(),
+        ));
+        assert!(proves_connection_unusable(&readonly));
+        // Dropped, but a write is still not retried: it is not an I/O error.
+        assert!(!is_dropped_connection(&readonly));
+
+        let broken = redis::RedisError::from(Error::from(ErrorKind::BrokenPipe));
+        assert!(proves_connection_unusable(&broken));
+        assert!(is_dropped_connection(&broken));
+
+        let timeout = redis::RedisError::from(Error::from(ErrorKind::TimedOut));
+        assert!(!proves_connection_unusable(&timeout));
+        assert!(!is_dropped_connection(&timeout));
+
+        let refused = redis::RedisError::from(Error::from(ErrorKind::ConnectionRefused));
+        assert!(!is_dropped_connection(&refused));
+
+        let response = redis::RedisError::from((redis::ErrorKind::ResponseError, "ERR"));
+        assert!(!proves_connection_unusable(&response));
+    }
+
+    #[test]
+    fn a_waiters_copy_of_a_redial_error_answers_like_the_original() {
+        use std::io::{Error, ErrorKind};
+
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::TimedOut,
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::Other,
+        ] {
+            let original = redis::RedisError::from(Error::from(kind));
+            let copy = copy_redial_error(&original);
+            assert_eq!(copy.is_io_error(), original.is_io_error(), "{kind:?}");
+            assert_eq!(
+                copy.is_connection_refusal(),
+                original.is_connection_refusal(),
+                "{kind:?}"
+            );
+            assert_eq!(copy.is_timeout(), original.is_timeout(), "{kind:?}");
+            assert_eq!(
+                copy.is_connection_dropped(),
+                original.is_connection_dropped(),
+                "{kind:?}"
+            );
+            assert!(copy.to_string().contains("redial failed"), "{copy}");
+        }
+
+        let auth = redis::RedisError::from((
+            redis::ErrorKind::AuthenticationFailed,
+            "WRONGPASS",
+            "invalid username-password pair".to_string(),
+        ));
+        let copy = copy_redial_error(&auth);
+        assert_eq!(copy.kind(), redis::ErrorKind::AuthenticationFailed);
+        assert!(copy.to_string().contains("WRONGPASS"), "{copy}");
+    }
+
+    #[test]
+    fn url_settings_are_read_and_taken_out_of_the_url() {
+        let url = url::Url::parse(
+            "redis://h:6379/2?BACKEND_RESPONSE_TIMEOUT_MS=500&protocol=resp3\
+             &backend-reconnect-num-retries=1",
+        )
+        .unwrap();
+        let (rest, settings) = split_connection_settings(&url).unwrap();
+        assert_eq!(rest.as_str(), "redis://h:6379/2?protocol=resp3");
+        assert_eq!(settings.response_timeout_ms, Some(500));
+        assert_eq!(settings.reconnect_num_retries, 1);
+
+        let only = url::Url::parse("redis://h:6379?backend-connection-timeout-ms=250").unwrap();
+        let (rest, settings) = split_connection_settings(&only).unwrap();
+        assert_eq!(rest.as_str(), "redis://h:6379");
+        assert_eq!(settings.connection_timeout_ms, 250);
+
+        let plain = url::Url::parse("redis://h:6379").unwrap();
+        let (rest, settings) = split_connection_settings(&plain).unwrap();
+        assert_eq!(rest, plain);
+        assert_eq!(settings, ConnectionSettings::default());
+
+        let bad = url::Url::parse("redis://h?backend-response-timeout-ms=soon").unwrap();
+        let err = RedisKeyValue::from_url(&bad).err().unwrap().to_string();
+        assert!(err.contains(RESPONSE_TIMEOUT_MS_KEY), "{err}");
+
+        let twice = url::Url::parse(
+            "redis://h?backend-response-timeout-ms=1&backend-response-timeout-ms=1",
+        )
+        .unwrap();
+        let err = split_connection_settings(&twice).unwrap_err().to_string();
+        assert!(err.contains("more than once"), "{err}");
+    }
+
+    use testcontainers::{
+        ContainerAsync, GenericImage,
+        core::{IntoContainerPort, WaitFor},
+        runners::AsyncRunner,
+    };
+
+    async fn start_redis() -> (ContainerAsync<GenericImage>, url::Url) {
+        let container = GenericImage::new("redis", "7-alpine")
+            .with_exposed_port(6379.tcp())
+            .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+            .start()
+            .await
+            .expect("redis starts");
+        let port = container.get_host_port_ipv4(6379).await.unwrap();
+        let url = url::Url::parse(&format!("redis://127.0.0.1:{port}")).unwrap();
+        (container, url)
+    }
+
+    /// The single-backend plugin shares one connection across its buckets, a
+    /// bucket's reads survive the server dropping that connection, and
+    /// `get-many` of one absent key returns one `None`.
+    #[tokio::test]
+    #[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+    async fn the_single_backend_plugin_shares_and_heals_one_connection() {
+        let (_redis, url) = start_redis().await;
+        let plugin = RedisKeyValue::from_url(&url).unwrap();
+        let first = plugin.connection().await.unwrap();
+        let second = plugin.connection().await.unwrap();
+        assert!(
+            Arc::ptr_eq(&first.inner, &second.inner),
+            "one shared connection"
+        );
+
+        let mut raw = redis::Client::open(url.as_str())
+            .unwrap()
+            .get_multiplexed_async_connection()
+            .await
+            .unwrap();
+        redis::cmd("SET")
+            .arg("b:k")
+            .arg("v")
+            .query_async::<()>(&mut raw)
+            .await
+            .unwrap();
+        let bucket = BucketHandle {
+            conn: first,
+            prefix: "b".to_string(),
+        };
+
+        // Kill every client connection but this one, as a server restart would.
+        redis::cmd("CLIENT")
+            .arg("KILL")
+            .arg("TYPE")
+            .arg("normal")
+            .query_async::<u64>(&mut raw)
+            .await
+            .unwrap();
+        let values = bucket
+            .get_many(&["k".to_string(), "absent".to_string()])
+            .await
+            .expect("a read is retried on a fresh connection");
+        assert_eq!(values, vec![Some(b"v".to_vec()), None]);
+        assert_eq!(
+            bucket.get_many(&["absent".to_string()]).await.unwrap(),
+            vec![None]
+        );
+    }
+
+    /// `open` checks a connection that has been quiet, so it fails while the
+    /// server is down, as it did when each `open` dialed.
+    #[tokio::test]
+    #[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+    async fn open_fails_while_the_server_is_down() {
+        let (redis, url) = start_redis().await;
+        let plugin = RedisKeyValue::from_url(&url).unwrap();
+        plugin.connection().await.unwrap();
+
+        redis.stop().await.unwrap();
+        tokio::time::sleep(IDLE_PROBE_AFTER + Duration::from_millis(500)).await;
+        plugin
+            .connection()
+            .await
+            .err()
+            .expect("the PING finds the server gone");
     }
 }
