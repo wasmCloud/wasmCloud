@@ -849,8 +849,8 @@ runtime:
       # binding's `secretFrom` uses. `keys` maps each config key to the key
       # the plugin is asked for. `workloads` is required: the namespaces (and
       # optionally names) whose workloads may have its values, or `all`. A
-      # name is a WorkloadDeployment's, else a WorkloadReplicaSet's, else the
-      # Workload's own; it narrows a grant within a namespace, which is the
+      # name is a WorkloadDeployment's, WorkloadDaemonSet's or WorkloadReplicaSet's,
+      # else the Workload's own; it narrows a grant within a namespace, which is the
       # boundary. The host asks the plugin on every workload bind, naming the
       # workload, so one entry serves each workload its own value when the
       # plugin scopes its answer by that name; a rotation reaches the next

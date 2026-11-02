@@ -424,10 +424,18 @@ func TestReplicaAnnotationsComeFromOwners(t *testing.T) {
 			OwnerReferences: ownedBy("WorkloadDeployment", "billing-api", "deployment-uid"),
 		},
 	}
-	r := &WorkloadReconciler{Client: newWorkloadClient(t, replicaSet)}
+	daemonSet := &runtimev1alpha1.WorkloadDaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "log-shipper",
+			Namespace: metav1.NamespaceDefault,
+			UID:       "ds-uid",
+		},
+	}
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, replicaSet, daemonSet)}
 	const keptAnnotation, keptValue = "example.com/kept", "yes"
 	spoofed := map[string]string{
 		workloadDeploymentNameAnnotation:   "billing-api",
+		workloadDaemonSetNameAnnotation:    daemonSet.Name,
 		workloadReplicaSetNameAnnotation:   replicaSet.Name,
 		workloadReplicaSetLegacyAnnotation: replicaSet.Name,
 		keptAnnotation:                     keptValue,
@@ -445,6 +453,11 @@ func TestReplicaAnnotationsComeFromOwners(t *testing.T) {
 			keptAnnotation:                   keptValue,
 			workloadReplicaSetNameAnnotation: replicaSet.Name,
 			workloadDeploymentNameAnnotation: "billing-api",
+		}},
+		{"a stale daemonset owner", ownedBy(workloadDaemonSetKind, daemonSet.Name, "other-uid"), map[string]string{keptAnnotation: keptValue}},
+		{"a daemonset replica", ownedBy(workloadDaemonSetKind, daemonSet.Name, "ds-uid"), map[string]string{
+			keptAnnotation:                  keptValue,
+			workloadDaemonSetNameAnnotation: daemonSet.Name,
 		}},
 	} {
 		workload := &runtimev1alpha1.Workload{

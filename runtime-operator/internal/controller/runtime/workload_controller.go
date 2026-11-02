@@ -464,33 +464,50 @@ func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *r
 	annotations := make(map[string]string, len(workload.Annotations)+2)
 	for k, v := range workload.Annotations {
 		switch k {
-		case workloadDeploymentNameAnnotation, workloadReplicaSetNameAnnotation, workloadReplicaSetLegacyAnnotation:
+		case workloadDeploymentNameAnnotation, workloadDaemonSetNameAnnotation,
+			workloadReplicaSetNameAnnotation, workloadReplicaSetLegacyAnnotation:
 			continue
 		}
 		annotations[k] = v
 	}
 
 	owner := metav1.GetControllerOf(workload)
-	if owner == nil || owner.APIVersion != runtimev1alpha1.GroupVersion.String() || owner.Kind != "WorkloadReplicaSet" {
+	if owner == nil || owner.APIVersion != runtimev1alpha1.GroupVersion.String() {
 		return annotations, nil
 	}
-	var replicaSet runtimev1alpha1.WorkloadReplicaSet
-	err := r.Get(ctx, client.ObjectKey{Namespace: workload.Namespace, Name: owner.Name}, &replicaSet)
-	switch {
-	case apierrors.IsNotFound(err):
-		return annotations, nil
-	case err != nil:
-		return nil, fmt.Errorf("reading WorkloadReplicaSet %s, which owns this Workload: %w", owner.Name, err)
-	case replicaSet.UID != owner.UID:
-		return annotations, nil
-	}
-	annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
-
-	deployment := metav1.GetControllerOf(&replicaSet)
-	if deployment != nil && deployment.APIVersion == runtimev1alpha1.GroupVersion.String() && deployment.Kind == "WorkloadDeployment" {
-		annotations[workloadDeploymentNameAnnotation] = deployment.Name
+	key := client.ObjectKey{Namespace: workload.Namespace, Name: owner.Name}
+	switch owner.Kind {
+	case workloadDaemonSetKind:
+		var daemonSet runtimev1alpha1.WorkloadDaemonSet
+		if found, err := r.getOwner(ctx, key, owner, &daemonSet); !found {
+			return annotations, err
+		}
+		annotations[workloadDaemonSetNameAnnotation] = daemonSet.Name
+	case "WorkloadReplicaSet":
+		var replicaSet runtimev1alpha1.WorkloadReplicaSet
+		if found, err := r.getOwner(ctx, key, owner, &replicaSet); !found {
+			return annotations, err
+		}
+		annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
+		deployment := metav1.GetControllerOf(&replicaSet)
+		if deployment != nil && deployment.APIVersion == runtimev1alpha1.GroupVersion.String() && deployment.Kind == "WorkloadDeployment" {
+			annotations[workloadDeploymentNameAnnotation] = deployment.Name
+		}
 	}
 	return annotations, nil
+}
+
+// getOwner reads the object owner names into obj. It reports false, with no
+// error, when the object is gone or has been replaced under the same name.
+func (r *WorkloadReconciler) getOwner(ctx context.Context, key client.ObjectKey, owner *metav1.OwnerReference, obj client.Object) (bool, error) {
+	err := r.Get(ctx, key, obj)
+	switch {
+	case apierrors.IsNotFound(err):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("reading %s %s, which owns this Workload: %w", owner.Kind, owner.Name, err)
+	}
+	return obj.GetUID() == owner.UID, nil
 }
 
 func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtimev1alpha1.Workload) error {
