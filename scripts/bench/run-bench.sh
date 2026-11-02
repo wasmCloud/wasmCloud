@@ -132,6 +132,9 @@ case "$bench" in
   scale_density)
     mkdir -p "${CARGO_TARGET_DIR}/density"
     export WASH_SCALE_REPORT_JSON="${CARGO_TARGET_DIR}/density/${bench}.json"
+    # Each mode publishes its own series: enforce keeps the default name,
+    # growth runs as `<flavour>-growth`.
+    export WASH_SCALE_GUEST_MEMORY_MODE="${WASH_SCALE_GUEST_MEMORY_MODE:-enforce,growth}"
     ;;
   gungraun_plugin)
     features=(--features host-component-plugins)

@@ -456,12 +456,16 @@ pub fn udp_connect(sockfd: impl AsFd, addr: SocketAddr) -> Result<(), Errno> {
 /// already has the address would lose the socket. Binding the port back
 /// keeps the address stable, which an unspecified socket relies on: its
 /// loopback half is registered under this same port.
+///
+/// macOS clears the local IP instead and refuses a second bind, so a socket
+/// bound to one address accepts datagrams for any local address afterwards.
 pub fn udp_disconnect(sockfd: impl AsFd) -> Result<(), Errno> {
-    let before = local_address(&sockfd)?;
-    dissolve(&sockfd)?;
-    let after = local_address(&sockfd)?;
+    let sockfd = sockfd.as_fd();
+    let before = local_address(sockfd)?;
+    dissolve(sockfd)?;
+    let after = local_address(sockfd)?;
     if after.port() == 0 && before.port() != 0 {
-        bind(&sockfd, &SocketAddr::new(after.ip(), before.port()))?;
+        bind(sockfd, &SocketAddr::new(after.ip(), before.port()))?;
     }
     Ok(())
 }
@@ -597,17 +601,24 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_keeps_an_ephemeral_port() {
-        for bind_addr in ["0.0.0.0:0", "127.0.0.1:0"] {
-            let sock = udp_socket(SocketAddressFamily::Ipv4).unwrap();
-            udp_bind(&sock, bind_addr.parse().unwrap()).unwrap();
+        for (family, local, peer) in [
+            (SocketAddressFamily::Ipv4, "127.0.0.1:0", "127.0.0.1:9999"),
+            (SocketAddressFamily::Ipv4, "0.0.0.0:0", "127.0.0.1:9999"),
+            (SocketAddressFamily::Ipv6, "[::1]:0", "[::1]:9999"),
+            (SocketAddressFamily::Ipv6, "[::]:0", "[::1]:9999"),
+        ] {
+            let sock = udp_socket(family).unwrap();
+            udp_bind(&sock, local.parse().unwrap()).unwrap();
             let bound = sock.local_addr().unwrap();
-
-            let remote: SocketAddr = "127.0.0.1:9999".parse().unwrap();
-            udp_connect(&sock, remote).unwrap();
-            udp_disconnect(&sock).unwrap();
-
-            let after = sock.local_addr().unwrap();
-            assert_eq!(after.port(), bound.port(), "{bind_addr}: {after}");
+            for _ in 0..2 {
+                udp_connect(&sock, peer.parse().unwrap()).unwrap();
+                udp_disconnect(&sock).unwrap();
+                assert_eq!(sock.local_addr().unwrap().port(), bound.port());
+                #[cfg(target_os = "linux")]
+                assert_eq!(sock.local_addr().unwrap().ip(), bound.ip());
+                #[cfg(target_os = "macos")]
+                assert!(sock.local_addr().unwrap().ip().is_unspecified());
+            }
         }
     }
 

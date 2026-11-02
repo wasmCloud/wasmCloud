@@ -76,6 +76,9 @@ pub struct NetworkUdpSocket {
     /// When the decision that permitted the connected peer lapses, if it does.
     connected_until: Option<std::time::Instant>,
 
+    /// Wake pending P3 receives when their peer or transport plane changes.
+    connection_changed: Arc<tokio::sync::Notify>,
+
     /// Peers this socket has sent to, when it is bound to the unspecified
     /// address and therefore reachable on every interface.
     ///
@@ -109,6 +112,7 @@ impl NetworkUdpSocket {
             quota_slot: None,
             connected_plane: None,
             connected_until: None,
+            connection_changed: Arc::default(),
             egress_peers: None,
         })
     }
@@ -308,6 +312,7 @@ impl super::loopback::UdpSocket {
             hop_limit,
             receive_buffer_size,
             receive_permits,
+            connection_changed: Arc::clone(&socket.connection_changed),
             send_buffer_size,
             family: socket.family,
             socket_addr_check: socket.socket_addr_check.clone(),
@@ -395,14 +400,15 @@ impl UdpSocket {
     }
 
     pub(crate) fn finish_bind(&mut self) -> Result<(), ErrorCode> {
-        match self {
+        let finished = match self {
             Self::Network(socket) => socket.finish_bind(),
             Self::Loopback(socket) => socket.finish_bind(),
-            Self::Unspecified { net, lo } => {
-                net.finish_bind()?;
-                lo.finish_bind()
-            }
-        }
+            Self::Unspecified { net, lo } => net.finish_bind().and_then(|()| lo.finish_bind()),
+        };
+        // A receive pending on the unbound socket has no filter or virtual
+        // endpoint until it reads the state installed here.
+        self.connection_changed().notify_waiters();
+        finished
     }
 
     pub(crate) fn is_connected(&self) -> bool {
@@ -433,14 +439,16 @@ impl UdpSocket {
         &mut self,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
-        match self {
+        let disconnected = match self {
             Self::Network(socket) => socket.disconnect(),
             Self::Loopback(socket) => socket.disconnect(loopback),
             Self::Unspecified { net, lo } => {
-                net.disconnect()?;
-                lo.disconnect(loopback)
+                net.disconnect().and_then(|()| lo.disconnect(loopback))
             }
-        }
+        };
+        // Also wakes after a failure, which can leave the native half changed.
+        self.connection_changed().notify_waiters();
+        disconnected
     }
 
     /// Connect to `addr` on `plane`.
@@ -456,17 +464,26 @@ impl UdpSocket {
         valid_until: Option<std::time::Instant>,
         loopback: &mut super::loopback::Network,
     ) -> Result<(), ErrorCode> {
-        match self {
+        let connected = match self {
             Self::Network(socket) => socket.connect_on(addr, plane, valid_until),
             Self::Loopback(socket) => socket.connect(addr, loopback),
             // An unspecified-bound socket is simultaneously a real socket and a
             // virtual endpoint, so both sides record the peer, and the plane
             // recorded here is what later decides which half carries a datagram
             // sent with no explicit destination.
-            Self::Unspecified { net, lo } => {
-                net.connect_on(addr, plane, valid_until)?;
-                lo.connect(addr, loopback)
-            }
+            Self::Unspecified { net, lo } => net
+                .connect_on(addr, plane, valid_until)
+                .and_then(|()| lo.connect(addr, loopback)),
+        };
+        // Also wakes after a failure, which can disconnect the native half.
+        self.connection_changed().notify_waiters();
+        connected
+    }
+
+    pub(crate) fn connection_changed(&self) -> &Arc<tokio::sync::Notify> {
+        match self {
+            Self::Network(net) | Self::Unspecified { net, .. } => &net.connection_changed,
+            Self::Loopback(lo) => &lo.connection_changed,
         }
     }
 

@@ -455,7 +455,7 @@ impl HostPlugin for MultiplexedAsyncKeyValue {
         }
 
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         // Only `store.open` is routed per `(implements ..)` label. The `bucket`
         // resource lives in `types`, and `types`/`atomics`/`cas`/`batch` are bound

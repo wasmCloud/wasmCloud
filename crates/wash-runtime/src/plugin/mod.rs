@@ -651,6 +651,9 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// the ingress the service will serve calls on. See
     /// [`crate::engine::dispatch`].
     ///
+    /// The workload's linkers are sealed; mutable access returns an error.
+    /// Bind in [`Self::on_workload_item_bind`] instead.
+    ///
     /// # Arguments
     /// * `workload` - The fully resolved workload
     /// * `component_id` - The ID of the specific component within the workload
@@ -951,13 +954,15 @@ pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
             wasi_blobstore::MultiplexedBlobstore::new()
                 .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
                 .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
-                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider)),
+                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider))
+                .with_provider(Arc::new(wasi_blobstore::S3BlobProvider)),
         ));
         plugins.push(Arc::new(
             wasi_blobstore::MultiplexedAsyncBlobstore::new()
                 .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
                 .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
-                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider)),
+                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider))
+                .with_provider(Arc::new(wasi_blobstore::S3BlobProvider)),
         ));
     }
 

@@ -203,19 +203,19 @@ impl HostPlugin for WasiOtel {
     ) -> anyhow::Result<()> {
         // Add all wasi:otel interfaces to linker
         bindings::wasi::otel::types::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
         bindings::wasi::otel::tracing::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
         bindings::wasi::otel::metrics::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
         bindings::wasi::otel::logs::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
 

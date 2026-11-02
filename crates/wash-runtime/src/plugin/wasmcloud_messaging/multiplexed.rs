@@ -181,7 +181,7 @@ impl HostPlugin for MultiplexedMessaging {
 
         let registry = self.build_registry(interfaces.iter()).await?;
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         // `types` carries only record definitions; bind it via the regular
         // path (no per-import routing needed).

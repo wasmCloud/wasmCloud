@@ -28,6 +28,9 @@ resources:
 - runtime_workloadreplicaset_admin_role.yaml
 - runtime_workloadreplicaset_editor_role.yaml
 - runtime_workloadreplicaset_viewer_role.yaml
+- runtime_workloaddaemonset_admin_role.yaml
+- runtime_workloaddaemonset_editor_role.yaml
+- runtime_workloaddaemonset_viewer_role.yaml
 - runtime_workload_admin_role.yaml
 - runtime_workload_editor_role.yaml
 - runtime_workload_viewer_role.yaml

@@ -117,7 +117,7 @@ func main() {
 		"watch-namespaces",
 		"",
 		"Comma-separated list of namespaces to watch for WorkloadDeployment-side resources "+
-			"(artifacts, workloads, workloadreplicasets, workloaddeployments + the "+
+			"(artifacts, workloads, workloadreplicasets, workloaddeployments, workloaddaemonsets + the "+
 			"services/endpointslices/configmaps/secrets/events the workload reconcilers touch). "+
 			"If empty, watches all namespaces.",
 	)

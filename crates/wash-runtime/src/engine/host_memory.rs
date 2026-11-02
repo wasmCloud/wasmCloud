@@ -79,20 +79,41 @@ pub const WASMTIME_DEFAULT_MAX_MEMORIES: u32 = 1000;
 pub const WASMTIME_DEFAULT_MAX_CORE_INSTANCES: u32 =
     super::CORE_INSTANCES_PER_MEMORY * WASMTIME_DEFAULT_MAX_MEMORIES;
 
-/// Memory mappings a pooled linear memory splits off once it is live: the
-/// copy-on-write image, the rest of its accessible pages (measured as two
-/// mappings), and the inaccessible remainder of the reservation.
+/// Memory mappings a pooled linear memory splits off once it is live, with
+/// copy-on-write images on (wasmtime's default): the image, the rest of its
+/// accessible pages (measured as two mappings), and the inaccessible
+/// remainder of the reservation. See [`mappings_per_live_memory`] for the
+/// count with images off.
 const MAPPINGS_PER_LIVE_MEMORY: u64 = 4;
+
+/// Memory mappings a pooled linear memory splits off once it is live with
+/// copy-on-write images off (`EngineBuilder::with_memory_init_cow`): its
+/// accessible pages and the inaccessible remainder.
+const MAPPINGS_PER_LIVE_MEMORY_WITHOUT_IMAGE: u64 = 2;
+
+/// [`MAPPINGS_PER_LIVE_MEMORY`] or
+/// [`MAPPINGS_PER_LIVE_MEMORY_WITHOUT_IMAGE`], as `memory_init_cow` says.
+fn mappings_per_live_memory(memory_init_cow: bool) -> u64 {
+    if memory_init_cow {
+        MAPPINGS_PER_LIVE_MEMORY
+    } else {
+        MAPPINGS_PER_LIVE_MEMORY_WITHOUT_IMAGE
+    }
+}
 
 /// Memory mappings a pooled fiber stack's guard page splits off, when the
 /// engine is built, whether or not the stack is ever used.
 const MAPPINGS_PER_POOLED_STACK: u64 = 2;
 
-/// Memory mappings a warm component instance costs once it holds them: its
-/// stack's two and its memory's four. The core instance, component instance
-/// and table totals cost none: the first two are counters, and the table pool
-/// is one mapping that stays whole.
-const MAPPINGS_PER_WARM_COMPONENT: u64 = MAPPINGS_PER_LIVE_MEMORY + MAPPINGS_PER_POOLED_STACK;
+/// Memory mappings a warm component instance costs once it holds them:
+/// its stack's two and its memory's share of the mappings. The core
+/// instance, component instance and table totals cost none: the first two
+/// are counters, and the table pool is one mapping that stays whole.
+/// The memory's share follows `memory_init_cow`: six in total with images
+/// on, four with them off.
+fn mappings_per_warm_component(memory_init_cow: bool) -> u64 {
+    mappings_per_live_memory(memory_init_cow) + MAPPINGS_PER_POOLED_STACK
+}
 
 /// Share of `vm.max_map_count` the pool may plan to use once every memory is
 /// live. The rest is for libraries, thread stacks and compiled code: each
@@ -164,11 +185,13 @@ enum CommitBound {
 /// Half the address space this process can map, at one memory's reservation each (see
 /// [`pool_slot_bytes`]), and no more than nine tenths of the kernel's
 /// `vm.max_map_count` holds at six mappings a warm component (its live
-/// memory's four and its stack's two), since a warm pool makes every memory
-/// live. Never below
+/// memory's four and its stack's two; four with copy-on-write images off),
+/// since a warm pool makes every memory live. Never below
 /// [`WASMTIME_DEFAULT_MAX_MEMORIES`], so no host gets fewer memories than it
 /// had. On a default Linux (47-bit address space, 65,530 mappings) that is
-/// 9,829 linear memories; macOS, with no mapping limit, derives 16,256.
+/// 9,829 linear memories, or 14,744 with copy-on-write images turned off by
+/// `WASMTIME_MEMORY_INIT_COW=false`, the one lever a `wash host` has for
+/// them; macOS, with no mapping limit, derives 16,256.
 ///
 /// Windows and Linux with strict overcommit accounting keep the floor:
 /// their stack and table pools (on Windows, the table pool) are committed
@@ -204,6 +227,13 @@ pub struct MaxMemoriesDerivation {
     /// warn past the same share, so a count derived here never trips them.
     /// Where the pools are not accounted, it changes nothing.
     pub from_memory_precommit_limit: bool,
+    /// Whether the engine will map copy-on-write memory images, which sets
+    /// how many mappings a live memory splits into (four with images, two
+    /// without). `None` reads `WASMTIME_MEMORY_INIT_COW` the way the engine
+    /// does when its builder names nothing.
+    /// `EngineBuilder::with_derived_max_memories` fills it from the builder's
+    /// own setting, so only a caller deriving a count by hand sets it.
+    pub memory_init_cow: Option<bool>,
 }
 
 impl MaxMemoriesDerivation {
@@ -213,11 +243,23 @@ impl MaxMemoriesDerivation {
         self.from_memory_precommit_limit = enable;
         self
     }
+
+    /// Set [`Self::memory_init_cow`], as `EngineBuilder::with_memory_init_cow`
+    /// will be.
+    #[must_use]
+    pub fn with_memory_init_cow(mut self, enable: bool) -> Self {
+        self.memory_init_cow = Some(enable);
+        self
+    }
 }
 
 /// [`derive_max_memories`] with every input named; see
 /// [`MaxMemoriesDerivation`].
 pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
+    let memory_init_cow = options
+        .memory_init_cow
+        .or_else(memory_init_cow_from_env)
+        .unwrap_or(true);
     let limits = process_limits();
     let commit = PoolCommit::read_within(
         limits.as_deref(),
@@ -238,7 +280,14 @@ pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
         max_map_count().map(MapCountLimit::limit),
         bound,
         PoolCommitShape::from_env(),
+        mappings_per_warm_component(memory_init_cow),
     )
+}
+
+/// `WASMTIME_MEMORY_INIT_COW`, read the way the engine reads it when its
+/// builder names no copy-on-write setting.
+pub(crate) fn memory_init_cow_from_env() -> Option<bool> {
+    super::getenv::<bool>("WASMTIME_MEMORY_INIT_COW")
 }
 
 /// `percent` of `x`, rounded down: how the derived count and the pool
@@ -247,12 +296,15 @@ fn share_of(x: u64, percent: u64) -> u64 {
     x.saturating_mul(percent) / 100
 }
 
-/// [`derive_max_memories`] from inputs the caller already read.
+/// [`derive_max_memories`] from inputs the caller already read;
+/// `mappings_per_warm_component` is [`mappings_per_warm_component`]'s for the
+/// engine's copy-on-write setting.
 fn derive_max_memories_within(
     address_space: u64,
     max_map_count: Option<u64>,
     commit: CommitBound,
     shape: PoolCommitShape,
+    mappings_per_warm_component: u64,
 ) -> u32 {
     if cfg!(not(target_pointer_width = "64")) {
         return WASMTIME_DEFAULT_MAX_MEMORIES;
@@ -265,7 +317,7 @@ fn derive_max_memories_within(
     let by_address_space = share_of(address_space, DERIVED_POOL_ADDRESS_SPACE_PERCENT)
         / pool_slot_bytes(WASMTIME_DEFAULT_HEAP_MEMORY);
     let by_map_count = max_map_count.map_or(u64::MAX, |limit| {
-        share_of(limit, POOL_MAP_COUNT_PERCENT) / MAPPINGS_PER_WARM_COMPONENT
+        share_of(limit, POOL_MAP_COUNT_PERCENT) / mappings_per_warm_component
     });
     u32::try_from(by_address_space.min(by_map_count).min(by_commit))
         .unwrap_or(u32::MAX)
@@ -889,11 +941,18 @@ impl HostMemoryBudgets {
 /// `async_stack_size` is `None` when the engine's stack size is not known
 /// before it is built (a caller-supplied base config may set it); the stack
 /// advisory is then left to [`pool_stack_advisory`] once the engine exists.
+/// `memory_init_cow` is `None` for the same reason. The mapping-count
+/// advisory still runs before the build, at the two mappings a memory
+/// without images splits into, which never warns falsely: the stacks' guard
+/// pages split when the engine is built, so a pool past `vm.max_map_count`
+/// may fail right there, and this is what explains it. Should the engine
+/// turn out to map images, [`pool_map_count_advisory_for`] checks again.
 pub(crate) fn pool_advisories(
     totals: &PoolTotals,
     max_memory_size: u64,
     table_elements: usize,
     async_stack_size: Option<usize>,
+    memory_init_cow: Option<bool>,
     sized_to_commit_limit: bool,
     memory_limit: Option<u64>,
 ) -> Vec<String> {
@@ -906,13 +965,24 @@ pub(crate) fn pool_advisories(
             max_memory_size,
             usable_address_space_within(limits.as_deref()),
         ),
-        max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit)),
+        pool_map_count_advisory_for(totals, memory_init_cow.unwrap_or(false)),
         pool_table_commit_advisory(totals.tables, table_elements, &commit),
         async_stack_size.and_then(|size| pool_stack_commit_advisory(totals.stacks, size, &commit)),
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// The mapping-count advisory alone, for an engine whose copy-on-write
+/// setting was only known once it was built (a base config may set it), and
+/// for [`pool_advisories`] when it is known before.
+pub(crate) fn pool_map_count_advisory_for(
+    totals: &PoolTotals,
+    memory_init_cow: bool,
+) -> Option<String> {
+    let per_memory = mappings_per_live_memory(memory_init_cow);
+    max_map_count().and_then(|limit| pool_map_count_advisory(totals, limit, per_memory))
 }
 
 /// The stack pool's advisory alone, for an engine whose stack size was only
@@ -1206,16 +1276,20 @@ fn pool_heap_ceiling_advisory(max_memory_size: u64) -> Option<String> {
 /// on memory mappings, if anything.
 ///
 /// Counts [`MAPPINGS_PER_POOLED_STACK`] for every pooled stack, split when
-/// the engine is built, and [`MAPPINGS_PER_LIVE_MEMORY`] for every linear
-/// memory, split once it is live. Memories and stacks are independent pool
-/// totals, so the estimate reads each installed count rather than the knob
-/// they were derived from.
-fn pool_map_count_advisory(totals: &PoolTotals, limit: MapCountLimit) -> Option<String> {
+/// the engine is built, and `mappings_per_live_memory` (see
+/// [`mappings_per_live_memory`]) for every linear memory, split once it is
+/// live. Memories and stacks are independent pool totals, so the estimate
+/// reads each installed count rather than the knob they were derived from.
+fn pool_map_count_advisory(
+    totals: &PoolTotals,
+    limit: MapCountLimit,
+    mappings_per_live_memory: u64,
+) -> Option<String> {
     let PoolTotals {
         memories, stacks, ..
     } = *totals;
     let max_map_count = limit.limit();
-    let needed = u64::from(memories) * MAPPINGS_PER_LIVE_MEMORY
+    let needed = u64::from(memories) * mappings_per_live_memory
         + u64::from(stacks) * MAPPINGS_PER_POOLED_STACK;
     let whose = match limit {
         MapCountLimit::Read(_) => "this kernel's vm.max_map_count of",
@@ -1614,6 +1688,7 @@ mod tests {
             max_map_count,
             commit,
             PoolCommitShape::defaults(),
+            mappings_per_warm_component(true),
         )
     }
 
@@ -1632,7 +1707,11 @@ mod tests {
         config.total_memories(budgets.max_memories);
         config.total_stacks(budgets.max_memories);
         config.total_tables(budgets.max_memories);
-        pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(max_map_count))
+        pool_map_count_advisory(
+            &PoolTotals::of(&config),
+            MapCountLimit::Read(max_map_count),
+            MAPPINGS_PER_LIVE_MEMORY,
+        )
     }
 
     #[test]
@@ -2292,6 +2371,7 @@ mod tests {
                 Some(65_530),
                 CommitBound::Within(bytes),
                 shape,
+                mappings_per_warm_component(true),
             )
         };
         // 16 GiB holds about 6,000 memories at the default tables and about
@@ -2358,6 +2438,21 @@ mod tests {
             derive_at_defaults(USER_ADDRESS_SPACE, Some(4_096), CommitBound::Unaccounted),
             WASMTIME_DEFAULT_MAX_MEMORIES
         );
+        // With copy-on-write images off a live memory is two mappings, not
+        // four, so the same mapping limit holds half again as many: 65,530 x
+        // 90% / 4 per warm component.
+        assert_eq!(
+            derive_max_memories_within(
+                USER_ADDRESS_SPACE,
+                Some(65_530),
+                CommitBound::Unaccounted,
+                PoolCommitShape::defaults(),
+                mappings_per_warm_component(false),
+            ),
+            14_744
+        );
+        assert_eq!(mappings_per_warm_component(true), 6);
+        assert_eq!(mappings_per_warm_component(false), 4);
     }
 
     #[test]
@@ -2395,18 +2490,35 @@ mod tests {
     #[test]
     fn an_assumed_map_count_is_named_as_assumed() {
         let totals = crate::engine::derived_pool_totals(12_000);
-        let read = pool_map_count_advisory(&totals, MapCountLimit::Read(65_530))
-            .expect("72,000 mappings are past 65,530");
+        let read = pool_map_count_advisory(
+            &totals,
+            MapCountLimit::Read(65_530),
+            MAPPINGS_PER_LIVE_MEMORY,
+        )
+        .expect("72,000 mappings are past 65,530");
         assert!(
             read.contains("this kernel's vm.max_map_count of 65530"),
             "{read}"
         );
-        let assumed =
-            pool_map_count_advisory(&totals, MapCountLimit::Assumed(LINUX_DEFAULT_MAX_MAP_COUNT))
-                .expect("the assumed limit is held to the same arithmetic");
+        let assumed = pool_map_count_advisory(
+            &totals,
+            MapCountLimit::Assumed(LINUX_DEFAULT_MAX_MAP_COUNT),
+            MAPPINGS_PER_LIVE_MEMORY,
+        )
+        .expect("the assumed limit is held to the same arithmetic");
         assert!(!assumed.contains("this kernel's"), "{assumed}");
         assert!(assumed.contains("could not be read"), "{assumed}");
         assert!(assumed.contains("65530"), "{assumed}");
+    }
+
+    /// The mapping-count advisory for `config` on a default Linux limit,
+    /// with copy-on-write images on.
+    fn map_count_with_images(config: &wasmtime::PoolingAllocationConfig) -> Option<String> {
+        pool_map_count_advisory(
+            &PoolTotals::of(config),
+            MapCountLimit::Read(65_530),
+            MAPPINGS_PER_LIVE_MEMORY,
+        )
     }
 
     #[test]
@@ -2415,9 +2527,8 @@ mod tests {
         config.total_memories(1000);
         config.total_stacks(40_000);
         config.total_tables(1000);
-        let advisory =
-            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
-                .expect("stack guard mappings alone exceed the kernel limit");
+        let advisory = map_count_with_images(&config)
+            .expect("stack guard mappings alone exceed the kernel limit");
         assert!(advisory.contains("84000 memory mappings"), "{advisory}");
         assert!(advisory.contains("40000 stacks"), "{advisory}");
         assert!(advisory.contains("Engine startup"), "{advisory}");
@@ -2427,20 +2538,13 @@ mod tests {
         );
 
         config.total_stacks(1000);
-        assert!(
-            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
-                .is_none()
-        );
+        assert!(map_count_with_images(&config).is_none());
         // Tables are one mapping however many there are.
         config.total_tables(70_000);
-        assert!(
-            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
-                .is_none()
-        );
+        assert!(map_count_with_images(&config).is_none());
         config.total_memories(20_000);
         let advisory =
-            pool_map_count_advisory(&PoolTotals::of(&config), MapCountLimit::Read(65_530))
-                .expect("the memory count uses its own installed total");
+            map_count_with_images(&config).expect("the memory count uses its own installed total");
         assert!(advisory.contains("82000 memory mappings"), "{advisory}");
         assert!(
             advisory.contains("WASMTIME_POOLING_TOTAL_MEMORIES"),

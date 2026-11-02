@@ -2,7 +2,8 @@
 # allowlist: Apache-2.0 plus the licenses approved in
 # https://github.com/cncf/foundation/blob/main/policies-guidance/allowed-third-party-license-policy.md
 # Any other license needs a CNCF exception (https://exceptions.cncf.io/)
-# before its crates are listed under `exceptions`.
+# before its crates are listed under `exceptions`. Mirror changes to `allow`
+# and `exceptions` in .github/dependency-review-config.yml.
 
 [graph]
 all-features = true

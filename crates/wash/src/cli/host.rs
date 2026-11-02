@@ -4,7 +4,7 @@ use anyhow::{Context as _, bail};
 use clap::Args;
 use tracing::info;
 use wash_runtime::{
-    engine::{Engine, WasmProposal},
+    engine::{Engine, WasmProposal, guest_memory::GuestMemoryMode},
     observability::Meters,
     plugin::{self},
 };
@@ -431,7 +431,21 @@ pub struct HostCommand {
     /// what it would have refused, but allows the growth anyway. Use it to
     /// size a budget: watch the reported high-water mark and `would_refuse`
     /// count, then return to `enforce`. The separate `--max-process-memory`
-    /// limit remains enforced in either mode.
+    /// limit remains enforced in every mode.
+    ///
+    /// `growth` enforces like `enforce`, but leaves up to 2 MiB of each
+    /// memory's first allocation (its initial size) uncharged. Choose it for
+    /// hosts packing many small instances.
+    ///
+    /// Initial memory is mapped lazily and costs only what the guest touches,
+    /// which is what `--max-process-memory` measures. Charged at its declared
+    /// size, a 1 MiB handler that touches 70 KiB fills the budget fifteen
+    /// times faster than it fills the container.
+    ///
+    /// The trade is overcommit. `--max-process-memory` refuses new instances
+    /// and growth once the host is over, but cannot stop admitted instances
+    /// writing the initial memory they hold. `--max-initial-guest-memory`
+    /// bounds how far that goes.
     ///
     /// `enforce` makes `--max-guest-memory` a real ceiling, so it has to leave
     /// the host room to be a host: wasmtime, compiled module images, NATS, OCI
@@ -451,6 +465,23 @@ pub struct HostCommand {
         default_value = "enforce"
     )]
     pub guest_memory_mode: GuestMemoryMode,
+
+    /// Under `--guest-memory-mode=growth`, the most initial memory the host
+    /// leaves uncharged across all its instances (e.g. `4GiB`).
+    ///
+    /// This is the overcommit bound: instances may come to write all of it,
+    /// and nothing else refuses them once admitted. Past it, a new instance
+    /// fails to instantiate, and a running guest's first `memory.grow` of an
+    /// empty memory returns -1.
+    ///
+    /// Unset, it is four times `--max-guest-memory`. Ignored in the other
+    /// modes, which charge initial memory to `--max-guest-memory`, and the
+    /// host warns if it is set there.
+    #[arg(
+        long = "max-initial-guest-memory",
+        env = "WASH_HOST_MAX_INITIAL_GUEST_MEMORY"
+    )]
+    pub max_initial_guest_memory: Option<String>,
 
     /// Ceiling on how large any single guest linear memory may grow
     /// (e.g. `512MiB`).
@@ -475,7 +506,8 @@ pub struct HostCommand {
     /// Unset, this uses the `--core-instances` count when that is given.
     /// Otherwise it is derived from the machine: half the usable address
     /// space and at most 90% of `vm.max_map_count`, allowing six mappings per
-    /// warm component (two for its stack, four for its memory). The floor is
+    /// warm component (two for its stack, four for its memory; two with
+    /// copy-on-write images off, `WASMTIME_MEMORY_INIT_COW=false`). The floor is
     /// 1000, which Windows, 32-bit targets, and Linux with strict overcommit
     /// accounting or a finite data-size limit keep: there the stack and
     /// table pools are committed at startup rather than reserved, 2.6 GiB at
@@ -1189,6 +1221,8 @@ impl CliCommand for HostCommand {
         )
         .map_err(|e| anyhow::anyhow!(e))?;
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
+        let max_initial_guest_memory =
+            parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1334,7 +1368,7 @@ impl CliCommand for HostCommand {
                     .with_memory_precommit_limit(self.max_memories_from_memory_precommit_limit),
             );
         }
-        engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode.into());
+        engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode);
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
                 engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
@@ -1343,6 +1377,9 @@ impl CliCommand for HostCommand {
                 engine_builder = engine_builder.without_max_process_memory()
             }
             ProcessMemoryPolicy::Automatic => {}
+        }
+        if let Some(bytes) = max_initial_guest_memory {
+            engine_builder = engine_builder.with_max_initial_guest_memory_bytes(bytes);
         }
 
         let engine = engine_builder.build()?;
@@ -2214,6 +2251,14 @@ mod policy_mode_tests {
     }
 
     #[test]
+    fn the_growth_mode_is_spelled_growth() {
+        assert_eq!(
+            parse(&["--guest-memory-mode=growth"]).guest_memory_mode,
+            GuestMemoryMode::Growth
+        );
+    }
+
+    #[test]
     fn an_ip_name_lookup_grant_lapses_only_when_given_a_lifetime() {
         assert_eq!(parse(&[]).ip_name_lookup_grant_lifetime, None);
         assert_eq!(
@@ -2261,16 +2306,6 @@ mod tests {
     }
 }
 
-/// CLI spelling of [`wash_runtime::engine::guest_memory::GuestMemoryMode`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum GuestMemoryMode {
-    /// Charge and report guest memory growth; allow it either way.
-    Count,
-    /// Refuse guest memory growth past `--max-guest-memory`.
-    #[default]
-    Enforce,
-}
-
 /// `--ip-name-lookup-grant-lifetime` from a flag or environment value, reading a
 /// blank one as unset.
 fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, String> {
@@ -2280,6 +2315,20 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, St
     humantime::parse_duration(raw)
         .map(Some)
         .map_err(|e| e.to_string())
+}
+
+/// `--max-initial-guest-memory`, reading a blank value as unset.
+fn parse_max_initial_guest_memory(raw: Option<&str>) -> anyhow::Result<Option<u64>> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
+        .map_err(|e| anyhow::anyhow!("invalid max-initial-guest-memory: {e}"))?;
+    anyhow::ensure!(
+        bytes > 0,
+        "max-initial-guest-memory must be greater than zero"
+    );
+    Ok(Some(bytes))
 }
 
 /// The three distinct meanings of the process-memory flag.
@@ -2334,30 +2383,27 @@ mod process_memory_policy_tests {
         assert!(ProcessMemoryPolicy::parse(Some("invalid")).is_err());
         Ok(())
     }
+
+    #[test]
+    fn max_initial_guest_memory_reads_blank_as_unset() -> anyhow::Result<()> {
+        for raw in [None, Some(""), Some("  ")] {
+            assert_eq!(parse_max_initial_guest_memory(raw)?, None);
+        }
+        assert_eq!(parse_max_initial_guest_memory(Some("4GiB"))?, Some(4 << 30));
+        assert!(parse_max_initial_guest_memory(Some("0")).is_err());
+        assert!(parse_max_initial_guest_memory(Some("off")).is_err());
+        Ok(())
+    }
 }
 
-/// Parse the guest mode, treating a blank environment value as unset.
+/// Parse the guest mode with the runtime's own parser,
+/// treating a blank environment value as unset.
 fn parse_guest_memory_mode(raw: &str) -> Result<GuestMemoryMode, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Ok(GuestMemoryMode::default());
     }
-    match raw.to_ascii_lowercase().as_str() {
-        "count" => Ok(GuestMemoryMode::Count),
-        "enforce" => Ok(GuestMemoryMode::Enforce),
-        _ => Err(format!(
-            "invalid guest-memory-mode {raw:?}; expected 'count' or 'enforce'"
-        )),
-    }
-}
-
-impl From<GuestMemoryMode> for wash_runtime::engine::guest_memory::GuestMemoryMode {
-    fn from(mode: GuestMemoryMode) -> Self {
-        match mode {
-            GuestMemoryMode::Count => Self::Count,
-            GuestMemoryMode::Enforce => Self::Enforce,
-        }
-    }
+    raw.parse()
 }
 
 /// CLI spelling of [`wash_runtime::sockets::policy::EgressMode`].

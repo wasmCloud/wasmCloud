@@ -50,6 +50,8 @@ pub struct Step {
     /// Footprint over the baseline, per workload.
     pub bytes_per_workload: Option<u64>,
     pub guest_memory_bytes: Option<u64>,
+    /// Initial memory the guest budget left uncharged, in growth mode.
+    pub initial_memory_bytes: Option<u64>,
     pub core_instances_in_use: Option<u64>,
     pub core_instances_total: Option<u64>,
     pub memories_in_use: Option<u64>,
@@ -86,6 +88,10 @@ pub struct Report {
     pub label: String,
     /// What ran: the fixture or image, and the host when it is not in-process.
     pub subject: String,
+    /// The guest memory policy, when the runner knows it. Older reports and
+    /// external-host runs may not provide this setting; written as `null`
+    /// then, like every other figure a run can lack.
+    pub guest_memory_mode: Option<String>,
     pub cores: usize,
     pub memory_limit_bytes: u64,
     pub baseline_footprint_bytes: Option<u64>,
@@ -418,6 +424,9 @@ pub fn print_comparison(reports: &[Report]) {
         reports.iter().flat_map(|r| r.limits.keys()).collect();
     row("", &|r| r.label.clone());
     row("cores", &|r| r.cores.to_string());
+    row("guest memory mode", &|r| {
+        r.guest_memory_mode.clone().unwrap_or_else(|| "-".into())
+    });
     row("served workloads", &|r| r.served().to_string());
     row("achieved workloads", &|r| r.achieved().to_string());
     for name in names {
@@ -443,6 +452,12 @@ pub fn print_comparison(reports: &[Report]) {
     row("guest memory charged", &|r| {
         or_dash(
             r.steps.last().and_then(|s| s.guest_memory_bytes),
+            render_bytes,
+        )
+    });
+    row("initial memory uncharged", &|r| {
+        or_dash(
+            r.steps.last().and_then(|s| s.initial_memory_bytes),
             render_bytes,
         )
     });
@@ -615,9 +630,15 @@ mod tests {
         let report: Report =
             serde_json::from_str(r#"{"bench":"bench-scale","flavour":"warm"}"#).unwrap();
         assert_eq!(report.flavour, Some(Flavour::Warm));
+        assert_eq!(report.guest_memory_mode, None);
+        let report = Report {
+            guest_memory_mode: Some("growth".into()),
+            ..report
+        };
         let json = serde_json::to_string(&report).unwrap();
         let back: Report = serde_json::from_str(&json).unwrap();
         assert_eq!(back.bench, "bench-scale");
+        assert_eq!(back.guest_memory_mode.as_deref(), Some("growth"));
         assert_eq!(render_bytes(512), "512B");
         assert_eq!(render_bytes(3 << 29), "1.5GiB");
     }

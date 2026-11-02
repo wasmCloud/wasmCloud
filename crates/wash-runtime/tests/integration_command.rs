@@ -55,7 +55,7 @@ impl HostPlugin for Probe {
     ) -> Result<()> {
         let calls = self.calls.clone();
         let exit = self.exit;
-        item.linker().instance("test:command/probe")?.func_wrap(
+        item.linker()?.instance("test:command/probe")?.func_wrap(
             "check",
             move |mut store, (): ()| {
                 calls.fetch_add(1, Ordering::SeqCst);

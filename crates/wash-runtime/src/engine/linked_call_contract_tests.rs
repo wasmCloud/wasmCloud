@@ -1,6 +1,28 @@
 use super::*;
 use wasmtime::component::{Component, types::ComponentItem};
 
+#[tokio::test]
+async fn detached_stream_tasks_finish_and_release_their_output() -> anyhow::Result<()> {
+    let (finish, wait) = tokio::sync::oneshot::channel();
+    let output = Arc::new(());
+    let released = Arc::downgrade(&output);
+    let task = AbortOnDropHandle::new(tokio::spawn(async move {
+        wait.await.expect("stream drain cancelled");
+        output
+    }));
+    detach_after_reply(task);
+    finish
+        .send(())
+        .map_err(|_| anyhow::anyhow!("stream task aborted before draining"))?;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while released.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
 fn signature(payload: &str, aggregate: &str) -> ComponentFunc {
     let mut config = wasmtime::Config::new();
     config

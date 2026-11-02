@@ -689,3 +689,494 @@ async fn policy_denies_each_p3_socket_operation() {
         }
     }
 }
+
+#[tokio::test]
+async fn pending_receive_follows_reconnected_peer() {
+    let mut data = Data::default();
+    let (receiver, destination) = bind(&mut data, "127.0.0.1:0").await;
+    let (_, old_peer) = bind(&mut data, "127.0.0.1:0").await;
+    let (sender, new_peer) = bind(&mut data, "127.0.0.1:0").await;
+    HostUdpSocket::connect(
+        &mut view(&mut data),
+        Resource::new_borrow(receiver),
+        old_peer.into(),
+    )
+    .await
+    .unwrap();
+    let mut store = store(data);
+    store
+        .run_concurrent(async |accessor| {
+            let accessor = accessor.with_getter::<WasiSockets>(view);
+            let mut pending = Box::pin(<WasiSockets as HostUdpSocketWithStore<Data>>::receive(
+                &accessor,
+                Resource::new_borrow(receiver),
+            ));
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+            accessor.with(|mut a| {
+                let mut v = a.get();
+                futures::executor::block_on(HostUdpSocket::connect(
+                    &mut v,
+                    Resource::new_borrow(receiver),
+                    new_peer.into(),
+                ))
+                .unwrap();
+            });
+            <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                &accessor,
+                Resource::new_borrow(sender),
+                vec![42],
+                Some(destination.into()),
+            )
+            .await
+            .unwrap();
+            let received = tokio::time::timeout(Duration::from_secs(2), pending).await;
+            assert!(
+                received.is_ok(),
+                "pending receive discarded the new connected peer's datagram"
+            );
+            assert_eq!(received.unwrap().unwrap().0, vec![42]);
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn pending_receive_follows_connected_plane_changes() {
+    for start_virtual in [true, false] {
+        let mut data = Data::default();
+        let (receiver, mut destination) = bind(&mut data, "0.0.0.0:0").await;
+        destination.set_ip("127.0.0.1".parse().unwrap());
+        let (sender, virtual_peer) = bind(&mut data, "127.0.0.1:0").await;
+        let host = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let host_peer = host.local_addr().unwrap();
+        data.ctx.socket_addr_check = SocketAddrCheck::new(move |addr, _| {
+            if addr == host_peer {
+                AddrDecision::allow_on(addr, Plane::Host)
+            } else {
+                AddrDecision::allow_by_address(addr)
+            }
+        });
+        let (old_peer, new_peer) = if start_virtual {
+            (virtual_peer, host_peer)
+        } else {
+            (host_peer, virtual_peer)
+        };
+        HostUdpSocket::connect(
+            &mut view(&mut data),
+            Resource::new_borrow(receiver),
+            old_peer.into(),
+        )
+        .await
+        .unwrap();
+        let mut store = store(data);
+        store
+            .run_concurrent(async |accessor| {
+                let accessor = accessor.with_getter::<WasiSockets>(view);
+                let mut pending = Box::pin(<WasiSockets as HostUdpSocketWithStore<Data>>::receive(
+                    &accessor,
+                    Resource::new_borrow(receiver),
+                ));
+                assert!(futures::poll!(pending.as_mut()).is_pending());
+                accessor.with(|mut a| {
+                    futures::executor::block_on(HostUdpSocket::connect(
+                        &mut a.get(),
+                        Resource::new_borrow(receiver),
+                        new_peer.into(),
+                    ))
+                    .unwrap();
+                });
+                if start_virtual {
+                    host.send_to(&[42], destination).await.unwrap();
+                } else {
+                    <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                        &accessor,
+                        Resource::new_borrow(sender),
+                        vec![42],
+                        Some(destination.into()),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let (payload, source) = tokio::time::timeout(Duration::from_secs(2), pending)
+                    .await
+                    .expect("receive should follow the new plane")
+                    .unwrap();
+                assert_eq!(payload, [42]);
+                assert_eq!(SocketAddr::from(source), new_peer);
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn pending_receive_accepts_other_peers_after_disconnect() {
+    let mut data = Data::default();
+    let (receiver, destination) = bind(&mut data, "127.0.0.1:0").await;
+    let (_, old_peer) = bind(&mut data, "127.0.0.1:0").await;
+    let (sender, _) = bind(&mut data, "127.0.0.1:0").await;
+    HostUdpSocket::connect(
+        &mut view(&mut data),
+        Resource::new_borrow(receiver),
+        old_peer.into(),
+    )
+    .await
+    .unwrap();
+    let mut store = store(data);
+    store
+        .run_concurrent(async |accessor| {
+            let accessor = accessor.with_getter::<WasiSockets>(view);
+            let mut pending = Box::pin(<WasiSockets as HostUdpSocketWithStore<Data>>::receive(
+                &accessor,
+                Resource::new_borrow(receiver),
+            ));
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+            accessor.with(|mut a| {
+                HostUdpSocket::disconnect(&mut a.get(), Resource::new_borrow(receiver)).unwrap();
+            });
+            <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                &accessor,
+                Resource::new_borrow(sender),
+                vec![42],
+                Some(destination.into()),
+            )
+            .await
+            .unwrap();
+            let received = tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .expect("receive should follow disconnect")
+                .unwrap();
+            assert_eq!(received.0, [42]);
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn pending_receive_follows_explicit_bind() {
+    for local in ["127.0.0.1:0", "0.0.0.0:0"] {
+        let local: SocketAddr = local.parse().unwrap();
+        let mut data = Data::default();
+        let receiver = create(&mut data, IpAddressFamily::Ipv4).await;
+        let (sender, sender_addr) = bind(&mut data, "127.0.0.1:0").await;
+        let mut store = store(data);
+        store
+            .run_concurrent(async |accessor| {
+                let accessor = accessor.with_getter::<WasiSockets>(view);
+                let mut pending = Box::pin(<WasiSockets as HostUdpSocketWithStore<Data>>::receive(
+                    &accessor,
+                    Resource::new_borrow(receiver),
+                ));
+                assert!(futures::poll!(pending.as_mut()).is_pending());
+                let mut destination: SocketAddr = accessor.with(|mut a| {
+                    let mut view = a.get();
+                    futures::executor::block_on(HostUdpSocket::bind(
+                        &mut view,
+                        Resource::new_borrow(receiver),
+                        local.into(),
+                    ))
+                    .unwrap();
+                    HostUdpSocket::get_local_address(&mut view, Resource::new_borrow(receiver))
+                        .unwrap()
+                        .into()
+                });
+                destination.set_ip("127.0.0.1".parse().unwrap());
+                <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                    &accessor,
+                    Resource::new_borrow(sender),
+                    vec![42],
+                    Some(destination.into()),
+                )
+                .await
+                .unwrap();
+                let (payload, source) = tokio::time::timeout(Duration::from_secs(2), pending)
+                    .await
+                    .expect("receive should follow the bind")
+                    .unwrap();
+                assert_eq!(payload, [42]);
+                assert_eq!(SocketAddr::from(source), sender_addr);
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn pending_receive_applies_the_filter_of_an_implicit_bind() {
+    let mut data = Data::default();
+    let receiver = create(&mut data, IpAddressFamily::Ipv4).await;
+    let host = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let host_peer = host.local_addr().unwrap();
+    let stranger = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    data.ctx.socket_addr_check = SocketAddrCheck::new(move |addr, _| {
+        if addr == host_peer {
+            AddrDecision::allow_on(addr, Plane::Host)
+        } else {
+            AddrDecision::allow_by_address(addr)
+        }
+    });
+    let mut store = store(data);
+    store
+        .run_concurrent(async |accessor| {
+            let accessor = accessor.with_getter::<WasiSockets>(view);
+            let mut pending = Box::pin(<WasiSockets as HostUdpSocketWithStore<Data>>::receive(
+                &accessor,
+                Resource::new_borrow(receiver),
+            ));
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+            <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                &accessor,
+                Resource::new_borrow(receiver),
+                vec![1],
+                Some(host_peer.into()),
+            )
+            .await
+            .unwrap();
+            let mut buf = [0; 1];
+            let (_, reply_to) = host.recv_from(&mut buf).await.unwrap();
+            stranger.send_to(&[2], reply_to).await.unwrap();
+            host.send_to(&[3], reply_to).await.unwrap();
+            let (payload, source) = tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .expect("receive should deliver the reply")
+                .unwrap();
+            assert_eq!(payload, [3]);
+            assert_eq!(SocketAddr::from(source), host_peer);
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn pending_receive_restores_wildcard_state_after_disconnect() {
+    for start_virtual in [true, false] {
+        let mut data = Data::default();
+        let (receiver, mut destination) = bind(&mut data, "0.0.0.0:0").await;
+        destination.set_ip("127.0.0.1".parse().unwrap());
+        let (sender, sender_addr) = bind(&mut data, "127.0.0.1:0").await;
+        let (_, virtual_peer) = bind(&mut data, "127.0.0.1:0").await;
+        let host = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let host_peer = host.local_addr().unwrap();
+        let stranger = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        data.ctx.socket_addr_check = SocketAddrCheck::new(move |addr, _| {
+            if addr == host_peer {
+                AddrDecision::allow_on(addr, Plane::Host)
+            } else {
+                AddrDecision::allow_by_address(addr)
+            }
+        });
+        let old_peer = if start_virtual {
+            virtual_peer
+        } else {
+            host_peer
+        };
+        HostUdpSocket::connect(
+            &mut view(&mut data),
+            Resource::new_borrow(receiver),
+            old_peer.into(),
+        )
+        .await
+        .unwrap();
+        let mut store = store(data);
+        store
+            .run_concurrent(async |accessor| {
+                let accessor = accessor.with_getter::<WasiSockets>(view);
+                let mut pending = Box::pin(<WasiSockets as HostUdpSocketWithStore<Data>>::receive(
+                    &accessor,
+                    Resource::new_borrow(receiver),
+                ));
+                assert!(futures::poll!(pending.as_mut()).is_pending());
+                accessor.with(|mut a| {
+                    HostUdpSocket::disconnect(&mut a.get(), Resource::new_borrow(receiver))
+                        .unwrap();
+                });
+                // The egress filter drops the stranger, and the restored
+                // virtual endpoint delivers the guest's datagram.
+                stranger.send_to(&[1], destination).await.unwrap();
+                <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                    &accessor,
+                    Resource::new_borrow(sender),
+                    vec![2],
+                    Some(destination.into()),
+                )
+                .await
+                .unwrap();
+                let (payload, source) = tokio::time::timeout(Duration::from_secs(2), pending)
+                    .await
+                    .expect("receive should follow disconnect")
+                    .unwrap();
+                assert_eq!(payload, [2]);
+                assert_eq!(SocketAddr::from(source), sender_addr);
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn connection_change_restarts_the_refusal_limit() {
+    let mut data = Data::default();
+    let (receiver, peer) = bind(&mut data, "127.0.0.1:0").await;
+    let (denied, denied_addr) = bind(&mut data, "127.0.0.1:0").await;
+    let (allowed, allowed_addr) = bind(&mut data, "127.0.0.1:0").await;
+    data.ctx.socket_addr_check = SocketAddrCheck::new(move |addr, reason| {
+        if matches!(reason, SocketAddrUse::UdpReceive) && addr == denied_addr {
+            AddrDecision::Deny(DenyReason::NotPermitted)
+        } else {
+            AddrDecision::allow_by_address(addr)
+        }
+    });
+    let mut store = store(data);
+    store
+        .run_concurrent(async |accessor| {
+            let accessor = accessor.with_getter::<WasiSockets>(view);
+            let mut pending = Box::pin(<WasiSockets as HostUdpSocketWithStore<Data>>::receive(
+                &accessor,
+                Resource::new_borrow(receiver),
+            ));
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+            // Two of these batches together pass the limit, so `receive` only
+            // survives if the reconnect between them restarted the count.
+            for _ in 0..2 {
+                for _ in 0..=MAX_REFUSED_DATAGRAMS_PER_RECEIVE / 2 {
+                    <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                        &accessor,
+                        Resource::new_borrow(denied),
+                        vec![1],
+                        Some(peer.into()),
+                    )
+                    .await
+                    .unwrap();
+                }
+                assert!(futures::poll!(pending.as_mut()).is_pending());
+                accessor.with(|mut a| {
+                    futures::executor::block_on(HostUdpSocket::connect(
+                        &mut a.get(),
+                        Resource::new_borrow(receiver),
+                        denied_addr.into(),
+                    ))
+                    .unwrap();
+                });
+            }
+            accessor.with(|mut a| {
+                HostUdpSocket::disconnect(&mut a.get(), Resource::new_borrow(receiver)).unwrap();
+            });
+            <WasiSockets as HostUdpSocketWithStore<Data>>::send(
+                &accessor,
+                Resource::new_borrow(allowed),
+                vec![2],
+                Some(peer.into()),
+            )
+            .await
+            .unwrap();
+            let (payload, source) = tokio::time::timeout(Duration::from_secs(2), pending)
+                .await
+                .expect("receive should deliver the allowed datagram")
+                .unwrap();
+            assert_eq!(payload, [2]);
+            assert_eq!(SocketAddr::from(source), allowed_addr);
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn p2_and_p3_senders_share_the_receivers_buffer_budget() {
+    use wasmtime_wasi::p2::bindings::sockets::{
+        instance_network,
+        network::IpAddressFamily as P2Family,
+        udp::{
+            HostIncomingDatagramStream as P2Incoming, HostOutgoingDatagramStream as P2Outgoing,
+            HostUdpSocket as P2Socket, OutgoingDatagram,
+        },
+        udp_create_socket,
+    };
+    for p2_first in [true, false] {
+        let mut data = Data::default();
+        let (receiver, destination) = bind(&mut data, "127.0.0.1:0").await;
+        let p2_sender =
+            udp_create_socket::Host::create_udp_socket(&mut view(&mut data), P2Family::Ipv4)
+                .await
+                .unwrap()
+                .rep();
+        let network = instance_network::Host::instance_network(&mut view(&mut data)).unwrap();
+        P2Socket::start_bind(
+            &mut view(&mut data),
+            Resource::new_borrow(p2_sender),
+            network,
+            crate::sockets::host_network::socket_addr_to_ip_socket_address(
+                "127.0.0.1:0".parse().unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        P2Socket::finish_bind(&mut view(&mut data), Resource::new_borrow(p2_sender)).unwrap();
+        let (p3_sender, _) = bind(&mut data, "127.0.0.1:0").await;
+        HostUdpSocket::set_receive_buffer_size(
+            &mut view(&mut data),
+            Resource::new_borrow(receiver),
+            1,
+        )
+        .unwrap();
+        let (_, p2_tx) =
+            P2Socket::stream(&mut view(&mut data), Resource::new_borrow(p2_sender), None)
+                .await
+                .unwrap();
+        let mut store = store(data);
+        let p2_send = |data: &mut Data, byte| {
+            let mut v = view(data);
+            assert_eq!(
+                P2Outgoing::check_send(&mut v, Resource::new_borrow(p2_tx.rep())).unwrap(),
+                1
+            );
+            assert_eq!(
+                P2Outgoing::send(
+                    &mut v,
+                    Resource::new_borrow(p2_tx.rep()),
+                    vec![OutgoingDatagram {
+                        data: vec![byte],
+                        remote_address: Some(
+                            crate::sockets::host_network::socket_addr_to_ip_socket_address(
+                                destination
+                            )
+                        ),
+                    }]
+                )
+                .unwrap(),
+                1
+            );
+        };
+        if p2_first {
+            p2_send(store.data_mut(), 1);
+            send(&mut store, p3_sender, vec![2], Some(destination))
+                .await
+                .unwrap();
+        } else {
+            send(&mut store, p3_sender, vec![1], Some(destination))
+                .await
+                .unwrap();
+            p2_send(store.data_mut(), 2);
+        }
+        assert_eq!(receive(&mut store, receiver).await.unwrap().0, [1]);
+        // P2 can inspect the same receiver queue without waiting: the second
+        // datagram must have been dropped, regardless of which API sent it.
+        let (rx, _) = P2Socket::stream(
+            &mut view(store.data_mut()),
+            Resource::new_borrow(receiver),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            P2Incoming::receive(
+                &mut view(store.data_mut()),
+                Resource::new_borrow(rx.rep()),
+                10
+            )
+            .unwrap()
+            .is_empty()
+        );
+        p2_send(store.data_mut(), 3);
+        assert_eq!(receive(&mut store, receiver).await.unwrap().0, [3]);
+    }
+}

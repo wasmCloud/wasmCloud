@@ -3,6 +3,7 @@ name = "blobby"
 version = "0.6.0"
 authors = ["wasmCloud Team"]
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
