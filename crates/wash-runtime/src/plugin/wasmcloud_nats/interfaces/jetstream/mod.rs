@@ -863,3 +863,7 @@ fn raw_message_err(ctx: &str, error: jetstream::stream::RawMessageError) -> type
         _ => jetstream_err(ctx, error),
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod contract_tests;

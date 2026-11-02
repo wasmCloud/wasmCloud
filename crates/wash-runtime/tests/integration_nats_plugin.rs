@@ -2490,3 +2490,219 @@ async fn filtered_purge_refuses_servers_with_unsafe_purge_replay() -> Result<()>
     .await?;
     Ok(())
 }
+
+/// A binding that serves the fixture's KV handler.
+fn kv_watch_interface(config: &[(&str, &str)]) -> WitInterface {
+    WitInterface {
+        interfaces: ["types", "core", "kv", "kv-handler"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ..nats_interface(config)
+    }
+}
+
+/// Writes `key` until its watch reports it, since a fresh watch only sees what
+/// is written after it attaches.
+async fn put_until_reported(
+    bucket: &async_nats::jetstream::kv::Store,
+    sub: &mut async_nats::Subscriber,
+    key: &str,
+    budget: Duration,
+) -> Result<String> {
+    let prefix = format!("kv:watched:{key}:put:");
+    let deadline = tokio::time::Instant::now() + budget;
+    while tokio::time::Instant::now() < deadline {
+        bucket.put(key, "v".into()).await?;
+        if let Some(line) = wait_for_result(sub, &prefix, Duration::from_millis(500)).await {
+            return Ok(line);
+        }
+    }
+    anyhow::bail!("the watch never reported `{key}`")
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_kv_watch_waits_for_its_bucket_and_reports_every_operation() -> Result<()> {
+    let h = start_nats_version("2.12.8-alpine", false).await?;
+    let host = start_host().await?;
+    let mut sub = h.client.subscribe("test.results").await?;
+
+    host.workload_start(workload_request(
+        "wl-kv-watch",
+        kv_watch_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("bucket-allow", "watched"),
+            ("kv-watches", "watched:items.>"),
+        ]),
+    ))
+    .await
+    .context("failed to start workload")?;
+
+    // Created only once the watch has found the bucket missing, so it attaches
+    // on a retry.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let bucket =
+        h.js.create_key_value(async_nats::jetstream::kv::Config {
+            bucket: "watched".to_string(),
+            history: 5,
+            ..Default::default()
+        })
+        .await?;
+    put_until_reported(&bucket, &mut sub, "items.a", Duration::from_secs(30)).await?;
+
+    bucket.put("skipped.x", "outside".into()).await?;
+    bucket.put("items.b", "fail:refused".into()).await?;
+    bucket.delete("items.a").await?;
+    bucket.purge("items.b").await?;
+    // One watch delivers in revision order, so every event before the purge
+    // is read here, the skipped key's included had it been delivered.
+    let mut lines = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !lines
+        .iter()
+        .any(|l: &String| l.starts_with("kv:watched:items.b:purge:"))
+    {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match wait_for_result(&mut sub, "kv:", remaining).await {
+            Some(line) => lines.push(line),
+            None => anyhow::bail!("the purge was never delivered, saw {lines:?}"),
+        }
+    }
+    for expected in [
+        "kv:watched:items.b:put:fail:refused",
+        "kv:watched:items.a:delete:",
+    ] {
+        assert!(
+            lines.iter().any(|l| l == expected),
+            "no `{expected}` in {lines:?}"
+        );
+    }
+    assert!(
+        !lines.iter().any(|l| l.contains("skipped.x")),
+        "a key outside the filter was delivered: {lines:?}"
+    );
+
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-kv-watch".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn replicas_in_a_queue_group_share_one_durable() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+    let subscription = format!("{STREAM}:test.orders.>:last-per-subject:workers");
+    let stream = h.js.get_stream(STREAM).await?;
+    let durables = || async {
+        let mut names = stream.consumer_names();
+        let mut out = Vec::new();
+        while let Some(name) = names.next().await {
+            out.push(name?);
+        }
+        anyhow::Ok(out)
+    };
+    // The second replica starts only once the first has created the durable,
+    // so it is the one that attaches, with limits that differ from it.
+    for (workload_id, max_deliver) in [("wl-queue-a", "5"), ("wl-queue-b", "3")] {
+        host.workload_start(workload_request(
+            workload_id,
+            nats_interface(&[
+                ("servers", &h.nats_url),
+                ("subject-allow", "test.>"),
+                ("stream-allow", STREAM),
+                ("bucket-allow", COUNTS_BUCKET),
+                ("max-deliver", max_deliver),
+                ("jetstream-subscriptions", &subscription),
+            ]),
+        ))
+        .await
+        .context("failed to start workload")?;
+        timeout(Duration::from_secs(20), async {
+            while durables().await?.is_empty() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let consumers = durables().await?;
+    assert_eq!(
+        consumers.len(),
+        1,
+        "expected one shared durable: {consumers:?}"
+    );
+    assert!(consumers[0].starts_with("workers_"), "{consumers:?}");
+    let info = stream.consumer_info(&consumers[0]).await?;
+    assert_eq!(info.config.max_deliver, 5, "the attach rewrote the durable");
+
+    // With the creator gone, only the replica that attached can deliver.
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-queue-a".into(),
+    })
+    .await?;
+    assert_eq!(durables().await?, consumers, "the shared durable went away");
+    let mut sub = h.client.subscribe("test.results").await?;
+    for i in 0..4 {
+        publish_to_stream(&h, &format!("test.orders.q{i}"), &format!("queued-{i}")).await?;
+    }
+    let mut handled = std::collections::BTreeSet::new();
+    while handled.len() < 4 {
+        let line = wait_for_result(&mut sub, "handled:queued-", Duration::from_secs(20))
+            .await
+            .with_context(|| format!("only {handled:?} were handled"))?;
+        handled.insert(line.split(':').nth(1).unwrap_or_default().to_string());
+    }
+    assert_eq!(
+        handled.into_iter().collect::<Vec<_>>(),
+        ["queued-0", "queued-1", "queued-2", "queued-3"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_subscription_attaches_once_its_stream_is_provisioned() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+    host.workload_start(workload_request(
+        "wl-late-stream",
+        nats_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>,late.>"),
+            ("stream-allow", format!("{STREAM},LATE").as_str()),
+            ("bucket-allow", COUNTS_BUCKET),
+            ("jetstream-subscriptions", "LATE:late.>:all"),
+        ]),
+    ))
+    .await
+    .context("failed to start workload")?;
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    h.js.create_stream(async_nats::jetstream::stream::Config {
+        name: "LATE".to_string(),
+        subjects: vec!["late.>".to_string()],
+        ..Default::default()
+    })
+    .await?;
+    let mut sub = h.client.subscribe("test.results").await?;
+    // Published before the retry attaches, which `deliver-policy: all` still
+    // delivers whichever side of the attach each one lands on.
+    publish_to_stream(&h, "late.one", "older").await?;
+    publish_to_stream(&h, "late.one", "latest").await?;
+    let mut handled = std::collections::BTreeSet::new();
+    while handled.len() < 2 {
+        let line = wait_for_result(&mut sub, "handled:", Duration::from_secs(30))
+            .await
+            .with_context(|| format!("only {handled:?} were handled from the late stream"))?;
+        handled.insert(line.split(':').nth(1).unwrap_or_default().to_string());
+    }
+    assert_eq!(handled.into_iter().collect::<Vec<_>>(), ["latest", "older"]);
+    Ok(())
+}

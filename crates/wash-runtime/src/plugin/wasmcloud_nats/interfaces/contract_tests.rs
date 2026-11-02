@@ -23,7 +23,7 @@ fn borrow<T: 'static>(resource: &Resource<T>) -> Resource<T> {
     Resource::new_borrow(resource.rep())
 }
 
-fn message(subject: &str, body: &[u8]) -> types::NatsMessage {
+pub(super) fn message(subject: &str, body: &[u8]) -> types::NatsMessage {
     types::NatsMessage {
         subject: subject.into(),
         body: body.into(),
@@ -32,7 +32,7 @@ fn message(subject: &str, body: &[u8]) -> types::NatsMessage {
     }
 }
 
-fn expect_denied<T>(result: Result<T, types::NatsError>) -> types::Denial {
+pub(super) fn expect_denied<T>(result: Result<T, types::NatsError>) -> types::Denial {
     match result {
         Err(types::NatsError::Denied(denial)) => denial,
         Err(other) => panic!("expected a denial, got {other:?}"),
@@ -40,9 +40,16 @@ fn expect_denied<T>(result: Result<T, types::NatsError>) -> types::Denial {
     }
 }
 
+pub(super) fn expect_not_found<T: std::fmt::Debug>(result: Result<T, types::NatsError>) {
+    assert!(
+        matches!(result, Err(types::NatsError::NotFound(_))),
+        "expected not-found, got {result:?}"
+    );
+}
+
 /// Lifts both layers of a `run_concurrent` result: the store faulting, then
 /// the body's own error.
-fn finished(result: wasmtime::Result<wasmtime::Result<()>>) -> anyhow::Result<()> {
+pub(super) fn finished(result: wasmtime::Result<wasmtime::Result<()>>) -> anyhow::Result<()> {
     match result {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) | Err(e) => Err(anyhow::anyhow!("{e:#}")),
@@ -50,10 +57,10 @@ fn finished(result: wasmtime::Result<wasmtime::Result<()>>) -> anyhow::Result<()
 }
 
 /// Per-test names, so every test can share one `NATS_URL` server.
-struct Scope {
-    subjects: String,
-    stream: String,
-    bucket: String,
+pub(super) struct Scope {
+    pub(super) subjects: String,
+    pub(super) stream: String,
+    pub(super) bucket: String,
 }
 
 impl Scope {
@@ -66,17 +73,17 @@ impl Scope {
         }
     }
 
-    fn subject(&self, leaf: &str) -> String {
+    pub(super) fn subject(&self, leaf: &str) -> String {
         format!("{}.{leaf}", self.subjects)
     }
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     server: NatsServer,
-    plugin: Arc<WasmcloudNats>,
+    pub(super) plugin: Arc<WasmcloudNats>,
     config: NatsConfig,
-    conn: Arc<ConnHandle>,
-    scope: Scope,
+    pub(super) conn: Arc<ConnHandle>,
+    pub(super) scope: Scope,
 }
 
 /// Deletes the scope's stream and bucket from a `NATS_URL` server, failed
@@ -109,7 +116,7 @@ impl Drop for Fixture {
     }
 }
 
-async fn fixture() -> anyhow::Result<Fixture> {
+pub(super) async fn fixture() -> anyhow::Result<Fixture> {
     #[cfg(feature = "wasi-tls")]
     crate::init_crypto();
     let server = NatsServer::start().await?;
@@ -167,7 +174,7 @@ async fn deny_all(fixture: &Fixture) -> anyhow::Result<Arc<ConnHandle>> {
     acquire(&fixture.plugin, "other", "other", &denied).await
 }
 
-fn new_store(
+pub(super) fn new_store(
     workload_id: &str,
     plugin: Option<&Arc<WasmcloudNats>>,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
