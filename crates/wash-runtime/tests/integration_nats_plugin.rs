@@ -2706,3 +2706,137 @@ async fn a_subscription_attaches_once_its_stream_is_provisioned() -> Result<()> 
     assert_eq!(handled.into_iter().collect::<Vec<_>>(), ["latest", "older"]);
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_recreated_kv_bucket_replays_early_writes_during_consumer_recovery() -> Result<()> {
+    let h = start_nats_version("2.12.8-alpine", false).await?;
+    let config = async_nats::jetstream::kv::Config {
+        bucket: "watched".into(),
+        history: 5,
+        ..Default::default()
+    };
+    let bucket = h.js.create_key_value(config.clone()).await?;
+    for _ in 0..64 {
+        bucket.put("padding", "old".into()).await?;
+    }
+
+    // Forward a test domain's API calls, with a gate on consumer creation.
+    let mut api = h.client.subscribe("$JS.RECOVERY.API.>").await?;
+    let (block_creates, create_gate) = tokio::sync::watch::channel(false);
+    let (attempts, mut attempted) = tokio::sync::mpsc::channel(16);
+    h.client.flush().await?;
+    let client = h.client.clone();
+    let proxy = tokio::spawn(async move {
+        while let Some(request) = api.next().await {
+            let Some(reply) = request.reply else {
+                continue;
+            };
+            let operation = request
+                .subject
+                .strip_prefix("$JS.RECOVERY.API.")
+                .context("unexpected API subject")?;
+            let blocked = *create_gate.borrow();
+            let response = if blocked && operation.starts_with("CONSUMER.CREATE.") {
+                let body: serde_json::Value = serde_json::from_slice(&request.payload)?;
+                let _ = attempts.try_send(body);
+                bytes::Bytes::from_static(
+                    br#"{"error":{"code":404,"err_code":10059,"description":"stream not found"}}"#,
+                )
+            } else {
+                client
+                    .request(format!("$JS.API.{operation}"), request.payload)
+                    .await?
+                    .payload
+            };
+            client.publish(reply, response).await?;
+        }
+        anyhow::Ok(())
+    });
+
+    let host = start_host().await?;
+    let mut sub = h.client.subscribe("test.results").await?;
+    host.workload_start(workload_request(
+        "wl-kv-recreated",
+        kv_watch_interface(&[
+            ("servers", &h.nats_url),
+            ("subject-allow", "test.>"),
+            ("bucket-allow", "watched"),
+            ("jetstream-domain", "RECOVERY"),
+            ("kv-watches", "watched:items.>"),
+        ]),
+    ))
+    .await?;
+    put_until_reported(&bucket, &mut sub, "items.ready", Duration::from_secs(30)).await?;
+    let checkpoint = bucket.put("items.checkpoint", "old-head".into()).await?;
+    wait_for_result(
+        &mut sub,
+        "kv:watched:items.checkpoint:put:old-head",
+        Duration::from_secs(20),
+    )
+    .await
+    .context("the old checkpoint was never delivered")?;
+
+    let stream = h.js.get_stream("KV_watched").await?;
+    let mut consumers = stream.consumer_names();
+    let name = consumers
+        .next()
+        .await
+        .context("the watch has no consumer")??;
+    let info = stream.consumer_info(&name).await?;
+    let deliver_subject = info.config.deliver_subject.context("no deliver subject")?;
+
+    // A replacement consumer's heartbeats reset its delivery sequence,
+    // which sends the SDK into its internal recreation loop.
+    block_creates.send_replace(true);
+    stream.delete_consumer(&name).await?;
+    stream
+        .create_consumer(async_nats::jetstream::consumer::push::Config {
+            name: Some(name),
+            deliver_subject,
+            filter_subject: "$KV.watched.items.>".into(),
+            deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::New,
+            ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
+            idle_heartbeat: Duration::from_millis(500),
+            ..Default::default()
+        })
+        .await?;
+    let attempt = timeout(Duration::from_secs(20), attempted.recv())
+        .await
+        .context("the SDK did not retry consumer creation")?
+        .context("the ordered consumer never retried creation")?;
+    assert_eq!(attempt["config"]["opt_start_seq"], checkpoint + 1);
+
+    h.js.delete_key_value("watched").await?;
+    let bucket = h.js.create_key_value(config).await?;
+    for (key, value) in [
+        ("items.first", "early-first"),
+        ("items.second", "early-second"),
+    ] {
+        assert!(bucket.put(key, value.into()).await? < checkpoint);
+    }
+    block_creates.send_replace(false);
+
+    let expected = std::collections::BTreeSet::from([
+        "kv:watched:items.first:put:early-first".to_string(),
+        "kv:watched:items.second:put:early-second".to_string(),
+    ]);
+    let mut delivered = std::collections::BTreeSet::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while delivered != expected {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let line = wait_for_result(&mut sub, "kv:watched:items.", remaining)
+            .await
+            .with_context(|| format!("early writes were skipped: {delivered:?}"))?;
+        if expected.contains(&line) {
+            delivered.insert(line);
+        }
+    }
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-kv-recreated".into(),
+    })
+    .await?;
+    proxy.abort();
+    let _ = proxy.await;
+    Ok(())
+}
