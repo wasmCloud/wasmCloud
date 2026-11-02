@@ -1160,8 +1160,9 @@ impl PluginBindingSet {
         if !refused.is_empty() {
             findings.push(format!(
                 "it sets {}, which belong to the operator; a manifest that set them could point \
-                 itself at another backend or widen its own grant. Ask the operator to declare \
-                 them under `host.plugins`",
+                 itself at another backend, widen its own grant, or decide how much host time \
+                 its connections take. Remove them from the manifest, or ask the operator to \
+                 declare them under `host.plugins`",
                 refused.join(", "),
             ));
         }

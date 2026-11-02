@@ -1336,6 +1336,8 @@ pub struct DevConfig {
 
     /// Optional Redis connection URL for the WASI keyvalue plugin.
     /// Example: redis://127.0.0.1:6379
+    /// The query may tune the connection with the same keys a host binding
+    /// takes, e.g. `?backend-response-timeout-ms=500`.
     /// When set, takes precedence over wasi_keyvalue_path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_keyvalue_redis_url: Option<url::Url>,
