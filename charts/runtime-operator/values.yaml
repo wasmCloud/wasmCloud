@@ -785,7 +785,9 @@ runtime:
       #                     backend-reconnect-max-delay-ms  longest pause
       #                       between redials (default 300, max 600000)
       #                     backend-connection-timeout-ms   cap on one
-      #                       connection attempt (default 3000, 1 to 600000)
+      #                       connection attempt (default 3000, 1 to 600000);
+      #                       with the two above, one whole redial must fit
+      #                       in 600000ms or the binding is refused
       #                     backend-response-timeout-ms     cap on one
       #                       command's reply (default none: a large SCAN or
       #                       MGET can be slow, and a timed-out command still
