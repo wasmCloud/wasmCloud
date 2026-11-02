@@ -28,6 +28,8 @@ pub struct Key {
     pub aliases: &'static [&'static str],
     /// Who may write it.
     pub ownership: KeyOwnership,
+    /// Whether this key selects NATS protocol authentication.
+    pub auth: bool,
 }
 
 impl Key {
@@ -42,14 +44,16 @@ const fn host(canonical: &'static str) -> Key {
         canonical,
         aliases: &[],
         ownership: KeyOwnership::Host,
+        auth: false,
     }
 }
 
-const fn host_aliased(canonical: &'static str, aliases: &'static [&'static str]) -> Key {
+const fn auth(canonical: &'static str, aliases: &'static [&'static str]) -> Key {
     Key {
         canonical,
         aliases,
         ownership: KeyOwnership::Host,
+        auth: true,
     }
 }
 
@@ -59,6 +63,7 @@ const fn ceiling(canonical: &'static str) -> Key {
         canonical,
         aliases: &[],
         ownership: KeyOwnership::HostCeiling,
+        auth: false,
     }
 }
 
@@ -67,6 +72,7 @@ const fn workload(canonical: &'static str) -> Key {
         canonical,
         aliases: &[],
         ownership: KeyOwnership::Workload,
+        auth: false,
     }
 }
 
@@ -84,15 +90,15 @@ pub const KEYS: &[Key] = &[
     host("name"),
     host("jetstream-domain"),
     host("inbox-prefix"),
-    host_aliased("creds", &["creds-file"]),
-    host("jwt"),
-    host_aliased("nkey-seed", &["nkey"]),
-    host_aliased("nkey-seed-file", &["nkey-file"]),
-    host_aliased("username", &["user"]),
-    host("password"),
-    host("password-file"),
-    host("token"),
-    host("token-file"),
+    auth("creds", &["creds-file"]),
+    auth("jwt", &[]),
+    auth("nkey-seed", &["nkey"]),
+    auth("nkey-seed-file", &["nkey-file"]),
+    auth("username", &["user"]),
+    auth("password", &[]),
+    auth("password-file", &[]),
+    auth("token", &[]),
+    auth("token-file", &[]),
     host("jwt-as-token"),
     host("tls-ca"),
     host("tls-cert"),
@@ -186,6 +192,11 @@ pub fn host_owned() -> impl Iterator<Item = &'static str> {
     KEYS.iter()
         .filter(|key| key.ownership == KeyOwnership::Host)
         .flat_map(Key::spellings)
+}
+
+/// NATS protocol authentication keys, including aliases.
+pub fn auth_keys() -> impl Iterator<Item = &'static str> {
+    KEYS.iter().filter(|key| key.auth).flat_map(Key::spellings)
 }
 
 /// The grant keys a workload may narrow, every spelling.
