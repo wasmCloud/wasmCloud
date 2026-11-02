@@ -1,14 +1,14 @@
 use super::*;
 
-const API: &str = "test:workload/api@0.1.0";
-const EXPORTER: &str = r#"(component
+pub(super) const API: &str = "test:workload/api@0.1.0";
+pub(super) const EXPORTER: &str = r#"(component
     (core module $m (func (export "f") (result i32) i32.const 42))
     (core instance $m (instantiate $m))
     (func $f (result u32) (canon lift (core func $m "f")))
     (instance $api (export "f" (func $f)))
     (export "test:workload/api@0.1.0" (instance $api)))"#;
 
-fn engine() -> &'static wasmtime::Engine {
+pub(super) fn engine() -> &'static wasmtime::Engine {
     static ENGINE: std::sync::OnceLock<wasmtime::Engine> = std::sync::OnceLock::new();
     ENGINE.get_or_init(|| {
         crate::init_crypto();
@@ -21,7 +21,7 @@ fn engine() -> &'static wasmtime::Engine {
     })
 }
 
-fn component(name: &str, wat: &str) -> WorkloadComponent {
+pub(super) fn component(name: &str, wat: &str) -> WorkloadComponent {
     WorkloadComponent::new(
         "contracts",
         "contracts",
@@ -36,7 +36,7 @@ fn component(name: &str, wat: &str) -> WorkloadComponent {
     )
 }
 
-fn service(wat: &str) -> WorkloadService {
+pub(super) fn service(wat: &str) -> WorkloadService {
     WorkloadService::new(
         "contracts",
         "contracts",
@@ -50,7 +50,7 @@ fn service(wat: &str) -> WorkloadService {
     )
 }
 
-async fn resolve(
+pub(super) async fn resolve(
     service: Option<WorkloadService>,
     components: impl IntoIterator<Item = WorkloadComponent>,
 ) -> anyhow::Result<ResolvedWorkload> {

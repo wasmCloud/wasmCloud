@@ -9027,3 +9027,9 @@ mod lifecycle_tests;
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "workload_contract_tests.rs"]
 mod contract_tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "workload_runtime_tests.rs"]
+mod runtime_tests;
