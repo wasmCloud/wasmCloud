@@ -133,22 +133,17 @@ impl RedisKeyValue {
 
 /// `config` key: how many times a dropped connection is redialed before the
 /// call waiting on it fails. The v1 redis provider's name for it.
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 pub(crate) const RECONNECT_NUM_RETRIES_KEY: &str = "backend-reconnect-num-retries";
 /// `config` key: the longest pause, in milliseconds, between redial attempts.
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 pub(crate) const RECONNECT_MAX_DELAY_MS_KEY: &str = "backend-reconnect-max-delay-ms";
 /// `config` key: how long, in milliseconds, one connection attempt may take.
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 pub(crate) const CONNECTION_TIMEOUT_MS_KEY: &str = "backend-connection-timeout-ms";
 /// `config` key: how long, in milliseconds, one command may wait for its reply.
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 pub(crate) const RESPONSE_TIMEOUT_MS_KEY: &str = "backend-response-timeout-ms";
 
 /// Every redis connection setting a binding's `config` may carry. Each is the
 /// operator's: the multiplexed plugins' `KEYVALUE_HOST_OWNED_KEYS` claims
 /// them all, so a workload under `workloadConfig: deny` cannot set one.
-#[cfg(all(test, feature = "wasm_component_model_implements"))]
 pub(crate) const CONNECTION_SETTING_KEYS: &[&str] = &[
     RECONNECT_NUM_RETRIES_KEY,
     RECONNECT_MAX_DELAY_MS_KEY,
@@ -158,10 +153,8 @@ pub(crate) const CONNECTION_SETTING_KEYS: &[&str] = &[
 
 /// Upper bound on [`RECONNECT_NUM_RETRIES_KEY`]. A call that finds the
 /// connection dead waits for every redial, so this bounds that wait.
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 const MAX_RECONNECT_NUM_RETRIES: u64 = 1_000;
 /// Upper bound on each millisecond setting (ten minutes).
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 const MAX_SETTING_MS: u64 = 600_000;
 
 /// How a redis keyvalue backend dials, redials, and waits on its server.
@@ -206,7 +199,6 @@ impl ConnectionSettings {
     ///
     /// A value that is not a whole number in range, a timeout of zero, or one
     /// key given twice under different spellings with different values.
-    #[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
     pub(crate) fn from_config(config: &HashMap<String, String>) -> anyhow::Result<Self> {
         let mut settings = Self::default();
         if let Some(v) = setting(config, RECONNECT_NUM_RETRIES_KEY)? {
@@ -243,20 +235,6 @@ impl ConnectionSettings {
         Ok(settings)
     }
 
-    /// A stable rendering of the parsed values, so two bindings that spell the
-    /// same settings differently still share one pooled connection, and two
-    /// with different settings never do.
-    #[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
-    pub(crate) fn pool_key_suffix(&self) -> String {
-        let response = self
-            .response_timeout_ms
-            .map_or_else(|| "none".to_string(), |ms| ms.to_string());
-        format!(
-            "retries={};max-delay-ms={};connect-ms={};response-ms={response}",
-            self.reconnect_num_retries, self.reconnect_max_delay_ms, self.connection_timeout_ms
-        )
-    }
-
     fn connection_config(&self) -> redis::AsyncConnectionConfig {
         let mut config = redis::AsyncConnectionConfig::new()
             .set_connection_timeout(Duration::from_millis(self.connection_timeout_ms));
@@ -282,7 +260,6 @@ impl ConnectionSettings {
             .min(self.reconnect_max_delay_ms)
     }
 
-    #[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
     /// The longest one redial can take: every attempt running into the
     /// connection timeout, with the longest pause between each. Callers that
     /// find the connection dead queue behind the redial for all of it.
@@ -304,14 +281,7 @@ const REDIAL_BASE_DELAY_MS: u64 = 50;
 /// `url` without the connection settings in its query, and those settings.
 fn split_connection_settings(url: &url::Url) -> anyhow::Result<(url::Url, ConnectionSettings)> {
     let is_setting = |key: &str| {
-        let key = crate::plugin::bindings::canonical_key(key);
-        [
-            RECONNECT_NUM_RETRIES_KEY,
-            RECONNECT_MAX_DELAY_MS_KEY,
-            CONNECTION_TIMEOUT_MS_KEY,
-            RESPONSE_TIMEOUT_MS_KEY,
-        ]
-        .contains(&key.as_str())
+        CONNECTION_SETTING_KEYS.contains(&crate::plugin::bindings::canonical_key(key).as_str())
     };
     let (settings, rest): (Vec<_>, Vec<_>) = url
         .query_pairs()
@@ -337,7 +307,6 @@ fn split_connection_settings(url: &url::Url) -> anyhow::Result<(url::Url, Connec
 }
 
 /// The value of `key` in `config`, in any spelling that folds to it.
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 fn setting<'a>(config: &'a HashMap<String, String>, key: &str) -> anyhow::Result<Option<&'a str>> {
     let mut found: Option<(&str, &str)> = None;
     for (k, v) in config {
@@ -355,7 +324,6 @@ fn setting<'a>(config: &'a HashMap<String, String>, key: &str) -> anyhow::Result
     Ok(found.map(|(_, v)| v))
 }
 
-#[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 fn parse_bounded(key: &str, value: &str, min: u64, max: u64) -> anyhow::Result<u64> {
     let parsed: u64 = value.trim().parse().map_err(|_| {
         anyhow::anyhow!("redis keyvalue config `{key}` must be a whole number, got {value:?}")
@@ -512,7 +480,9 @@ impl Connection {
         if self.idle_for() < IDLE_PROBE_AFTER {
             return Ok(());
         }
-        self.query_read::<String>(&redis::cmd("PING")).await.map(drop)
+        self.query_read::<String>(&redis::cmd("PING"))
+            .await
+            .map(drop)
     }
 
     fn live(&self) -> Option<(redis::aio::MultiplexedConnection, u64)> {
@@ -604,22 +574,41 @@ impl Connection {
         }
     }
 
+    /// Send `cmd` on `live`. A command that proved the connection unusable
+    /// drops it, and the next command redials.
+    async fn run<T: redis::FromRedisValue>(
+        &self,
+        (mut conn, generation): (redis::aio::MultiplexedConnection, u64),
+        cmd: &redis::Cmd,
+    ) -> redis::RedisResult<T> {
+        let result = cmd.query_async(&mut conn).await;
+        match &result {
+            Ok(_) => self.mark_reply(),
+            Err(e) if proves_connection_unusable(e) => self.discard(generation),
+            Err(_) => {}
+        }
+        result
+    }
+
     /// Send `cmd` once, telling a failure to connect from a failed command.
-    /// A command that proved the connection dead drops it, and the next
-    /// command redials.
     async fn send<T: redis::FromRedisValue>(&self, cmd: &redis::Cmd) -> Result<T, Failure> {
-        let (mut conn, generation) = self.get().await.map_err(Failure::Dial)?;
-        match cmd.query_async(&mut conn).await {
-            Ok(value) => {
-                self.mark_reply();
-                Ok(value)
+        let live = self.get().await.map_err(Failure::Dial)?;
+        self.run(live, cmd).await.map_err(Failure::Command)
+    }
+
+    /// Make a read with `attempt`, and once more if the connection dropped
+    /// under the first try (see [`is_dropped_connection`]).
+    async fn retrying_read<T, F, Fut>(&self, attempt: F) -> redis::RedisResult<T>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, Failure>>,
+    {
+        match attempt().await {
+            Err(Failure::Command(e)) if is_dropped_connection(&e) => {
+                tracing::debug!(error = %e, "redis connection dropped; retrying a read once");
+                attempt().await.map_err(Failure::into_inner)
             }
-            Err(e) => {
-                if proves_connection_unusable(&e) {
-                    self.discard(generation);
-                }
-                Err(Failure::Command(e))
-            }
+            other => other.map_err(Failure::into_inner),
         }
     }
 
@@ -657,13 +646,7 @@ impl Connection {
         &self,
         cmd: &redis::Cmd,
     ) -> redis::RedisResult<T> {
-        match self.send(cmd).await {
-            Err(Failure::Command(e)) if is_dropped_connection(&e) => {
-                tracing::debug!(error = %e, "redis connection dropped; retrying a read once");
-                self.send(cmd).await.map_err(Failure::into_inner)
-            }
-            other => other.map_err(Failure::into_inner),
-        }
+        self.retrying_read(|| self.send(cmd)).await
     }
 
     /// Fetch one `SCAN` page of keys matching `pattern`, as `(next cursor,
@@ -693,35 +676,35 @@ impl Connection {
         pattern: &str,
         count: usize,
     ) -> redis::RedisResult<(u64, Vec<K>)> {
-        let mut retried = false;
-        loop {
-            let (mut conn, generation) = self.get().await?;
-            let cursor = decode_cursor(token, generation)?;
-            let scan = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(pattern)
-                .arg("COUNT")
-                .arg(count)
-                .clone();
-            match scan.query_async::<(u64, Vec<K>)>(&mut conn).await {
-                Ok((next, keys)) => {
-                    self.mark_reply();
-                    return Ok((encode_cursor(generation, next)?, keys));
-                }
-                Err(e) => {
-                    if proves_connection_unusable(&e) {
-                        self.discard(generation);
-                    }
-                    if !retried && is_dropped_connection(&e) {
-                        tracing::debug!(error = %e, "redis connection dropped; retrying a SCAN page once");
-                        retried = true;
-                        continue;
-                    }
-                    return Err(e);
-                }
-            }
-        }
+        self.retrying_read(|| self.scan_once(token, pattern, count))
+            .await
+    }
+
+    /// One try at a `SCAN` page for [`Connection::scan_page`]. A refused
+    /// cursor is reported as a failed command: it is not a dropped
+    /// connection, so it is not retried.
+    async fn scan_once<K: redis::FromRedisValue>(
+        &self,
+        token: u64,
+        pattern: &str,
+        count: usize,
+    ) -> Result<(u64, Vec<K>), Failure> {
+        let live = self.get().await.map_err(Failure::Dial)?;
+        let generation = live.1;
+        let cursor = decode_cursor(token, generation).map_err(Failure::Command)?;
+        let scan = redis::cmd("SCAN")
+            .arg(cursor)
+            .arg("MATCH")
+            .arg(pattern)
+            .arg("COUNT")
+            .arg(count)
+            .clone();
+        let (next, keys) = self
+            .run::<(u64, Vec<K>)>(live, &scan)
+            .await
+            .map_err(Failure::Command)?;
+        let next = encode_cursor(generation, next).map_err(Failure::Command)?;
+        Ok((next, keys))
     }
 }
 
@@ -1298,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    fn the_pool_key_suffix_follows_the_parsed_values() {
+    fn settings_compare_by_parsed_value_not_spelling() {
         let a = ConnectionSettings::from_config(&config(&[("BACKEND_RESPONSE_TIMEOUT_MS", "500")]))
             .unwrap();
         let b =
@@ -1306,12 +1289,9 @@ mod tests {
                 .unwrap();
         let c = ConnectionSettings::from_config(&config(&[("backend-response-timeout-ms", "600")]))
             .unwrap();
-        assert_eq!(a.pool_key_suffix(), b.pool_key_suffix());
-        assert_ne!(a.pool_key_suffix(), c.pool_key_suffix());
-        assert_ne!(
-            a.pool_key_suffix(),
-            ConnectionSettings::default().pool_key_suffix()
-        );
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, ConnectionSettings::default());
     }
 
     /// The first connect is not put through the reconnect backoff: a refused

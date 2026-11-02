@@ -221,15 +221,14 @@ impl BackendProvider<KvId> for RedisProvider {
         // Pool by url AND prefix: two interfaces with the same url but different
         // prefixes are different logical stores and must not share an instance.
         // The connection settings are part of the key too, so a binding with a
-        // tighter timeout never inherits another's connection. A config whose
-        // settings do not parse is not pooled; `instantiate` reports why.
+        // tighter timeout never inherits another's connection. They go in
+        // parsed, so two spellings of the same settings share one. A config
+        // whose settings do not parse is not pooled; `instantiate` reports why.
+        // The key never leaves this process, so the `Debug` rendering will do.
         let url = config.get("url")?;
         let prefix = config.get("prefix").map(String::as_str).unwrap_or("");
         let settings = ConnectionSettings::from_config(config).ok()?;
-        Some(format!(
-            "{url}\u{0}{prefix}\u{0}{}",
-            settings.pool_key_suffix()
-        ))
+        Some(format!("{url}\u{0}{prefix}\u{0}{settings:?}"))
     }
     fn backend_type(&self) -> &'static str {
         "redis"
