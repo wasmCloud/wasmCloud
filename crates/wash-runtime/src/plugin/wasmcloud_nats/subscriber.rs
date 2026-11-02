@@ -576,6 +576,9 @@ const KV_REBUILD_REPORT_THRESHOLD: u32 = 10;
 /// How often a run of KV watch rebuilds is worth reporting.
 const KV_REBUILD_REPORT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Bucket identity checks stay live during ordered-consumer recovery.
+const KV_BUCKET_PROBE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Delay before rebuilding a push consumer whose delivery stream ended.
 const RESUBSCRIBE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -2172,20 +2175,10 @@ pub(super) async fn spawn_kv_watches(
         let cancel_token = cancel_token.clone();
 
         tokio::spawn(async move {
-            // A KV watch is an ordered consumer underneath, which recovers
-            // from a reconnect on its own and losslessly. The rebuild is kept
-            // anyway — as belt and braces for the failures the ordered
-            // consumer does not heal, chiefly a bucket deleted and recreated
-            // under the watch — and made lossless in the same way: every
-            // rebuild resumes at the revision after the last one dispatched,
-            // rather than at whatever the bucket holds when it reattaches.
             let mut reconnects = conn.reconnects.subscribe();
             reconnects.mark_unchanged();
-            // The last revision handed to the component, and the bucket's
-            // creation time — a recreated bucket restarts revisions at 1, so a
-            // position held for the old one would sit past the new one's head
-            // and the watch would deliver nothing ever again.
-            let mut last_revision: Option<u64> = None;
+            // New watches skip history; replacement buckets replay from revision 1.
+            let mut next_revision: Option<u64> = None;
             let mut bucket_created: Option<i128> = None;
             // A bucket that is briefly absent — a server restart, provisioning
             // that has not caught up — comes back within seconds. A bucket that
@@ -2236,20 +2229,16 @@ pub(super) async fn spawn_kv_watches(
                 if bucket_created.is_some_and(|previous| previous != created) {
                     warn!(
                         bucket = %watch.bucket,
-                        "kv bucket was recreated, restarting the watch from its head"
+                        "kv bucket was recreated, replaying retained revisions"
                     );
-                    last_revision = None;
+                    next_revision = Some(1);
                 }
                 bucket_created = Some(created);
 
-                // With nothing dispatched yet the watch starts from now, which
-                // is what the interface promises a fresh watch. After that,
-                // resuming at the next revision is what keeps the writes made
-                // during an outage from being silently skipped.
-                let watching = match last_revision {
+                let watching = match next_revision {
                     Some(revision) => {
                         store_kv
-                            .watch_from_revision(watch.filter.as_str(), revision.saturating_add(1))
+                            .watch_from_revision(watch.filter.as_str(), revision)
                             .await
                     }
                     None => store_kv.watch(watch.filter.as_str()).await,
@@ -2270,28 +2259,23 @@ pub(super) async fn spawn_kv_watches(
                     }
                 };
                 consecutive_failures = 0;
+                let mut bucket_probe = tokio::time::interval_at(
+                    tokio::time::Instant::now() + KV_BUCKET_PROBE,
+                    KV_BUCKET_PROBE,
+                );
+                bucket_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
                 loop {
-                    // Taken before an entry is, so that waiting for capacity
-                    // never blinds the loop to cancellation or a reconnect —
-                    // see the same ordering in the JetStream loop.
-                    let permit = tokio::select! {
-                        acquired = in_flight.clone().acquire_owned() => match acquired {
-                            Ok(p) => p,
-                            Err(_) => break 'watch,
-                        },
-                        _ = reconnects.changed() => {
-                            warn!(
-                                bucket = %watch.bucket,
-                                "reconnected to NATS, rebuilding KV watch"
-                            );
-                            break;
-                        }
-                        _ = cancel_token.cancelled() => break 'watch,
-                    };
-
+                    // Reserve capacity before reading; probes and cancellation
+                    // stay live while either capacity or the SDK is pending.
                     tokio::select! {
-                        maybe = stream.next() => {
+                        delivery = async {
+                            let permit = in_flight.clone().acquire_owned().await.ok()?;
+                            Some((permit, stream.next().await))
+                        } => {
+                            let Some((permit, maybe)) = delivery else {
+                                break 'watch;
+                            };
                             let entry = match maybe {
                                 Some(Ok(e)) => e,
                                 // A consumer-level error is this watch's
@@ -2345,9 +2329,8 @@ pub(super) async fn spawn_kv_watches(
                                 None => break,
                             };
 
-                            // Recorded before the entry moves into the handler
-                            // task: this is where a rebuild resumes from.
-                            last_revision = Some(entry.revision);
+                            // Advance before dispatch so rebuilds resume after this entry.
+                            next_revision = Some(entry.revision.saturating_add(1));
 
                             let bucket_for_label = watch.bucket.clone();
                             let key_label = entry.key.clone();
@@ -2390,6 +2373,18 @@ pub(super) async fn spawn_kv_watches(
                                     Ok(Ok(())) => {}
                                 }
                             });
+                        }
+                        _ = bucket_probe.tick() => {
+                            let current = tokio::select! {
+                                current = conn.jetstream.get_key_value(&watch.bucket) => current,
+                                _ = reconnects.changed() => break,
+                                _ = cancel_token.cancelled() => break 'watch,
+                            };
+                            if !current.is_ok_and(|bucket| {
+                                bucket.stream.cached_info().created.unix_timestamp_nanos() == created
+                            }) {
+                                break;
+                            }
                         }
                         _ = reconnects.changed() => {
                             warn!(
