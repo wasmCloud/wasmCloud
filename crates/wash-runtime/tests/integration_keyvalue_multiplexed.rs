@@ -82,7 +82,7 @@ async fn multiplexed_routes_to_redis_and_nats() -> Result<()> {
     // --- build the routing registry from two named host interfaces ---
     let plugin = MultiplexedKeyValue::new()
         .with_provider(Arc::new(RedisProvider))
-        .with_provider(Arc::new(NatsProvider));
+        .with_provider(Arc::new(NatsProvider::default()));
     let interfaces = HashSet::from([
         kv_iface("redis-kv", "redis", &redis_url),
         kv_iface("nats-kv", "nats", &nats_url),

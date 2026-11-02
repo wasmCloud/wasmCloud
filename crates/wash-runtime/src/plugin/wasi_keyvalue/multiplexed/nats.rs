@@ -320,7 +320,17 @@ async fn present_entry(
 /// Provider for [`NatsBackend`], selected by `config.backend = "nats"`. Requires
 /// `config.url` (e.g. `nats://127.0.0.1:4222`).
 #[derive(Default)]
-pub struct NatsProvider;
+pub struct NatsProvider {
+    ignore_discovered_servers: bool,
+}
+
+impl NatsProvider {
+    /// Restrict connections to their configured URL even without an egress policy.
+    pub fn with_ignore_discovered_servers(mut self, ignore: bool) -> Self {
+        self.ignore_discovered_servers = ignore;
+        self
+    }
+}
 
 #[async_trait::async_trait]
 impl BackendProvider<KvId> for NatsProvider {
@@ -339,7 +349,7 @@ impl BackendProvider<KvId> for NatsProvider {
         let url = config
             .get("url")
             .ok_or_else(|| anyhow::anyhow!("nats keyvalue backend requires a 'url' config"))?;
-        let client = connect_nats(url, egress).await?;
+        let client = connect_nats(url, egress, self.ignore_discovered_servers).await?;
         let context = async_nats::jetstream::new(client);
         Ok(Arc::new(NatsBackend {
             context: Arc::new(context),
