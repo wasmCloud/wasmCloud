@@ -751,7 +751,7 @@ async fn redis_backend_follows_a_failover_that_keeps_its_connection_open() -> Re
         .set(BUCKET, "k", b"after".to_vec())
         .await
         .expect_err("the demoted server refuses the write");
-    assert!(format!("{err:?}").contains("READONLY"), "{err:?}");
+    assert!(is_read_only_refusal(&err), "{err:?}");
     backend
         .set(BUCKET, "k", b"after".to_vec())
         .await
@@ -798,7 +798,7 @@ async fn redis_backend_keeps_reading_from_a_server_with_no_primary_to_move_to() 
             .set(BUCKET, "k", b"v".to_vec())
             .await
             .expect_err("a read-only server refuses the write");
-        assert!(format!("{err:?}").contains("READONLY"), "{err:?}");
+        assert!(is_read_only_refusal(&err), "{err:?}");
     }
     assert_eq!(
         proxy.accepted() - before,
@@ -942,4 +942,10 @@ async fn redis_backend_recovers_from_a_redial_refused_at_auth() -> Result<()> {
     assert_eq!(value.as_deref(), Some(b"1".as_slice()));
 
     Ok(())
+}
+
+/// Whether a keyvalue error is a server's read-only refusal. The redis crate
+/// renders the server's `READONLY` reply as `ReadOnly`, so match either case.
+fn is_read_only_refusal(err: &impl std::fmt::Debug) -> bool {
+    format!("{err:?}").to_ascii_lowercase().contains("readonly")
 }

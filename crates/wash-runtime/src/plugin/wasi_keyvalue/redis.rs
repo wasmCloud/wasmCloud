@@ -444,12 +444,12 @@ struct Redials {
 
 /// Why a [`Connection`] call failed: no connection could be made, or the
 /// command failed on one.
-enum Failure {
+enum ConnectionError {
     Dial(redis::RedisError),
     Command(redis::RedisError),
 }
 
-impl Failure {
+impl ConnectionError {
     fn into_inner(self) -> redis::RedisError {
         match self {
             Self::Dial(e) | Self::Command(e) => e,
@@ -682,9 +682,9 @@ impl Connection {
     }
 
     /// Send `cmd` once, telling a failure to connect from a failed command.
-    async fn send<T: redis::FromRedisValue>(&self, cmd: &redis::Cmd) -> Result<T, Failure> {
-        let live = self.get().await.map_err(Failure::Dial)?;
-        self.run(live, cmd).await.map_err(Failure::Command)
+    async fn send<T: redis::FromRedisValue>(&self, cmd: &redis::Cmd) -> Result<T, ConnectionError> {
+        let live = self.get().await.map_err(ConnectionError::Dial)?;
+        self.run(live, cmd).await.map_err(ConnectionError::Command)
     }
 
     /// Make a read with `attempt`, and once more if the connection dropped
@@ -692,14 +692,14 @@ impl Connection {
     async fn retrying_read<T, F, Fut>(&self, attempt: F) -> redis::RedisResult<T>
     where
         F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T, Failure>>,
+        Fut: std::future::Future<Output = Result<T, ConnectionError>>,
     {
         match attempt().await {
-            Err(Failure::Command(e)) if is_dropped_connection(&e) => {
+            Err(ConnectionError::Command(e)) if is_dropped_connection(&e) => {
                 tracing::debug!(error = %e, "redis connection dropped; retrying a read once");
-                attempt().await.map_err(Failure::into_inner)
+                attempt().await.map_err(ConnectionError::into_inner)
             }
-            other => other.map_err(Failure::into_inner),
+            other => other.map_err(ConnectionError::into_inner),
         }
     }
 
@@ -711,7 +711,7 @@ impl Connection {
         cmd: &redis::Cmd,
     ) -> redis::RedisResult<T> {
         self.probe_if_idle().await?;
-        self.send(cmd).await.map_err(Failure::into_inner)
+        self.send(cmd).await.map_err(ConnectionError::into_inner)
     }
 
     /// Send a read, and once more if the connection dropped under the first
@@ -779,10 +779,10 @@ impl Connection {
         token: u64,
         pattern: &str,
         count: usize,
-    ) -> Result<(u64, Vec<K>), Failure> {
-        let live = self.get().await.map_err(Failure::Dial)?;
+    ) -> Result<(u64, Vec<K>), ConnectionError> {
+        let live = self.get().await.map_err(ConnectionError::Dial)?;
         let generation = live.1;
-        let cursor = decode_cursor(token, generation).map_err(Failure::Command)?;
+        let cursor = decode_cursor(token, generation).map_err(ConnectionError::Command)?;
         let scan = redis::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
@@ -793,8 +793,8 @@ impl Connection {
         let (next, keys) = self
             .run::<(u64, Vec<K>)>(live, &scan)
             .await
-            .map_err(Failure::Command)?;
-        let next = encode_cursor(generation, next).map_err(Failure::Command)?;
+            .map_err(ConnectionError::Command)?;
+        let next = encode_cursor(generation, next).map_err(ConnectionError::Command)?;
         Ok((next, keys))
     }
 }
@@ -1399,10 +1399,10 @@ mod tests {
             .expect("nothing listens on the port");
         let elapsed = started.elapsed();
         assert!(err.is_connection_refusal(), "{err}");
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "the first connect took {elapsed:?}"
-        );
+        // Windows retries a refused SYN before reporting it, which takes about
+        // two seconds; the redial schedule above would take tens of seconds.
+        let bound = Duration::from_secs(if cfg!(windows) { 5 } else { 1 });
+        assert!(elapsed < bound, "the first connect took {elapsed:?}");
     }
 
     #[test]
