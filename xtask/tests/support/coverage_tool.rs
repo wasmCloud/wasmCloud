@@ -12,6 +12,10 @@ fn setting<T: std::str::FromStr>(key: &str) -> Option<T> {
         })
 }
 
+fn env(key: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| "unset".into())
+}
+
 fn totals(key: &str) -> String {
     let percent = setting::<f64>(key).unwrap_or(100.0);
     format!(r#"{{"count":10000,"covered":{},"percent":{percent}}}"#, percent * 100.0)
@@ -31,9 +35,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .open("calls.txt")?,
         "{name}\t{}\tcwd={}\tdebug={}\tincremental={}",
         args.join("\t"),
-        std::env::current_dir()?.display(),
-        std::env::var("CARGO_PROFILE_TEST_DEBUG")?,
-        std::env::var("CARGO_INCREMENTAL")?,
+        fs::canonicalize(std::env::current_dir()?)?.display(),
+        env("CARGO_PROFILE_TEST_DEBUG"),
+        env("CARGO_INCREMENTAL"),
     )?;
     let tool;
     if name == "rustup" {
