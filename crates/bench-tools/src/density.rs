@@ -523,16 +523,27 @@ pub fn print_comparison(reports: &[Report]) {
         return;
     };
     eprintln!(
-        "\n== {}: {}, limit {} ==",
+        "\n== {}, limit {} ==",
         first.bench,
-        first.subject,
         render_bytes(first.memory_limit_bytes)
     );
+    // One line per distinct subject, naming the flavours it describes.
+    let mut subjects: Vec<(&str, Vec<&str>)> = Vec::new();
+    for report in reports {
+        match subjects.iter_mut().find(|(s, _)| *s == report.subject) {
+            Some((_, labels)) => labels.push(&report.label),
+            None => subjects.push((&report.subject, vec![&report.label])),
+        }
+    }
+    for (subject, labels) in subjects {
+        eprintln!("{}: {subject}", labels.join(", "));
+    }
+    // Printed once all are known, so the label column fits the longest.
+    let rows = std::cell::RefCell::new(Vec::<(String, Vec<String>)>::new());
     let row = |label: &str, cell: &dyn Fn(&Report) -> String| {
         let cells: Vec<String> = reports.iter().map(cell).collect();
         if cells.iter().any(|c| c != "-") {
-            let cells: Vec<String> = cells.iter().map(|c| format!("{c:>20}")).collect();
-            eprintln!("{label:<26}{}", cells.join(""));
+            rows.borrow_mut().push((label.to_string(), cells));
         }
     };
     // Workload ramps only: a messaging run starts its components once.
@@ -625,6 +636,26 @@ pub fn print_comparison(reports: &[Report]) {
     row("cpu-s total", &|r| {
         or_dash(r.cpu_secs_total, |v| format!("{v:.1}"))
     });
+    let rows = rows.into_inner();
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0) + 2;
+    let columns: Vec<usize> = (0..reports.len())
+        .map(|i| {
+            let widest = rows
+                .iter()
+                .filter_map(|(_, cells)| cells.get(i))
+                .map(String::len)
+                .max();
+            widest.unwrap_or(0).max(18) + 2
+        })
+        .collect();
+    for (label, cells) in rows {
+        let cells: Vec<String> = cells
+            .iter()
+            .zip(&columns)
+            .map(|(c, column)| format!("{c:>column$}"))
+            .collect();
+        eprintln!("{label:<width$}{}", cells.join(""));
+    }
     for report in reports {
         eprintln!("{}: stopped by {}", report.label, report.stop);
     }

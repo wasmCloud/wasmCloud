@@ -247,6 +247,59 @@ impl Peaks {
     }
 }
 
+/// A burst once every message it published has ended, or `settle_by` passed.
+struct Burst {
+    peaks: Peaks,
+    sent: usize,
+    published: Result<()>,
+}
+
+/// Samples peaks until the publisher is done and every message it sent has
+/// ended, or the deliveries have sat idle for a `hold` with some unaccounted:
+/// an ending this bench does not recognise, which still closed its span.
+async fn watch_burst(
+    engine: &Engine,
+    mut publisher: tokio::task::JoinHandle<(usize, Result<()>)>,
+    before: Counts,
+    hold: Duration,
+    settle_by: Instant,
+) -> Result<Burst> {
+    let mut peaks = Peaks::default();
+    let mut published = None;
+    let mut idle_since = None;
+    loop {
+        peaks.sample(engine);
+        if published.is_none() && publisher.is_finished() {
+            published = Some(
+                (&mut publisher)
+                    .await
+                    .context("the publisher should not panic")?,
+            );
+        }
+        idle_since = DELIVERIES
+            .idle()
+            .then(|| idle_since.unwrap_or_else(Instant::now));
+        if let (Some((sent, _)), Some(idle_since)) = (&published, idle_since)
+            && (DELIVERIES.counts().since(before).ended() >= *sent || idle_since.elapsed() >= hold)
+        {
+            break;
+        }
+        if Instant::now() >= settle_by {
+            break;
+        }
+        tokio::time::sleep(SAMPLE_EVERY).await;
+    }
+    let (sent, published) = match published {
+        Some(published) => published,
+        None => publisher.await.context("the publisher should not panic")?,
+    };
+    Ok(Burst {
+        peaks,
+        sent,
+        published,
+    })
+}
+
 fn build_engine(settings: &Settings) -> Result<Engine> {
     // The stock pool, so the ceilings are the ones a default host derives.
     Engine::builder()
@@ -272,10 +325,10 @@ pub(super) async fn run(
     let admission_wait_ms = (hold_ms / 2).max(1);
 
     let engine = build_engine(&settings)?;
-    anyhow::ensure!(
-        engine.process_memory().is_some(),
-        "the engine was built without a process memory guard"
-    );
+    let guard = engine
+        .process_memory()
+        .cloned()
+        .context("the engine was built without a process memory guard")?;
     let limits = MessagingLimits::resolve(None, None, PoolBudget(&engine).into());
     let (host_total, per_component) = (limits.host_total(), limits.per_component_default());
     let messaging = Arc::new(InMemoryMessaging::with_limits(limits));
@@ -351,7 +404,7 @@ pub(super) async fn run(
     let pool_baseline = engine.pool_usage();
     let memories_total = pool_baseline.map(|u| u.memories.total);
     let core_instances_total = pool_baseline.map(|u| u.core_instances.total);
-    let refusals_baseline = Refusals::now(&engine);
+    let refusals_baseline = Refusals::now(&engine, &guard);
     let ceiling = settings.memory_limit / 100 * GUARD_SLACK_PERCENT;
     // A delivery holds at least one linear memory, whichever path builds it.
     let limits: BTreeMap<String, Option<u64>> = [
@@ -384,70 +437,49 @@ pub(super) async fn run(
 
         let before = DELIVERIES.counts();
         DELIVERIES.reset_peak();
-        let refusals_before = Refusals::now(&engine);
+        let refusals_before = Refusals::now(&engine, &guard);
         let step_started = Instant::now();
-
-        // Published from the load generator's runtime, round-robin across the
-        // components, so the burst lands at once and its CPU is not the host's.
-        // Yields how many were published before any error.
-        let mut publisher = {
-            let messaging = Arc::clone(&messaging);
-            let workload_ids = Arc::clone(&workload_ids);
-            let body = hold_ms.to_string().into_bytes();
-            load.runtime.spawn(async move {
-                let mut sent = 0;
-                for workload_id in workload_ids.iter().cycle().take(offered) {
-                    if let Err(e) = messaging.publish(workload_id, SUBJECT, body.clone()).await {
-                        return (sent, Err(anyhow::anyhow!("publishing message {sent}: {e}")));
-                    }
-                    sent += 1;
-                }
-                (sent, Ok(()))
-            })
-        };
 
         // Every message ends one way or another well inside this: a burst
         // drains in waves of one hold each, at the ceiling at worst.
         let waves = offered.div_ceil(binding.unwrap_or(1).max(1) as usize) as u32;
         let settle_by = step_started + settings.msg_hold * (waves + 2) + Duration::from_secs(30);
-        let mut peaks = Peaks::default();
-        let mut published = None;
-        let mut idle_since = None;
-        loop {
-            peaks.sample(&engine);
-            if published.is_none() && publisher.is_finished() {
-                published = Some(
-                    (&mut publisher)
-                        .await
-                        .context("the publisher should not panic")?,
-                );
-            }
-            idle_since = DELIVERIES
-                .idle()
-                .then(|| idle_since.unwrap_or_else(Instant::now));
-            // Idle for a hold with messages unaccounted: an ending this bench
-            // does not recognise, which still closed its delivery's span.
-            if let (Some((sent, _)), Some(idle_since)) = (&published, idle_since)
-                && (DELIVERIES.counts().since(before).ended() >= *sent
-                    || idle_since.elapsed() >= settings.msg_hold)
-            {
-                break;
-            }
-            if Instant::now() >= settle_by {
-                break;
-            }
-            tokio::time::sleep(SAMPLE_EVERY).await;
-        }
-        let (sent, publish_result) = match published {
-            Some(published) => published,
-            None => publisher.await.context("the publisher should not panic")?,
+        // Published, round-robin across the components, and watched from the
+        // load generator's runtime, so neither is counted as the host's CPU.
+        let burst = {
+            let messaging = Arc::clone(&messaging);
+            let workload_ids = Arc::clone(&workload_ids);
+            let engine = engine.clone();
+            let body = hold_ms.to_string().into_bytes();
+            let hold = settings.msg_hold;
+            load.runtime.spawn(async move {
+                let publisher = tokio::spawn(async move {
+                    let mut sent = 0;
+                    for workload_id in workload_ids.iter().cycle().take(offered) {
+                        if let Err(e) = messaging.publish(workload_id, SUBJECT, body.clone()).await
+                        {
+                            return (sent, Err(anyhow::anyhow!("publishing message {sent}: {e}")));
+                        }
+                        sent += 1;
+                    }
+                    (sent, Ok(()))
+                });
+                watch_burst(&engine, publisher, before, hold, settle_by).await
+            })
         };
+        let Burst {
+            peaks,
+            sent,
+            published: publish_result,
+        } = burst
+            .await
+            .context("the burst watcher should not panic")??;
 
         let counts = DELIVERIES.counts().since(before);
         let unaccounted = sent.saturating_sub(counts.ended());
         let peak_in_flight = DELIVERIES.peak.load(Ordering::SeqCst);
         let footprint = measured_footprint(peaks.footprint, "step")?;
-        let refusals_now = Refusals::now(&engine);
+        let refusals_now = Refusals::now(&engine, &guard);
         let in_step = refusals_now.since(refusals_before);
         let (cpu_now, _) = host_cpu(&load.threads);
         let wall_secs = step_started.elapsed().as_secs_f64().max(f64::EPSILON);
@@ -480,7 +512,7 @@ pub(super) async fn run(
         print_step(first, steps.last().expect("just pushed"));
 
         if let Some(stop) = memory_stop(
-            &engine,
+            &guard,
             refusals_now.since(refusals_baseline),
             footprint,
             ceiling,
@@ -516,8 +548,9 @@ pub(super) async fn run(
         subject: format!(
             "{FIXTURE} x{components} (poolSize {}), {hold_ms}ms per delivery, admission wait \
              {admission_wait_ms}ms, ceilings {host_total} host / {per_component} per component, \
-             pool {} memories / {} core instances, {} cores{}",
+             max-guest-memory {}, pool {} memories / {} core instances, {} cores{}",
             flavour.pool_size(),
+            render_bytes(settings.guest_memory),
             memories_total.map_or_else(|| "-".into(), |n| n.to_string()),
             core_instances_total.map_or_else(|| "-".into(), |n| n.to_string()),
             cpu.cores,
@@ -566,8 +599,8 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
 
-    #[tokio::test]
-    async fn messaging_engine_uses_the_requested_guest_memory_budget() -> Result<()> {
+    #[test]
+    fn messaging_engine_uses_the_requested_guest_memory_budget() -> Result<()> {
         let settings = Settings::from_values(|key| match key {
             "WASH_SCALE_GUEST_MEMORY" => Some("64KiB".into()),
             "WASH_SCALE_MEMORY_LIMIT" => Some("4GiB".into()),

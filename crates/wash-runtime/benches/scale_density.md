@@ -95,7 +95,10 @@ slot it waits for comes free.
 
 The host is built the way `wash host` builds one with no messaging flags: the
 stock pool, and the ceilings `MessagingLimits::resolve` derives from it.
-`WASH_SCALE_CORE_INSTANCES` does not apply. Deliveries are counted from the
+`WASH_SCALE_MEMORY_LIMIT` and `WASH_SCALE_GUEST_MEMORY` set max-process-memory
+and max-guest-memory, as for HTTP. The HTTP ramp's own knobs do not apply:
+`WASH_SCALE_CORE_INSTANCES`, `_FIXTURE`, `_STEP`, `_MAX_COMPONENTS`,
+`_START_CONCURRENCY` and `_SAMPLE`. Deliveries are counted from the
 messaging plugin's own tracing: a delivery is in flight while the span it
 opens on admission is open, and the plugin's log line says whether it
 completed, failed, or was shed.

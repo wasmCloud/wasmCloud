@@ -55,13 +55,13 @@
 //! | --- | --- | --- |
 //! | `WASH_SCALE_MEMORY_LIMIT` | the host's max-process-memory, e.g. `4GiB` | half of the machine/container budget, at most 2 GiB |
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
-//! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
+//! | `WASH_SCALE_MAX_COMPONENTS` | HTTP: stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
-//! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
-//! | `WASH_SCALE_START_CONCURRENCY` | concurrent starts | available parallelism |
-//! | `WASH_SCALE_SAMPLE` | requests per step, spread across the set | `200` |
-//! | `WASH_SCALE_CORE_INSTANCES` | pool slots | sized from address space and `vm.max_map_count` |
-//! | `WASH_SCALE_FIXTURE` | `p3` or `p2` HTTP handler | `p3` |
+//! | `WASH_SCALE_STEP` | HTTP: workloads started between measurements | `250` |
+//! | `WASH_SCALE_START_CONCURRENCY` | HTTP: concurrent starts | available parallelism |
+//! | `WASH_SCALE_SAMPLE` | HTTP: requests per step, spread across the set | `200` |
+//! | `WASH_SCALE_CORE_INSTANCES` | HTTP: pool slots | sized from address space and `vm.max_map_count` |
+//! | `WASH_SCALE_FIXTURE` | HTTP: `p3` or `p2` handler | `p3` |
 //! | `WASH_SCALE_CPUS` | cores the host may use; a list (`1,2,4`) runs each flavour at each | all |
 //! | `WASH_SCALE_REPORT_JSON` | also write every flavour's results as JSON here | unset |
 //! | `WASH_SCALE_MSG_COMPONENTS` | messaging components the bursts are spread across | `8` |
@@ -92,7 +92,7 @@ use bench_tools::density::{Report, Step, percentile, print_comparison, print_ste
 use wash_runtime::engine::Engine;
 use wash_runtime::engine::host_memory::{HostMemoryBudgets, render_bytes};
 use wash_runtime::engine::pool_usage::{PoolUsage, pool_refusals};
-use wash_runtime::engine::process_memory::process_footprint;
+use wash_runtime::engine::process_memory::{ProcessMemoryGuard, process_footprint};
 use wash_runtime::host::http::{DynamicRouter, Ingress};
 use wash_runtime::host::{Host, HostApi, HostBuilder};
 use wash_runtime::types::{
@@ -336,12 +336,12 @@ struct Refusals {
 }
 
 impl Refusals {
-    fn now(engine: &Engine) -> Self {
+    fn now(engine: &Engine, guard: &ProcessMemoryGuard) -> Self {
         Self {
             memory: engine.guest_memory().process_refused(),
             guest: engine.guest_memory().refused(),
             pool: pool_refusals(),
-            guard: engine.process_memory().map_or(0, |g| g.refused_starts()),
+            guard: guard.refused_starts(),
         }
     }
 
@@ -362,8 +362,13 @@ impl Refusals {
 /// The stops every flavour checks first, the guard before the rest: a run it
 /// ends is the one this bench is for, and what fails once it trips is its
 /// doing. `refused` is counted since the run's baseline.
-fn memory_stop(engine: &Engine, refused: Refusals, footprint: u64, ceiling: u64) -> Option<Stop> {
-    if engine.process_memory().is_some_and(|g| g.is_over()) {
+fn memory_stop(
+    guard: &ProcessMemoryGuard,
+    refused: Refusals,
+    footprint: u64,
+    ceiling: u64,
+) -> Option<Stop> {
+    if guard.is_over() {
         Some(Stop::MemoryGuard {
             refused: refused.memory,
         })
@@ -398,10 +403,10 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         )
         .with_max_process_memory_bytes(settings.memory_limit)
         .build()?;
-    anyhow::ensure!(
-        engine.process_memory().is_some(),
-        "the engine was built without a process memory guard"
-    );
+    let guard = engine
+        .process_memory()
+        .cloned()
+        .context("the engine was built without a process memory guard")?;
     // Routed by Host header, as a real host routes: `DevRouter` would send
     // every request to the newest workload and never reach the rest.
     let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse()?).await?;
@@ -420,7 +425,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
     let mut cpu_before = cpu_baseline;
     let pool_baseline = engine.pool_usage();
     let baseline_in_use = pool_baseline.map_or(0, |u| u.core_instances.in_use);
-    let refusals_baseline = Refusals::now(&engine);
+    let refusals_baseline = Refusals::now(&engine, &guard);
     let ceiling = settings.memory_limit / 100 * GUARD_SLACK_PERCENT;
     let mut refusals_before = refusals_baseline;
 
@@ -496,7 +501,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         let sample_cpu_secs = between(cpu_started, cpu_now);
         cpu_before = cpu_now;
         let wall_secs = step_started.elapsed().as_secs_f64().max(f64::EPSILON);
-        let refusals_now = Refusals::now(&engine);
+        let refusals_now = Refusals::now(&engine, &guard);
         let refused_in_step =
             refusals_now.since(refusals_before).total() + u64::from(starts.first_error.is_some());
         refusals_before = refusals_now;
@@ -534,7 +539,7 @@ async fn run(flavour: Flavour, settings: Settings, cpu: CpuLimit, load: Load) ->
         print_step(first, step);
 
         let refused = refusals_now.since(refusals_baseline);
-        if let Some(stop) = memory_stop(&engine, refused, footprint, ceiling) {
+        if let Some(stop) = memory_stop(&guard, refused, footprint, ceiling) {
             break stop;
         }
         if let Some(message) = starts.first_error {
