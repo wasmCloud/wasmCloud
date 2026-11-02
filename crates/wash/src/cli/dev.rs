@@ -27,7 +27,7 @@ use crate::{
         CliCommand, CliContext, CommandOutput, component_build::build_dev_component,
         oci::OCI_CACHE_DIR, signal,
     },
-    config::{Config, load_config},
+    config::{Config, WorkloadConfig, load_config_with_defaults},
     wit::WitConfig,
     workload::{ResolvedWorkload, resolve_component_workload, resolve_workload},
 };
@@ -35,6 +35,16 @@ use crate::{
 /// Start a development server for a Wasm component
 #[derive(Debug, Clone, Args)]
 pub struct DevCommand {}
+
+fn dev_config_defaults() -> Config {
+    Config {
+        workload: Some(WorkloadConfig {
+            allowed_hosts: vec![wash_runtime::host::allowed_hosts::AllowedHost::Any],
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
 
 fn dev_socket_policy(
     quotas: &Arc<wash_runtime::host::quota::QuotaRegistry>,
@@ -67,7 +77,7 @@ impl CliCommand for DevCommand {
         // Load configuration with wit fetch disabled for 2 reasons:
         // 1. During dev sessions, we want to avoid network calls for fetching WIT files to ensure faster startup times.
         // 2. It can cause file watchers to enter a build-loop as we touch wkg files during fetch.
-        let config = load_config(
+        let config = load_config_with_defaults(
             &ctx.user_config_path(),
             Some(project_dir),
             Some(Config {
@@ -78,6 +88,7 @@ impl CliCommand for DevCommand {
                 }),
                 ..Default::default()
             }),
+            dev_config_defaults(),
         )
         .context("failed to load config for development")?;
 
@@ -949,6 +960,71 @@ mod lifecycle_tests {
     use super::*;
     use crate::config::{DevComponent, DevConfig};
     use wash_runtime::types::WorkloadStatusRequest;
+
+    #[test]
+    fn dev_egress_defaults_respect_configured_policies() {
+        use wash_runtime::host::allowed_hosts::AllowedHost;
+
+        let dir = tempfile::tempdir().unwrap();
+        let wash_dir = dir.path().join(crate::cli::CONFIG_DIR_NAME);
+        std::fs::create_dir(&wash_dir).unwrap();
+        let global = dir.path().join("global.yaml");
+        let local = wash_dir.join(crate::cli::CONFIG_FILE_NAME);
+        let cases = [
+            (None, None, vec![AllowedHost::Any]),
+            (None, Some("workload: {}"), vec![AllowedHost::Any]),
+            (
+                None,
+                Some("workload:\n  environment:\n    config: {LOG: debug}"),
+                vec![AllowedHost::Any],
+            ),
+            (None, Some("workload:\n  allowedHosts: []"), vec![]),
+            (
+                None,
+                Some("workload:\n  allowedHosts: ['api.example.com']"),
+                vec!["api.example.com".parse().unwrap()],
+            ),
+            (
+                Some("workload:\n  allowedHosts: []"),
+                Some("workload: {}"),
+                vec![],
+            ),
+            (
+                Some("workload:\n  allowedHosts: ['*']"),
+                Some("workload:\n  allowedHosts: []"),
+                vec![],
+            ),
+        ];
+        for (global_yaml, local_yaml, expected) in cases {
+            for (path, yaml) in [(&global, global_yaml), (&local, local_yaml)] {
+                if let Some(yaml) = yaml {
+                    std::fs::write(path, yaml).unwrap();
+                } else if path.exists() {
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
+            let config = load_config_with_defaults::<Config>(
+                &global,
+                Some(dir.path()),
+                None,
+                dev_config_defaults(),
+            )
+            .unwrap();
+            let resolved = resolve_workload(&config, dir.path(), None).unwrap();
+            assert_eq!(
+                resolved.allowed_hosts, expected,
+                "{global_yaml:?}, {local_yaml:?}"
+            );
+            assert!(resolved.allowed_ip_name_lookups.is_empty());
+            assert!(resolved.allowed_host_loopback_ports.is_empty());
+            let saved = serde_saphyr::to_string(&config).unwrap();
+            let reloaded: Config = serde_saphyr::from_str(&saved).unwrap();
+            assert_eq!(
+                resolve_workload(&reloaded, dir.path(), None).unwrap(),
+                resolved
+            );
+        }
+    }
 
     fn component() -> Bytes {
         // Empty component with no imports or exports.
