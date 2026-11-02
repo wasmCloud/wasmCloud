@@ -81,9 +81,9 @@ pub struct HostCommand {
     #[arg(long = "nats-connect-timeout", default_value = "0s", value_parser = humantime::parse_duration)]
     pub nats_connect_timeout: Duration,
 
-    /// Reconnect only to the NATS servers given on the command line or in a
-    /// binding, never to ones a cluster advertises. Set this when each URL is
-    /// a load-balanced address such as a Kubernetes Service.
+    /// Restrict host and binding NATS connections to their configured URLs.
+    /// Set this when each URL is a load-balanced address such as a Kubernetes
+    /// Service. A single-server URL loses discovery-based cluster failover.
     #[arg(long = "nats-ignore-discovered-servers", default_value_t = false)]
     pub nats_ignore_discovered_servers: bool,
 
@@ -1575,7 +1575,11 @@ impl CliCommand for HostCommand {
 
         #[cfg(feature = "wasm_component_model_implements")]
         {
-            cluster_host_builder = cluster_host_builder.with_multiplexed_plugins()?;
+            for plugin in
+                plugin::multiplexed_plugins_with_nats_discovery(self.nats_ignore_discovered_servers)
+            {
+                cluster_host_builder = cluster_host_builder.with_plugin(plugin)?;
+            }
         }
 
         if let Some(postgres_url) = &self.postgres_url {

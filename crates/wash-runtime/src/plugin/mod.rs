@@ -926,6 +926,15 @@ pub(crate) fn lock_root(root: impl AsRef<Path>, untrusted: &str) -> Result<PathB
 /// as `multiplex_only`, depends on the host's own configuration.
 #[cfg(feature = "wasm_component_model_implements")]
 pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
+    multiplexed_plugins_with_nats_discovery(false)
+}
+
+/// Register multiplexed plugins with a shared NATS discovery policy.
+/// Egress policies always restrict NATS connections to their configured URLs.
+#[cfg(feature = "wasm_component_model_implements")]
+pub fn multiplexed_plugins_with_nats_discovery(
+    ignore_discovered_servers: bool,
+) -> Vec<std::sync::Arc<dyn HostPlugin>> {
     #[allow(unused_mut)]
     let mut plugins: Vec<std::sync::Arc<dyn HostPlugin>> = Vec::new();
     #[allow(unused_imports)]
@@ -933,49 +942,61 @@ pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
 
     #[cfg(feature = "wasi-keyvalue")]
     {
+        let nats = Arc::new(
+            wasi_keyvalue::NatsProvider::default()
+                .with_ignore_discovered_servers(ignore_discovered_servers),
+        );
         plugins.push(Arc::new(
             wasi_keyvalue::MultiplexedKeyValue::new()
                 .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
                 .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
-                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(nats.clone())
                 .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
         ));
         plugins.push(Arc::new(
             wasi_keyvalue::MultiplexedAsyncKeyValue::new()
                 .with_provider(Arc::new(wasi_keyvalue::InMemoryProvider))
                 .with_provider(Arc::new(wasi_keyvalue::RedisProvider))
-                .with_provider(Arc::new(wasi_keyvalue::NatsProvider))
+                .with_provider(nats)
                 .with_provider(Arc::new(wasi_keyvalue::FilesystemProvider)),
         ));
     }
 
     #[cfg(feature = "wasi-blobstore")]
     {
+        let nats = Arc::new(
+            wasi_blobstore::NatsBlobProvider::default()
+                .with_ignore_discovered_servers(ignore_discovered_servers),
+        );
         plugins.push(Arc::new(
             wasi_blobstore::MultiplexedBlobstore::new()
                 .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
                 .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
-                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider))
+                .with_provider(nats.clone())
                 .with_provider(Arc::new(wasi_blobstore::S3BlobProvider)),
         ));
         plugins.push(Arc::new(
             wasi_blobstore::MultiplexedAsyncBlobstore::new()
                 .with_provider(Arc::new(wasi_blobstore::InMemoryProvider))
                 .with_provider(Arc::new(wasi_blobstore::FilesystemProvider))
-                .with_provider(Arc::new(wasi_blobstore::NatsBlobProvider))
+                .with_provider(nats)
                 .with_provider(Arc::new(wasi_blobstore::S3BlobProvider)),
         ));
     }
 
+    let nats = Arc::new(
+        wasmcloud_messaging::NatsMsgProvider::default()
+            .with_ignore_discovered_servers(ignore_discovered_servers),
+    );
     plugins.push(Arc::new(
         wasmcloud_messaging::MultiplexedMessaging::new()
             .with_provider(Arc::new(wasmcloud_messaging::InMemoryMsgProvider))
-            .with_provider(Arc::new(wasmcloud_messaging::NatsMsgProvider)),
+            .with_provider(nats.clone()),
     ));
     plugins.push(Arc::new(
         wasmcloud_messaging::MultiplexedAsyncMessaging::new()
             .with_provider(Arc::new(wasmcloud_messaging::InMemoryMsgProvider))
-            .with_provider(Arc::new(wasmcloud_messaging::NatsMsgProvider)),
+            .with_provider(nats),
     ));
 
     plugins

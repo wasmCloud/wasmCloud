@@ -468,18 +468,17 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
 
 /// Connect the client behind a multiplexed NATS backend.
 ///
-/// Under a declared ceiling the client stays on `url`: a server a cluster
-/// advertises arrives on the wire, after [`BackendProvider::check_egress`] ran,
-/// so following it would leave the checked endpoint. That costs the failover
-/// an unlisted peer would have given, as it does for wasmcloud-nats.
+/// A host setting or declared egress policy restricts the client to `url`.
+/// Advertised servers have not passed the egress check.
 pub(crate) async fn connect_nats(
     url: &str,
     egress: Option<&PluginEgressPolicy>,
+    ignore_discovered_servers: bool,
 ) -> anyhow::Result<async_nats::Client> {
-    let options = match egress {
-        Some(_) => async_nats::ConnectOptions::new().ignore_discovered_servers(),
-        None => async_nats::ConnectOptions::new(),
-    };
+    let mut options = async_nats::ConnectOptions::new();
+    if ignore_discovered_servers || egress.is_some() {
+        options = options.ignore_discovered_servers();
+    }
     Ok(options.connect(url).await?)
 }
 
@@ -541,6 +540,30 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::SeqCst;
+
+    #[tokio::test]
+    async fn nats_discovery_respects_host_setting_and_egress_policy() -> anyhow::Result<()> {
+        use crate::nats_test::accept_advertising;
+
+        for (ignore, policy) in [(false, false), (true, false), (false, true), (true, true)] {
+            let given = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let advertised = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let url = format!("nats://{}", given.local_addr()?);
+            let egress = policy.then(|| PluginEgressPolicy::allowing(&[&url]));
+            let (_socket, client) = tokio::try_join!(
+                accept_advertising(&given, advertised.local_addr()?),
+                connect_nats(&url, egress.as_deref(), ignore),
+            )?;
+            let pool = client.server_pool().await?;
+            let discover = !ignore && !policy;
+            assert_eq!(pool.len(), if discover { 2 } else { 1 });
+            assert_eq!(
+                pool.iter().filter(|s| s.is_discovered).count(),
+                usize::from(discover)
+            );
+        }
+        Ok(())
+    }
 
     fn registry(entries: &[(&str, i32)]) -> HashMap<String, i32> {
         entries.iter().map(|(k, v)| (k.to_string(), *v)).collect()

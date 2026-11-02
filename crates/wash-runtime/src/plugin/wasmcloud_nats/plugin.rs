@@ -250,10 +250,7 @@ impl WasmcloudNats {
                 )
             }
 
-            // A server the cluster advertises was never checked against the
-            // ceiling, so under a declared policy the client stays on the
-            // servers the operator wrote. `configure_egress_policy` says so at
-            // startup, where an operator can act on it.
+            // An egress policy always excludes unchecked advertised servers.
             let ignore_discovered_servers =
                 self.ignore_discovered_servers || self.egress_policy.load().is_some();
             let handle = self

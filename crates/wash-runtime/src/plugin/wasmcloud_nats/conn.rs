@@ -216,7 +216,6 @@ async fn build_options(
         opts = opts.add_client_certificate(cert.clone(), key.clone());
     }
     if ignore_discovered_servers {
-        // Only operator-declared servers were checked against the policy.
         opts = opts.ignore_discovered_servers();
     }
 

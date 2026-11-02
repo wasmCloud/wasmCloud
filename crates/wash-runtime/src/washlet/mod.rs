@@ -465,7 +465,7 @@ impl ClusterHostBuilder {
         self
     }
 
-    pub fn with_plugin<T: HostPlugin>(mut self, plugin: Arc<T>) -> anyhow::Result<Self> {
+    pub fn with_plugin(mut self, plugin: Arc<dyn HostPlugin>) -> anyhow::Result<Self> {
         self.host_builder = self.host_builder.with_plugin(plugin)?;
         Ok(self)
     }
@@ -3235,64 +3235,44 @@ mod tests {
         Ok(())
     }
 
-    /// Accepts one client on `listener` with an `INFO` that advertises
-    /// `advertised`, and hands back the socket so the caller decides when the
-    /// server goes away.
-    async fn accept_advertising(
-        listener: &tokio::net::TcpListener,
-        advertised: std::net::SocketAddr,
-    ) -> anyhow::Result<tokio::net::TcpStream> {
-        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
-        let (mut socket, _) = listener.accept().await?;
-        socket
-            .write_all(
-                format!("INFO {{\"max_payload\":1048576,\"connect_urls\":[\"{advertised}\"]}}\r\n")
-                    .as_bytes(),
-            )
-            .await?;
-        let mut reader = BufReader::new(&mut socket);
-        loop {
-            let mut line = String::new();
-            anyhow::ensure!(reader.read_line(&mut line).await? > 0, "closed before PING");
-            if line.starts_with("PING") {
-                break;
-            }
-        }
-        socket.write_all(b"PONG\r\n").await?;
-        Ok(socket)
-    }
-
-    /// Whether a client that loses its only given server reconnects to one the
-    /// cluster advertised.
-    async fn reconnects_to_advertised(ignore: bool) -> anyhow::Result<bool> {
-        let given = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let advertised = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let options = NatsConnectionOptions::default().with_ignore_discovered_servers(ignore);
-        let (socket, _client) = tokio::try_join!(
-            accept_advertising(&given, advertised.local_addr()?),
-            connect_nats(format!("nats://{}", given.local_addr()?), options),
-        )?;
-        drop(given);
-        drop(socket);
-        Ok(
-            tokio::time::timeout(Duration::from_secs(2), advertised.accept())
-                .await
-                .is_ok(),
-        )
-    }
-
     #[tokio::test]
-    async fn a_reconnect_follows_advertised_servers_by_default() -> anyhow::Result<()> {
-        assert!(reconnects_to_advertised(false).await?);
+    async fn advertised_servers_are_only_added_when_discovery_is_enabled() -> anyhow::Result<()> {
+        use crate::nats_test::accept_advertising;
+
+        for ignore in [false, true] {
+            let given = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let advertised = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let options = NatsConnectionOptions::default().with_ignore_discovered_servers(ignore);
+            let (_socket, client) = tokio::try_join!(
+                accept_advertising(&given, advertised.local_addr()?),
+                connect_nats(format!("nats://{}", given.local_addr()?), options),
+            )?;
+            let pool = client.server_pool().await?;
+            assert_eq!(pool.len(), if ignore { 1 } else { 2 });
+            assert_eq!(
+                pool.iter().filter(|s| s.is_discovered).count(),
+                usize::from(!ignore)
+            );
+        }
         Ok(())
     }
 
     #[tokio::test]
-    async fn a_reconnect_can_be_held_to_the_given_servers() -> anyhow::Result<()> {
-        assert!(
-            !reconnects_to_advertised(true).await?,
-            "the client dialed a server it was never given"
-        );
+    async fn a_reconnect_follows_advertised_servers_by_default() -> anyhow::Result<()> {
+        use crate::nats_test::accept_advertising;
+
+        let given = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let advertised = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let (socket, _client) = tokio::try_join!(
+            accept_advertising(&given, advertised.local_addr()?),
+            connect_nats(
+                format!("nats://{}", given.local_addr()?),
+                NatsConnectionOptions::default(),
+            ),
+        )?;
+        drop(given);
+        drop(socket);
+        tokio::time::timeout(Duration::from_secs(5), advertised.accept()).await??;
         Ok(())
     }
 

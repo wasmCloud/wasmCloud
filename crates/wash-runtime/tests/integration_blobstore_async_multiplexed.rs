@@ -63,7 +63,8 @@ async fn async_multiplexed_blobstore_routes_to_nats() -> Result<()> {
     let nats_url = format!("nats://127.0.0.1:{nats_port}");
 
     // --- build the routing registry from the named host interface ---
-    let plugin = MultiplexedAsyncBlobstore::new().with_provider(Arc::new(NatsBlobProvider));
+    let plugin =
+        MultiplexedAsyncBlobstore::new().with_provider(Arc::new(NatsBlobProvider::default()));
     let registry = plugin
         .build_registry(&[nats_blob_iface("nats-blob", &nats_url)])
         .await

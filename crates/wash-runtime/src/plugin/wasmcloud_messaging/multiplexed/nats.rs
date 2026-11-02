@@ -72,7 +72,17 @@ impl MsgBackend for NatsMsgBackend {
 /// NATS provider, selected by `config.backend = "nats"`. Requires `config.url`
 /// (e.g. `nats://127.0.0.1:4222`).
 #[derive(Default)]
-pub struct NatsMsgProvider;
+pub struct NatsMsgProvider {
+    ignore_discovered_servers: bool,
+}
+
+impl NatsMsgProvider {
+    /// Restrict connections to their configured URL even without an egress policy.
+    pub fn with_ignore_discovered_servers(mut self, ignore: bool) -> Self {
+        self.ignore_discovered_servers = ignore;
+        self
+    }
+}
 
 #[async_trait::async_trait]
 impl BackendProvider<MsgId> for NatsMsgProvider {
@@ -91,7 +101,7 @@ impl BackendProvider<MsgId> for NatsMsgProvider {
         let url = config
             .get("url")
             .ok_or_else(|| anyhow::anyhow!("nats messaging backend requires a 'url' config"))?;
-        let client = connect_nats(url, egress).await?;
+        let client = connect_nats(url, egress, self.ignore_discovered_servers).await?;
         Ok(Arc::new(NatsMsgBackend {
             client: Arc::new(client),
         }))

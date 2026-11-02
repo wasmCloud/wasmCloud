@@ -11,6 +11,11 @@ mod env_guard;
 pub mod host;
 #[cfg(any(feature = "washlet", feature = "wasmcloud-nats"))]
 mod nats_credentials;
+#[cfg(all(
+    test,
+    any(feature = "washlet", feature = "wasm_component_model_implements")
+))]
+mod nats_test;
 pub mod observability;
 pub mod plugin;
 pub mod sockets;

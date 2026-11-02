@@ -106,7 +106,7 @@ async fn multiplexed_messaging_routes_each_import_to_its_cluster() -> Result<()>
     let (_nats_a, url_a) = start_nats().await?;
     let (_nats_b, url_b) = start_nats().await?;
 
-    let plugin = MultiplexedMessaging::new().with_provider(Arc::new(NatsMsgProvider));
+    let plugin = MultiplexedMessaging::new().with_provider(Arc::new(NatsMsgProvider::default()));
     let interfaces = HashSet::from([msg_iface("team-a", &url_a), msg_iface("team-b", &url_b)]);
     let registry = plugin.build_registry(&interfaces).await?;
     let team_a = registry.get("team-a").expect("team-a routed").clone();

@@ -86,7 +86,7 @@ async fn p3_guest_streams_blobstore_through_nats() -> Result<()> {
         .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
         .with_plugin(Arc::new(
-            MultiplexedAsyncBlobstore::new().with_provider(Arc::new(NatsBlobProvider)),
+            MultiplexedAsyncBlobstore::new().with_provider(Arc::new(NatsBlobProvider::default())),
         ))?
         .with_plugin_bindings(
             PluginBindings::new().with_plugin(
