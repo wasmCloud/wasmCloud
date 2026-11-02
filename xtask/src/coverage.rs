@@ -18,6 +18,10 @@ const REPORT_ARGS: &[&str] = &[
     "--ignore-filename-regex",
     r"[/\\](washlet[/\\]generated|xtask)[/\\]",
 ];
+/// Minimum percentage for every metric in [`METRICS`].
+const THRESHOLD: u8 = 80;
+/// `llvm-cov` summary keys and the names used in threshold failures.
+const METRICS: [(&str, &str); 2] = [("lines", "line"), ("regions", "region")];
 
 #[derive(Subcommand)]
 pub(crate) enum Task {
@@ -257,11 +261,50 @@ impl Runner<'_> {
             self.report_dir().join("tests-passed").is_file(),
             "Coverage evidence requires a successful full test run."
         );
+        let flags = METRICS.map(|(key, _)| format!("--fail-under-{key}"));
+        let threshold = THRESHOLD.to_string();
         let mut args = vec!["llvm-cov", "report"];
         args.extend_from_slice(REPORT_ARGS);
-        args.extend(["--fail-under-lines", "80", "--fail-under-regions", "80"]);
-        self.cargo(&args, Some("threshold.txt"))
+        for flag in &flags {
+            args.extend([flag.as_str(), threshold.as_str()]);
+        }
+        match self.cargo(&args, Some("threshold.txt")) {
+            Ok(()) => Ok(()),
+            // llvm-cov exits 1 without naming the metric, so explain it from the
+            // summary, which `collect()` removes whenever it gathers new data.
+            Err(error) => match shortfalls(&self.report_dir().join("coverage.json")) {
+                Some(message) => Err(error.context(message)),
+                None => Err(error),
+            },
+        }
     }
+}
+
+/// Describes each metric in the JSON summary that is below [`THRESHOLD`].
+fn shortfalls(summary: &Path) -> Option<String> {
+    let summary: serde_json::Value = serde_json::from_slice(&fs::read(summary).ok()?).ok()?;
+    let data = summary.get("data")?.as_array()?;
+    let mut failures = Vec::new();
+    for (key, name) in METRICS {
+        // The same arithmetic as cargo-llvm-cov's `--fail-under-*` checks.
+        let (mut count, mut covered) = (0.0, 0.0);
+        for entry in data {
+            let totals = entry.get("totals")?.get(key)?;
+            count += totals.get("count")?.as_f64()?;
+            covered += totals.get("covered")?.as_f64()?;
+        }
+        let percent = if count == 0.0 {
+            0.0
+        } else {
+            covered * 100.0 / count
+        };
+        if percent < f64::from(THRESHOLD) {
+            // Truncate so a value just under the bar never prints as equal to it.
+            let shown = (percent * 100.0).floor() / 100.0;
+            failures.push(format!("{name} coverage {shown:.2}% is below {THRESHOLD}%"));
+        }
+    }
+    (!failures.is_empty()).then(|| failures.join("; "))
 }
 
 fn execute(mut command: Command, mut log: Option<File>, echo: bool) -> Result<()> {
@@ -532,6 +575,45 @@ mod tests {
         assert_eq!(failure_code(runner.run(None))?, 9);
         let log = fs::read_to_string(runner.report_dir().join("threshold.txt"))?;
         assert!(log.contains("report stdout") && log.contains("report stderr"));
+        Ok(())
+    }
+
+    #[test]
+    fn threshold_failures_name_each_metric_below_the_bar() -> Result<()> {
+        let fixture = Fixture::new()?;
+        fixture.scenario("THRESHOLD_EXIT=1\nLINES_PERCENT=81.48\nREGIONS_PERCENT=77.34")?;
+        let error = fixture
+            .runner()
+            .run(None)
+            .err()
+            .context("expected failure")?;
+        assert_eq!(error.to_string(), "region coverage 77.34% is below 80%");
+        assert!(format!("{error:#}").starts_with("region coverage 77.34% is below 80%: "));
+        assert_eq!(failure_code(Err(error))?, 1);
+
+        fixture.scenario("THRESHOLD_EXIT=1\nLINES_PERCENT=79.999\nREGIONS_PERCENT=12.5")?;
+        let error = fixture
+            .runner()
+            .run(None)
+            .err()
+            .context("expected failure")?;
+        assert_eq!(
+            error.to_string(),
+            "line coverage 79.99% is below 80%; region coverage 12.50% is below 80%"
+        );
+
+        // Without a summary to explain it, the llvm-cov failure is reported as is.
+        let runner = fixture.runner();
+        runner.run(Some(Task::Test))?;
+        let error = runner
+            .run(Some(Task::Check))
+            .err()
+            .context("expected failure")?;
+        let failure = error
+            .downcast_ref::<CommandFailure>()
+            .context("expected a subprocess failure")?;
+        assert_eq!(error.to_string(), failure.to_string());
+        assert_eq!(failure_code(Err(error))?, 1);
         Ok(())
     }
 

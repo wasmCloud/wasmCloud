@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::Path;
 
-fn setting(key: &str) -> Option<i32> {
+fn setting<T: std::str::FromStr>(key: &str) -> Option<T> {
     fs::read_to_string("scenario")
         .ok()?
         .lines()
@@ -10,6 +10,11 @@ fn setting(key: &str) -> Option<i32> {
             let (name, value) = line.split_once('=')?;
             (name == key).then(|| value.parse().ok()).flatten()
         })
+}
+
+fn totals(key: &str) -> String {
+    let percent = setting::<f64>(key).unwrap_or(100.0);
+    format!(r#"{{"count":10000,"covered":{},"percent":{percent}}}"#, percent * 100.0)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(setting("CLEAN_EXIT").unwrap_or(0));
     }
     if args.first().map(String::as_str) == Some("xtask") {
-        if setting("BLOCK_TEST_LOG").is_some() {
+        if setting::<i32>("BLOCK_TEST_LOG").is_some() {
             fs::create_dir("target/coverage/tests.txt")?;
         }
         std::process::exit(setting("FIXTURE_EXIT").unwrap_or(0));
@@ -73,6 +78,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         for pair in args.windows(2) {
             match pair[0].as_str() {
+                "--output-path" if args.iter().any(|arg| arg == "--json") => fs::write(
+                    &pair[1],
+                    format!(
+                        r#"{{"data":[{{"totals":{{"lines":{},"regions":{}}}}}]}}"#,
+                        totals("LINES_PERCENT"),
+                        totals("REGIONS_PERCENT"),
+                    ),
+                )?,
                 "--output-path" => fs::write(&pair[1], "report")?,
                 "--output-dir" => {
                     let html = Path::new(&pair[1]).join("html");
