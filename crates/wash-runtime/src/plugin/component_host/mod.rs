@@ -2041,23 +2041,14 @@ fn build_plugin_store(
             .with_guest_memory(engine.guest_memory()),
     );
     store.data_mut().stream_payloads = engine.stream_payloads().clone();
-    // The other half of the same requirement: on a fuel-metering engine a store
-    // starts with no fuel, and calling a guest without fuel traps. See
-    // `new_store_from_templates`, which does this for every workload store.
-    let _ = store.set_fuel(u64::MAX);
-    // Required, not optional: the engine enables `epoch_interruption`, and a
-    // store that never sets a deadline traps the moment it runs any guest code.
     // `WarnThenTrap` because this one store serves every workload that imports
     // the plugin's capability: an abandoned call gets a long runway to finish
     // on its own before ending it costs every tenant a supervised restart.
-    crate::engine::abandon::arm_epoch_deadline(
+    crate::engine::store_settings::configure_store(
         &mut store,
+        engine.store_settings,
         crate::engine::abandon::AbandonedCallPolicy::WarnThenTrap,
     );
-    crate::engine::guest_memory::install_memory_limiter(&mut store);
-    if let Some(fuel) = engine.hostcall_fuel() {
-        store.set_hostcall_fuel(fuel);
-    }
     store
 }
 
@@ -2259,7 +2250,10 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_store_applies_the_engine_hostcall_fuel() {
-        let engine = Engine::builder().with_hostcall_fuel(4096).build().unwrap();
+        let engine = Engine::builder()
+            .with_hostcall_fuel(std::num::NonZeroUsize::new(4096).unwrap())
+            .build()
+            .unwrap();
         let store_context = PluginStoreContext {
             allowed_hosts: Arc::from([]),
             allowed_ip_name_lookups: Arc::from([]),
@@ -2274,6 +2268,7 @@ mod tests {
             &store_context,
         );
         assert_eq!(store.hostcall_fuel(), 4096);
+        assert_eq!(store.data().store_settings, engine.store_settings);
     }
 
     #[tokio::test]

@@ -507,11 +507,18 @@ runtime:
     # explicitly on a host group that is requested far below the node it lands
     # on.
     maxConcurrentStarts: ""
-    # -- The most bytes a guest may transfer to the host in one call
-    # (e.g. `256MiB`).
+    # -- Roughly the most bytes a guest may copy to the host in one call
+    # (e.g. `256MiB`). Past it the call traps. Must be greater than zero.
     #
+    # Also bounds each read the host makes from a future or stream, but not
+    # byte streams it reads directly, such as HTTP bodies and socket writes.
     # This is wasmtime's [`Store::set_hostcall_fuel`]. Unset, it is
-    # wasmtime's default.
+    # wasmtime's default of 128 MiB. The host allocates these bytes outside
+    # the guest memory budget, from what `limits.memory` leaves over after
+    # that budget (192 MiB at the default 768Mi; less on a small limit, where
+    # the budget's 256 MiB floor takes more than three quarters). With a
+    # `guestMemoryMode` other than `count`, the host warns at startup when
+    # this is larger. Unrelated to fuel metering.
     #
     # [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
     hostcallFuel: ""

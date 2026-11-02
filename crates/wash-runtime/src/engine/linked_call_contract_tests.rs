@@ -305,8 +305,8 @@ fn template(engine: &crate::engine::Engine, id: &str) -> ComponentCtxTemplate {
         loopback: Arc::new(std::sync::Mutex::new(loopback::Network::default())),
         socket_policy: Arc::new(crate::sockets::policy::SocketPolicy::default()),
         guest_memory: Arc::clone(engine.guest_memory()),
-        hostcall_fuel: engine.hostcall_fuel(),
-        trap_hint_logged: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        store_settings: engine.store_settings,
+        trap_hints: Arc::default(),
         #[cfg(feature = "wasi-tls")]
         tls_provider: None,
     }
@@ -621,7 +621,7 @@ async fn linked_store_applies_the_engine_hostcall_fuel() -> anyhow::Result<()> {
         .build()?;
     let configured = crate::engine::Engine::builder()
         .with_pooling_allocator(false)
-        .with_hostcall_fuel(4096)
+        .with_hostcall_fuel(std::num::NonZeroUsize::new(4096).unwrap())
         .build()?;
     for (engine, expected) in [
         (
@@ -641,6 +641,8 @@ async fn linked_store_applies_the_engine_hostcall_fuel() -> anyhow::Result<()> {
         )
         .await?;
         assert_eq!(store.hostcall_fuel(), expected);
+        // What the remediation hint names.
+        assert_eq!(store.data().store_settings, engine.store_settings);
     }
     Ok(())
 }
