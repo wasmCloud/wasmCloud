@@ -1398,6 +1398,13 @@ pub struct NatsConnectionOptions {
     /// The prefix of the inboxes the client creates for request replies, in
     /// place of `_INBOX`.
     pub inbox_prefix: Option<String>,
+    /// Reconnect only to the given servers, never to ones the cluster
+    /// advertises.
+    ///
+    /// The client keeps every advertised address for its lifetime and picks
+    /// among them at random on reconnect. Behind a Kubernetes Service those are
+    /// pod IPs, which a later pod in another NATS cluster can take over.
+    pub ignore_discovered_servers: bool,
 }
 
 impl NatsConnectionOptions {
@@ -1461,6 +1468,13 @@ impl NatsConnectionOptions {
         self.inbox_prefix = Some(prefix.into());
         self
     }
+
+    /// See [`NatsConnectionOptions::ignore_discovered_servers`].
+    #[must_use]
+    pub fn with_ignore_discovered_servers(mut self, ignore: bool) -> Self {
+        self.ignore_discovered_servers = ignore;
+        self
+    }
 }
 
 #[instrument(skip_all)]
@@ -1492,6 +1506,10 @@ pub async fn connect_nats(
 
     if let (Some(cert_path), Some(key_path)) = (options.tls_cert, options.tls_key) {
         opts = opts.add_client_certificate(cert_path, key_path)
+    }
+
+    if options.ignore_discovered_servers {
+        opts = opts.ignore_discovered_servers();
     }
 
     // Without a callback these events are raised and discarded. `SlowConsumer`
@@ -3214,6 +3232,67 @@ mod tests {
         )?;
         assert_eq!(connect["name"], "host:test");
         assert!(client.new_inbox().starts_with("runtime.inbox."));
+        Ok(())
+    }
+
+    /// Accepts one client on `listener` with an `INFO` that advertises
+    /// `advertised`, and hands back the socket so the caller decides when the
+    /// server goes away.
+    async fn accept_advertising(
+        listener: &tokio::net::TcpListener,
+        advertised: std::net::SocketAddr,
+    ) -> anyhow::Result<tokio::net::TcpStream> {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let (mut socket, _) = listener.accept().await?;
+        socket
+            .write_all(
+                format!("INFO {{\"max_payload\":1048576,\"connect_urls\":[\"{advertised}\"]}}\r\n")
+                    .as_bytes(),
+            )
+            .await?;
+        let mut reader = BufReader::new(&mut socket);
+        loop {
+            let mut line = String::new();
+            anyhow::ensure!(reader.read_line(&mut line).await? > 0, "closed before PING");
+            if line.starts_with("PING") {
+                break;
+            }
+        }
+        socket.write_all(b"PONG\r\n").await?;
+        Ok(socket)
+    }
+
+    /// Whether a client that loses its only given server reconnects to one the
+    /// cluster advertised.
+    async fn reconnects_to_advertised(ignore: bool) -> anyhow::Result<bool> {
+        let given = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let advertised = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsConnectionOptions::default().with_ignore_discovered_servers(ignore);
+        let (socket, _client) = tokio::try_join!(
+            accept_advertising(&given, advertised.local_addr()?),
+            connect_nats(format!("nats://{}", given.local_addr()?), options),
+        )?;
+        drop(given);
+        drop(socket);
+        Ok(
+            tokio::time::timeout(Duration::from_secs(2), advertised.accept())
+                .await
+                .is_ok(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_follows_advertised_servers_by_default() -> anyhow::Result<()> {
+        assert!(reconnects_to_advertised(false).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_can_be_held_to_the_given_servers() -> anyhow::Result<()> {
+        assert!(
+            !reconnects_to_advertised(true).await?,
+            "the client dialed a server it was never given"
+        );
         Ok(())
     }
 

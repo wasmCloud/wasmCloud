@@ -344,6 +344,9 @@ spec:
             {{- with $top.Values.runtime.natsConnectTimeoutSeconds }}
             - "--nats-connect-timeout={{ . }}s"
             {{- end }}
+            {{- if $top.Values.runtime.natsIgnoreDiscoveredServers }}
+            - "--nats-ignore-discovered-servers"
+            {{- end }}
             {{- if $endpoint.enabled }}
             - "--probe-addr=0.0.0.0:{{ $endpoint.port }}"
             {{- end }}
