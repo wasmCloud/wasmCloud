@@ -10,13 +10,16 @@
 //!   3. a raw client seeds a counter; the backend `increment`s it (signed),
 //!      and the raw client sees the new value — proving `INCRBY` semantics.
 //!
-//! Two more tests restart the redis container under a pooled backend: every
-//! read made right after a restart succeeds (the backend reconnects and
-//! re-sends it), and every write (`set`, `set_many`, `delete`, `delete_many`,
-//! `increment`, `put_if_absent`) surfaces the dropped connection instead and
-//! is applied at most once.
-//! Another stops redis and checks a call fails within the configured redial
-//! schedule, and that the backend recovers once redis is back.
+//! The rest drop the backend's connection under it:
+//! - every read made right after a redis restart succeeds (the backend
+//!   reconnects and re-sends it);
+//! - every write (`set`, `set_many`, `delete`, `delete_many`, `increment`,
+//!   `put_if_absent`) on a just-dropped connection surfaces the error instead
+//!   and is applied at most once;
+//! - a list-keys cursor from before a reconnect is refused;
+//! - while redis is stopped, a call fails within the configured redial
+//!   schedule, and the backend recovers once redis is back.
+//!
 //! The backend reaches redis through a small TCP proxy the test owns, so the
 //! url stays the same across the restart without pinning a host port (a port
 //! picked free and handed to Docker can be taken by anything in between).
@@ -513,10 +516,40 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("increment after the failed one: {e:?}"))?;
     assert_eq!(after, 6, "applied exactly once");
 
-    // A later SCAN page (nonzero cursor) is not replayed on a new server: its
-    // cursor may skip keys there. The call that crosses the restart fails.
+    // put_if_absent (SET NX)
     proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
+    backend
+        .put_if_absent(BUCKET, "fresh", b"x".to_vec())
+        .await
+        .expect_err("a put-if-absent on the dropped connection is not retried");
+    let fresh: Option<Vec<u8>> = raw.get("fresh").await?;
+    assert_eq!(fresh, None);
+    assert!(
+        backend
+            .put_if_absent(BUCKET, "fresh", b"x".to_vec())
+            .await
+            .map_err(|e| anyhow::anyhow!("put_if_absent after the failed one: {e:?}"))?,
+        "the key was absent, so this write happens"
+    );
+
+    Ok(())
+}
+
+/// A later SCAN page (nonzero cursor) is not replayed on a new connection: a
+/// restarted server may lay out its table differently, so the cursor could
+/// skip keys there. The page that crosses the reconnect fails, and so does
+/// any later use of a cursor from before it, however the reconnect came
+/// about.
+#[tokio::test]
+#[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+async fn redis_backend_refuses_a_list_keys_cursor_from_before_a_reconnect() -> Result<()> {
+    let redis = start_redis().await?;
+    let proxy = RedisProxy::start(redis.get_host_port_ipv4(6379).await?).await?;
+    let backend = backend_behind(&proxy).await?;
+    let mut raw = redis::Client::open(proxy.url.as_str())?
+        .get_multiplexed_async_connection()
+        .await?;
     let many: Vec<(String, String)> = (0..5_000)
         .map(|i| (format!("page-{i}"), "v".to_string()))
         .collect();
@@ -602,23 +635,6 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         .list_keys(BUCKET, Some(fresh))
         .await
         .map_err(|e| anyhow::anyhow!("the fresh listing continues: {e:?}"))?;
-
-    // put_if_absent (SET NX)
-    proxy.cut().await;
-    let mut raw = raw_client.get_multiplexed_async_connection().await?;
-    backend
-        .put_if_absent(BUCKET, "fresh", b"x".to_vec())
-        .await
-        .expect_err("a put-if-absent on the dropped connection is not retried");
-    let fresh: Option<Vec<u8>> = raw.get("fresh").await?;
-    assert_eq!(fresh, None);
-    assert!(
-        backend
-            .put_if_absent(BUCKET, "fresh", b"x".to_vec())
-            .await
-            .map_err(|e| anyhow::anyhow!("put_if_absent after the failed one: {e:?}"))?,
-        "the key was absent, so this write happens"
-    );
 
     Ok(())
 }
