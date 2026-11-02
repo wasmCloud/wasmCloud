@@ -141,15 +141,15 @@ impl NatsBlobstore {
         }
     }
 
-    /// A binding's own connection, when it names credentials to connect as:
-    /// read and made from the same keys as a `wasmcloud:nats` binding's, so
-    /// the containers it opens live in the account those credentials sign in
-    /// to. A binding naming none uses the host's connection.
+    /// NATS credentials or a TLS client identity select a binding connection.
+    /// Bindings without either use the host connection.
     async fn connect_binding(
         &self,
         config: &HashMap<String, String>,
     ) -> anyhow::Result<Option<Arc<async_nats::jetstream::Context>>> {
-        if matches!(parse_auth(config)?, NatsAuth::Anonymous) {
+        let client_identity = nats_keys::get(config, "tls-cert").is_some()
+            || nats_keys::get(config, "tls-key").is_some();
+        if matches!(parse_auth(config)?, NatsAuth::Anonymous) && !client_identity {
             return Ok(None);
         }
         let config = NatsConfig::from_map(config)?;
@@ -966,3 +966,8 @@ impl HostPlugin for NatsBlobstore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "nats_contract_tests.rs"]
+mod tests;

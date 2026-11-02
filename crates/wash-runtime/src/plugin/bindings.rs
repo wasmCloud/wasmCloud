@@ -670,6 +670,7 @@ pub struct PluginBindingSet {
 struct DefaultBundle {
     anchor: String,
     entries: Vec<(String, String)>,
+    requires_any: Vec<String>,
 }
 
 impl PluginBindingSet {
@@ -800,11 +801,30 @@ impl PluginBindingSet {
     /// all-or-nothing on the anchor. A skipped bundle is logged, or an operator
     /// has no way to learn the rest of it did not come along.
     #[must_use]
-    pub fn with_default_bundle<I, K, V>(mut self, anchor: impl AsRef<str>, entries: I) -> Self
+    pub fn with_default_bundle<I, K, V>(self, anchor: impl AsRef<str>, entries: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<str>,
         V: Into<String>,
+    {
+        self.with_default_bundle_if_any(anchor, entries, std::iter::empty::<&str>())
+    }
+
+    /// Apply a bundle when a listed key has a nonempty value or awaits a secret.
+    /// An empty key list makes the bundle unconditional.
+    #[must_use]
+    pub fn with_default_bundle_if_any<I, K, V, J, S>(
+        mut self,
+        anchor: impl AsRef<str>,
+        entries: I,
+        keys: J,
+    ) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: Into<String>,
+        J: IntoIterator<Item = S>,
+        S: AsRef<str>,
     {
         let entries: Vec<(String, String)> = entries
             .into_iter()
@@ -814,6 +834,10 @@ impl PluginBindingSet {
             self.default_bundles.push(DefaultBundle {
                 anchor: canonical_key(anchor.as_ref()),
                 entries,
+                requires_any: keys
+                    .into_iter()
+                    .map(|key| canonical_key(key.as_ref()))
+                    .collect(),
             });
         }
         self
@@ -1308,6 +1332,14 @@ impl PluginBindingSet {
                 || self.withheld.contains(&canonical)
         };
         for bundle in &self.default_bundles {
+            if !bundle.requires_any.is_empty()
+                && !bundle.requires_any.iter().any(|key| {
+                    lookup(resolved, key, schema).is_some_and(|value| !value.trim().is_empty())
+                        || pending.contains(&schema.canonical(key))
+                })
+            {
+                continue;
+            }
             if is_set(resolved, &bundle.anchor) {
                 debug!(
                     plugin_id = %self.plugin_id,
@@ -1870,6 +1902,92 @@ impl PluginBindings {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conditional_defaults_require_a_nonempty_resolved_key() {
+        let set = PluginBindingSet::new("test")
+            .with_workload_config(WorkloadConfigPolicy::Allow)
+            .with_default_bundle_if_any(
+                "servers",
+                [("servers", "nats://data:4222"), ("tls-cert", "/host.crt")],
+                ["username", "token-file"],
+            );
+        let schema = BindingSchema::empty();
+        for workload in [map(&[]), map(&[("username", " \t")])] {
+            let resolved = set
+                .resolve("", &workload, &schema, never_narrows())
+                .unwrap();
+            assert!(!resolved.contains_key("tls-cert"));
+        }
+        for workload in [
+            map(&[("UserName", "tenant")]),
+            map(&[("TOKEN_FILE", "/tenant.token")]),
+        ] {
+            let resolved = set
+                .resolve("", &workload, &schema, never_narrows())
+                .unwrap();
+            assert_eq!(resolved["tls-cert"], "/host.crt");
+        }
+        let resolved = set
+            .resolve(
+                "",
+                &map(&[("username", "tenant"), ("servers", "nats://other:4222")]),
+                &schema,
+                never_narrows(),
+            )
+            .unwrap();
+        assert!(!resolved.contains_key("tls-cert"));
+
+        let set = set.with_binding("tenant", map(&[("username", "tenant")]));
+        let layers: BTreeMap<_, _> = set
+            .host_layers(&schema)
+            .map(|(name, layer, _)| (name, layer))
+            .collect();
+        assert_eq!(layers["tenant"]["tls-cert"], "/host.crt");
+    }
+
+    #[test]
+    fn conditional_defaults_recognize_pending_credentials() {
+        let set = PluginBindingSet::new("test")
+            .with_binding("tenant", HashMap::new())
+            .with_binding_secrets(
+                "tenant",
+                HashMap::from([(
+                    "token".to_string(),
+                    PluginSecretRef {
+                        source: "tenant".into(),
+                        plugin: "vault".into(),
+                        key: "token".into(),
+                        grant: crate::plugin::WorkloadGrant::All,
+                    },
+                )]),
+            )
+            .with_default_bundle_if_any(
+                "servers",
+                [("servers", "nats://data:4222"), ("tls-cert", "/host.crt")],
+                ["token"],
+            );
+        let schema = BindingSchema::empty();
+        let (_, layer, pending) = set.host_layers(&schema).next().unwrap();
+        assert_eq!(layer["tls-cert"], "/host.crt");
+        assert!(pending.contains("token"));
+        assert!(!layer.contains_key("token"));
+    }
+
+    #[test]
+    fn withheld_credentials_do_not_activate_conditional_defaults() {
+        let schema = BindingSchema::empty();
+        let mut set = PluginBindingSet::new("test").with_default_bundle_if_any(
+            "servers",
+            [("servers", "nats://data:4222"), ("tls-cert", "/host.crt")],
+            ["token"],
+        );
+        set.withhold("token", &schema);
+        let resolved = set
+            .resolve("", &HashMap::new(), &schema, never_narrows())
+            .unwrap();
+        assert!(!resolved.contains_key("tls-cert"));
+    }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs

@@ -1278,8 +1278,7 @@ impl HostCommand {
     /// The operator's plugin binding declarations, plus the fallbacks this
     /// host's own flags supply.
     ///
-    /// `wasmcloud:nats` is the only plugin with a fallback today: a binding
-    /// that names no `servers` dials the data plane. The TLS material rides
+    /// NATS bindings without `servers` fall back to the data plane. TLS rides
     /// with it as an *anchored bundle* rather than as three independent
     /// defaults, because certs are only valid for the address they were issued
     /// for — an operator who points a binding at some other NATS and sets no
@@ -1319,19 +1318,25 @@ impl HostCommand {
             }
         }
 
-        // A `wasi:blobstore` binding that names credentials connects as a
-        // `wasmcloud:nats` binding does, so it falls back to the same NATS.
-        let mut declared = declared;
-        for id in [
-            wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
-            wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
-        ] {
-            let set = declared
-                .for_plugin(id)
-                .with_default_bundle("servers", bundle.clone());
-            declared = declared.with_plugin(set);
-        }
-        Ok(declared)
+        let nats = declared
+            .for_plugin(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
+            .with_default_bundle("servers", bundle.clone());
+        // Inherited client certificates must not select a blobstore connection.
+        // Protocol credentials still inherit the data plane's TLS identity.
+        let blobstore = declared
+            .for_plugin(plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID)
+            .with_default_bundle_if_any(
+                "servers",
+                bundle.clone(),
+                plugin::wasmcloud_nats::auth_keys(),
+            )
+            .with_default_bundle(
+                "servers",
+                bundle
+                    .into_iter()
+                    .filter(|(key, _)| !matches!(*key, "tls-cert" | "tls-key")),
+            );
+        Ok(declared.with_plugin(nats).with_plugin(blobstore))
     }
 }
 
@@ -2281,6 +2286,65 @@ host:
 
     fn config_from(yaml: &str) -> crate::config::Config {
         serde_saphyr::from_str(yaml).expect("config must parse")
+    }
+
+    #[test]
+    fn blobstore_tls_defaults_preserve_host_and_explicit_identities() -> anyhow::Result<()> {
+        let host = parse(&[
+            "--data-nats-url=nats://data:4222",
+            "--data-nats-tls-ca=/ca.crt",
+            "--data-nats-tls-cert=/host.crt",
+            "--data-nats-tls-key=/host.key",
+            "--data-nats-tls-first",
+        ]);
+        let catalog = host.plugin_bindings(&config_from("{}"), std::path::Path::new("."))?;
+        let declared = catalog
+            .for_plugin(wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID)
+            .with_workload_config(WorkloadConfigPolicy::Allow);
+        let inherited = resolve(&declared, "", &[])?;
+        assert_eq!(inherited["servers"], "nats://data:4222");
+        assert_eq!(inherited["tls-ca"], "/ca.crt");
+        assert_eq!(inherited["tls-first"], "true");
+        assert!(!inherited.contains_key("tls-cert"));
+        assert!(!inherited.contains_key("tls-key"));
+
+        let anonymous = resolve(&declared, "", &[("jwt-as-token", "false")])?;
+        assert!(!anonymous.contains_key("tls-cert"));
+        assert!(!anonymous.contains_key("tls-key"));
+
+        for credentials in [
+            vec![("username", "tenant"), ("password", "secret")],
+            vec![("token-file", "/tenant.token")],
+            vec![("creds-file", "/tenant.creds")],
+            vec![("nkey-file", "/tenant.seed")],
+            vec![("jwt", "tenant.jwt"), ("nkey-seed", "tenant.seed")],
+        ] {
+            let resolved = resolve(&declared, "", &credentials)?;
+            assert_eq!(resolved["tls-cert"], "/host.crt");
+            assert_eq!(resolved["tls-key"], "/host.key");
+        }
+
+        let explicit = resolve(
+            &declared,
+            "",
+            &[("TLS_CERT", "/tenant.crt"), ("TLS_KEY", "/tenant.key")],
+        )?;
+        assert_eq!(explicit["TLS_CERT"], "/tenant.crt");
+        assert_eq!(explicit["TLS_KEY"], "/tenant.key");
+        assert_eq!(explicit["servers"], "nats://data:4222");
+
+        let partial = resolve(&declared, "", &[("tls-cert", "/tenant.crt")])?;
+        assert!(!partial.contains_key("tls-key"));
+
+        let elsewhere = resolve(
+            &declared,
+            "",
+            &[("servers", "nats://other:4222"), ("token", "tenant-token")],
+        )?;
+        for key in ["tls-ca", "tls-cert", "tls-key", "tls-first"] {
+            assert!(!elsewhere.contains_key(key), "{key}");
+        }
+        Ok(())
     }
 
     fn nats_bindings(
