@@ -16,4 +16,4 @@ pub use multiplexed::{
 };
 #[cfg(feature = "wasm_component_model_implements")]
 pub use multiplexed_async::MultiplexedAsyncBlobstore;
-pub use nats::NatsBlobstore;
+pub use nats::{NatsBlobstore, PLUGIN_BLOBSTORE_ID};

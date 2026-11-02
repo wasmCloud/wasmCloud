@@ -237,6 +237,34 @@ async fn build_options(
     }))
 }
 
+/// Connects as `config` says — to its servers, with its credentials and TLS —
+/// and opens JetStream in its domain.
+///
+/// `wasi:blobstore`'s NATS plugin connects a binding that names credentials
+/// through here too, so the same keys reach the same account in both plugins.
+pub(crate) async fn connect(
+    config: &NatsConfig,
+    reconnects: tokio::sync::watch::Sender<u64>,
+    denials: tokio::sync::broadcast::Sender<String>,
+    ignore_discovered_servers: bool,
+) -> anyhow::Result<async_nats::jetstream::Context> {
+    let client = build_options(config, reconnects, denials, ignore_discovered_servers)
+        .await?
+        .connect(config.servers.clone())
+        .await
+        .with_context(|| {
+            format!(
+                "failed to connect to NATS at {} using {} auth",
+                config.servers.join(","),
+                config.auth.kind()
+            )
+        })?;
+    Ok(match &config.jetstream_domain {
+        Some(domain) => async_nats::jetstream::with_domain(client, domain),
+        None => async_nats::jetstream::new(client),
+    })
+}
+
 /// Routes one connection event, extracted from the callback so it is testable.
 fn handle_nats_event(
     event: &async_nats::Event,
@@ -411,28 +439,14 @@ impl ConnectionRegistry {
 
         let (reconnects, _) = tokio::sync::watch::channel(0);
         let (subscription_denials, _) = tokio::sync::broadcast::channel(64);
-        let opts = build_options(
+        let jetstream = connect(
             config,
             reconnects.clone(),
             subscription_denials.clone(),
             ignore_discovered_servers,
         )
         .await?;
-        let client = opts
-            .connect(config.servers.clone())
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to connect to NATS at {} using {} auth",
-                    config.servers.join(","),
-                    config.auth.kind()
-                )
-            })?;
-
-        let jetstream = match &config.jetstream_domain {
-            Some(domain) => async_nats::jetstream::with_domain(client.clone(), domain),
-            None => async_nats::jetstream::new(client.clone()),
-        };
+        let client = jetstream.client();
 
         let handle = Arc::new(ConnHandle {
             reconnects,

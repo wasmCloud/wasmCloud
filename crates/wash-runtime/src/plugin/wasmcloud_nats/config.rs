@@ -394,7 +394,7 @@ impl Layer<'_> {
 /// Silently preferring one when several are set hides a misconfiguration until
 /// the connection is refused, so a conflict is an error at bind time. `None`
 /// when a pending key is part of the mechanism selected.
-fn parse_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
+fn parse_layer_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
     // One `get` per setting: aliases are resolved by the key table, so
     // `creds-file` and `creds` are the same lookup rather than two.
     let creds = r.get("creds");
@@ -480,8 +480,17 @@ fn parse_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
     Ok(Some(NatsAuth::Anonymous))
 }
 
+/// Parses credentials after all binding secrets have resolved.
+pub(crate) fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
+    parse_layer_auth(&Layer {
+        cfg,
+        pending: &BTreeSet::new(),
+    })?
+    .context("NATS credentials have no value")
+}
+
 /// Parses and validates a config layer, leaving its pending keys unread.
-/// `auth` settles the credentials `parse_auth` found, `None` when a pending
+/// `auth` settles the credentials `parse_layer_auth` found, `None` when a pending
 /// key decides them.
 fn read<A>(
     r: &Layer<'_>,
@@ -574,7 +583,7 @@ fn read<A>(
         name: r.get("name").map(String::from),
         jetstream_domain: r.get("jetstream-domain").map(String::from),
         inbox_prefix: r.get("inbox-prefix").map(String::from),
-        auth: auth(parse_auth(r)?)?,
+        auth: auth(parse_layer_auth(r)?)?,
         tls,
         policy: PolicySpec {
             subject_allow: r.list("subject-allow"),
@@ -604,7 +613,7 @@ impl NatsConfig {
             cfg,
             pending: &BTreeSet::new(),
         };
-        // With nothing pending, every mechanism `parse_auth` selects has its
+        // With nothing pending, every mechanism `parse_layer_auth` selects has its
         // values.
         read(&layer, |auth| {
             auth.context("NATS credentials have no value")
@@ -953,6 +962,25 @@ pub(super) fn subscription_spec(key: &str, binding: &str, value: String) -> Stri
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolved_auth_does_not_require_servers() -> anyhow::Result<()> {
+        assert!(matches!(parse_auth(&map(&[]))?, NatsAuth::Anonymous));
+        assert!(matches!(
+            parse_auth(&map(&[("user", "tenant"), ("password", "secret")]))?,
+            NatsAuth::UserPassword { .. }
+        ));
+        assert!(parse_auth(&map(&[("username", "tenant")])).is_err());
+        assert!(
+            parse_auth(&map(&[
+                ("username", "tenant"),
+                ("password", "secret"),
+                ("token", "other")
+            ]))
+            .is_err()
+        );
+        Ok(())
+    }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs

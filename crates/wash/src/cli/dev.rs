@@ -444,17 +444,23 @@ impl CliCommand for DevCommand {
         // After every plugin is registered, so `build()` can refuse a
         // declaration naming an id this host has no plugin for.
         //
-        // `dev.data_nats_url` is the address a `wasmcloud:nats` binding falls
-        // back to. An anchored bundle rather than a plain default: a binding
-        // that names its own `servers` is pointing somewhere else, and should
-        // inherit nothing else from the dev NATS either.
+        // `dev.data_nats_url` is the address a `wasmcloud:nats` binding, or a
+        // `wasi:blobstore` one naming credentials, falls back to. An anchored
+        // bundle rather than a plain default: a binding that names its own
+        // `servers` is pointing somewhere else, and should inherit nothing
+        // else from the dev NATS either.
         let mut plugin_bindings =
             dev_config.to_plugin_bindings(&config, project_dir, Some(project_dir))?;
         if let Some(url) = &dev_config.data_nats_url {
-            let nats = plugin_bindings
-                .for_plugin(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
-                .with_default_bundle("servers", [("servers", url.clone())]);
-            plugin_bindings = plugin_bindings.with_plugin(nats);
+            for id in [
+                plugin::wasmcloud_nats::PLUGIN_NATS_ID,
+                plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
+            ] {
+                let set = plugin_bindings
+                    .for_plugin(id)
+                    .with_default_bundle("servers", [("servers", url.clone())]);
+                plugin_bindings = plugin_bindings.with_plugin(set);
+            }
         }
         host_builder = host_builder.with_plugin_bindings(plugin_bindings);
 

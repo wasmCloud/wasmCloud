@@ -1125,15 +1125,23 @@ impl HostCommand {
                     }
                 }),
         );
-        // A credential file a `wasmcloud:nats` binding names, so a workload
-        // cannot mount the Secret the binding authenticates with.
+        // A credential file a `wasmcloud:nats` or `wasi:blobstore` binding
+        // names, so a workload cannot mount the Secret the binding
+        // authenticates with.
         if let Ok(bindings) = self.plugin_bindings(config, project_dir) {
-            let nats = bindings.for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID);
-            let names: Vec<&str> = std::iter::once("").chain(nats.binding_names()).collect();
-            for name in names {
-                paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
-                    &nats.host_layer(name),
-                ));
+            for id in [
+                wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
+                wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
+            ] {
+                let declared = bindings.for_plugin(id);
+                let names: Vec<&str> = std::iter::once("")
+                    .chain(declared.binding_names())
+                    .collect();
+                for name in names {
+                    paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
+                        &declared.host_layer(name),
+                    ));
+                }
             }
         }
         paths.extend(
@@ -1257,10 +1265,19 @@ impl HostCommand {
             }
         }
 
-        let nats = declared
-            .for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
-            .with_default_bundle("servers", bundle);
-        Ok(declared.with_plugin(nats))
+        // A `wasi:blobstore` binding that names credentials connects as a
+        // `wasmcloud:nats` binding does, so it falls back to the same NATS.
+        let mut declared = declared;
+        for id in [
+            wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
+            wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
+        ] {
+            let set = declared
+                .for_plugin(id)
+                .with_default_bundle("servers", bundle.clone());
+            declared = declared.with_plugin(set);
+        }
+        Ok(declared)
     }
 }
 
