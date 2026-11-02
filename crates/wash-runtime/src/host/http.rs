@@ -842,7 +842,7 @@ impl Router for DynamicRouter {
 
         // Primary hostname plus any DNS aliases injected by the operator.
         // Aliases are a comma-separated list of Service DNS names (e.g.
-        // "my-svc,my-svc.default,my-svc.default.svc,my-svc.default.svc.cluster.local")
+        // "my-svc.default,my-svc.default.svc,my-svc.default.svc.cluster.local")
         // that allow cluster-internal callers to reach this workload via Service DNS.
         let mut routes = vec![IngressRoute::ingress(&primary_host)];
         routes.extend(ingress_aliases(http_iface));

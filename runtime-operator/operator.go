@@ -19,6 +19,9 @@ import (
 // considered unreachable: four missed heartbeats at the host's 15s interval.
 const DefaultHeartbeatTTL = 60 * time.Second
 
+// DefaultClusterDomain is the Kubernetes default cluster DNS domain.
+const DefaultClusterDomain = runtime_controllers.DefaultClusterDomain
+
 // MinHeartbeatTTL is the shortest TTL the operator honours. Hosts publish every
 // 15s, so under two intervals a live fleet reads as unheard between ticks and
 // no host is ever reaped.
@@ -59,6 +62,9 @@ type EmbeddedOperatorConfig struct {
 	// is locked to the workload's own namespace and any non-matching
 	// Environment is rejected with a Warning Event.
 	AllowSharedHosts bool
+	// ClusterDomain is the cluster's DNS domain, used for the fully-qualified
+	// Service DNS alias. Empty means DefaultClusterDomain.
+	ClusterDomain string
 }
 
 // EmbeddedOperator is the main struct for the embedded operator.
@@ -135,6 +141,7 @@ func NewEmbeddedOperator(
 		Recorder:          mgr.GetEventRecorder("workload-controller"),
 		OperatorNamespace: cfg.Namespace,
 		AllowSharedHosts:  cfg.AllowSharedHosts,
+		ClusterDomain:     cfg.ClusterDomain,
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

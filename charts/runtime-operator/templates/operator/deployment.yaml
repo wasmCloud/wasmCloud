@@ -56,6 +56,9 @@ spec:
             - "-host-namespaces={{ . }}"
             {{- end }}
             - "-allow-shared-hosts={{ .Values.operator.allowSharedHosts }}"
+            {{- with .Values.operator.clusterDomain }}
+            - "-cluster-domain={{ . }}"
+            {{- end }}
             # Always leader-gate the operator. Harmless at the default
             # replicas: 1, and required if replicas is ever raised.
             - "-leader-elect"

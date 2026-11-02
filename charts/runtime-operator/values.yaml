@@ -203,6 +203,10 @@ operator:
   # `CrossEnvironmentSchedulingDenied` Warning Event and a
   # `HostSelection=False` condition on the Workload.
   allowSharedHosts: true
+  # -- The cluster's DNS domain. A Workload that sets `kubernetes.service` is
+  # reachable at `<svc>.<ns>.svc.<clusterDomain>`. Empty uses the operator's
+  # default, `cluster.local`; set it when the kubelet's `clusterDomain` differs.
+  clusterDomain: ""
   # -- Additional environment variables for the operator container, appended
   # after the chart-managed vars. Standard Kubernetes env shape (supports
   # `valueFrom` secretKeyRef / configMapKeyRef).
