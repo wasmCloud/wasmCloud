@@ -547,7 +547,7 @@ fn explain_compile_failure(
     heap_ceiling: u64,
     memory_reservation: u64,
 ) -> anyhow::Error {
-    use host_memory::{parse_bytes, render_bytes};
+    use host_memory::{render_bytes, render_bytes_exact};
 
     let text = format!("{e:#}");
     let Some(required) = parse_pooling_minimum(&text) else {
@@ -557,28 +557,19 @@ fn explain_compile_failure(
         .checked_next_power_of_two()
         .unwrap_or(required)
         .max(4 * host_memory::MIB);
-    // Suggested settings must parse back to the exact byte count.
-    let setting = |bytes| {
-        let rendered = render_bytes(bytes);
-        if parse_bytes(&rendered) == Ok(bytes) {
-            rendered
-        } else {
-            format!("{bytes}B")
-        }
-    };
     let advice = if required > memory_reservation {
         format!(
             "--memory-reservation is {}. Raise it to at least {} \
              (chart: runtime.resources.memoryReservation), and ensure --default-heap-memory \
              permits that size (chart: runtime.resources.defaultHeapMemory).",
             render_bytes(memory_reservation),
-            setting(suggested),
+            render_bytes_exact(suggested),
         )
     } else {
         format!(
             "Raise --default-heap-memory to at least {} \
              (chart: runtime.resources.defaultHeapMemory).",
-            setting(suggested.min(memory_reservation)),
+            render_bytes_exact(suggested.min(memory_reservation)),
         )
     };
     anyhow::Error::from(e).context(format!(
@@ -2835,6 +2826,36 @@ mod tests {
         if let Some(heap) = engine.installed_heap_memory {
             assert_eq!(heap, 256 << 20);
         }
+    }
+
+    #[test]
+    fn a_custom_memory_layout_matches_the_pool_slot_stride() -> anyhow::Result<()> {
+        let layout = host_memory::MemoryLayout {
+            reservation: host_memory::MIB + 1,
+            guard: 1,
+        };
+        let engine = Engine::builder()
+            .with_pooling_allocator(true)
+            .with_max_memories(2)
+            .with_memory_layout(layout)
+            .build()?;
+        if engine.pool_totals().is_none() {
+            return Ok(());
+        }
+        let bytes = wat::parse_str("(module (memory (export \"memory\") 1))")?;
+        let module = wasmtime::Module::new(engine.inner(), bytes)?;
+        let mut store = wasmtime::Store::new(engine.inner(), ());
+        let mut allocate = || -> anyhow::Result<usize> {
+            let instance = wasmtime::Instance::new(&mut store, &module, &[])?;
+            let memory = instance.get_memory(&mut store, "memory").unwrap();
+            Ok(memory.data_ptr(&store) as usize)
+        };
+        let stride = allocate()?.abs_diff(allocate()?);
+        assert_eq!(
+            u64::try_from(stride)?,
+            host_memory::pool_slot_bytes(layout.reservation, layout)
+        );
+        Ok(())
     }
 
     #[test]

@@ -490,6 +490,7 @@ pub const WASMTIME_MEMORY_GUARD: u64 = 64 * 1024;
 ///   pooling, wasmtime may relocate a memory to grow beyond it.
 /// - The **guard** is unmapped, never accessible, and part of neither memory;
 ///   wasmtime also puts one before the first slot.
+/// - The reservation and guard are rounded up separately to host pages.
 /// - Wasmtime's 4 GiB reservation covers a 32-bit dynamic index. The guard
 ///   covers many constant offsets added to it; larger offsets still need
 ///   bounds checks even at the default layout.
@@ -530,7 +531,7 @@ impl MemoryLayout {
 
 /// Address space one pooled memory slot reserves when the heap ceiling is
 /// `max_memory_size`: the larger of the ceiling and the layout's reservation,
-/// plus its guard.
+/// plus its guard, each rounded up to the host page size.
 ///
 /// wasmtime's own slab layout without memory protection keys, which it leaves
 /// off by default. A caller-supplied base config that changes the reservation
@@ -539,12 +540,11 @@ impl MemoryLayout {
 /// A ceiling above the reservation does not make a bigger slot in practice:
 /// wasmtime refuses to build a pool whose `max_memory_size` exceeds its
 /// `memory_reservation` (see [`pool_heap_ceiling_advisory`]). Every pool that
-/// builds has slots of exactly the reservation plus the guard; the larger
-/// figure is only what such a pool would have needed.
+/// builds has slots of the page-rounded reservation plus the page-rounded
+/// guard; the larger figure is only what such a pool would have needed.
 pub fn pool_slot_bytes(max_memory_size: u64, layout: MemoryLayout) -> u64 {
-    max_memory_size
-        .max(layout.reservation)
-        .saturating_add(layout.guard)
+    round_to_pool_page(max_memory_size.max(layout.reservation))
+        .saturating_add(round_to_pool_page(layout.guard))
 }
 
 /// Address space a pool of `slots` memories reserves: one [`pool_slot_bytes`]
@@ -554,14 +554,15 @@ pub fn pool_slot_bytes(max_memory_size: u64, layout: MemoryLayout) -> u64 {
 pub fn pool_slab_bytes(max_memory_size: u64, slots: u32, layout: MemoryLayout) -> u64 {
     pool_slot_bytes(max_memory_size, layout)
         .saturating_mul(u64::from(slots))
-        .saturating_add(layout.guard)
+        .saturating_add(round_to_pool_page(layout.guard))
 }
 
-/// The page the table and stack pools round each table and stack up to: the
-/// host's, as wasmtime reads it. 4 KiB on x86-64 and on Windows, 16 KiB on Apple silicon, where a
-/// one-element table costs four times what the Linux default would suggest
-/// and a 20,000-element one rounds to the same ten 16 KiB pages as forty 4 KiB
-/// ones. Only the estimate's input: wasmtime maps the real pool.
+fn round_to_pool_page(bytes: u64) -> u64 {
+    let page = pool_page();
+    bytes.div_ceil(page).saturating_mul(page)
+}
+
+/// The host page size Wasmtime uses to align pool allocations.
 fn pool_page() -> u64 {
     #[cfg(unix)]
     {
@@ -826,6 +827,16 @@ pub fn render_bytes(bytes: u64) -> String {
         }
     }
     format!("{bytes}B")
+}
+
+/// Render a byte count that parses back exactly, for settings and series keys.
+pub fn render_bytes_exact(bytes: u64) -> String {
+    let rendered = render_bytes(bytes);
+    if parse_bytes(&rendered) == Ok(bytes) {
+        rendered
+    } else {
+        format!("{bytes}B")
+    }
 }
 
 /// The host's resolved memory budgets.
@@ -2417,6 +2428,49 @@ mod tests {
         assert!(
             advisory.contains(&format!("derive {} core instances", 100 * per)),
             "{advisory}"
+        );
+    }
+
+    #[test]
+    fn exact_byte_labels_round_trip_without_collisions() {
+        for bytes in [0, 1, 1023, 1024, 1050 * MIB, 1060 * MIB, u64::MAX] {
+            assert_eq!(parse_bytes(&render_bytes_exact(bytes)), Ok(bytes));
+        }
+        assert_eq!(render_bytes_exact(1024 * MIB), "1GiB");
+        assert_ne!(
+            render_bytes_exact(1050 * MIB),
+            render_bytes_exact(1060 * MIB)
+        );
+    }
+
+    #[test]
+    fn memory_slots_and_slab_guards_round_up_separately() {
+        let page = pool_page();
+        let layout = MemoryLayout {
+            reservation: page + 1,
+            guard: 1,
+        };
+        assert_eq!(pool_slot_bytes(page, layout), 3 * page);
+        assert_eq!(pool_slab_bytes(page, 2, layout), 7 * page);
+        assert_eq!(derived_slot_bytes(layout), 3 * page);
+        assert_eq!(pool_slot_bytes(3 * page + 1, layout), 5 * page);
+        let unguarded = MemoryLayout {
+            reservation: page,
+            guard: 0,
+        };
+        assert_eq!(pool_slot_bytes(page, unguarded), page);
+        assert_eq!(pool_slab_bytes(page, 2, unguarded), 2 * page);
+        assert_eq!(pool_slot_bytes(u64::MAX, layout), u64::MAX);
+        assert_eq!(
+            pool_slab_bytes(
+                page,
+                u32::MAX,
+                MemoryLayout {
+                    reservation: u64::MAX,
+                    guard: u64::MAX,
+                }
+            ),
+            u64::MAX
         );
     }
 
