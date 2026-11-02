@@ -52,6 +52,8 @@ pub struct RedisKeyValue {
     /// `open` that succeeds. A failed open leaves it empty, so the next one
     /// tries again.
     conn: Arc<tokio::sync::OnceCell<Connection>>,
+    /// How that connection dials and waits. See [`RedisKeyValue::from_url`].
+    settings: ConnectionSettings,
     metrics: Arc<WasiKeyvalueMetrics>,
 }
 
@@ -70,19 +72,54 @@ impl WasiKeyvalueMetrics {
 }
 
 impl RedisKeyValue {
+    /// A plugin for the server `client` names, with the default connection
+    /// settings.
     pub fn new(client: redis::Client) -> Self {
+        Self::with_settings(client, ConnectionSettings::default())
+    }
+
+    fn with_settings(client: redis::Client, settings: ConnectionSettings) -> Self {
         let meter = opentelemetry::global::meter("wasi-keyvalue");
         let metrics = WasiKeyvalueMetrics::new(&meter);
         Self {
             client,
             conn: Arc::default(),
+            settings,
             metrics: Arc::new(metrics),
         }
     }
 
+    /// A plugin for the server `url` names.
+    ///
+    /// The url's query may carry the same connection settings a multiplexed
+    /// binding's `config` does (`backend-reconnect-num-retries`,
+    /// `backend-reconnect-max-delay-ms`, `backend-connection-timeout-ms`,
+    /// `backend-response-timeout-ms`, in any case, `_` or `-`), for example
+    /// `redis://localhost:6379?backend-response-timeout-ms=500`. They are
+    /// taken out before the url reaches redis; any other query parameter is
+    /// left for redis to read.
+    ///
+    /// # Errors
+    ///
+    /// A setting redis keyvalue config would refuse, or a url redis cannot
+    /// open.
     pub fn from_url(url: &url::Url) -> anyhow::Result<Self> {
+        let (url, settings) = split_connection_settings(url)?;
         let client = redis::Client::open(url.as_str())?;
-        Ok(Self::new(client))
+        Ok(Self::with_settings(client, settings))
+    }
+
+    /// The connection every bucket shares, dialing it on first use. One that
+    /// has been quiet for [`IDLE_PROBE_AFTER`] is checked first, so an `open`
+    /// while the server is down fails as it did when each `open` dialed.
+    async fn connection(&self) -> redis::RedisResult<Connection> {
+        let conn = self
+            .conn
+            .get_or_try_init(|| Connection::connect(self.client.clone(), self.settings))
+            .await?
+            .clone();
+        conn.probe_if_idle().await?;
+        Ok(conn)
     }
 
     fn record_operation(&self, operation: &str) {
@@ -264,6 +301,41 @@ impl ConnectionSettings {
 /// [`ConnectionSettings::redial_delay`].
 const REDIAL_BASE_DELAY_MS: u64 = 50;
 
+/// `url` without the connection settings in its query, and those settings.
+fn split_connection_settings(url: &url::Url) -> anyhow::Result<(url::Url, ConnectionSettings)> {
+    let is_setting = |key: &str| {
+        let key = crate::plugin::bindings::canonical_key(key);
+        [
+            RECONNECT_NUM_RETRIES_KEY,
+            RECONNECT_MAX_DELAY_MS_KEY,
+            CONNECTION_TIMEOUT_MS_KEY,
+            RESPONSE_TIMEOUT_MS_KEY,
+        ]
+        .contains(&key.as_str())
+    };
+    let (settings, rest): (Vec<_>, Vec<_>) = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .partition(|(k, _)| is_setting(k));
+    let mut config: HashMap<String, String> = HashMap::new();
+    for (k, v) in settings {
+        // Two spellings of one key are refused by `from_config`; the same
+        // spelling twice would be lost in the map, so refuse it here.
+        if config.insert(k.clone(), v).is_some() {
+            anyhow::bail!("redis keyvalue url sets `{k}` more than once");
+        }
+    }
+    let settings = ConnectionSettings::from_config(&config)?;
+
+    let mut url = url.clone();
+    if rest.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(rest);
+    }
+    Ok((url, settings))
+}
+
 /// The value of `key` in `config`, in any spelling that folds to it.
 #[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
 fn setting<'a>(config: &'a HashMap<String, String>, key: &str) -> anyhow::Result<Option<&'a str>> {
@@ -360,13 +432,18 @@ const IDLE_PROBE_AFTER: Duration = Duration::from_secs(5);
 /// generation of the connection that issued it in the bits below, and the
 /// redis `SCAN` cursor in the low [`CURSOR_BITS`]. See
 /// [`Connection::scan_page`].
-const TOKEN_FLAG: u64 = 1 << 63;
+///
+/// Every token is below 2^53, so a guest that carries it through JSON or a
+/// JavaScript `number` gets it back intact.
+const TOKEN_FLAG: u64 = 1 << 52;
 /// Bits of a redis `SCAN` cursor a token carries. A redis cursor indexes the
-/// keyspace hash table, which never approaches 2^48 buckets.
-const CURSOR_BITS: u32 = 48;
+/// keyspace hash table, which never approaches 2^40 buckets (that table alone
+/// would take terabytes).
+const CURSOR_BITS: u32 = 40;
 const CURSOR_MASK: u64 = (1 << CURSOR_BITS) - 1;
-/// Bits of the connection generation a token carries (it wraps).
-const GENERATION_MASK: u64 = (1 << (63 - CURSOR_BITS)) - 1;
+/// Bits of the connection generation a token carries (it wraps after 4096
+/// reconnects).
+const GENERATION_MASK: u64 = (1 << (52 - CURSOR_BITS)) - 1;
 
 #[derive(Default)]
 struct Redials {
@@ -746,14 +823,8 @@ impl<'a> bindings::wasi::keyvalue::store::Host for ActiveCtx<'a> {
         // if the server restarts, rather than dialing (and holding) a fresh
         // connection per `open`: a guest that opens a bucket per request would
         // otherwise pay a connect each time.
-        let conn = match plugin
-            .conn
-            .get_or_try_init(|| {
-                Connection::connect(plugin.client.clone(), ConnectionSettings::default())
-            })
-            .await
-        {
-            Ok(conn) => conn.clone(),
+        let conn = match plugin.connection().await {
+            Ok(conn) => conn,
             Err(e) => {
                 tracing::error!("Failed to connect to Redis: {e}");
                 return Ok(Err(StoreError::Other(
