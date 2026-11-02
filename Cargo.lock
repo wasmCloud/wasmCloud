@@ -7983,6 +7983,7 @@ dependencies = [
  "anyhow",
  "clap",
  "pbjson-build",
+ "serde_json",
  "tempfile",
  "tonic-prost-build",
 ]
