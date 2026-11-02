@@ -38,7 +38,7 @@ wasi-otel = []
 washlet = ["oci", "dep:nkeys"]
 wasi-config = []
 wasi-logging = []
-wasi-blobstore = ["dep:sha2", "dep:object_store"]
+wasi-blobstore = ["dep:sha2", "dep:object_store", "wasmcloud-nats"]
 wasi-keyvalue = []
 # Component-model `(implements ..)` / `named_imports` multiplexing. On by
 # default; disable with `--no-default-features` for a build that neither

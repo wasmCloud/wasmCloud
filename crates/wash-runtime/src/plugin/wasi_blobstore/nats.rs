@@ -1,10 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::WorkloadTracker;
-use crate::plugin::{HostPlugin, WitInterfaces};
+use crate::plugin::wasmcloud_nats::config::{NatsAuth, NatsConfig, parse_auth};
+use crate::plugin::wasmcloud_nats::{conn as nats_conn, keys as nats_keys};
+use crate::plugin::{HostPlugin, PluginEgressPolicy, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
 use async_nats::jetstream::object_store::{self, List, Object, ObjectStore};
 use bytes::Bytes;
@@ -19,7 +21,7 @@ use wasmtime_wasi::p2::{InputStream, OutputStream};
 use wasmtime_wasi_io::poll::Pollable;
 use wasmtime_wasi_io::streams::{StreamError, StreamResult};
 
-pub(crate) const PLUGIN_BLOBSTORE_ID: &str = "wasi-blobstore";
+pub const PLUGIN_BLOBSTORE_ID: &str = "wasi-blobstore";
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -54,6 +56,10 @@ pub struct WorkloadData {
     pub read_only: bool,
     /// Cancellation token for any ongoing operations
     pub cancel_token: tokio_util::sync::CancellationToken,
+    /// The JetStream its containers are opened on when its binding names
+    /// credentials: a connection of its own, made as those credentials.
+    /// `None` uses the host's.
+    pub jetstream: Option<Arc<async_nats::jetstream::Context>>,
 }
 
 /// Resource representation for an incoming value (data being read)
@@ -122,6 +128,8 @@ async fn present(store: &ObjectStore, name: &str) -> bool {
 pub struct NatsBlobstore {
     client: Arc<async_nats::jetstream::Context>,
     tracker: Arc<RwLock<WorkloadTracker<WorkloadData, ()>>>,
+    /// Network ceiling checked before a binding's own connection is made.
+    egress_policy: Arc<arc_swap::ArcSwapOption<PluginEgressPolicy>>,
 }
 
 impl NatsBlobstore {
@@ -129,7 +137,36 @@ impl NatsBlobstore {
         Self {
             client: async_nats::jetstream::new(client.clone()).into(),
             tracker: Arc::default(),
+            egress_policy: Arc::default(),
         }
+    }
+
+    /// A binding's own connection, when it names credentials to connect as:
+    /// read and made from the same keys as a `wasmcloud:nats` binding's, so
+    /// the containers it opens live in the account those credentials sign in
+    /// to. A binding naming none uses the host's connection.
+    async fn connect_binding(
+        &self,
+        config: &HashMap<String, String>,
+    ) -> anyhow::Result<Option<Arc<async_nats::jetstream::Context>>> {
+        if matches!(parse_auth(config)?, NatsAuth::Anonymous) {
+            return Ok(None);
+        }
+        let config = NatsConfig::from_map(config)?;
+        let policy = self.egress_policy.load_full();
+        if let Some(policy) = &policy {
+            for server in &config.servers {
+                policy.check_nats_server(server)?;
+            }
+        }
+        let jetstream = nats_conn::connect(
+            &config,
+            tokio::sync::watch::channel(0).0,
+            tokio::sync::broadcast::channel(1).0,
+            policy.is_some(),
+        )
+        .await?;
+        Ok(Some(Arc::new(jetstream)))
     }
 
     async fn workload_permit(
@@ -137,13 +174,17 @@ impl NatsBlobstore {
         workload_id: &str,
         container_name: &str,
         is_write: bool,
-    ) -> Option<tokio_util::sync::CancellationToken> {
+    ) -> Option<(
+        tokio_util::sync::CancellationToken,
+        Arc<async_nats::jetstream::Context>,
+    )> {
         let tracker = self.tracker.read().await;
         match tracker.workloads.get(workload_id) {
             Some(item) => {
                 if let Some(data) = &item.workload_data {
                     if data.buckets.contains(container_name) {
-                        return Some(data.cancel_token.clone());
+                        let jetstream = data.jetstream.as_ref().unwrap_or(&self.client);
+                        return Some((data.cancel_token.clone(), jetstream.clone()));
                     }
                     if is_write && data.read_only {
                         return None;
@@ -165,15 +206,14 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<Resource<ContainerData>, BlobstoreError>> {
         let plugin = self.try_get_plugin::<NatsBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
-        let _workload_permit = match plugin.workload_permit(&self.workload_id, &name, true).await {
-            Some(token) => token,
+        let (_, jetstream) = match plugin.workload_permit(&self.workload_id, &name, true).await {
+            Some(permit) => permit,
             None => {
                 return Ok(Err("unauthorized".to_string()));
             }
         };
 
-        let store = match plugin
-            .client
+        let store = match jetstream
             .create_object_store(object_store::Config {
                 bucket: name.to_string(),
                 ..Default::default()
@@ -202,17 +242,17 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<Resource<ContainerData>, BlobstoreError>> {
         let plugin = self.try_get_plugin::<NatsBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
-        let _workload_permit = match plugin
+        let (_, jetstream) = match plugin
             .workload_permit(&self.workload_id, &name, false)
             .await
         {
-            Some(token) => token,
+            Some(permit) => permit,
             None => {
                 return Ok(Err("unauthorized".to_string()));
             }
         };
 
-        let store = match plugin.client.get_object_store(name.to_string()).await {
+        let store = match jetstream.get_object_store(name.to_string()).await {
             Ok(store) => store,
             Err(e) => {
                 return Ok(Err(format!("failed to get bucket: {e}")));
@@ -235,14 +275,14 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), BlobstoreError>> {
         let plugin = self.try_get_plugin::<NatsBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
-        let _workload_permit = match plugin.workload_permit(&self.workload_id, &name, true).await {
-            Some(token) => token,
+        let (_, jetstream) = match plugin.workload_permit(&self.workload_id, &name, true).await {
+            Some(permit) => permit,
             None => {
                 return Ok(Err("unauthorized".to_string()));
             }
         };
 
-        if let Err(e) = plugin.client.delete_object_store(name.to_string()).await {
+        if let Err(e) = jetstream.delete_object_store(name.to_string()).await {
             return Ok(Err(format!("failed to delete bucket: {e}")));
         };
 
@@ -256,14 +296,14 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<bool, BlobstoreError>> {
         let plugin = self.try_get_plugin::<NatsBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
-        let _workload_permit = match plugin.workload_permit(&self.workload_id, &name, true).await {
-            Some(token) => token,
+        let (_, jetstream) = match plugin.workload_permit(&self.workload_id, &name, true).await {
+            Some(permit) => permit,
             None => {
                 return Ok(Err("unauthorized".to_string()));
             }
         };
 
-        match plugin.client.get_object_store(name.to_string()).await {
+        match jetstream.get_object_store(name.to_string()).await {
             Ok(_) => Ok(Ok(true)),
             Err(_) => Ok(Ok(false)),
         }
@@ -277,34 +317,37 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
     ) -> wasmtime::Result<Result<(), BlobstoreError>> {
         let plugin = self.try_get_plugin::<NatsBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
-        let _read_permit = match plugin
+        let (_, read_jetstream) = match plugin
             .workload_permit(&self.workload_id, &src.container, false)
             .await
         {
-            Some(token) => token,
+            Some(permit) => permit,
             None => {
                 return Ok(Err("unauthorized read".to_string()));
             }
         };
 
-        let _write_permit = match plugin
+        let (_, write_jetstream) = match plugin
             .workload_permit(&self.workload_id, &dest.container, true)
             .await
         {
-            Some(token) => token,
+            Some(permit) => permit,
             None => {
                 return Ok(Err("unauthorized write".to_string()));
             }
         };
 
-        let read_store = match plugin.client.get_object_store(src.container.clone()).await {
+        let read_store = match read_jetstream.get_object_store(src.container.clone()).await {
             Ok(store) => store,
             Err(e) => {
                 return Ok(Err(format!("failed to get source bucket: {e}")));
             }
         };
 
-        let write_store = match plugin.client.get_object_store(dest.container.clone()).await {
+        let write_store = match write_jetstream
+            .get_object_store(dest.container.clone())
+            .await
+        {
             Ok(store) => store,
             Err(e) => {
                 return Ok(Err(format!("failed to get destination bucket: {e}")));
@@ -331,16 +374,16 @@ impl<'a> bindings::wasi::blobstore::blobstore::Host for ActiveCtx<'a> {
         let plugin = self.try_get_plugin::<NatsBlobstore>(PLUGIN_BLOBSTORE_ID)?;
 
         // requires an extra write permit on the src container to delete the object after copy
-        let _write_permit = match plugin
+        let (_, jetstream) = match plugin
             .workload_permit(&self.workload_id, &src.container, true)
             .await
         {
-            Some(token) => token,
+            Some(permit) => permit,
             None => {
                 return Ok(Err("unauthorized delete".to_string()));
             }
         };
-        let delete_store = match plugin.client.get_object_store(src.container.clone()).await {
+        let delete_store = match jetstream.get_object_store(src.container.clone()).await {
             Ok(store) => store,
             Err(e) => {
                 return Ok(Err(format!("failed to get source bucket: {e}")));
@@ -817,6 +860,20 @@ impl HostPlugin for NatsBlobstore {
         }
     }
 
+    /// The keys a `wasmcloud:nats` binding connects with — where, and as
+    /// whom — so under `workloadConfig: deny` only the operator decides which
+    /// account a workload's containers live in.
+    fn binding_schema(&self) -> crate::plugin::BindingSchema {
+        crate::plugin::BindingSchema::with_host_owned_keys(nats_keys::host_owned())
+    }
+
+    /// Retains the declared ceiling; a binding's own connection is checked
+    /// against it before it is made. The host's connection is the host's.
+    fn configure_egress_policy(&self, policy: Arc<PluginEgressPolicy>) -> anyhow::Result<()> {
+        self.egress_policy.store(Some(policy));
+        Ok(())
+    }
+
     async fn on_workload_item_bind<'a>(
         &self,
         component_handle: &mut WorkloadItem<'a>,
@@ -868,12 +925,20 @@ impl HostPlugin for NatsBlobstore {
             .get("read_only")
             .is_some_and(|v| v == "true");
 
+        let jetstream = self.connect_binding(&interface.config).await.map_err(|e| {
+            e.context(format!(
+                "wasi:blobstore binding of workload `{}`",
+                workload.id()
+            ))
+        })?;
+
         self.tracker.write().await.add_unresolved_workload(
             workload,
             WorkloadData {
                 buckets: HashSet::from_iter(buckets),
                 read_only,
                 cancel_token: tokio_util::sync::CancellationToken::new(),
+                jetstream,
             },
         );
 
