@@ -360,7 +360,9 @@ fn parse_bounded(key: &str, value: &str, min: u64, max: u64) -> anyhow::Result<u
 /// fails and the calls after it use the fresh connection. To keep that from
 /// happening after every idle period, a write on a connection that has been
 /// quiet for [`IDLE_PROBE_AFTER`] is preceded by a `PING`. A `READONLY` reply
-/// (a failover that demoted the server in place) also drops the connection.
+/// (perhaps a failover that demoted the server in place) swaps in a fresh
+/// connection only if that one reaches a primary; otherwise the read-only
+/// connection is kept and reads go on (see [`Connection::follow_primary`]).
 ///
 /// Every dial uses the same `client`, so the same host and port that the
 /// multiplexed provider's `check_egress` approved, resolved by name exactly as
@@ -398,7 +400,14 @@ struct ConnectionInner {
     /// When a command last got a reply (or a connection was last dialed). A
     /// write sent after [`IDLE_PROBE_AFTER`] of quiet is preceded by a `PING`.
     last_reply: std::sync::Mutex<Instant>,
+    /// When a `READONLY` refusal last checked for a primary, if ever. See
+    /// [`Connection::follow_primary`].
+    last_role_check: std::sync::Mutex<Option<Instant>>,
 }
+
+/// The shortest time between two checks for a primary after `READONLY`
+/// refusals. See [`Connection::follow_primary`].
+const ROLE_CHECK_COOLDOWN: Duration = Duration::from_secs(1);
 
 /// How long a connection may sit quiet before a write first checks it with a
 /// `PING`. A server's `timeout`, or a load balancer's idle cutoff, closes a
@@ -465,6 +474,7 @@ impl Connection {
                 dialing: tokio::sync::Mutex::default(),
                 redials_finished: std::sync::atomic::AtomicU64::new(0),
                 last_reply: std::sync::Mutex::new(Instant::now()),
+                last_role_check: std::sync::Mutex::new(None),
             }),
         })
     }
@@ -585,8 +595,9 @@ impl Connection {
         }
     }
 
-    /// Send `cmd` on `live`. A command that proved the connection unusable
-    /// drops it, and the next command redials.
+    /// Send `cmd` on `live`. A command that proved the connection dead drops
+    /// it, and the next command redials. A `READONLY` refusal checks whether a
+    /// primary can now be reached (see [`Connection::follow_primary`]).
     async fn run<T: redis::FromRedisValue>(
         &self,
         (mut conn, generation): (redis::aio::MultiplexedConnection, u64),
@@ -595,10 +606,79 @@ impl Connection {
         let result = cmd.query_async(&mut conn).await;
         match &result {
             Ok(_) => self.mark_reply(),
-            Err(e) if proves_connection_unusable(e) => self.discard(generation),
+            Err(e) if e.is_unrecoverable_error() => self.discard(generation),
+            Err(e) if e.kind() == redis::ErrorKind::ReadOnly => {
+                self.follow_primary(generation).await;
+            }
             Err(_) => {}
         }
         result
+    }
+
+    /// After connection `generation` refused a write with `READONLY`, dial a
+    /// fresh connection and swap it in only if it reaches a primary.
+    ///
+    /// A failover that demotes the old primary in place leaves the connection
+    /// open, and only a new connection follows the url's name to the new
+    /// primary. But a server can also be read-only with nowhere better to go
+    /// (a primary that lost its own, a replica the url names on purpose). There
+    /// the current connection is kept: reads go on, and list-keys cursors it
+    /// issued stay valid, which they would not across a swap. So the swap
+    /// happens only when the fresh connection's `ROLE` says `master`.
+    ///
+    /// At most one check runs per [`ROLE_CHECK_COOLDOWN`], so a stream of
+    /// refused writes does not dial once each. The refused write is not
+    /// retried either way: it is a write.
+    async fn follow_primary(&self, generation: u64) {
+        {
+            let mut last = self
+                .inner
+                .last_role_check
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if last.is_some_and(|at| at.elapsed() < ROLE_CHECK_COOLDOWN) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
+
+        // Held like a redial, so the two never race to replace the connection.
+        let mut redials = self.inner.dialing.lock().await;
+        if self.live().map(|(_, g)| g) != Some(generation) {
+            // Already replaced or dropped since the refusal.
+            return;
+        }
+        let config = self.inner.settings.connection_config();
+        let mut fresh = match self
+            .inner
+            .client
+            .get_multiplexed_async_connection_with_config(&config)
+            .await
+        {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                tracing::debug!(error = %e, "redis primary check could not dial; keeping the connection");
+                return;
+            }
+        };
+        let role = redis::cmd("ROLE")
+            .query_async::<Vec<redis::Value>>(&mut fresh)
+            .await;
+        if !role.as_deref().is_ok_and(is_primary_role) {
+            tracing::debug!("redis is still read-only; keeping the connection");
+            return;
+        }
+        tracing::info!(
+            "redis write refused as read-only, and a primary is reachable; switching to it"
+        );
+        redials.dialed += 1;
+        redials.failed = None;
+        *self
+            .inner
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((fresh, redials.dialed));
+        self.mark_reply();
     }
 
     /// Send `cmd` once, telling a failure to connect from a failed command.
@@ -731,15 +811,12 @@ pub(crate) fn is_dropped_connection(e: &redis::RedisError) -> bool {
     e.is_io_error() && e.is_unrecoverable_error() && !e.is_connection_refusal()
 }
 
-/// Whether `e` shows the connection cannot serve this backend any more, so the
-/// next command should redial.
-///
-/// That is every error redis calls unrecoverable, plus `READONLY`: after a
-/// failover that demotes the old primary in place, the connection stays open
-/// but every write on it fails, and only a redial reaches the new primary.
-/// A `READONLY` write is still not retried: it is a write.
-fn proves_connection_unusable(e: &redis::RedisError) -> bool {
-    e.is_unrecoverable_error() || e.kind() == redis::ErrorKind::ReadOnly
+/// Whether a `ROLE` reply comes from a primary: its first element is
+/// `master` (a replica says `slave`, a sentinel `sentinel`).
+fn is_primary_role(role: &[redis::Value]) -> bool {
+    role.first()
+        .and_then(|kind| redis::from_redis_value::<String>(kind).ok())
+        .is_some_and(|kind| kind == "master")
 }
 
 /// A copy of a failed redial's error for the callers that waited on it
@@ -1428,31 +1505,48 @@ mod tests {
     }
 
     #[test]
-    fn readonly_and_dead_connections_are_dropped_but_slow_ones_are_not() {
+    fn dead_connections_are_dropped_but_slow_and_read_only_ones_are_not() {
         use std::io::{Error, ErrorKind};
 
+        // A read-only server keeps its connection (reads still work there)
+        // unless a primary turns out to be reachable, and the refused write
+        // is not retried.
         let readonly = redis::RedisError::from((
             redis::ErrorKind::ReadOnly,
             "READONLY",
             "You can't write against a read only replica.".to_string(),
         ));
-        assert!(proves_connection_unusable(&readonly));
-        // Dropped, but a write is still not retried: it is not an I/O error.
+        assert!(!readonly.is_unrecoverable_error());
         assert!(!is_dropped_connection(&readonly));
 
         let broken = redis::RedisError::from(Error::from(ErrorKind::BrokenPipe));
-        assert!(proves_connection_unusable(&broken));
+        assert!(broken.is_unrecoverable_error());
         assert!(is_dropped_connection(&broken));
 
         let timeout = redis::RedisError::from(Error::from(ErrorKind::TimedOut));
-        assert!(!proves_connection_unusable(&timeout));
+        assert!(!timeout.is_unrecoverable_error());
         assert!(!is_dropped_connection(&timeout));
 
         let refused = redis::RedisError::from(Error::from(ErrorKind::ConnectionRefused));
         assert!(!is_dropped_connection(&refused));
+    }
 
-        let response = redis::RedisError::from((redis::ErrorKind::ResponseError, "ERR"));
-        assert!(!proves_connection_unusable(&response));
+    #[test]
+    fn only_a_primary_role_is_followed() {
+        use redis::Value;
+
+        let reply = |kind: &str| {
+            vec![
+                Value::BulkString(kind.as_bytes().to_vec()),
+                Value::Int(0),
+                Value::Array(vec![]),
+            ]
+        };
+        assert!(is_primary_role(&reply("master")));
+        assert!(!is_primary_role(&reply("slave")));
+        assert!(!is_primary_role(&reply("sentinel")));
+        assert!(!is_primary_role(&[]));
+        assert!(!is_primary_role(&[Value::Int(1)]));
     }
 
     #[test]

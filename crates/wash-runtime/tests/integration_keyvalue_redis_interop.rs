@@ -723,8 +723,9 @@ async fn direct(
 
 /// A failover that demotes the old primary in place leaves the backend's
 /// connection open, and every write on it is refused with `READONLY`. That
-/// reply drops the connection, so the next write redials and reaches the new
-/// primary. The `READONLY` write itself is not retried.
+/// reply checks a fresh connection, which reaches the new primary, so it is
+/// swapped in and the next write lands there. The `READONLY` write itself is
+/// not retried.
 #[tokio::test]
 #[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
 async fn redis_backend_follows_a_failover_that_keeps_its_connection_open() -> Result<()> {
@@ -757,6 +758,63 @@ async fn redis_backend_follows_a_failover_that_keeps_its_connection_open() -> Re
         .map_err(|e| anyhow::anyhow!("set after the failover: {e:?}"))?;
     let on_new: Option<Vec<u8>> = direct(&new, None).await?.get("k").await?;
     assert_eq!(on_new.as_deref(), Some(b"after".as_slice()));
+
+    Ok(())
+}
+
+/// A server that turns read-only with no primary to move to keeps the
+/// backend's connection: writes are refused, but reads go on, and a
+/// list-keys cursor issued before still continues. A stream of refused
+/// writes checks for a primary once, not once each.
+#[tokio::test]
+#[ignore = "requires Docker (redis); run with `cargo test --include-ignored`"]
+async fn redis_backend_keeps_reading_from_a_server_with_no_primary_to_move_to() -> Result<()> {
+    let redis = start_redis().await?;
+    let proxy = RedisProxy::start(redis.get_host_port_ipv4(6379).await?).await?;
+    let backend = backend_behind(&proxy).await?;
+    let mut raw = direct(&redis, None).await?;
+    let many: Vec<(String, String)> = (0..5_000)
+        .map(|i| (format!("page-{i}"), "v".to_string()))
+        .collect();
+    raw.mset::<_, _, ()>(&many).await?;
+    let cursor = backend
+        .list_keys(BUCKET, None)
+        .await
+        .map_err(|e| anyhow::anyhow!("first page: {e:?}"))?
+        .cursor
+        .context("5000 keys take more than one SCAN page")?;
+
+    // The only server turns read-only (its "primary" is unreachable), and the
+    // url still names it.
+    redis::cmd("REPLICAOF")
+        .arg("127.0.0.1")
+        .arg(1)
+        .query_async::<()>(&mut raw)
+        .await?;
+
+    let before = proxy.accepted();
+    for _ in 0..3 {
+        let err = backend
+            .set(BUCKET, "k", b"v".to_vec())
+            .await
+            .expect_err("a read-only server refuses the write");
+        assert!(format!("{err:?}").contains("READONLY"), "{err:?}");
+    }
+    assert_eq!(
+        proxy.accepted() - before,
+        1,
+        "three refused writes check for a primary once"
+    );
+
+    let value = backend
+        .get(BUCKET, "page-0")
+        .await
+        .map_err(|e| anyhow::anyhow!("a read on the read-only server: {e:?}"))?;
+    assert_eq!(value.as_deref(), Some(b"v".as_slice()));
+    backend
+        .list_keys(BUCKET, Some(cursor))
+        .await
+        .map_err(|e| anyhow::anyhow!("the cursor continues on the kept connection: {e:?}"))?;
 
     Ok(())
 }
