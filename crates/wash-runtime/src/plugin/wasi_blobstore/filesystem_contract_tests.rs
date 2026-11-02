@@ -591,3 +591,79 @@ fn clearing_an_opened_container_does_not_follow_a_replacement_root() {
         b"nested data"
     );
 }
+
+#[tokio::test]
+async fn binding_tracks_blobstore_workloads_and_unbinding_cancels_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = FilesystemBlobstore::new(dir.path());
+    assert_eq!(plugin.id(), PLUGIN_BLOBSTORE_ID);
+    assert!(
+        plugin
+            .world()
+            .imports
+            .iter()
+            .any(|interface| { interface.namespace == "wasi" && interface.package == "blobstore" })
+    );
+    assert!(plugin.world().exports.is_empty());
+
+    let blobstore = HashSet::from([WitInterface::from("wasi:blobstore/container@0.2.0-draft")]);
+    let keyvalue = HashSet::from([WitInterface::from("wasi:keyvalue/store@0.2.0-draft")]);
+    let workload = |id: &str, interfaces: &HashSet<WitInterface>| {
+        crate::engine::workload::UnresolvedWorkload::new(
+            id,
+            "name",
+            "namespace",
+            None,
+            Vec::<crate::engine::workload::WorkloadComponent>::new(),
+            interfaces.iter().cloned().collect(),
+        )
+    };
+
+    plugin
+        .on_workload_bind(&workload("other", &keyvalue), WitInterfaces::new(&keyvalue))
+        .await
+        .unwrap();
+    assert!(
+        plugin
+            .tracker
+            .read()
+            .await
+            .get_workload_data("other")
+            .is_none()
+    );
+
+    plugin
+        .on_workload_bind(
+            &workload("files", &blobstore),
+            WitInterfaces::new(&blobstore),
+        )
+        .await
+        .unwrap();
+    let token = plugin
+        .tracker
+        .read()
+        .await
+        .get_workload_data("files")
+        .unwrap()
+        .cancel_token
+        .clone();
+    assert!(!token.is_cancelled());
+
+    plugin
+        .on_workload_unbind("files", WitInterfaces::new(&blobstore))
+        .await
+        .unwrap();
+    assert!(token.is_cancelled());
+    assert!(
+        plugin
+            .tracker
+            .read()
+            .await
+            .get_workload_data("files")
+            .is_none()
+    );
+    plugin
+        .on_workload_unbind("files", WitInterfaces::new(&blobstore))
+        .await
+        .unwrap();
+}

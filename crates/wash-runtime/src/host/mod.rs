@@ -2708,7 +2708,7 @@ mod tests {
                 self.entered.notify_one();
                 std::future::pending::<()>().await;
             }
-            item.linker().instance("test:probe/marker@0.1.0")?;
+            item.linker()?.instance("test:probe/marker@0.1.0")?;
             Ok(())
         }
 
@@ -3070,7 +3070,7 @@ mod tests {
             item: &mut crate::engine::workload::WorkloadItem<'a>,
             _interfaces: crate::plugin::WitInterfaces<'_>,
         ) -> anyhow::Result<()> {
-            item.linker()
+            item.linker()?
                 .instance(&format!("test:probe/{}@0.1.0", self.id))?;
             Ok(())
         }

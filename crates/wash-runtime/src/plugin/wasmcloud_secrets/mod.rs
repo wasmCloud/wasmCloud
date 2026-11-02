@@ -282,7 +282,7 @@ impl HostPlugin for WasmcloudSecrets {
         // itself — `secret` and `reveal` only `use` the type, they don't
         // define it.
         bindings::wasmcloud::secrets::store::add_to_linker::<_, SharedCtx>(
-            item.linker(),
+            item.linker()?,
             extract_active_ctx,
         )?;
 
@@ -310,7 +310,7 @@ impl HostPlugin for WasmcloudSecrets {
                 .unwrap_or_default();
 
             bindings::wasmcloud::secrets::reveal::add_to_linker::<_, SharedCtx>(
-                item.linker(),
+                item.linker()?,
                 extract_active_ctx,
             )?;
 
@@ -329,7 +329,7 @@ impl HostPlugin for WasmcloudSecrets {
             // above) still needs `reveal` wired to unwrap its handles.
             if !has_dynamic {
                 bindings::wasmcloud::secrets::reveal::add_to_linker::<_, SharedCtx>(
-                    item.linker(),
+                    item.linker()?,
                     extract_active_ctx,
                 )?;
             }
@@ -348,7 +348,7 @@ impl HostPlugin for WasmcloudSecrets {
             // plaintext values can be scrubbed right after, rather than
             // living on unzeroized for as long as this closure would.
             bindings::named_imports::wasmcloud::secrets::secret::add_to_linker::<_, SharedCtx>(
-                item.linker(),
+                item.linker()?,
                 &component,
                 |label: &str| match labeled.get(label) {
                     Some(Some(value)) => Ok(Arc::<str>::from(value.as_str())),

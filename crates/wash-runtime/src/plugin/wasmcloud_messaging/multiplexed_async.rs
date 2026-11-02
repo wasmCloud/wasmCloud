@@ -315,7 +315,7 @@ impl HostPlugin for MultiplexedAsyncMessaging {
         }
 
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         if has_labeled {
             bindings::named_imports::wasmcloud::messaging0_3_0::consumer::add_to_linker::<

@@ -5,7 +5,7 @@
 //! fetching dependencies from registries and manages lock files for reproducible builds.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::ErrorKind,
     path::{Path, PathBuf},
     time::Duration,
@@ -22,7 +22,10 @@ use wasm_pkg_client::{
     caching::{CachingClient, FileCache},
     oci::{BasicCredentials, OciRegistryConfig},
 };
-use wasm_pkg_core::{lock::LockFile, wit::OutputType};
+use wasm_pkg_core::{
+    lock::LockFile,
+    wit::{OutputType, WIT_DEPS_DIR},
+};
 
 /// The default name of the lock file for wasmCloud projects
 pub const WKG_LOCK_FILE_NAME: &str = "wkg.lock";
@@ -351,16 +354,19 @@ fn windows_cache_streams(path: &Path) -> std::io::Result<Vec<PathBuf>> {
 pub struct CommonPackageArgs {
     /// The path to the [wasm_pkg_client::Config] configuration file.
     pub config: Option<PathBuf>,
-    /// The path to the cache directory. Defaults to the wash cache directory.
+    /// The path to the cache directory. Defaults to `WKG_CACHE_DIR`, then to the default wkg
+    /// cache directory for this platform.
     pub cache: Option<PathBuf>,
 }
 
 impl CommonPackageArgs {
-    fn cache_dir(&self) -> PathBuf {
+    fn cache_dir(&self) -> Result<PathBuf> {
         match (self.cache.as_ref(), std::env::var_os("WKG_CACHE_DIR")) {
-            (Some(path), _) => path.to_owned(),
-            (None, Some(path)) => PathBuf::from(path),
-            _ => todo!("use common dir"),
+            (Some(path), _) => Ok(path.to_owned()),
+            (None, Some(path)) => Ok(PathBuf::from(path)),
+            (None, None) => {
+                FileCache::global_cache_path().context("no default WIT package cache directory")
+            }
         }
     }
 
@@ -447,12 +453,7 @@ impl CommonPackageArgs {
 
     /// Helper for loading the [`FileCache`]
     pub async fn load_cache(&self) -> anyhow::Result<FileCache> {
-        // We attempt to setup a cache dir in the following order of preference:
-        // 1. Path provided by the user via flag
-        // 2. Path provided by the user via `WASH` prefixed environment variable
-        // 3. Path provided by the users via `WKG` prefixed environment variable
-        // 4. Default path to cache in wash dir
-        FileCache::new(self.cache_dir()).await
+        FileCache::new(self.cache_dir()?).await
     }
 }
 
@@ -476,7 +477,7 @@ impl WkgFetcher {
         common: &CommonPackageArgs,
         wkg_config: wasm_pkg_core::manifest::Manifest,
     ) -> Result<Self> {
-        let cache_dir = common.cache_dir();
+        let cache_dir = common.cache_dir()?;
         let cache = common
             .load_cache()
             .await
@@ -688,17 +689,134 @@ impl WkgFetcher {
         Ok(())
     }
 
+    /// The override that serves `package`: its own, or else its namespace's. A namespace's local
+    /// source serves the package from wherever in that source it lives, and fails with
+    /// [`SourceLacksPackage`] if it is not there, because the source replaces the registry for its
+    /// whole namespace.
+    fn override_for(
+        &self,
+        package: &PackageRef,
+    ) -> Result<Option<wasm_pkg_core::manifest::Override>> {
+        self.override_from(package, &mut HashMap::new())
+    }
+
+    /// [`Self::override_for`], scanning each namespace's source once across the calls that share
+    /// `sources`.
+    fn override_from(
+        &self,
+        package: &PackageRef,
+        sources: &mut HashMap<String, BTreeMap<PackageRef, PathBuf>>,
+    ) -> Result<Option<wasm_pkg_core::manifest::Override>> {
+        let Some(overrides) = self.wkg_config.overrides.as_ref() else {
+            return Ok(None);
+        };
+        if let Some(package_override) = overrides.get(&package.to_string()) {
+            return Ok(Some(package_override.clone()));
+        }
+        let namespace = package.namespace().to_string();
+        let Some(namespace_override) = overrides.get(&namespace) else {
+            return Ok(None);
+        };
+        let Some(source) = namespace_override.path.as_ref() else {
+            return Ok(Some(namespace_override.clone()));
+        };
+        let held = sources
+            .entry(namespace)
+            .or_insert_with_key(|namespace| namespace_source_packages(source, namespace));
+        match held.get(package) {
+            Some(path) => Ok(Some(wasm_pkg_core::manifest::Override {
+                path: Some(path.clone()),
+                version: namespace_override.version.clone(),
+            })),
+            None => Err(SourceLacksPackage {
+                package: package.clone(),
+                source: source.clone(),
+                held: held.keys().cloned().collect(),
+            }
+            .into()),
+        }
+    }
+
+    /// The overrides that serve the `pending` packages and, through their local sources, what
+    /// those depend on, keyed by `namespace:package`. A registry package needs no such walk: it
+    /// carries its own dependencies.
+    fn reachable_overrides(
+        &self,
+        mut pending: Vec<PackageRef>,
+    ) -> Result<HashMap<String, wasm_pkg_core::manifest::Override>> {
+        let mut sources = HashMap::new();
+        let mut visited = BTreeSet::new();
+        let mut reached = HashMap::new();
+        while let Some(package) = pending.pop() {
+            if !visited.insert(package.clone()) {
+                continue;
+            }
+            let Some(package_override) = self.override_from(&package, &mut sources)? else {
+                continue;
+            };
+            if let Some(path) = package_override.path.as_ref() {
+                pending.extend(named_packages(path).unwrap_or_default());
+            }
+            reached.insert(package.to_string(), package_override);
+        }
+        Ok(reached)
+    }
+
+    /// The manifest to resolve `wit_dir` with. `wasm_pkg_core` reads every override key as
+    /// `namespace:package`, so a namespace-wide override becomes an entry for each package in that
+    /// namespace that `wit_dir` or a local source needs.
+    fn resolution_manifest(&self, wit_dir: &Path) -> Result<wasm_pkg_core::manifest::Manifest> {
+        let mut manifest = self.wkg_config.clone();
+        let Some(overrides) = manifest.overrides.as_mut() else {
+            return Ok(manifest);
+        };
+        if overrides.keys().all(|key| key.contains(':')) {
+            return Ok(manifest);
+        }
+        overrides.retain(|key, _| key.contains(':'));
+
+        let mut pending = named_packages(wit_dir)?;
+        for path in overrides.values().filter_map(|o| o.path.as_ref()) {
+            // A path that cannot be read is reported by the resolution that follows
+            pending.extend(named_packages(path).unwrap_or_default());
+        }
+        for (key, package_override) in self.reachable_overrides(pending)? {
+            overrides.entry(key).or_insert(package_override);
+        }
+        Ok(manifest)
+    }
+
+    /// Says which namespace-wide overrides served no package in the expanded `manifest`.
+    fn warn_of_unused_namespace_sources(&self, manifest: &wasm_pkg_core::manifest::Manifest) {
+        let expanded = manifest.overrides.iter().flatten();
+        let served: BTreeSet<&str> = expanded
+            .filter_map(|(key, _)| key.split_once(':'))
+            .map(|(namespace, _)| namespace)
+            .collect();
+        let configured = self.wkg_config.overrides.iter().flatten();
+        for (key, _) in configured {
+            if !key.contains(':') && !served.contains(key.as_str()) {
+                warn!(
+                    namespace = key,
+                    "the WIT source override for this namespace matches no package in use"
+                );
+            }
+        }
+    }
+
     pub async fn fetch_wit_dependencies(
         &self,
         wit_dir: impl AsRef<Path>,
         lock: &mut LockFile,
     ) -> Result<()> {
         let wit_dir = wit_dir.as_ref();
+        let manifest = self.resolution_manifest(wit_dir)?;
+        self.warn_of_unused_namespace_sources(&manifest);
         let mut attempt = 1;
         loop {
             self.discard_invalid_cache_entries().await?;
             match wasm_pkg_core::wit::fetch_dependencies(
-                &self.wkg_config,
+                &manifest,
                 wit_dir,
                 lock,
                 self.client(),
@@ -730,12 +848,11 @@ impl WkgFetcher {
         Vec<u8>,
     )> {
         let wit_dir = wit_dir.as_ref();
+        let manifest = self.resolution_manifest(wit_dir)?;
         let mut attempt = 1;
         loop {
             self.discard_invalid_cache_entries().await?;
-            match wasm_pkg_core::wit::build_package(&self.wkg_config, wit_dir, lock, self.client())
-                .await
-            {
+            match wasm_pkg_core::wit::build_package(&manifest, wit_dir, lock, self.client()).await {
                 Ok(package) => return Ok(package),
                 Err(error)
                     if attempt < WIT_FETCH_MAX_ATTEMPTS
@@ -822,7 +939,10 @@ impl WkgFetcher {
     ) -> PackageLookup {
         match self.try_load_package(package, version, lock).await {
             Ok(lookup) => lookup,
-            Err(e) => PackageLookup::Failed(e),
+            Err(e) => match e.downcast::<SourceLacksPackage>() {
+                Ok(lacks) => PackageLookup::Missing(lacks.to_string()),
+                Err(e) => PackageLookup::Failed(e),
+            },
         }
     }
 
@@ -840,19 +960,11 @@ impl WkgFetcher {
 
         // A `wkg.toml` override (which is also where a `wit.sources` local path lands) replaces
         // the registry for this package, so the registry is only searched when there is none.
-        // Overrides are keyed by `namespace:package`, or by `namespace` alone for a whole
-        // namespace.
-        let package_override = self
-            .wkg_config
-            .overrides
-            .as_ref()
-            .and_then(|overrides| {
-                overrides
-                    .get(&package.to_string())
-                    .or_else(|| overrides.get(&package.namespace().to_string()))
-            })
-            .cloned();
+        let package_override = self.override_for(package)?;
 
+        let local = package_override
+            .as_ref()
+            .is_some_and(|package_override| package_override.path.is_some());
         let client = self.client();
 
         // The lock file goes in so that a version it already pins is the one selected here, the
@@ -860,6 +972,7 @@ impl WkgFetcher {
         let mut resolver =
             wasm_pkg_core::resolver::DependencyResolver::new_with_client(client.clone(), lock)
                 .context("failed to create dependency resolver")?;
+        let mut local_dir = None;
 
         match package_override {
             Some(package_override) => {
@@ -881,10 +994,15 @@ impl WkgFetcher {
                 let dependency = override_dependency(package, package_override, &requirement)
                     .await
                     .with_context(|| format!("failed to apply the override for [{package}]"))?;
-                resolver
-                    .add_dependency(package, &dependency)
-                    .await
-                    .with_context(|| format!("failed to load package [{package}]"))?;
+                match dependency {
+                    wasm_pkg_core::resolver::Dependency::Local(path) if path.is_dir() => {
+                        local_dir = Some(path);
+                    }
+                    dependency => resolver
+                        .add_dependency(package, &dependency)
+                        .await
+                        .with_context(|| format!("failed to load package [{package}]"))?,
+                }
             }
             None => {
                 if let Some(missing) =
@@ -893,31 +1011,65 @@ impl WkgFetcher {
                     return Ok(PackageLookup::Missing(missing));
                 }
                 resolver
-                    .add_packages([(package.clone(), requirement)])
+                    .add_packages([(package.clone(), requirement.clone())])
                     .await
                     .with_context(|| format!("failed to look up package [{package}]"))?;
             }
         }
 
-        let resolutions = resolver
-            .resolve()
-            .await
-            .with_context(|| format!("failed to resolve package [{package}]"))?;
-
-        let resolution = resolutions
-            .get(package)
-            .with_context(|| format!("package [{package}] resolved to nothing"))?;
-        let decoded = resolution
-            .decode()
-            .await
-            .with_context(|| format!("failed to decode package [{package}]"))?;
-        let (resolve, package_id, _) = decoded
-            .resolve()
-            .with_context(|| format!("failed to parse the WIT of package [{package}]"))?;
+        let (resolve, package_id) = match local_dir {
+            // A local package's dependencies resolve the way a fetch resolves them, so one it
+            // needs from a source override comes from there rather than from a registry. Only
+            // the overrides it reaches go in, since resolution loads every override it is given.
+            Some(path) => {
+                let mut overrides = self.reachable_overrides(named_packages(&path)?)?;
+                overrides.remove(&package.to_string());
+                let mut manifest = self.wkg_config.clone();
+                manifest.overrides = Some(overrides);
+                wasm_pkg_core::wit::resolve_dependencies(&manifest, &path, lock, client)
+                    .await
+                    .with_context(|| format!("failed to resolve package [{package}]"))?
+                    .generate_resolve(&path)
+                    .await
+                    .with_context(|| format!("failed to parse the WIT of package [{package}]"))?
+            }
+            None => {
+                let resolutions = resolver
+                    .resolve()
+                    .await
+                    .with_context(|| format!("failed to resolve package [{package}]"))?;
+                let resolution = resolutions
+                    .get(package)
+                    .with_context(|| format!("package [{package}] resolved to nothing"))?;
+                let decoded = resolution
+                    .decode()
+                    .await
+                    .with_context(|| format!("failed to decode package [{package}]"))?;
+                let (resolve, package_id, _) = decoded
+                    .resolve()
+                    .with_context(|| format!("failed to parse the WIT of package [{package}]"))?;
+                (resolve, package_id)
+            }
+        };
         let resolved = resolve
             .packages
             .get(package_id)
             .with_context(|| format!("package [{package}] is missing from its own WIT"))?;
+
+        // A local override serves whatever version its files declare, whatever was asked for
+        if local
+            && let Some(requested) = version
+            && let Some(actual) = resolved.name.version.as_ref()
+            && !requirement.matches(actual)
+        {
+            return Ok(PackageLookup::Missing(format!(
+                "[{package}] comes from a source override that provides version [{actual}], not \
+                 the requested version [{requested}].\n\
+                 \n\
+                 Change the override under `wit.sources` in .wash/config.yaml (or in wkg.toml), \
+                 or ask for version [{actual}]."
+            )));
+        }
 
         Ok(PackageLookup::Found(PackageContents {
             version: resolved.name.version.clone(),
@@ -925,6 +1077,74 @@ impl WkgFetcher {
             worlds: resolved.worlds.keys().cloned().collect(),
         }))
     }
+}
+
+/// A package in an overridden namespace that the namespace's local source does not hold.
+#[derive(Debug)]
+struct SourceLacksPackage {
+    package: PackageRef,
+    source: PathBuf,
+    held: Vec<PackageRef>,
+}
+
+impl std::fmt::Display for SourceLacksPackage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let held = self
+            .held
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            f,
+            "[{}] is not in the source override for its namespace at [{}], which holds [{held}].\n\
+             \n\
+             Add the package to that source, or give it its own entry under `wit.sources` in \
+             .wash/config.yaml (or in wkg.toml).",
+            self.package,
+            self.source.display(),
+        )
+    }
+}
+
+impl std::error::Error for SourceLacksPackage {}
+
+/// The packages a WIT file or directory names, without their version requirements.
+fn named_packages(path: &Path) -> Result<Vec<PackageRef>> {
+    let (_, packages) = wasm_pkg_core::wit::get_packages(path)?;
+    Ok(packages.into_iter().map(|(package, _)| package).collect())
+}
+
+/// The packages of `namespace` that a local source holds, by where each one lives: `source`
+/// itself, its entries, and the entries of its `deps` directory, which is where a WIT tree keeps
+/// the packages it depends on. The first place found wins. Only directories and `.wit` files are
+/// parsed, so other files in the source are never read.
+fn namespace_source_packages(source: &Path, namespace: &str) -> BTreeMap<PackageRef, PathBuf> {
+    let mut candidates = vec![source.to_path_buf()];
+    for dir in [source.to_path_buf(), source.join(WIT_DEPS_DIR)] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut paths: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir() || path.extension().is_some_and(|ext| ext == "wit"))
+            .collect();
+        paths.sort();
+        candidates.extend(paths);
+    }
+
+    let mut packages = BTreeMap::new();
+    for candidate in candidates {
+        match wasm_pkg_core::wit::get_packages(&candidate) {
+            Ok((spec, _)) if spec.package.namespace().to_string() == namespace => {
+                packages.entry(spec.package).or_insert(candidate);
+            }
+            Ok(_) => {}
+            Err(e) => debug!(path = %candidate.display(), "not a WIT package: {e:#}"),
+        }
+    }
+    packages
 }
 
 const WIT_FETCH_MAX_ATTEMPTS: u32 = 3;
@@ -2258,6 +2478,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "wit_contract_tests.rs"]
 mod contract_tests;

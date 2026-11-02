@@ -459,9 +459,14 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         self.mux.configure_egress_policy(policy)
     }
 
+    /// Same schema as the sync plugin: the blobstore address keys and every
+    /// S3 key are host-owned.
     fn binding_schema(&self) -> crate::plugin::BindingSchema {
-        crate::plugin::multiplex::backend_binding_schema(
-            crate::plugin::multiplex::BLOBSTORE_HOST_OWNED_KEYS,
+        crate::plugin::BindingSchema::with_host_owned_keys(
+            crate::plugin::multiplex::BLOBSTORE_HOST_OWNED_KEYS
+                .iter()
+                .copied()
+                .chain(super::multiplexed::host_owned_spellings()),
         )
     }
 
@@ -507,7 +512,7 @@ impl HostPlugin for MultiplexedAsyncBlobstore {
         }
 
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         // `blobstore` (create/get/delete container, copy/move) routed per
         // `(implements ..)` label so each label lands on its own backend.
@@ -637,6 +642,16 @@ mod tests {
             "workload-a's backend outlived it"
         );
         assert!(plugin.mux.default_for("workload-b").is_some());
+    }
+
+    #[test]
+    fn schema_matches_the_sync_plugin() {
+        // The two surfaces route to the same backends, so a key the operator
+        // owns on one must be owned on the other.
+        assert_eq!(
+            MultiplexedAsyncBlobstore::new().binding_schema(),
+            crate::plugin::wasi_blobstore::MultiplexedBlobstore::new().binding_schema()
+        );
     }
 }
 

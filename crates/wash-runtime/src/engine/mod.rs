@@ -738,11 +738,13 @@ impl Engine {
         } = workload;
         let annotations_arc = Arc::new(annotations);
 
-        // Process and validate volumes - create a lookup map from volume name to validated host path
-        let mut validated_volumes = std::collections::HashMap::new();
         // Created on the first `emptyDir`, and removed when the workload is
         // released or, for a start that fails before then, when this drops.
+        // Declared first to drop last: Windows cannot remove a directory while
+        // the volume handles below are open.
         let mut workload_scratch: Option<Arc<scratch::ScratchDir>> = None;
+        // Process and validate volumes - create a lookup map from volume name to validated host path
+        let mut validated_volumes = std::collections::HashMap::new();
 
         for v in volumes {
             let host_path = match v.volume_type {

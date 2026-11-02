@@ -6,6 +6,7 @@ resources:
 - bases/runtime.wasmcloud.dev_artifacts.yaml
 - bases/runtime.wasmcloud.dev_workloads.yaml
 - bases/runtime.wasmcloud.dev_workloadreplicasets.yaml
+- bases/runtime.wasmcloud.dev_workloaddaemonsets.yaml
 - bases/runtime.wasmcloud.dev_workloaddeployments.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 

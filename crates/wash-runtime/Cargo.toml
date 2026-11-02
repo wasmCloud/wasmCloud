@@ -38,7 +38,7 @@ wasi-otel = []
 washlet = ["oci", "dep:nkeys"]
 wasi-config = []
 wasi-logging = []
-wasi-blobstore = []
+wasi-blobstore = ["dep:sha2", "dep:object_store"]
 wasi-keyvalue = []
 # Component-model `(implements ..)` / `named_imports` multiplexing. On by
 # default; disable with `--no-default-features` for a build that neither
@@ -83,6 +83,7 @@ hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", 
 imbl = { workspace = true }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
+object_store = { workspace = true, optional = true }
 redis = { workspace = true }
 semver = { workspace = true }
 sysinfo = { workspace = true }

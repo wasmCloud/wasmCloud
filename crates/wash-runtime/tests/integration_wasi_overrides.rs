@@ -44,7 +44,7 @@ impl HostPlugin for Override {
             .lock()
             .map_err(|_| anyhow::anyhow!("bind recorder poisoned"))?
             .push(item.id().to_owned());
-        item.linker()
+        item.linker()?
             .instance("wasi:clocks/monotonic-clock@0.2.12")?
             .func_wrap("now", |_, (): ()| Ok((4242u64,)))?;
         Ok(())

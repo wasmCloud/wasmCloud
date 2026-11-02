@@ -148,7 +148,7 @@ impl HostPlugin for DynamicConfig {
 
         // Add `wasi:config/store` to the workload's linker
         bindings::wasi::config::store::add_to_linker::<_, SharedCtx>(
-            component_handle.linker(),
+            component_handle.linker()?,
             extract_active_ctx,
         )?;
 

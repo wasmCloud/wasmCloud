@@ -683,7 +683,7 @@ impl HostPlugin for WasmcloudPostgres {
         // linker borrow — named-import linking needs both.
         #[cfg(feature = "wasm_component_model_implements")]
         let component = component_handle.component().clone();
-        let linker = component_handle.linker();
+        let linker = component_handle.linker()?;
 
         // Sync `0.1.1-draft` (wasip2).
         if !pg_sync.is_empty() {

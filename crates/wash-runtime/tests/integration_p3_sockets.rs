@@ -56,7 +56,7 @@ impl HostPlugin for Completion {
         _: WitInterfaces<'_>,
     ) -> Result<()> {
         let done = self.0.clone();
-        item.linker()
+        item.linker()?
             .instance("wasmcloud:test-p3/completion@0.1.0")?
             .func_wrap("done", move |_, (): ()| {
                 if let Some(tx) = done.lock().unwrap().take() {

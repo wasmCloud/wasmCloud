@@ -819,7 +819,7 @@ impl HostPlugin for WasmcloudNats {
         // linker's mutable one.
         let component = item.component().clone();
 
-        let linker = item.linker();
+        let linker = item.linker()?;
         {
             use interfaces::bindings::wasmcloud::nats as nats_wit;
             // `types` carries record and error definitions only: nothing to

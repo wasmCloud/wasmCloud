@@ -414,7 +414,7 @@ impl HostPlugin for MultiplexedKeyValue {
         // Clone the component (cheap, Arc-backed) so the immutable borrow ends
         // before we take the mutable linker borrow.
         let component = item.component().clone();
-        let linker = item.linker();
+        let linker = item.linker()?;
 
         bindings::named_imports::wasi::keyvalue::store::add_to_linker::<_, SharedCtx>(
             linker,
