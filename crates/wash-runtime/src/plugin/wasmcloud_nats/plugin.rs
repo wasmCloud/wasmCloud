@@ -66,6 +66,9 @@ pub struct WasmcloudNats {
     failure_sink: arc_swap::ArcSwapOption<WorkloadFailureSink>,
     /// Network ceiling checked before the native client connects.
     egress_policy: arc_swap::ArcSwapOption<PluginEgressPolicy>,
+    /// Keeps every connection on its declared `servers`, with or without an
+    /// egress policy.
+    ignore_discovered_servers: bool,
     /// The host's guest-memory budget, when it told this plugin. Subscription
     /// byte budgets are per subscription and were never compared against it:
     /// seven subscriptions at the 32MiB default is 224MiB of potential backlog
@@ -93,6 +96,7 @@ impl WasmcloudNats {
             lattice_prefixes: Vec::new(),
             failure_sink: arc_swap::ArcSwapOption::empty(),
             egress_policy: arc_swap::ArcSwapOption::empty(),
+            ignore_discovered_servers: false,
             memory_budget: None,
             host_backlog: Arc::new(subscriber::HostBacklogBudget::unbounded()),
         }
@@ -116,6 +120,13 @@ impl WasmcloudNats {
     /// Denies the host's own lattice subject space to every workload.
     pub fn with_lattice_prefixes(mut self, prefixes: Vec<String>) -> Self {
         self.lattice_prefixes = prefixes;
+        self
+    }
+
+    /// Reconnects every workload connection only to its declared `servers`,
+    /// never to ones the cluster advertises.
+    pub fn with_ignore_discovered_servers(mut self, ignore: bool) -> Self {
+        self.ignore_discovered_servers = ignore;
         self
     }
 
@@ -243,7 +254,8 @@ impl WasmcloudNats {
             // ceiling, so under a declared policy the client stays on the
             // servers the operator wrote. `configure_egress_policy` says so at
             // startup, where an operator can act on it.
-            let ignore_discovered_servers = self.egress_policy.load().is_some();
+            let ignore_discovered_servers =
+                self.ignore_discovered_servers || self.egress_policy.load().is_some();
             let handle = self
                 .connections
                 .acquire(

@@ -81,6 +81,12 @@ pub struct HostCommand {
     #[arg(long = "nats-connect-timeout", default_value = "0s", value_parser = humantime::parse_duration)]
     pub nats_connect_timeout: Duration,
 
+    /// Reconnect only to the NATS servers given on the command line or in a
+    /// binding, never to ones a cluster advertises. Set this when each URL is
+    /// a load-balanced address such as a Kubernetes Service.
+    #[arg(long = "nats-ignore-discovered-servers", default_value_t = false)]
+    pub nats_ignore_discovered_servers: bool,
+
     /// Path to TLS CA certificate file for NATS Scheduler connection
     #[arg(long = "scheduler-nats-tls-ca")]
     pub scheduler_nats_tls_ca: Option<PathBuf>,
@@ -1344,7 +1350,8 @@ impl CliCommand for HostCommand {
         let mut scheduler_options = wash_runtime::washlet::NatsConnectionOptions::default()
             .with_name(format!("host:{}", cluster_host_builder.host_id()))
             .with_auth(self.scheduler_nats_auth())
-            .with_tls_first(self.scheduler_nats_tls_first);
+            .with_tls_first(self.scheduler_nats_tls_first)
+            .with_ignore_discovered_servers(self.nats_ignore_discovered_servers);
         scheduler_options.tls_ca = self.scheduler_nats_tls_ca.clone();
         scheduler_options.tls_cert = self.scheduler_nats_tls_cert.clone();
         scheduler_options.tls_key = self.scheduler_nats_tls_key.clone();
@@ -1357,7 +1364,8 @@ impl CliCommand for HostCommand {
         let mut data_options = wash_runtime::washlet::NatsConnectionOptions::default()
             .with_name(format!("host:{}:data", cluster_host_builder.host_id()))
             .with_auth(self.data_nats_auth())
-            .with_tls_first(self.data_nats_tls_first);
+            .with_tls_first(self.data_nats_tls_first)
+            .with_ignore_discovered_servers(self.nats_ignore_discovered_servers);
         data_options.tls_ca = self.data_nats_tls_ca.clone();
         data_options.tls_cert = self.data_nats_tls_cert.clone();
         data_options.tls_key = self.data_nats_tls_key.clone();
@@ -1557,6 +1565,7 @@ impl CliCommand for HostCommand {
                     // start fit, and the first sign of the mismatch is an
                     // OOMKill.
                     .with_memory_budget(host_memory.max_guest_memory)
+                    .with_ignore_discovered_servers(self.nats_ignore_discovered_servers)
                     .with_lattice_prefixes(vec![
                         format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
                         format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),

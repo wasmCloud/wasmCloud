@@ -664,6 +664,11 @@ runtime:
   # rather than a reason to exit and spend a pod restart. Zero fails on the
   # first refusal. `probes.endpoint.startupFailureThreshold` has to cover this.
   natsConnectTimeoutSeconds: 60
+  # -- Reconnect only to the NATS URLs given here and in bindings, never to
+  # servers a NATS cluster advertises. Turn this on when each URL is a Service;
+  # advertised pod IPs can later belong to another cluster's pod. With it on, a
+  # URL that names one server loses failover to the rest of its cluster.
+  natsIgnoreDiscoveredServers: false
   # -- How long a terminating host pod has to shut down before it is killed.
   #
   # Three numbers in sequence, and this is the budget for all of them:
