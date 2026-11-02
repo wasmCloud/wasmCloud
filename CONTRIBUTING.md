@@ -93,7 +93,8 @@ Reports are written to `target/coverage/`: `html/index.html`, `coverage.json`,
 records the commit, working tree status, toolchain, features, test scope, and CI
 run URL. `cargo xtask coverage report` regenerates reports after a failed run;
 partial reports are diagnostic only. `cargo xtask coverage check` requires a
-successful full test run and at least **80% line and compiler-region coverage**. Neither failed tests nor percentages below the
+successful full test run and at least **80% line and compiler-region coverage**,
+set by `THRESHOLD` in `xtask/src/coverage.rs` and recorded in the provenance. Neither failed tests nor percentages below the
 target are treated as passing evidence.
 
 The [coverage workflow](https://github.com/wasmCloud/wasmCloud/actions/workflows/coverage.yml)
@@ -115,7 +116,7 @@ The report includes native workspace code except the `xtask` developer tooling
 crate, and uses cargo-llvm-cov's default exclusions for test files, examples,
 benchmarks, dependencies, and build output. Generated protobuf bindings under
 `washlet/generated/` are also excluded. The `xtask` tests still run, but its code
-is excluded from every report format and the 80% threshold. Inline
+is excluded from every report format and the coverage threshold. Inline
 unit-test modules and test-only helper functions use conditional `coverage(off)`
 attributes so their bodies do not count toward the percentage. These attributes
 are active only during nightly coverage builds. Platform-specific code is measured

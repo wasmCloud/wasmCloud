@@ -3,18 +3,6 @@ name: coverage
 on:
   pull_request:
     branches: [main]
-    paths:
-      - '.github/workflows/coverage.yml'
-      - '.github/scripts/coverage-summary.mjs'
-      - '.github/actions/setup-rust/**'
-      - '.github/tool-versions.env'
-      - '.cargo/**'
-      - 'crates/**'
-      - 'xtask/**'
-      - 'wit/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
   merge_group:
   push:
     branches: [main]
@@ -31,8 +19,42 @@ defaults:
     shell: bash
 
 jobs:
+  # Pull requests that touch no Rust inputs skip the coverage job, which a
+  # required check treats as passing. Merge groups and main always run it.
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - '.github/workflows/coverage.yml'
+              - '.github/scripts/coverage-summary.mjs'
+              - '.github/actions/setup-rust/**'
+              - '.github/tool-versions.env'
+              - '.cargo/**'
+              - 'crates/**'
+              - 'xtask/**'
+              - 'wit/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+
   rust:
-    name: Rust coverage (80% lines and regions)
+    name: Rust coverage
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -77,7 +99,7 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         id: report
         run: cargo xtask coverage report
-      - name: Require 80% line and region coverage
+      - name: Require line and region coverage thresholds
         if: ${{ !cancelled() && steps.report.outcome == 'success' }}
         id: threshold
         run: cargo xtask coverage check
