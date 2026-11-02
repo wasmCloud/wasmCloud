@@ -232,8 +232,8 @@ fn layout_label(label: String, layout: Option<host_memory::MemoryLayout>) -> Str
     match layout {
         Some(layout) => format!(
             "{label}-layout{}+{}",
-            render_bytes(layout.reservation),
-            render_bytes(layout.guard)
+            host_memory::render_bytes_exact(layout.reservation),
+            host_memory::render_bytes_exact(layout.guard)
         ),
         None => label,
     }
@@ -939,6 +939,19 @@ mod tests {
             ),
             "warm-layout1GiB+32MiB"
         );
+    }
+
+    #[test]
+    fn distinct_memory_layouts_publish_distinct_series() {
+        let label = |reservation, guard| {
+            layout_label(
+                "warm".into(),
+                Some(host_memory::MemoryLayout { reservation, guard }),
+            )
+        };
+        let mib = host_memory::MIB;
+        assert_ne!(label(1050 * mib, 32 * mib), label(1060 * mib, 32 * mib));
+        assert_ne!(label(256 * mib, 1050), label(256 * mib, 1060));
     }
 
     #[test]
