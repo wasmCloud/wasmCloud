@@ -713,9 +713,15 @@ async fn invoke_ephemeral_relocated(
                     return;
                 }
             };
-        let _ = store
+        // Lent to the call rather than moved into it: a trap ends
+        // `run_concurrent` before the call can report it, so a failure before
+        // the results are handed over is answered below. A trap while they
+        // drain only cuts their streams short.
+        let mut pending = Some(ready_tx);
+        let reply = &mut pending;
+        let ran = store
             .run_concurrent(async move |accessor| {
-                let ready = async {
+                let (relocated, dones) = async {
                     // get_func + arg injection inside run_concurrent: the store is
                     // in async-required mode after instantiate.
                     let (func, arg_vals, executed) =
@@ -760,42 +766,47 @@ async fn invoke_ephemeral_relocated(
                         },
                     )
                 }
-                .await;
+                .await?;
 
-                match ready {
-                    Ok((relocated, dones)) => {
-                        let _ = ready_tx.send(Ok(relocated));
-                        // Keep the store alive until result streams drain, but bound
-                        // it: a consumer that never reads (or never drops) its result
-                        // stream would otherwise pin this ephemeral store — and its
-                        // core-instance slots — indefinitely. A transfer still making
-                        // progress past this bound is truncated when the store drops.
-                        // The `timeout` below is a future on this store, so it
-                        // cannot fire if the guest stops yielding mid-drain.
-                        // This timer runs off-store, and is cancelled when the
-                        // drain ends.
-                        let _drain_timer =
-                            Arc::clone(&drain_flag).arm_after(crate::timeouts::stream_drain());
-                        let drain = async {
-                            for done in dones {
-                                let _ = done.await;
-                            }
-                        };
-                        if timeout(crate::timeouts::stream_drain(), drain)
-                            .await
-                            .is_err()
-                        {
-                            trace!("relocated ephemeral store drain timed out; dropping store");
-                        }
-                    }
-                    Err(e) => {
-                        let _ = ready_tx.send(Err(e));
-                    }
+                if let Some(tx) = reply.take() {
+                    let _ = tx.send(Ok(relocated));
                 }
-                Ok::<(), wasmtime::Error>(())
+                // Keep the store alive until result streams drain, but bound
+                // it: a consumer that never reads (or never drops) its result
+                // stream would otherwise pin this ephemeral store — and its
+                // core-instance slots — indefinitely. A transfer still making
+                // progress past this bound is truncated when the store drops.
+                // The `timeout` below is a future on this store, so it
+                // cannot fire if the guest stops yielding mid-drain.
+                // This timer runs off-store, and is cancelled when the
+                // drain ends.
+                let _drain_timer =
+                    Arc::clone(&drain_flag).arm_after(crate::timeouts::stream_drain());
+                let drain = async {
+                    for done in dones {
+                        let _ = done.await;
+                    }
+                };
+                if timeout(crate::timeouts::stream_drain(), drain)
+                    .await
+                    .is_err()
+                {
+                    trace!("relocated ephemeral store drain timed out; dropping store");
+                }
+                Ok(())
             })
-            .await
-            .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e));
+            .await;
+        let failed = match ran {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e),
+            Err(e) => {
+                crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
+                Some(e)
+            }
+        };
+        if let (Some(e), Some(tx)) = (failed, pending.take()) {
+            let _ = tx.send(Err(e));
+        }
     }));
 
     let relocated = call
