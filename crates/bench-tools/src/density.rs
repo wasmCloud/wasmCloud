@@ -545,25 +545,27 @@ pub fn print_comparison(reports: &[Report]) {
             }
         })
     };
-    // Unset on every HTTP step, so an HTTP report reads `-`.
-    let messages = |n: Option<usize>| or_dash(n, |n| n.to_string());
+    let messages_row = |label: &str, value: &dyn Fn(&Report) -> Option<usize>| {
+        row(label, &|r| {
+            if r.is_messaging() {
+                or_dash(value(r), |n| n.to_string())
+            } else {
+                "-".into()
+            }
+        })
+    };
     let names: std::collections::BTreeSet<&String> =
         reports.iter().flat_map(|r| r.limits.keys()).collect();
     row("", &|r| r.label.clone());
     row("cores", &|r| r.cores.to_string());
     http_row("served workloads", &|r| r.served().to_string());
     http_row("achieved workloads", &|r| r.achieved().to_string());
-    row("served in flight", &|r| messages(r.served_in_flight()));
-    row("peak in flight", &|r| messages(r.peak_in_flight()));
-    row("offered at stop", &|r| {
-        messages(r.steps.last().and_then(|s| s.messages_offered))
-    });
-    row("shed at stop", &|r| {
-        messages(r.steps.last().and_then(|s| s.messages_shed))
-    });
-    row("refused at stop", &|r| {
-        let last = r.steps.last().filter(|s| s.messages_offered.is_some());
-        messages(last.map(|s| s.refused as usize))
+    messages_row("served in flight", &Report::served_in_flight);
+    messages_row("peak in flight", &Report::peak_in_flight);
+    messages_row("offered at stop", &|r| r.steps.last()?.messages_offered);
+    messages_row("shed at stop", &|r| r.steps.last()?.messages_shed);
+    messages_row("refused at stop", &|r| {
+        r.steps.last().map(|s| s.refused as usize)
     });
     for name in names {
         row(&format!("limit: {name}"), &|r| match r.limits.get(name) {
