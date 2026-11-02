@@ -90,6 +90,9 @@ pub struct SharedCtx {
     /// here is what makes the release exact: dropping the store drops this and
     /// hands the bytes back.
     pub memory_limiter: crate::engine::guest_memory::StoreMemoryLimiter,
+    /// What [`crate::engine::store_settings::configure_store`] set this store
+    /// up with, for the remediation hints to name.
+    pub(crate) store_settings: crate::engine::store_settings::StoreSettings,
     /// Notifies waiters after all other store data is dropped.
     ///
     /// Wasmtime disposes guest fibers and host tasks before dropping store data.
@@ -152,6 +155,7 @@ impl SharedCtx {
             abandoned: Arc::default(),
             executed: Arc::default(),
             memory_limiter: Default::default(),
+            store_settings: Default::default(),
             dropped: StoreDropped::default(),
         }
     }
@@ -330,10 +334,9 @@ pub struct Ctx {
     plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
     /// The HTTP hooks for outgoing HTTP requests.
     http_hooks: CtxHttpHooks,
-    /// Whether this workload deploy has already logged the remediation hint
-    /// for a known guest toolchain trap. Shared by every component of one
-    /// deploy (see [`crate::engine::trap_remediation`]).
-    pub(crate) trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
+    /// The remediation hints this workload deploy has already logged. Shared
+    /// by every component of one deploy (see [`crate::engine::trap_remediation`]).
+    pub(crate) trap_hints: Arc<crate::engine::trap_remediation::TrapHints>,
     /// The cumulative metric totals this guest instance has reported.
     #[cfg(feature = "wasi-otel")]
     pub(crate) cumulative_totals: crate::plugin::wasi_otel::CumulativeTotals,
@@ -644,7 +647,7 @@ impl CtxBuilder {
             },
             plugins,
             http_hooks,
-            trap_hint_logged: Arc::default(),
+            trap_hints: Arc::default(),
             #[cfg(feature = "wasi-otel")]
             cumulative_totals: Default::default(),
         }

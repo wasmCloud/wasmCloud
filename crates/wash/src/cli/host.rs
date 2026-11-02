@@ -498,13 +498,15 @@ pub struct HostCommand {
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
-    /// The most bytes a guest may transfer to the host in one call
+    /// Roughly the most bytes a guest may copy to the host in one call
     /// (e.g. `256MiB`).
     ///
-    /// This is wasmtime's [`Store::set_hostcall_fuel`]. Unset, it is
-    /// wasmtime's default.
-    ///
-    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    /// Also bounds each read the host makes from a future or stream, but not
+    /// byte streams it reads directly, such as HTTP bodies and socket writes.
+    /// wasmtime's `Store::set_hostcall_fuel`; unset, its default of 128 MiB.
+    /// Past it the call traps. The host allocates these bytes outside the
+    /// guest memory budget. Unrelated to `--meters fuel`, which counts
+    /// instructions.
     #[arg(long = "hostcall-fuel", env = "WASH_HOSTCALL_FUEL")]
     pub hostcall_fuel: Option<String>,
 
@@ -999,6 +1001,13 @@ fn nats_auth(
 }
 
 impl HostCommand {
+    /// `--hostcall-fuel` as the engine takes it; `None` keeps wasmtime's
+    /// default.
+    fn hostcall_fuel(&self) -> anyhow::Result<Option<std::num::NonZeroUsize>> {
+        wash_runtime::engine::host_memory::parse_hostcall_fuel(self.hostcall_fuel.as_deref())
+            .map_err(|e| anyhow::anyhow!("invalid hostcall-fuel: {e}"))
+    }
+
     /// How the scheduler connection authenticates.
     fn scheduler_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
         nats_auth(
@@ -1233,18 +1242,7 @@ impl CliCommand for HostCommand {
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         let max_initial_guest_memory =
             parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
-        let hostcall_fuel = self
-            .hostcall_fuel
-            .as_deref()
-            .map(str::trim)
-            .filter(|raw| !raw.is_empty())
-            .map(|raw| {
-                let bytes = hm::parse_bytes(raw)
-                    .map_err(|e| anyhow::anyhow!("invalid hostcall-fuel: {e}"))?;
-                anyhow::ensure!(bytes > 0, "hostcall-fuel must be greater than zero");
-                usize::try_from(bytes).context("hostcall-fuel does not fit in usize")
-            })
-            .transpose()?;
+        let hostcall_fuel = self.hostcall_fuel()?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -2256,6 +2254,22 @@ mod policy_mode_tests {
 
     fn parse(args: &[&str]) -> HostCommand {
         TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    #[test]
+    fn hostcall_fuel_flag_is_parsed_by_the_host_command() -> anyhow::Result<()> {
+        assert_eq!(
+            parse(&["--hostcall-fuel", "256MiB"]).hostcall_fuel()?,
+            std::num::NonZeroUsize::new(256 << 20)
+        );
+        assert_eq!(parse(&[]).hostcall_fuel()?, None);
+        assert_eq!(parse(&["--hostcall-fuel", " "]).hostcall_fuel()?, None);
+        let err = parse(&["--hostcall-fuel", "0"])
+            .hostcall_fuel()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "invalid hostcall-fuel: must be greater than zero");
+        Ok(())
     }
 
     #[test]

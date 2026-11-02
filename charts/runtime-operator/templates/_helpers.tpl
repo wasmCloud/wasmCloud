@@ -415,3 +415,12 @@ imagePullSecrets:
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+A host env value from a chart value that may be a bare number. A YAML number
+arrives as a float64 and would print as `2.68435456e+08`, which the host
+cannot parse, so numbers render as integers and anything else as is.
+*/}}
+{{- define "runtime-operator.envNumber" -}}
+{{- if or (kindIs "int64" .) (kindIs "float64" .) }}{{ int64 . }}{{ else }}{{ . }}{{ end }}
+{{- end }}

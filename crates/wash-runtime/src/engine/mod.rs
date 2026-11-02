@@ -253,6 +253,7 @@ pub mod pool_usage;
 pub mod process_memory;
 mod scratch;
 pub(crate) mod store;
+pub(crate) mod store_settings;
 pub(crate) mod trap_remediation;
 mod value;
 mod volumes;
@@ -398,11 +399,8 @@ pub struct Engine {
     /// [`host_memory::HostMemoryBudgets::max_guest_memory`] is the cap on.
     /// Every store this engine builds carries a limiter drawing on it.
     pub(crate) guest_memory: Arc<guest_memory::GuestMemoryBudget>,
-    /// The most bytes a guest may transfer to the host in one call
-    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
-    ///
-    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
-    pub(crate) hostcall_fuel: Option<usize>,
+    /// What every store this engine builds is configured with.
+    pub(crate) store_settings: store_settings::StoreSettings,
     /// The whole process's footprint against `max_process_memory`, sampled on
     /// its own thread. The guest budget refuses growth while it is over.
     /// `None` when the guard was switched off.
@@ -614,12 +612,10 @@ impl Engine {
         &self.guest_memory
     }
 
-    /// The most bytes a guest may transfer to the host in one call
-    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
-    ///
-    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
-    pub fn hostcall_fuel(&self) -> Option<usize> {
-        self.hostcall_fuel
+    /// The hostcall fuel each store starts every guest-to-host call with: see
+    /// [`EngineBuilder::with_hostcall_fuel`]. `None` is wasmtime's default.
+    pub fn hostcall_fuel(&self) -> Option<std::num::NonZeroUsize> {
+        self.store_settings.hostcall_fuel
     }
 
     /// The process's memory footprint against `max_process_memory`, for an
@@ -797,7 +793,7 @@ impl Engine {
 
         let loopback = Arc::default();
         // One per deploy, shared by every component in it.
-        let trap_hint_logged = Arc::default();
+        let trap_hints = Arc::default();
 
         // Iniitalize service
         let service = if let Some(svc) = service {
@@ -814,7 +810,7 @@ impl Engine {
                     Some(
                         handle
                             .with_annotations(Arc::clone(&annotations_arc))
-                            .with_trap_hint_flag(&trap_hint_logged),
+                            .with_trap_hints(&trap_hints),
                     )
                 }
                 Err(e) => {
@@ -842,7 +838,7 @@ impl Engine {
                     workload_components.push(
                         handle
                             .with_annotations(Arc::clone(&annotations_arc))
-                            .with_trap_hint_flag(&trap_hint_logged),
+                            .with_trap_hints(&trap_hints),
                     );
                 }
                 Err(e) => {
@@ -935,7 +931,7 @@ impl Engine {
         service.metadata.resolved_volume_mounts = resolved_volume_mounts;
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
-        service.metadata.hostcall_fuel = self.hostcall_fuel;
+        service.metadata.store_settings = self.store_settings;
         service.metadata.compiled = compiled;
 
         let world = service.world();
@@ -1118,7 +1114,7 @@ impl Engine {
         workload_component.metadata.resolved_volume_mounts = resolved_volume_mounts;
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
-        workload_component.metadata.hostcall_fuel = self.hostcall_fuel;
+        workload_component.metadata.store_settings = self.store_settings;
         workload_component.metadata.compiled = compiled;
         // From the source alone. A component wasmtime cannot cost
         // (`resources_required` is `None`) imports a core module, which no
@@ -1344,7 +1340,7 @@ pub struct EngineBuilder {
     max_process_memory_off: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     max_initial_guest_memory_bytes: Option<u64>,
-    hostcall_fuel: Option<usize>,
+    hostcall_fuel: Option<std::num::NonZeroUsize>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1491,12 +1487,18 @@ impl EngineBuilder {
         self
     }
 
-    /// The most bytes a guest may transfer to the host in one call
-    /// (wasmtime's [`Store::set_hostcall_fuel`]). Unset, it is wasmtime's default.
+    /// Roughly the most bytes a guest may copy to the host in one
+    /// guest-to-host call, or in one read the host makes from a future or
+    /// stream: wasmtime's [`wasmtime::Store::set_hostcall_fuel`], refilled for
+    /// each. Past it the call traps. Byte streams the host reads directly,
+    /// such as HTTP bodies and socket writes, are not counted. Unset, it is
+    /// wasmtime's default of 128 MiB.
     ///
-    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    /// The host allocates these bytes outside the guest memory budget, so a
+    /// value past what the process holds back from guests draws a startup
+    /// warning when that budget is enforced.
     #[must_use]
-    pub fn with_hostcall_fuel(mut self, fuel: usize) -> Self {
+    pub fn with_hostcall_fuel(mut self, fuel: std::num::NonZeroUsize) -> Self {
         self.hostcall_fuel = Some(fuel);
         self
     }
@@ -1769,6 +1771,19 @@ impl EngineBuilder {
         // merely counts against costs nothing.
         if self.guest_memory_mode.enforces()
             && let Some(advisory) = host_memory.enforcement_advisory_within(memory_limit)
+        {
+            tracing::warn!("{advisory}");
+        }
+        // Only for a value the operator named: wasmtime's default is upstream's
+        // call. And only when the guest budget is a ceiling: otherwise nothing
+        // is held back from guests to compare against.
+        if self.guest_memory_mode.enforces()
+            && let Some(fuel) = self.hostcall_fuel
+            && let Some(advisory) = host_memory::hostcall_fuel_advisory_within(
+                u64::try_from(fuel.get()).unwrap_or(u64::MAX),
+                host_memory.max_guest_memory,
+                memory_limit,
+            )
         {
             tracing::warn!("{advisory}");
         }
@@ -2101,7 +2116,9 @@ impl EngineBuilder {
                 }
                 .into_metered()
             },
-            hostcall_fuel: self.hostcall_fuel,
+            store_settings: store_settings::StoreSettings {
+                hostcall_fuel: self.hostcall_fuel,
+            },
             process_memory,
             #[cfg(feature = "wasi-tls")]
             tls_provider: self.tls_provider,

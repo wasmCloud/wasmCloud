@@ -38,7 +38,7 @@ use wasmtime::error::Context as _;
 use wasmtime::{AsContext, AsContextMut, StoreContextMut};
 use wasmtime_wasi::WasiCtxBuilder;
 
-use crate::engine::abandon::{AbandonedCallPolicy, arm_epoch_deadline};
+use crate::engine::abandon::AbandonedCallPolicy;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
@@ -86,13 +86,10 @@ pub(crate) struct ComponentCtxTemplate {
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
     /// The host-wide guest memory budget this component's stores draw on.
     guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
-    /// The most bytes a guest may transfer to the host in one call
-    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
-    ///
-    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
-    hostcall_fuel: Option<usize>,
-    /// The workload deploy's trap-hint flag.
-    trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
+    /// What every store built from this template is configured with.
+    store_settings: crate::engine::store_settings::StoreSettings,
+    /// The workload deploy's trap hints.
+    trap_hints: Arc<crate::engine::trap_remediation::TrapHints>,
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
 }
@@ -108,8 +105,8 @@ impl ComponentCtxTemplate {
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
             guest_memory: metadata.guest_memory.clone(),
-            hostcall_fuel: metadata.hostcall_fuel,
-            trap_hint_logged: metadata.trap_hint_logged.clone(),
+            store_settings: metadata.store_settings,
+            trap_hints: metadata.trap_hints.clone(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -363,7 +360,7 @@ async fn build_ctx_from_template(
     let mut ctx = ctx_builder.build();
     ctx.volume_mounts = all_volume_mounts.to_vec();
     ctx.store_id = store_id.to_string().into();
-    ctx.trap_hint_logged = Arc::clone(&template.trap_hint_logged);
+    ctx.trap_hints = Arc::clone(&template.trap_hints);
     Ok(ctx)
 }
 
@@ -402,20 +399,13 @@ pub(crate) async fn new_store_from_templates(
     }
 
     let mut store = wasmtime::Store::new(engine, shared_ctx);
-    // A store on a fuel-metering engine starts at zero, and calling a guest
-    // without fuel traps. Fuel here is a counter, never a bound:
-    // `FuelConsumptionMeter::observe` resets it and reads the delta around the
-    // call it measures, and nothing else reads it at all. Giving every store
-    // the maximum is what lets a guest run while its consumption is counted.
-    // Errors when the engine is not metering fuel, which is the ordinary case.
-    let _ = store.set_fuel(u64::MAX);
     // Trap for every store built here, services included: trapping a service
     // means a supervisor restart, which beats carrying a wedged call forever.
-    arm_epoch_deadline(&mut store, AbandonedCallPolicy::Trap);
-    crate::engine::guest_memory::install_memory_limiter(&mut store);
-    if let Some(fuel) = active.hostcall_fuel {
-        store.set_hostcall_fuel(fuel);
-    }
+    crate::engine::store_settings::configure_store(
+        &mut store,
+        active.store_settings,
+        AbandonedCallPolicy::Trap,
+    );
 
     let active_id = active.component_id.clone();
     for (linked_id, linked_pre) in linked_instances {

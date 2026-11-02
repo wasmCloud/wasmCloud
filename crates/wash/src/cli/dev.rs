@@ -104,16 +104,11 @@ impl CliCommand for DevCommand {
                 .with_context(|| format!("invalid dev.wasm_proposals entry {name:?}"))?;
             engine_builder = engine_builder.with_wasm_proposal(proposal);
         }
-        if let Some(raw) = dev_config
-            .hostcall_fuel
-            .as_deref()
-            .map(str::trim)
-            .filter(|raw| !raw.is_empty())
+        if let Some(fuel) = wash_runtime::engine::host_memory::parse_hostcall_fuel(
+            dev_config.hostcall_fuel.as_deref(),
+        )
+        .map_err(|e| anyhow::anyhow!("invalid dev.hostcall_fuel: {e}"))?
         {
-            let fuel = wash_runtime::engine::host_memory::parse_bytes(raw)
-                .map_err(|e| anyhow::anyhow!("invalid dev.hostcall_fuel: {e}"))?;
-            anyhow::ensure!(fuel > 0, "dev.hostcall_fuel must be greater than zero");
-            let fuel = usize::try_from(fuel).context("dev.hostcall_fuel does not fit in usize")?;
             engine_builder = engine_builder.with_hostcall_fuel(fuel);
         }
         // Raised before any ceiling is computed from it: every allowance below

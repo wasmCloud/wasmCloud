@@ -240,11 +240,11 @@ spec:
                    Keep any new host knob on this side of that line. */}}
             {{- with $resources.defaultHeapMemory }}
             - name: WASH_DEFAULT_HEAP_MEMORY
-              value: "{{ . }}"
+              value: "{{ include "runtime-operator.envNumber" . }}"
             {{- end }}
             {{- with $resources.maxMemories }}
             - name: WASH_MAX_MEMORIES
-              value: "{{ . }}"
+              value: "{{ include "runtime-operator.envNumber" . }}"
             {{- end }}
             {{- /* Compared as text: every sibling knob is a string, and a
                    quoted "false" would be truthy to a bare `if`. */}}
@@ -254,7 +254,7 @@ spec:
             {{- end }}
             {{- with $resources.coreInstances }}
             - name: WASH_CORE_INSTANCES
-              value: "{{ . }}"
+              value: "{{ include "runtime-operator.envNumber" . }}"
             {{- end }}
             - name: WASH_GUEST_MEMORY_MODE
               value: "{{ $resources.guestMemoryMode | default "enforce" }}"
@@ -270,11 +270,16 @@ spec:
             {{- $starts := $resources.maxConcurrentStarts }}
             {{- if or (kindIs "int64" $starts) (kindIs "float64" $starts) (and (kindIs "string" $starts) (ne $starts "")) }}
             - name: WASH_MAX_CONCURRENT_STARTS
-              value: "{{ $starts }}"
+              value: "{{ include "runtime-operator.envNumber" $starts }}"
+            {{- end }}
+            {{- /* The host refuses 0; refused here so an upgrade stops at
+                   render instead of crashlooping every host. */}}
+            {{- if eq (toString $resources.hostcallFuel) "0" }}
+            {{- fail "resources.hostcallFuel must be greater than zero: leave it empty for wasmtime's default" }}
             {{- end }}
             {{- with $resources.hostcallFuel }}
             - name: WASH_HOSTCALL_FUEL
-              value: "{{ . }}"
+              value: "{{ include "runtime-operator.envNumber" . }}"
             {{- end }}
             {{- with $top.Values.runtime.env }}
             {{- toYaml . | nindent 12 }}

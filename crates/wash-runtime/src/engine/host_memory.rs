@@ -559,6 +559,25 @@ const GUEST_MEMORY_DENOMINATOR: u64 = 4;
 const MIN_DERIVED_MAX_GUEST_MEMORY: u64 = 256 * MIB;
 const MAX_DERIVED_MAX_GUEST_MEMORY: u64 = 1024 * 1024 * MIB;
 
+/// A hostcall fuel setting (`--hostcall-fuel`, `dev.hostcall_fuel`) as
+/// [`crate::engine::EngineBuilder::with_hostcall_fuel`] takes it: a byte size
+/// per [`parse_bytes`], with a blank value read as unset.
+///
+/// # Errors
+///
+/// Anything [`parse_bytes`] refuses, zero, which would trap every call that
+/// passes the host any data, or a size this platform's `usize` cannot hold.
+pub fn parse_hostcall_fuel(raw: Option<&str>) -> Result<Option<std::num::NonZeroUsize>, String> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    let bytes = parse_bytes(raw)?;
+    let bytes = usize::try_from(bytes).map_err(|_| format!("{raw:?} does not fit in usize"))?;
+    std::num::NonZeroUsize::new(bytes)
+        .map(Some)
+        .ok_or_else(|| "must be greater than zero".to_string())
+}
+
 /// Parse a byte size, following Kubernetes' quantity grammar.
 ///
 /// | Form | Meaning |
@@ -1630,6 +1649,33 @@ pub(crate) fn process_memory_advisory_within(
     })
 }
 
+/// What to say about an operator-set hostcall fuel at startup, if anything.
+/// The host allocates what a guest copies to it outside the guest memory
+/// budget, so it comes out of what the process holds back from guests. This
+/// is a floor: every concurrent call can take the full fuel, and the host
+/// cannot know how many will.
+pub(crate) fn hostcall_fuel_advisory_within(
+    hostcall_fuel: u64,
+    max_guest_memory: u64,
+    memory_limit: Option<u64>,
+) -> Option<String> {
+    let limit = memory_limit?;
+    let held_back = limit.saturating_sub(max_guest_memory);
+    (hostcall_fuel > held_back).then(|| {
+        format!(
+            "hostcall-fuel {} is more than the {} this process holds back from guests (a {} \
+             limit less a {} guest memory budget). The host allocates what a guest copies to it \
+             outside that budget, up to this much for each call in flight, so even one large \
+             call can get this host OOM-killed. Lower hostcall-fuel or max-guest-memory, or \
+             raise the limit",
+            render_bytes(hostcall_fuel),
+            render_bytes(held_back),
+            render_bytes(limit),
+            render_bytes(max_guest_memory),
+        )
+    })
+}
+
 /// The guest memory budget when an operator names none.
 ///
 /// A share of the limit that will actually kill the process, clamped. Mirrors
@@ -1669,6 +1715,40 @@ impl fmt::Display for HostMemoryBudgets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hostcall_fuel_parses_a_nonzero_byte_size() {
+        for blank in [None, Some(""), Some("  ")] {
+            assert_eq!(parse_hostcall_fuel(blank), Ok(None));
+        }
+        assert_eq!(
+            parse_hostcall_fuel(Some(" 256MiB ")),
+            Ok(std::num::NonZeroUsize::new(256 << 20))
+        );
+        assert_eq!(
+            parse_hostcall_fuel(Some("0")),
+            Err("must be greater than zero".to_string())
+        );
+        assert!(parse_hostcall_fuel(Some("lots")).is_err());
+        assert!(parse_hostcall_fuel(Some("-1")).is_err());
+    }
+
+    #[test]
+    fn hostcall_fuel_advisory_checks_what_guests_leave_over() {
+        // The chart's default host: 768 MiB, a quarter held back.
+        let limit_bytes = 768 * MIB;
+        let limit = Some(limit_bytes);
+        let guests = derive_max_guest_memory_within(limit);
+        assert_eq!(guests, 576 * MIB);
+        assert!(hostcall_fuel_advisory_within(128 * MIB, guests, limit).is_none());
+        assert!(hostcall_fuel_advisory_within(192 * MIB, guests, limit).is_none());
+        let advisory = hostcall_fuel_advisory_within(256 * MIB, guests, limit)
+            .expect("256 MiB is past the 192 MiB held back");
+        assert!(advisory.contains("hostcall-fuel 256MiB"), "{advisory}");
+        // A budget at or past the limit leaves nothing held back.
+        assert!(hostcall_fuel_advisory_within(1, limit_bytes, limit).is_some());
+        assert!(hostcall_fuel_advisory_within(u64::MAX, guests, None).is_none());
+    }
 
     impl PoolCommitShape {
         /// The shape with no `WASMTIME_POOLING_*` overrides.

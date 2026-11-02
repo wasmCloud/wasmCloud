@@ -171,15 +171,12 @@ pub struct WorkloadMetadata {
     /// [`Default`] here is an unmetered budget, so a metadata built outside an
     /// engine is neither charged nor limited.
     pub(crate) guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
-    /// The most bytes a guest may transfer to the host in one call
-    /// (wasmtime's [`Store::set_hostcall_fuel`]). `None` leaves wasmtime's default.
-    ///
-    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
-    pub(crate) hostcall_fuel: Option<usize>,
-    /// Set once this workload deploy has logged the remediation hint for a
-    /// known guest toolchain trap. One flag is shared by every component of a
-    /// deploy, so a redeploy starts with a fresh one.
-    pub(crate) trap_hint_logged: Arc<std::sync::atomic::AtomicBool>,
+    /// What every store built for this component is configured with, from
+    /// the engine. [`Default`] here is wasmtime's own defaults.
+    pub(crate) store_settings: crate::engine::store_settings::StoreSettings,
+    /// The remediation hints this workload deploy has already logged. One set
+    /// is shared by every component of a deploy, so a redeploy starts fresh.
+    pub(crate) trap_hints: Arc<crate::engine::trap_remediation::TrapHints>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
     /// Workload annotations
@@ -620,8 +617,8 @@ impl WorkloadService {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
-                hostcall_fuel: None,
-                trap_hint_logged: Arc::default(),
+                store_settings: Default::default(),
+                trap_hints: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
@@ -641,9 +638,12 @@ impl WorkloadService {
         self
     }
 
-    /// Share the workload deploy's trap-hint flag with this component.
-    pub(crate) fn with_trap_hint_flag(mut self, flag: &Arc<std::sync::atomic::AtomicBool>) -> Self {
-        self.metadata.trap_hint_logged = Arc::clone(flag);
+    /// Share the workload deploy's trap hints with this component.
+    pub(crate) fn with_trap_hints(
+        mut self,
+        hints: &Arc<crate::engine::trap_remediation::TrapHints>,
+    ) -> Self {
+        self.metadata.trap_hints = Arc::clone(hints);
         self
     }
 
@@ -744,8 +744,8 @@ impl WorkloadComponent {
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
-                hostcall_fuel: None,
-                trap_hint_logged: Arc::default(),
+                store_settings: Default::default(),
+                trap_hints: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
                 plugin_bound_instances: Default::default(),
@@ -765,9 +765,12 @@ impl WorkloadComponent {
         self
     }
 
-    /// Share the workload deploy's trap-hint flag with this component.
-    pub(crate) fn with_trap_hint_flag(mut self, flag: &Arc<std::sync::atomic::AtomicBool>) -> Self {
-        self.metadata.trap_hint_logged = Arc::clone(flag);
+    /// Share the workload deploy's trap hints with this component.
+    pub(crate) fn with_trap_hints(
+        mut self,
+        hints: &Arc<crate::engine::trap_remediation::TrapHints>,
+    ) -> Self {
+        self.metadata.trap_hints = Arc::clone(hints);
         self
     }
 
@@ -5564,7 +5567,7 @@ mod tests {
         let engine = crate::engine::Engine::builder()
             .with_pooling_allocator(false)
             .without_max_process_memory()
-            .with_hostcall_fuel(4096)
+            .with_hostcall_fuel(std::num::NonZeroUsize::new(4096).unwrap())
             .build()
             .unwrap();
         let bytes = bytes::Bytes::from(wat::parse_str("(component)").unwrap());
@@ -5605,11 +5608,20 @@ mod tests {
             .unwrap();
         assert_eq!(unresolved.components.len(), 1);
         for component in unresolved.components.values() {
-            assert_eq!(component.metadata.hostcall_fuel, Some(4096));
+            assert_eq!(
+                component.metadata.store_settings.hostcall_fuel,
+                Some(std::num::NonZeroUsize::new(4096).unwrap())
+            );
         }
         assert_eq!(
-            unresolved.service.as_ref().unwrap().metadata.hostcall_fuel,
-            Some(4096)
+            unresolved
+                .service
+                .as_ref()
+                .unwrap()
+                .metadata
+                .store_settings
+                .hostcall_fuel,
+            Some(std::num::NonZeroUsize::new(4096).unwrap())
         );
     }
 
