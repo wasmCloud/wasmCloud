@@ -58,9 +58,7 @@ pub struct Config {
     /// (env vars, wasi:config values, outbound allowlist). Field shape mirrors
     /// `WorkloadDeployment.spec.template.spec.components[].localResources`.
     ///
-    /// Omitting the section resolves the same as `workload: {}`: `allowedHosts`
-    /// is `*`, which admits any destination for outbound HTTP requests and
-    /// `wasi:sockets` connections.
+    /// Shared defaults deny egress. `wash dev` supplies its own allow-all default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workload: Option<WorkloadConfig>,
 
@@ -240,37 +238,24 @@ impl BuildConfig {
 /// Use [`WorkloadConfig::builder`] to construct so future fields don't break
 /// callers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, bon::Builder)]
-#[serde(rename_all = "camelCase", default = "WorkloadConfig::omitted")]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct WorkloadConfig {
     /// Environment variables for the component (wasi:cli/env). Combines inline
     /// values with named references to top-level `configs:` and `secrets:`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentLayer>,
     /// Opaque key-value config delivered to the component (e.g. wasi:config/store).
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub config: HashMap<String, String>,
     /// Outbound allowlist for HTTP requests and `wasi:sockets` connections.
     /// Each entry parses into a typed [`AllowedHost`]; YAML/JSON callers
     /// continue to write plain strings.
     ///
-    /// Default resolution distinguishes "field omitted" from "explicit
-    /// empty":
-    ///
-    /// - **Missing from YAML**, or no `workload:` section at all →
-    ///   `[AllowedHost::Any]` (allow-all). Keeps `wash dev` ergonomic for
-    ///   users who haven't thought about egress.
-    /// - **`allowedHosts: []` in YAML** → empty `Vec` is preserved.
-    ///   `resolve_workload` passes it through unchanged; the runtime
-    ///   (`wash-runtime::host::http::check_allowed_hosts`) treats empty
-    ///   as deny-all. Explicit user intent is respected.
-    /// - **`WorkloadConfig::default()` (Rust API)** → empty `Vec`
-    ///   (derived `Default`), which the runtime treats as deny-all. A
-    ///   `Config` with no `workload`, `Config::default()` included, still
-    ///   resolves allow-all, as an omitted section does.
-    ///
-    /// The serialization side does NOT skip empty lists, so a round-trip
-    /// preserves the explicit-empty intent.
+    /// Empty or omitted denies all egress. `wash dev` supplies an allow-all
+    /// default before merging configuration; explicit lists, including `[]`,
+    /// override it. Empty lists survive serialization.
+    #[serde(default)]
     pub allowed_hosts: Vec<AllowedHost>,
     /// Names components may resolve through
     /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`). Each entry
@@ -281,8 +266,8 @@ pub struct WorkloadConfig {
     /// A host named in `allowedHosts` may be resolved without being listed
     /// here; this list is for names beyond those. Resolution is otherwise
     /// opt-in: nothing substitutes an allow-all policy for a workload that
-    /// declared none, and the `*` an omitted `allowedHosts` becomes opens no
-    /// lookup.
+    /// declared none. `*` in `allowedHosts` opens no lookup.
+    #[serde(default)]
     #[builder(default)]
     pub allowed_ip_name_lookups: Vec<AllowedIpName>,
     /// Ports on the machine's own loopback components may reach through
@@ -293,20 +278,9 @@ pub struct WorkloadConfig {
     /// non-empty one is inert unless the host runs with
     /// `--allow-host-loopback`. `127.0.0.1` keeps meaning the workload's own
     /// virtual network either way.
+    #[serde(default)]
     #[builder(default)]
     pub allowed_host_loopback_ports: Vec<AllowedLoopbackPort>,
-}
-
-impl WorkloadConfig {
-    /// The struct's serde default, so a field the YAML omits, and an omitted
-    /// `workload:` section, take their values from here: `allowedHosts` is
-    /// `*` (allow-all) and every other field is empty.
-    pub(crate) fn omitted() -> Self {
-        Self {
-            allowed_hosts: vec![AllowedHost::Any],
-            ..Self::default()
-        }
-    }
 }
 
 // The `configs:`/`secrets:` source model moved to wash-runtime so every
@@ -1643,10 +1617,20 @@ pub fn load_config<T>(
 where
     T: Serialize + Into<Config>,
 {
-    let mut figment = Figment::new();
+    load_config_with_defaults(global_config_path, project_dir, cli_args, Config::default())
+}
 
-    // Start with defaults
-    figment = figment.merge(figment::providers::Serialized::defaults(Config::default()));
+/// Load configuration over command-specific defaults at the lowest precedence.
+pub(crate) fn load_config_with_defaults<T>(
+    global_config_path: &Path,
+    project_dir: Option<&Path>,
+    cli_args: Option<T>,
+    defaults: Config,
+) -> Result<Config>
+where
+    T: Serialize + Into<Config>,
+{
+    let mut figment = Figment::from(figment::providers::Serialized::defaults(defaults));
 
     // Global config file
     if global_config_path.exists() {
@@ -2218,6 +2202,26 @@ dev:
                 .to_string()
                 .contains("build.command")
         );
+    }
+
+    #[test]
+    fn shared_config_loading_defaults_to_deny_all_egress() {
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.yaml");
+        for yaml in [
+            None,
+            Some("workload: {}"),
+            Some("workload:\n  config: {x: value}"),
+        ] {
+            if let Some(yaml) = yaml {
+                std::fs::write(&global, yaml).unwrap();
+            }
+            let config = load_config::<Config>(&global, None, None).unwrap();
+            let resolved = crate::workload::resolve_workload(&config, dir.path(), None).unwrap();
+            assert!(resolved.allowed_hosts.is_empty());
+            assert!(resolved.allowed_ip_name_lookups.is_empty());
+            assert!(resolved.allowed_host_loopback_ports.is_empty());
+        }
     }
 
     #[test]
