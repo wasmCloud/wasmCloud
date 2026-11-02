@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PLUGIN_KEYVALUE_ID: &str = "wasi-keyvalue";
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
@@ -193,6 +193,16 @@ impl ConnectionSettings {
                 MAX_SETTING_MS,
             )?);
         }
+        // Each key is bounded on its own, but together they could still keep
+        // every caller waiting on one redial for days.
+        let worst = settings.worst_case_redial_ms();
+        anyhow::ensure!(
+            worst <= MAX_SETTING_MS,
+            "redis keyvalue config `{RECONNECT_NUM_RETRIES_KEY}`, \
+             `{RECONNECT_MAX_DELAY_MS_KEY}` and `{CONNECTION_TIMEOUT_MS_KEY}` together let one \
+             redial take up to {worst}ms, more than the {MAX_SETTING_MS}ms allowed; lower one \
+             of them"
+        );
         Ok(settings)
     }
 
@@ -223,11 +233,30 @@ impl ConnectionSettings {
     /// and all of `min(max delay, 50ms * 2^attempt)`. The jitter keeps many
     /// pooled connections that lost one server from redialing in lockstep.
     fn redial_delay(&self, attempt: usize) -> Duration {
-        let exponent = u32::try_from(attempt).unwrap_or(u32::MAX).min(16);
-        let ceiling = REDIAL_BASE_DELAY_MS
-            .saturating_mul(1 << exponent)
-            .min(self.reconnect_max_delay_ms);
+        let ceiling = self.redial_ceiling_ms(attempt);
         Duration::from_millis(fastrand::u64(ceiling / 2..=ceiling))
+    }
+
+    /// The longest pause before redial `attempt`: `min(max delay, 50ms * 2^attempt)`.
+    fn redial_ceiling_ms(&self, attempt: usize) -> u64 {
+        let exponent = u32::try_from(attempt).unwrap_or(u32::MAX).min(16);
+        REDIAL_BASE_DELAY_MS
+            .saturating_mul(1 << exponent)
+            .min(self.reconnect_max_delay_ms)
+    }
+
+    #[cfg_attr(not(feature = "wasm_component_model_implements"), allow(dead_code))]
+    /// The longest one redial can take: every attempt running into the
+    /// connection timeout, with the longest pause between each. Callers that
+    /// find the connection dead queue behind the redial for all of it.
+    fn worst_case_redial_ms(&self) -> u64 {
+        let attempts = self.reconnect_num_retries as u64 + 1;
+        let pauses: u64 = (0..self.reconnect_num_retries)
+            .map(|attempt| self.redial_ceiling_ms(attempt))
+            .sum();
+        self.connection_timeout_ms
+            .saturating_mul(attempts)
+            .saturating_add(pauses)
     }
 }
 
@@ -277,7 +306,10 @@ fn parse_bounded(key: &str, value: &str, min: u64, max: u64) -> anyhow::Result<u
 /// connection that a command found dead, and the next command dials a new one.
 /// A read that found it dead is sent once more on the replacement (see
 /// [`Connection::query_read`]); a write may already have run, so its call
-/// fails and the calls after it use the fresh connection.
+/// fails and the calls after it use the fresh connection. To keep that from
+/// happening after every idle period, a write on a connection that has been
+/// quiet for [`IDLE_PROBE_AFTER`] is preceded by a `PING`. A `READONLY` reply
+/// (a failover that demoted the server in place) also drops the connection.
 ///
 /// Every dial uses the same `client`, so the same host and port that the
 /// multiplexed provider's `check_egress` approved, resolved by name exactly as
@@ -312,7 +344,17 @@ struct ConnectionInner {
     /// How many redials have finished, read without the lock so a caller can
     /// tell whether one finished while it waited.
     redials_finished: std::sync::atomic::AtomicU64,
+    /// When a command last got a reply (or a connection was last dialed). A
+    /// write sent after [`IDLE_PROBE_AFTER`] of quiet is preceded by a `PING`.
+    last_reply: std::sync::Mutex<Instant>,
 }
+
+/// How long a connection may sit quiet before a write first checks it with a
+/// `PING`. A server's `timeout`, or a load balancer's idle cutoff, closes a
+/// quiet connection, and a write that then finds it dead cannot be retried
+/// (it might have run). A `PING` can be, so the write goes out on a live
+/// connection instead of failing.
+const IDLE_PROBE_AFTER: Duration = Duration::from_secs(5);
 
 /// A list-keys cursor this backend handed out has this bit set, the
 /// generation of the connection that issued it in the bits below, and the
@@ -366,8 +408,34 @@ impl Connection {
                 current: std::sync::Mutex::new(Some((conn, 0))),
                 dialing: tokio::sync::Mutex::default(),
                 redials_finished: std::sync::atomic::AtomicU64::new(0),
+                last_reply: std::sync::Mutex::new(Instant::now()),
             }),
         })
+    }
+
+    fn mark_reply(&self) {
+        *self
+            .inner
+            .last_reply
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
+    }
+
+    fn idle_for(&self) -> Duration {
+        self.inner
+            .last_reply
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .elapsed()
+    }
+
+    /// Check the connection with a `PING` if it has been quiet for
+    /// [`IDLE_PROBE_AFTER`], redialing if the `PING` finds it dead.
+    async fn probe_if_idle(&self) -> redis::RedisResult<()> {
+        if self.idle_for() < IDLE_PROBE_AFTER {
+            return Ok(());
+        }
+        self.query_read::<String>(&redis::cmd("PING")).await.map(drop)
     }
 
     fn live(&self) -> Option<(redis::aio::MultiplexedConnection, u64)> {
@@ -399,11 +467,7 @@ impl Connection {
         if let Some((finished, e)) = &redials.failed
             && *finished > seen
         {
-            return Err(redis::RedisError::from((
-                e.kind(),
-                "redis redial failed",
-                e.to_string(),
-            )));
+            return Err(copy_redial_error(e));
         }
 
         let settings = &self.inner.settings;
@@ -436,16 +500,13 @@ impl Connection {
                     .current
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(live.clone());
+                self.mark_reply();
                 Ok(live)
             }
             Err(e) => {
-                let e = Arc::new(e);
-                redials.failed = Some((finished, e.clone()));
-                Err(redis::RedisError::from((
-                    e.kind(),
-                    "redis redial failed",
-                    e.to_string(),
-                )))
+                // The waiters get a copy; this caller gets the error itself.
+                redials.failed = Some((finished, Arc::new(copy_redial_error(&e))));
+                Err(e)
             }
         };
         self.inner
@@ -471,20 +532,28 @@ impl Connection {
     /// command redials.
     async fn send<T: redis::FromRedisValue>(&self, cmd: &redis::Cmd) -> Result<T, Failure> {
         let (mut conn, generation) = self.get().await.map_err(Failure::Dial)?;
-        cmd.query_async(&mut conn).await.map_err(|e| {
-            if e.is_unrecoverable_error() {
-                self.discard(generation);
+        match cmd.query_async(&mut conn).await {
+            Ok(value) => {
+                self.mark_reply();
+                Ok(value)
             }
-            Failure::Command(e)
-        })
+            Err(e) => {
+                if proves_connection_unusable(&e) {
+                    self.discard(generation);
+                }
+                Err(Failure::Command(e))
+            }
+        }
     }
 
-    /// Send `cmd` once. If the connection proved dead, it is dropped, and the
-    /// next command redials.
+    /// Send a write once. If the connection proved dead, it is dropped, and
+    /// the next command redials. A connection that has been quiet for a while
+    /// is checked first (see [`IDLE_PROBE_AFTER`]).
     pub(crate) async fn query<T: redis::FromRedisValue>(
         &self,
         cmd: &redis::Cmd,
     ) -> redis::RedisResult<T> {
+        self.probe_if_idle().await?;
         self.send(cmd).await.map_err(Failure::into_inner)
     }
 
@@ -514,7 +583,7 @@ impl Connection {
         match self.send(cmd).await {
             Err(Failure::Command(e)) if is_dropped_connection(&e) => {
                 tracing::debug!(error = %e, "redis connection dropped; retrying a read once");
-                self.query(cmd).await
+                self.send(cmd).await.map_err(Failure::into_inner)
             }
             other => other.map_err(Failure::into_inner),
         }
@@ -533,9 +602,10 @@ impl Connection {
     /// telling the caller to list again from the first page. Nothing is
     /// remembered per token, so no caller's listing can crowd out another's.
     ///
-    /// A cursor without [`TOKEN_FLAG`] (one from before tokens, or a redis
-    /// cursor too large to carry, which no redis keyspace produces) is sent to
-    /// redis as it is, unchecked.
+    /// A cursor without [`TOKEN_FLAG`] (one from before tokens) is sent to
+    /// redis as it is, unchecked. A redis cursor too large to carry, which no
+    /// redis keyspace produces, fails the page rather than being handed out
+    /// bare.
     ///
     /// A page whose connection dropped under it is retried once like any read.
     /// For a first page that is a fresh scan; for a later one the retry
@@ -549,17 +619,7 @@ impl Connection {
         let mut retried = false;
         loop {
             let (mut conn, generation) = self.get().await?;
-            let cursor = if token & TOKEN_FLAG == 0 {
-                token
-            } else if (token >> CURSOR_BITS) & GENERATION_MASK == generation & GENERATION_MASK {
-                token & CURSOR_MASK
-            } else {
-                return Err(redis::RedisError::from((
-                    redis::ErrorKind::ClientError,
-                    "list-keys cursor is from before a reconnect",
-                    "the server may have changed; list again from the first page".to_string(),
-                )));
-            };
+            let cursor = decode_cursor(token, generation)?;
             let scan = redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
@@ -569,15 +629,11 @@ impl Connection {
                 .clone();
             match scan.query_async::<(u64, Vec<K>)>(&mut conn).await {
                 Ok((next, keys)) => {
-                    let next = if next == 0 || next > CURSOR_MASK {
-                        next
-                    } else {
-                        TOKEN_FLAG | ((generation & GENERATION_MASK) << CURSOR_BITS) | next
-                    };
-                    return Ok((next, keys));
+                    self.mark_reply();
+                    return Ok((encode_cursor(generation, next)?, keys));
                 }
                 Err(e) => {
-                    if e.is_unrecoverable_error() {
+                    if proves_connection_unusable(&e) {
                         self.discard(generation);
                     }
                     if !retried && is_dropped_connection(&e) {
@@ -602,6 +658,77 @@ impl Connection {
 /// means the server is slow, not gone, and retrying would double the wait.
 pub(crate) fn is_dropped_connection(e: &redis::RedisError) -> bool {
     e.is_io_error() && e.is_unrecoverable_error() && !e.is_connection_refusal()
+}
+
+/// Whether `e` shows the connection cannot serve this backend any more, so the
+/// next command should redial.
+///
+/// That is every error redis calls unrecoverable, plus `READONLY`: after a
+/// failover that demotes the old primary in place, the connection stays open
+/// but every write on it fails, and only a redial reaches the new primary.
+/// A `READONLY` write is still not retried: it is a write.
+fn proves_connection_unusable(e: &redis::RedisError) -> bool {
+    e.is_unrecoverable_error() || e.kind() == redis::ErrorKind::ReadOnly
+}
+
+/// A copy of a failed redial's error for the callers that waited on it
+/// (`RedisError` is not `Clone`). An I/O error stays one, of a kind that
+/// answers `is_connection_refusal`, `is_timeout` and `is_connection_dropped`
+/// as the original does; anything else keeps its kind and text.
+fn copy_redial_error(e: &redis::RedisError) -> redis::RedisError {
+    use std::io::{Error, ErrorKind};
+
+    let io_kind = if e.is_connection_refusal() {
+        Some(ErrorKind::ConnectionRefused)
+    } else if e.is_timeout() {
+        Some(ErrorKind::TimedOut)
+    } else if e.is_connection_dropped() {
+        Some(ErrorKind::BrokenPipe)
+    } else if e.is_io_error() {
+        Some(ErrorKind::Other)
+    } else {
+        None
+    };
+    match io_kind {
+        Some(kind) => Error::new(kind, format!("redis redial failed: {e}")).into(),
+        None => redis::RedisError::from((e.kind(), "redis redial failed", e.to_string())),
+    }
+}
+
+/// The list-keys cursor handed out for redis `SCAN` cursor `next`, issued on
+/// connection `generation`. See [`TOKEN_FLAG`].
+///
+/// A redis cursor too large to carry is refused rather than handed out bare:
+/// a bare cursor with [`TOKEN_FLAG`] set would be read back as a token.
+fn encode_cursor(generation: u64, next: u64) -> redis::RedisResult<u64> {
+    if next == 0 {
+        return Ok(0);
+    }
+    if next > CURSOR_MASK {
+        return Err(redis::RedisError::from((
+            redis::ErrorKind::ClientError,
+            "redis returned a SCAN cursor too large to carry",
+            format!("cursor {next} exceeds {CURSOR_BITS} bits"),
+        )));
+    }
+    Ok(TOKEN_FLAG | ((generation & GENERATION_MASK) << CURSOR_BITS) | next)
+}
+
+/// The redis `SCAN` cursor to send for list-keys cursor `token` on connection
+/// `generation`. A token from another generation is refused; a cursor without
+/// [`TOKEN_FLAG`] (from before tokens) is sent as it is.
+fn decode_cursor(token: u64, generation: u64) -> redis::RedisResult<u64> {
+    if token & TOKEN_FLAG == 0 {
+        return Ok(token);
+    }
+    if (token >> CURSOR_BITS) & GENERATION_MASK != generation & GENERATION_MASK {
+        return Err(redis::RedisError::from((
+            redis::ErrorKind::ClientError,
+            "list-keys cursor is from before a reconnect",
+            "the server may have changed; list again from the first page".to_string(),
+        )));
+    }
+    Ok(token & CURSOR_MASK)
 }
 
 // Implementation for the store interface

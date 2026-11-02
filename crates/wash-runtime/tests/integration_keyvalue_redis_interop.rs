@@ -27,7 +27,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -187,6 +187,8 @@ struct RedisProxy {
     url: String,
     upstream: Arc<AtomicU16>,
     generation: watch::Sender<u64>,
+    /// Connections the proxy is carrying right now.
+    live: Arc<AtomicUsize>,
 }
 
 impl RedisProxy {
@@ -194,20 +196,25 @@ impl RedisProxy {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("redis://{}", listener.local_addr()?);
         let upstream = Arc::new(AtomicU16::new(upstream_port));
+        let live = Arc::new(AtomicUsize::new(0));
         let (generation, _) = watch::channel(0u64);
-        let (target, cuts) = (upstream.clone(), generation.clone());
+        let (target, cuts, carried) = (upstream.clone(), generation.clone(), live.clone());
         tokio::spawn(async move {
             while let Ok((mut client, _)) = listener.accept().await {
                 let port = target.load(Ordering::SeqCst);
                 let mut cut = cuts.subscribe();
+                let carried = carried.clone();
+                carried.fetch_add(1, Ordering::SeqCst);
                 tokio::spawn(async move {
-                    let Ok(mut server) = TcpStream::connect(("127.0.0.1", port)).await else {
-                        return;
-                    };
-                    tokio::select! {
-                        _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
-                        _ = cut.changed() => {}
+                    if let Ok(mut server) = TcpStream::connect(("127.0.0.1", port)).await {
+                        tokio::select! {
+                            _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {}
+                            _ = cut.changed() => {}
+                        }
                     }
+                    // Both sockets are dropped by now.
+                    drop(client);
+                    carried.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         });
@@ -215,11 +222,17 @@ impl RedisProxy {
             url,
             upstream,
             generation,
+            live,
         })
     }
 
-    fn cut(&self) {
+    /// Drop every connection the proxy carries, and wait until each is
+    /// closed, so nothing sent afterwards on one of them reaches redis.
+    async fn cut(&self) {
         self.generation.send_modify(|g| *g += 1);
+        while self.live.load(Ordering::SeqCst) > 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 
     fn point_at(&self, port: u16) {
@@ -284,7 +297,7 @@ async fn ping(port: u16) -> bool {
 /// through it, and wait until the restarted server answers a fresh client.
 async fn restart_redis(redis: &ContainerAsync<GenericImage>, proxy: &RedisProxy) -> Result<()> {
     redis.stop().await?;
-    proxy.cut();
+    proxy.cut().await;
     redis.start().await?;
     proxy.point_at(wait_until_ready(redis).await?);
     Ok(())
@@ -419,6 +432,9 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
     // first attempt landed and only its reply was lost. Each write that finds
     // the connection dead surfaces the error, was not applied (the connection
     // died before it was sent), and succeeds when the caller tries again.
+    // The connection is cut at the proxy rather than by restarting redis, so
+    // each write follows the cut at once: a write after a few quiet seconds
+    // is checked with a `PING` first and would succeed.
     let raw_client = redis::Client::open(proxy.url.as_str())?;
     let check = |op: &str, r: Result<(), wash_runtime::plugin::wasi_keyvalue::StoreError>| {
         r.err()
@@ -426,7 +442,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
             .with_context(|| format!("{op} on the dropped connection is not retried"))
     };
 
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
     check("set", backend.set(BUCKET, "w", b"1".to_vec()).await)?;
     assert_eq!(raw.get::<_, Option<Vec<u8>>>("w").await?, None);
@@ -435,7 +451,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("set after the failed one: {e:?}"))?;
 
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
     let pairs = vec![
         ("w1".to_string(), b"1".to_vec()),
@@ -448,7 +464,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("set_many after the failed one: {e:?}"))?;
 
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
     check("delete", backend.delete(BUCKET, "w").await)?;
     assert_eq!(raw.exists::<_, u64>("w").await?, 1);
@@ -457,7 +473,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("delete after the failed one: {e:?}"))?;
 
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
     let keys = vec!["w1".to_string(), "w2".to_string()];
     check(
@@ -472,14 +488,14 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
     assert_eq!(raw.exists::<_, u64>(&["w1", "w2", "w"]).await?, 0);
 
     // A read on the same kind of dropped connection is retried and succeeds.
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     backend
         .get(BUCKET, "w")
         .await
         .map_err(|e| anyhow::anyhow!("a read after a restart is retried: {e:?}"))?;
 
     // increment (INCRBY)
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
     raw.set::<_, _, ()>("counter", "5").await?;
     backend
@@ -499,7 +515,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
 
     // A later SCAN page (nonzero cursor) is not replayed on a new server: its
     // cursor may skip keys there. The call that crosses the restart fails.
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
     let many: Vec<(String, String)> = (0..5_000)
         .map(|i| (format!("page-{i}"), "v".to_string()))
@@ -535,7 +551,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         }
     }
     let cursor = cursor.context("5000 keys take more than one SCAN page")?;
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     backend
         .list_keys(BUCKET, Some(cursor))
         .await
@@ -558,7 +574,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("list_keys from the start: {e:?}"))?;
     let cursor = page.cursor.context("a fresh listing pages too")?;
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     backend
         .get(BUCKET, "page-1")
         .await
@@ -588,7 +604,7 @@ async fn redis_backend_does_not_retry_a_write() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("the fresh listing continues: {e:?}"))?;
 
     // put_if_absent (SET NX)
-    restart_redis(&redis, &proxy).await?;
+    proxy.cut().await;
     let mut raw = raw_client.get_multiplexed_async_connection().await?;
     backend
         .put_if_absent(BUCKET, "fresh", b"x".to_vec())
@@ -625,7 +641,7 @@ async fn redis_backend_redials_within_its_settings_and_recovers() -> Result<()> 
     .await?;
 
     redis.stop().await?;
-    proxy.cut();
+    proxy.cut().await;
     // Eight calls at once all find the connection dead and queue for the
     // redial. They share its outcome, so together they fail after one redial
     // schedule: four attempts with pauses of 25-50, 50-100 and 100-200ms,
