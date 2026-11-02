@@ -52,6 +52,7 @@ use wasmtime_wasi_http::p3::bindings::Service;
 use crate::engine::ctx::CallerIdentity;
 use crate::engine::ctx::SharedCtx;
 use crate::engine::dispatch::{GuestJob, GuestTask, Placement};
+use crate::engine::lent_reply::LentReplies;
 use crate::host::http::ServiceHttpJob;
 #[cfg(feature = "host-component-plugins")]
 use crate::host::job_registry::JobRegistry;
@@ -148,6 +149,7 @@ impl Ingress {
                 instance: *instance,
                 rx,
                 in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                replies: Arc::default(),
             }),
             #[cfg(feature = "host-component-plugins")]
             Ingress::Capability {
@@ -195,6 +197,7 @@ impl Ingress {
                     registry,
                     replay,
                     in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    replies: Arc::default(),
                 })
             }
         }
@@ -219,6 +222,9 @@ enum PreparedIngress {
         /// [`MAX_INFLIGHT_GUEST_CALLS`]. Fresh per incarnation, like the
         /// channel beside it.
         in_flight: Arc<std::sync::atomic::AtomicUsize>,
+        /// Replies of the calls in flight, answered with the fault if the
+        /// instance traps.
+        replies: Arc<LentReplies>,
     },
     #[cfg(feature = "host-component-plugins")]
     Capability {
@@ -231,6 +237,9 @@ enum PreparedIngress {
         /// first `serve` entry (empty on re-entry after a drop flush).
         replay: Vec<LifecycleReplay>,
         in_flight: Arc<std::sync::atomic::AtomicUsize>,
+        /// Replies of the calls in flight, answered with the fault if the
+        /// plugin traps.
+        replies: Arc<LentReplies>,
     },
 }
 
@@ -244,7 +253,60 @@ enum ServeOutcome {
     FlushDrops,
 }
 
+/// What a call to a service hears when its store faults.
+const SERVICE_FAULTED: &str = "the workload's service faulted";
+
 impl PreparedIngress {
+    /// Answer the calls this ingress has in flight or queued on a store that
+    /// faulted. The channel closes first, so a call made on hearing the fault
+    /// is refused rather than queued on an incarnation that is gone. HTTP and
+    /// messaging calls in flight already answer a dropped reply.
+    fn fault(&mut self, err: &wasmtime::Error) {
+        match self {
+            PreparedIngress::Http { rx, .. } => {
+                rx.close();
+                while let Ok(job) = rx.try_recv() {
+                    let _ = job
+                        .resp_tx
+                        .send(Err(anyhow::anyhow!("{SERVICE_FAULTED}: {err:#}")));
+                }
+            }
+            PreparedIngress::Messaging { rx, .. } => {
+                rx.close();
+                while let Ok(job) = rx.try_recv() {
+                    let _ = job
+                        .result_tx
+                        .send(Err(format!("{SERVICE_FAULTED}: {err:#}")));
+                }
+            }
+            PreparedIngress::Guest { rx, replies, .. } => {
+                rx.close();
+                replies.fault(err);
+                while let Ok(job) = rx.try_recv() {
+                    job.refuse(anyhow::anyhow!("{SERVICE_FAULTED}: {err:#}"));
+                }
+            }
+            #[cfg(feature = "host-component-plugins")]
+            PreparedIngress::Capability { rx, replies, .. } => {
+                rx.close();
+                replies.fault(err);
+                while let Ok(job) = rx.try_recv() {
+                    match job {
+                        CapabilityJob::Call(call) => {
+                            let _ = call.reply.send(Err(capability::plugin_faulted()));
+                        }
+                        CapabilityJob::SecretSource(call) => {
+                            let _ = call.reply.send(Err(capability::plugin_faulted()));
+                        }
+                        CapabilityJob::DropResource { reply, .. } => {
+                            let _ = reply.send(Err(capability::plugin_faulted()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Serve inbound invocations, spawning one concurrent task per invocation on
     /// the shared instance, until the delivery channel closes ([`Shutdown`]) or a
     /// resource drop needs flushing ([`FlushDrops`]). Takes `&mut self` so the
@@ -298,6 +360,7 @@ impl PreparedIngress {
                 instance,
                 rx,
                 in_flight,
+                replies,
             } => {
                 while let Some(job) = rx.recv().await {
                     // Taking a job off the channel and spawning it is what the
@@ -320,11 +383,13 @@ impl PreparedIngress {
                     }
                     // Services are not pooled and cannot be retired.
                     let spawned = accessor.spawn(GuestServeTask {
-                        task: GuestTask {
-                            instance: *instance,
+                        task: GuestTask::new(
+                            *instance,
                             job,
-                            placement: Placement::Service,
-                        },
+                            Placement::Service,
+                            replies,
+                            SERVICE_FAULTED,
+                        ),
                         in_flight: InFlightGuard::new(Arc::clone(in_flight)),
                     });
                     if let Err(e) = spawned {
@@ -342,6 +407,7 @@ impl PreparedIngress {
                 registry,
                 replay,
                 in_flight,
+                replies,
             } => {
                 // Replay lifecycle binds before serving capability calls, and
                 // await each one's COMPLETION: a queued call from a rebound
@@ -386,6 +452,7 @@ impl PreparedIngress {
                         func_map,
                         registry,
                         in_flight,
+                        replies,
                         CapabilityCall {
                             interface,
                             func,
@@ -418,7 +485,7 @@ impl PreparedIngress {
                         }
                         CapabilityJob::Call(call) => {
                             admit_and_spawn_call(
-                                accessor, *instance, func_map, registry, in_flight, call,
+                                accessor, *instance, func_map, registry, in_flight, replies, call,
                             );
                         }
                         CapabilityJob::SecretSource(call) => {
@@ -603,7 +670,12 @@ impl PreparedTriggerDriver {
                     futures::future::join_all(prepared.iter_mut().map(|p| p.serve(accessor))).await
                 })
                 .await
-                .inspect_err(|e| crate::engine::trap_remediation::note_guest_fault(store.data(), e))
+                .inspect_err(|e| {
+                    crate::engine::trap_remediation::note_guest_fault(store.data(), e);
+                    for ingress in &mut prepared {
+                        ingress.fault(e);
+                    }
+                })
                 .context("trigger service driver exited")?;
             // Closed channels end the driver; proxy drops only pause it.
             #[cfg(feature = "host-component-plugins")]

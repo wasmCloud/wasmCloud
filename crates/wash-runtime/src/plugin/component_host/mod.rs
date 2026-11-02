@@ -1888,7 +1888,7 @@ async fn run_supervisor(
         .await
         {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => error!(id = state.id, err = %e, "trigger service driver faulted"),
+            Ok(Err(e)) => error!(id = state.id, err = ?e, "trigger service driver faulted"),
             Err(_) => error!(id = state.id, "trigger service driver panicked"),
         }
         drop(store);

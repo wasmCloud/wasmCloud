@@ -61,6 +61,7 @@ use crate::engine::abandon::{AbandonFlag, DispatchedCall};
 use crate::engine::ctx::SharedCtx;
 use crate::engine::instance_driver::{InstanceJob, InvocationSample, PoolSlot};
 use crate::engine::instance_pool::{ComponentInstance, Declined, Dispatch, InstancePool};
+use crate::engine::lent_reply::{LentReplies, LentReply};
 use crate::engine::workload::ResolvedWorkload;
 
 /// Invocations one of a service's ingresses may have queued before its driver
@@ -294,27 +295,53 @@ async fn serve_alone(
 /// retire, so it keeps serving; a guest *trap* faults its store either way, and
 /// the supervisor restarts it.
 pub(crate) struct GuestTask {
-    pub(crate) instance: Instance,
-    pub(crate) job: GuestJob,
-    pub(crate) placement: Placement,
+    instance: Instance,
+    call: Box<dyn GuestCall>,
+    reply: LentReply<anyhow::Result<()>>,
+    attributes: Arc<[opentelemetry::KeyValue]>,
+    control: SettleOnDrop,
+    placement: Placement,
 }
 
-impl AccessorTask<SharedCtx> for GuestTask {
-    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
-        let GuestTask {
-            instance,
-            job,
-            placement,
-        } = self;
+impl GuestTask {
+    /// Serve `job` on `instance`, its reply lent from the store's `replies`
+    /// and answered with `faulted` if the store faults first.
+    pub(crate) fn new(
+        instance: Instance,
+        job: GuestJob,
+        placement: Placement,
+        replies: &Arc<LentReplies>,
+        faulted: &'static str,
+    ) -> Self {
         let GuestJob {
             call,
             reply,
             attributes,
             control,
         } = job;
+        Self {
+            instance,
+            call,
+            reply: replies.lend(reply, move |err| Err(anyhow::anyhow!("{faulted}: {err:#}"))),
+            attributes,
+            control,
+            placement,
+        }
+    }
+}
+
+impl AccessorTask<SharedCtx> for GuestTask {
+    async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
+        let GuestTask {
+            instance,
+            call,
+            reply,
+            attributes,
+            control,
+            placement,
+        } = self;
         let outcome = serve(accessor, instance, call, attributes, &control.0, placement).await;
-        // A dropped dispatcher closes the channel.
-        let _ = reply.send(outcome);
+        reply.send(outcome);
         Ok(())
     }
 }

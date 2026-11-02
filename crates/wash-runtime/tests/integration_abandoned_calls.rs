@@ -601,11 +601,14 @@ async fn an_abandoned_message_delivery_traps_and_restarts_the_service() -> Resul
     );
 
     // The supervisor restarts the service: a fresh instance counts from one.
+    // A delivery queued on the wedged incarnation is answered with its fault.
     let echoed = eventually(SPIN_BOUND, async || {
-        deliver(&ingress, &workload_id, "after")
+        let echoed = deliver(&ingress, &workload_id, "after")
             .await?
             .err()
-            .context("handler echoes via the err arm")
+            .context("handler echoes via the err arm")?;
+        anyhow::ensure!(echoed.starts_with("other: "), "not an echo: {echoed}");
+        Ok(echoed)
     })
     .await?;
     assert_eq!(

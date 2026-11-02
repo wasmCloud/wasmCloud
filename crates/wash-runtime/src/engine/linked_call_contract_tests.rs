@@ -884,12 +884,12 @@ async fn ephemeral_calls_run_each_call_on_a_fresh_instance() -> anyhow::Result<(
 }
 
 #[tokio::test]
-async fn warm_linked_calls_reuse_an_instance_until_the_pool_closes() -> anyhow::Result<()> {
+async fn warm_linked_calls_reuse_an_instance_until_it_traps() -> anyhow::Result<()> {
     let callee = Callee::new(CALLEE, warm())?;
     let call = callee
         .ephemeral(EphemeralCallMode::PlainValue, Default::default())
         .await?;
-    for expected in 1..=3 {
+    for expected in 1..=2 {
         let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
         assert_eq!(
             calls,
@@ -897,6 +897,24 @@ async fn warm_linked_calls_reuse_an_instance_until_the_pool_closes() -> anyhow::
             "a warm instance keeps its state"
         );
     }
+    let error = ephemeral_invoke(&callee, &call, "trap", &[], 0)
+        .await
+        .expect_err("a trapping callee must fail the call");
+    assert!(format!("{error:?}").contains("unreachable"), "{error:?}");
+    let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
+    assert_eq!(
+        calls,
+        [Val::U32(1)],
+        "the trapped instance must not serve again"
+    );
+
+    let error = ephemeral_invoke(&callee, &call, "iface", &[Val::U32(1)], 1)
+        .await
+        .expect_err("an export that is no function must fail the call");
+    assert!(
+        format!("{error:#}").contains("function not found for contract:callee/api.iface"),
+        "{error:#}"
+    );
     let sum = ephemeral_invoke(&callee, &call, "add-one", &[Val::U32(1)], 1).await?;
     assert_eq!(sum, [Val::U32(2)]);
 
@@ -942,47 +960,16 @@ async fn ephemeral_calls_report_guest_failures_to_the_caller() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn a_warm_instance_that_traps_is_replaced() -> anyhow::Result<()> {
-    let callee = Callee::new(CALLEE, warm())?;
-    let call = callee
-        .ephemeral(EphemeralCallMode::PlainValue, Default::default())
-        .await?;
-    for expected in 1..=2 {
-        let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
-        assert_eq!(calls, [Val::U32(expected)]);
-    }
-    ephemeral_invoke(&callee, &call, "trap", &[], 0)
-        .await
-        .expect_err("a trapping callee must fail the call");
-    let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
-    assert_eq!(
-        calls,
-        [Val::U32(1)],
-        "the trapped instance must not serve again"
-    );
-
-    let error = ephemeral_invoke(&callee, &call, "iface", &[Val::U32(1)], 1)
-        .await
-        .expect_err("an export that is no function must fail the call");
-    assert!(
-        format!("{error:#}").contains("function not found for contract:callee/api.iface"),
-        "{error:#}"
-    );
-    let sum = ephemeral_invoke(&callee, &call, "add-one", &[Val::U32(1)], 1).await?;
-    assert_eq!(sum, [Val::U32(2)]);
-    Ok(())
-}
-
-#[tokio::test]
 async fn ephemeral_calls_report_a_callee_that_will_not_instantiate() -> anyhow::Result<()> {
     let ephemeral = Callee::new(UNSTARTABLE, instance_pool::InstancePolicy::Ephemeral)?;
     let pooled = Callee::new(UNSTARTABLE, warm())?;
+    let [plain, relocated] = ephemeral.modes("add-one");
     // Only a plain call consults the pool, which builds the instance itself.
-    let cases = ephemeral
-        .modes("add-one")
-        .map(|mode| (&ephemeral, mode))
-        .into_iter()
-        .chain([(&pooled, EphemeralCallMode::PlainValue)]);
+    let cases = [
+        (&ephemeral, plain),
+        (&ephemeral, relocated),
+        (&pooled, EphemeralCallMode::PlainValue),
+    ];
     for (callee, mode) in cases {
         let call = callee.ephemeral(mode, Default::default()).await?;
         let error = ephemeral_invoke(callee, &call, "add-one", &[Val::U32(1)], 1)
@@ -1125,64 +1112,41 @@ async fn shared_store_async_calls_reach_the_callee_in_the_callers_store() -> any
 #[cfg(feature = "host-component-plugins")]
 mod service {
     use super::*;
-    use crate::engine::dispatch::{GuestJob, GuestTask, Placement, ServiceCalls};
-    use wasmtime::component::AccessorTask;
+    use crate::engine::dispatch::ServiceCalls;
+    use crate::host::trigger_service::{CliRunError, Ingress, run_trigger_driver};
 
-    /// The service's running instance, in its own store.
-    async fn start_service(
-        engine: &crate::engine::Engine,
-        pre: &InstancePre<SharedCtx>,
-    ) -> (wasmtime::Store<SharedCtx>, wasmtime::component::Instance) {
-        let mut store = new_store_from_templates(
-            engine.inner(),
-            engine.stream_payloads(),
-            &crate::host::HostRef::detached(),
-            &template(engine, "service"),
-            &[],
-            &[],
-            true,
-        )
-        .await
-        .expect("service store");
-        let instance = pre
-            .instantiate_async(&mut store)
-            .await
-            .expect("service instance");
-        (store, instance)
-    }
-
-    /// Serve every dispatched call on one running instance, restarting it when
-    /// a call faults its store, as the service supervisor does. Counts the
-    /// calls delivered.
+    /// Run the service's driver on `calls`, with a fresh incarnation each time
+    /// one faults. The watch counts incarnations whose ingress is in place.
     fn serve(
         engine: crate::engine::Engine,
         pre: InstancePre<SharedCtx>,
-        mut rx: tokio::sync::mpsc::Receiver<GuestJob>,
-    ) -> (AbortOnDropHandle<()>, Arc<std::sync::atomic::AtomicUsize>) {
-        let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = Arc::clone(&delivered);
+        calls: Arc<ServiceCalls>,
+    ) -> (AbortOnDropHandle<()>, tokio::sync::watch::Receiver<usize>) {
+        let (started, incarnations) = tokio::sync::watch::channel(0);
         let server = AbortOnDropHandle::new(tokio::spawn(async move {
-            let mut running = None;
-            while let Some(job) = rx.recv().await {
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let (mut store, instance) = match running.take() {
-                    Some(running) => running,
-                    None => start_service(&engine, &pre).await,
-                };
-                let task = GuestTask {
-                    instance,
-                    job,
-                    placement: Placement::Service,
-                };
-                let ran = store
-                    .run_concurrent(async |accessor| task.run(accessor).await)
-                    .await;
-                if ran.is_ok() {
-                    running = Some((store, instance));
-                }
+            while let Some(rx) = calls.next_incarnation() {
+                started.send_modify(|n| *n += 1);
+                let mut store = new_store_from_templates(
+                    engine.inner(),
+                    engine.stream_payloads(),
+                    &crate::host::HostRef::detached(),
+                    &template(&engine, "service"),
+                    &[],
+                    &[],
+                    true,
+                )
+                .await
+                .expect("service store");
+                let _ = run_trigger_driver(
+                    &mut store,
+                    &pre,
+                    vec![Ingress::Guest(rx)],
+                    CliRunError::Logged,
+                )
+                .await;
             }
         }));
-        (server, delivered)
+        (server, incarnations)
     }
 
     /// A service call carrying `signature`'s types.
@@ -1206,12 +1170,7 @@ mod service {
         let calls = Arc::new(ServiceCalls::default());
         let _claim = calls.claim()?;
         let pre = callee.components.read().await["callee"].pre_instantiate_ref()?;
-        let (_server, delivered) = serve(
-            callee.engine.clone(),
-            pre,
-            calls.next_incarnation().expect("claimed"),
-        );
-        let delivered = || delivered.load(std::sync::atomic::Ordering::SeqCst);
+        let (_server, mut incarnations) = serve(callee.engine.clone(), pre, Arc::clone(&calls));
         let mut caller = callee.store("caller", Linked::No).await?;
         let service = |export: &str, signature: &str, plain: bool| {
             callee.invocation(
@@ -1231,28 +1190,6 @@ mod service {
                 .await?,
                 [Val::U32(42)]
             );
-            for expected in 1..=2 {
-                assert_eq!(
-                    invoke(&mut caller, &service("bump", "bump", plain), &[], 1).await?,
-                    [Val::U32(expected)],
-                    "the service keeps its state between calls"
-                );
-            }
-
-            let before = delivered();
-            invoke(&mut caller, &service("trap", "trap", plain), &[], 0)
-                .await
-                .expect_err("a trapping service export must fail the call");
-            assert_eq!(
-                delivered(),
-                before + 1,
-                "the trapping call reached the service"
-            );
-            assert_eq!(
-                invoke(&mut caller, &service("bump", "bump", plain), &[], 1).await?,
-                [Val::U32(1)],
-                "a trap restarts the service"
-            );
 
             // Wired as the importer declared it, which the service's export is not.
             let error = invoke(
@@ -1268,10 +1205,26 @@ mod service {
                     .contains("function not found for service export contract:callee/api.iface"),
                 "{error:#}"
             );
-            // Restart the service so the next round counts from zero again.
-            invoke(&mut caller, &service("trap", "trap", plain), &[], 0)
+
+            let restarted = *incarnations.borrow() + 1;
+            let error = invoke(&mut caller, &service("trap", "trap", plain), &[], 0)
                 .await
                 .expect_err("a trapping service export must fail the call");
+            let rendered = format!("{error:#}");
+            assert!(
+                rendered.contains("contract:callee/api.trap") && rendered.contains("unreachable"),
+                "{rendered}"
+            );
+            // The trap ended the incarnation; wait for the next one's ingress.
+            // Its state starts over, even after the previous round's calls.
+            incarnations.wait_for(|n| *n >= restarted).await?;
+            for expected in 1..=2 {
+                assert_eq!(
+                    invoke(&mut caller, &service("bump", "bump", plain), &[], 1).await?,
+                    [Val::U32(expected)],
+                    "the service keeps its state between calls"
+                );
+            }
         }
         Ok(())
     }

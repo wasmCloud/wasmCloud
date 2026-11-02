@@ -42,7 +42,7 @@ use crate::engine::abandon::AbandonedCallPolicy;
 #[cfg(feature = "wasi-tls")]
 use crate::engine::ctx::SharedTlsProvider;
 use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxGuard};
-use crate::engine::instance_driver::{InstanceJob, LinkedJob};
+use crate::engine::instance_driver::{InstanceJob, LinkedCall, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::stream_pump::Done;
@@ -877,14 +877,16 @@ async fn invoke_ephemeral_plain(
             crate::timeouts::ephemeral_call(),
         );
         let job = InstanceJob::Linked(Box::new(LinkedJob {
-            func_idx: inv.func_idx,
-            params: params.to_vec(),
-            results_len: results.len(),
-            import_name: inv.import_name.clone(),
-            export_name: inv.export_name.clone(),
+            call: LinkedCall {
+                func_idx: inv.func_idx,
+                params: params.to_vec(),
+                results_len: results.len(),
+                import_name: inv.import_name.clone(),
+                export_name: inv.export_name.clone(),
+                abandoned: call.flag(),
+                attributes: Arc::clone(&attributes),
+            },
             reply,
-            abandoned: call.flag(),
-            attributes: Arc::clone(&attributes),
         }));
         // The label belongs to store creation alone: a component that will not
         // instantiate fails inside `offer_or_install` too, and reporting that as
@@ -923,7 +925,7 @@ async fn invoke_ephemeral_plain(
                 );
                 reclaimed = declined.instance;
                 if let InstanceJob::Linked(job) = declined.job {
-                    declined_params = Some(job.params);
+                    declined_params = Some(job.call.params);
                 }
             }
         }
