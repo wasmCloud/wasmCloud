@@ -28,8 +28,9 @@ import (
 )
 
 const (
+	workloadDaemonSetKind                 = "WorkloadDaemonSet"
 	workloadDaemonSetReconcileInterval    = 1 * time.Minute
-	workloadDaemonSetNameIndex            = "workload.daemonset.name"
+	workloadDaemonSetOwnerIndex           = "workload.daemonset.owner"
 	workloadDaemonSetGenerationAnnotation = "runtime.wasmcloud.dev/workload-daemonset-generation"
 	// workloadDaemonSetNameAnnotation gives the host a workload name that is
 	// stable across Hosts and rollouts.
@@ -80,23 +81,20 @@ func (h *daemonSetHost) readyCurrent() int32 {
 }
 
 func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, daemonSet *runtimev1alpha1.WorkloadDaemonSet) error {
-	// The garbage collector is removing or orphaning this DaemonSet's Workloads.
-	if !daemonSet.DeletionTimestamp.IsZero() {
-		return condition.ErrNoop()
-	}
-
-	if !daemonSet.Status.AllTrue(runtimev1alpha1.WorkloadDaemonSetConditionArtifact) {
-		return condition.ErrStatusUnknown(fmt.Errorf("artifacts not ready"))
-	}
+	// The garbage collector is removing or orphaning this DaemonSet's Workloads,
+	// so the pass only reports what is left. The Artifacts behind the template
+	// may be gone too, and with nothing left to roll no instance is outdated.
+	deleting := !daemonSet.DeletionTimestamp.IsZero()
 
 	template := daemonSet.Spec.Template.DeepCopy()
-	if err := resolveArtifacts(ctx, r.Client, daemonSet.Namespace, template, daemonSet.Spec.Artifacts); err != nil {
-		return err
+	var templateHash string
+	if !deleting {
+		var err error
+		template, templateHash, err = r.resolveTemplate(ctx, daemonSet)
+		if err != nil {
+			return err
+		}
 	}
-	if daemonSet.Spec.Kubernetes != nil {
-		template.Spec.Kubernetes = daemonSet.Spec.Kubernetes.DeepCopy()
-	}
-	templateHash := template.Hash()
 
 	readySince, retained, err := r.matchingHosts(ctx, daemonSet.Namespace, &template.Spec)
 	if err != nil {
@@ -107,22 +105,29 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	workloads := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, workloads,
 		client.InNamespace(daemonSet.Namespace),
-		client.MatchingFields{workloadDaemonSetNameIndex: daemonSet.Name},
+		client.MatchingFields{workloadDaemonSetOwnerIndex: string(daemonSet.UID)},
 	); err != nil {
 		return err
 	}
-	orphans, err := r.adoptOrphans(ctx, daemonSet)
-	if err != nil {
-		return err
+
+	// Names still in use, including by Workloads being deleted.
+	taken := make(map[string]bool, len(workloads.Items))
+
+	if !deleting {
+		orphans, held, err := r.adoptOrphans(ctx, daemonSet)
+		if err != nil {
+			return err
+		}
+		workloads.Items = append(workloads.Items, orphans...)
+		for _, name := range held {
+			taken[name] = true
+		}
 	}
-	workloads.Items = append(workloads.Items, orphans...)
 
 	hosts := make(map[string]*daemonSetHost, len(desired))
 	for hostID, since := range readySince {
 		hosts[hostID] = &daemonSetHost{readySince: since}
 	}
-	// Names still in use, including by Workloads being deleted.
-	taken := make(map[string]bool, len(workloads.Items))
 	for i := range workloads.Items {
 		workload := &workloads.Items[i]
 		taken[workload.Name] = true
@@ -131,7 +136,7 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 		}
 		host, ok := hosts[workload.Spec.HostID]
 		if !ok {
-			if retained[workload.Spec.HostID] {
+			if deleting || retained[workload.Spec.HostID] {
 				continue
 			}
 			// The host left or stopped matching. Its instances go with it and
@@ -141,7 +146,7 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 			}
 			continue
 		}
-		if workload.Annotations[workloadDaemonSetGenerationAnnotation] == templateHash {
+		if deleting || workload.Annotations[workloadDaemonSetGenerationAnnotation] == templateHash {
 			host.current = append(host.current, workload)
 		} else {
 			host.outdated = append(host.outdated, workload)
@@ -152,14 +157,53 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 	if daemonSet.Spec.ReplicasPerHost != nil {
 		perHost = *daemonSet.Spec.ReplicasPerHost
 	}
+
+	// Report what this pass leaves behind, not what it started from.
+	defer r.setScheduleStatus(ctx, daemonSet, desired, hosts, perHost)
+
+	if deleting {
+		return condition.ErrNoop()
+	}
+	return r.syncHosts(ctx, daemonSet, template, templateHash, desired, hosts, perHost, taken)
+}
+
+// resolveTemplate returns the DaemonSet's template with its Artifacts resolved,
+// and the hash of the result.
+func (r *WorkloadDaemonSetReconciler) resolveTemplate(
+	ctx context.Context,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+) (*runtimev1alpha1.WorkloadReplicaTemplate, string, error) {
+	if !daemonSet.Status.AllTrue(runtimev1alpha1.WorkloadDaemonSetConditionArtifact) {
+		return nil, "", condition.ErrStatusUnknown(fmt.Errorf("artifacts not ready"))
+	}
+
+	template := daemonSet.Spec.Template.DeepCopy()
+	if err := resolveArtifacts(ctx, r.Client, daemonSet.Namespace, template, daemonSet.Spec.Artifacts); err != nil {
+		return nil, "", err
+	}
+	if daemonSet.Spec.Kubernetes != nil {
+		template.Spec.Kubernetes = daemonSet.Spec.Kubernetes.DeepCopy()
+	}
+	return template, template.Hash(), nil
+}
+
+// syncHosts brings every desired Host to the current template, respecting the
+// DaemonSet's deploy policy and how many hosts may update at once.
+func (r *WorkloadDaemonSetReconciler) syncHosts(
+	ctx context.Context,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+	template *runtimev1alpha1.WorkloadReplicaTemplate,
+	templateHash string,
+	desired []string,
+	hosts map[string]*daemonSetHost,
+	perHost int32,
+	taken map[string]bool,
+) error {
 	maxConcurrentHosts := 1
 	if daemonSet.Spec.MaxConcurrentHosts != nil {
 		maxConcurrentHosts = int(*daemonSet.Spec.MaxConcurrentHosts)
 	}
 	recreate := daemonSet.Spec.DeployPolicy == runtimev1alpha1.WorkloadDeployPolicyRecreate
-
-	// Report what this pass leaves behind, not what it started from.
-	defer r.setScheduleStatus(ctx, daemonSet, desired, hosts, perHost)
 
 	// A host is mid-update while it runs both templates and the new
 	// instances are not all up yet; one finishing this pass frees its slot.
@@ -170,8 +214,16 @@ func (r *WorkloadDaemonSetReconciler) reconcileSchedule(ctx context.Context, dae
 		}
 	}
 
+	confirmed := false
 	for _, hostID := range desired {
 		host := hosts[hostID]
+
+		if !confirmed && len(host.current) < int(perHost) {
+			if err := r.confirmNotDeleted(ctx, daemonSet); err != nil {
+				return err
+			}
+			confirmed = true
+		}
 
 		if len(host.outdated) > 0 {
 			switch {
@@ -407,8 +459,9 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 }
 
 // existingInstance resolves a create that hit an existing name. It reads past
-// the cache, which may not hold this DaemonSet's own create yet. Anything this
-// DaemonSet doesn't control is holding the slot, which is an error.
+// the cache, which may not hold this DaemonSet's own create yet, or an instance
+// the next pass would adopt or leave for the garbage collector. Anything else
+// this DaemonSet doesn't control is holding the slot, which is an error.
 func (r *WorkloadDaemonSetReconciler) existingInstance(
 	ctx context.Context,
 	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
@@ -418,72 +471,110 @@ func (r *WorkloadDaemonSetReconciler) existingInstance(
 	if err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: daemonSet.Namespace, Name: name}, existing); err != nil {
 		return nil, err
 	}
-	if owner := metav1.GetControllerOf(existing); owner == nil || owner.UID != daemonSet.UID {
-		return nil, fmt.Errorf("workload %s already exists and this WorkloadDaemonSet does not control it", name)
+	owner := metav1.GetControllerOf(existing)
+	switch {
+	case metav1.IsControlledBy(existing, daemonSet):
+		return existing, nil
+	case isInstanceOf(existing, daemonSet) && (owner == nil || isPredecessor(owner, daemonSet)):
+		condition.ForceRequeue(ctx)
+		return nil, condition.ErrNoop()
 	}
-	return existing, nil
+	return nil, fmt.Errorf("workload %s already exists and this WorkloadDaemonSet does not control it", name)
+}
+
+// isInstanceOf reports whether a DaemonSet of this name started workload. The
+// label finds them, but a long name's value is shortened, so the annotation
+// decides.
+func isInstanceOf(workload *runtimev1alpha1.Workload, daemonSet *runtimev1alpha1.WorkloadDaemonSet) bool {
+	return workload.Labels[workloadDaemonSetNameLabel] == ownerLabelValue(daemonSet.Name) &&
+		workload.Annotations[workloadDaemonSetNameAnnotation] == daemonSet.Name
+}
+
+// isPredecessor reports whether owner is a deleted DaemonSet of the same name,
+// whose Workloads the garbage collector is about to remove.
+func isPredecessor(owner *metav1.OwnerReference, daemonSet *runtimev1alpha1.WorkloadDaemonSet) bool {
+	return owner.Kind == workloadDaemonSetKind && owner.Name == daemonSet.Name && owner.UID != daemonSet.UID
 }
 
 // adoptOrphans takes over the Workloads this DaemonSet started that have no
 // controller, such as those --cascade=orphan left behind, so they roll, scale
-// and leave like any other instance. It returns them for this pass. The label
-// finds them, but a long name's value is shortened, so the annotation decides.
+// and leave like any other instance. It returns them for this pass, then the
+// names that are out of its hands but still in use: orphans being deleted and
+// the instances of a predecessor.
 func (r *WorkloadDaemonSetReconciler) adoptOrphans(
 	ctx context.Context,
 	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
-) ([]runtimev1alpha1.Workload, error) {
+) ([]runtimev1alpha1.Workload, []string, error) {
 	labelled := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, labelled,
 		client.InNamespace(daemonSet.Namespace),
 		client.MatchingLabels{workloadDaemonSetNameLabel: ownerLabelValue(daemonSet.Name)},
 	); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	orphans := labelled.Items[:0]
+	var held []string
 	for i := range labelled.Items {
 		workload := &labelled.Items[i]
-		if metav1.GetControllerOf(workload) == nil && workload.Annotations[workloadDaemonSetNameAnnotation] == daemonSet.Name {
+		if !isInstanceOf(workload, daemonSet) {
+			continue
+		}
+		owner := metav1.GetControllerOf(workload)
+		switch {
+		case owner == nil && workload.DeletionTimestamp.IsZero():
 			orphans = append(orphans, *workload)
+		case owner == nil || isPredecessor(owner, daemonSet):
+			held = append(held, workload.Name)
 		}
 	}
 	if len(orphans) == 0 {
-		return nil, nil
+		return nil, held, nil
 	}
 
-	// Deleting a DaemonSet is what orphans its Workloads, and the cached copy
-	// may not show that delete yet.
-	latest := &runtimev1alpha1.WorkloadDaemonSet{}
-	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(daemonSet), latest); client.IgnoreNotFound(err) != nil {
-		return nil, err
-	}
-	if latest.UID != daemonSet.UID || !latest.DeletionTimestamp.IsZero() {
-		return nil, condition.ErrNoop()
+	if err := r.confirmNotDeleted(ctx, daemonSet); err != nil {
+		return nil, nil, err
 	}
 
 	adopted := orphans[:0]
 	for i := range orphans {
 		workload := &orphans[i]
-		if workload.DeletionTimestamp.IsZero() {
-			base := workload.DeepCopy()
-			if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
-				return nil, err
+		base := workload.DeepCopy()
+		if err := controllerutil.SetControllerReference(daemonSet, workload, r.Scheme); err != nil {
+			return nil, nil, err
+		}
+		patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
+		if err := r.Patch(ctx, workload, patch); err != nil {
+			switch {
+			case apierrors.IsNotFound(err):
+				continue
+			case apierrors.IsConflict(err):
+				// The cached copy is behind. Decide again once it catches up.
+				condition.ForceRequeue(ctx)
+				return nil, nil, condition.ErrNoop()
 			}
-			patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
-			if err := r.Patch(ctx, workload, patch); err != nil {
-				switch {
-				case apierrors.IsNotFound(err):
-					continue
-				case apierrors.IsConflict(err):
-					// The cached copy is behind. Decide again once it catches up.
-					condition.ForceRequeue(ctx)
-					return nil, condition.ErrNoop()
-				}
-				return nil, err
-			}
+			return nil, nil, err
 		}
 		adopted = append(adopted, *workload)
 	}
-	return adopted, nil
+	return adopted, held, nil
+}
+
+// confirmNotDeleted stops the pass if this DaemonSet is deleted or on its way.
+// The cached copy may not show a delete yet, and a delete is what orphans its
+// Workloads and removes its instances, so it reads past the cache before
+// anything is adopted or started.
+func (r *WorkloadDaemonSetReconciler) confirmNotDeleted(
+	ctx context.Context,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+) error {
+	latest := &runtimev1alpha1.WorkloadDaemonSet{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(daemonSet), latest); client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if latest.UID != daemonSet.UID || !latest.DeletionTimestamp.IsZero() {
+		return condition.ErrNoop()
+	}
+	return nil
 }
 
 func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads []*runtimev1alpha1.Workload) error {
@@ -496,6 +587,9 @@ func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads [
 }
 
 func (r *WorkloadDaemonSetReconciler) reconcileReady(_ context.Context, daemonSet *runtimev1alpha1.WorkloadDaemonSet) error {
+	if !daemonSet.DeletionTimestamp.IsZero() {
+		return condition.ErrStatusUnknown(fmt.Errorf("daemonset is being deleted"))
+	}
 	if !daemonSet.Status.AllTrue(
 		runtimev1alpha1.WorkloadDaemonSetConditionArtifact,
 		runtimev1alpha1.WorkloadDaemonSetConditionSchedule) {
@@ -579,9 +673,9 @@ func (r *WorkloadDaemonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadDaemonSetNameIndex, func(rawObj client.Object) []string {
-		if ownerName, ok := isOwnedByController(rawObj, daemonSetGvk); ok {
-			return []string{ownerName}
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadDaemonSetOwnerIndex, func(rawObj client.Object) []string {
+		if ownerUID, ok := controllerUID(rawObj, daemonSetGvk); ok {
+			return []string{ownerUID}
 		}
 
 		return []string{}

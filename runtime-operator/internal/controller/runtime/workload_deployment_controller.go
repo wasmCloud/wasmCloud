@@ -21,7 +21,7 @@ import (
 
 const (
 	workloadDeploymentReconcileInterval = 1 * time.Minute
-	workloadDeploymentNameIndex         = "workload.deployment.name"
+	workloadDeploymentOwnerIndex        = "workload.deployment.owner"
 	// workloadDeploymentNameLabel is stamped onto the ReplicaSets a deployment
 	// owns and exposed via the /scale subresource's selector so HPA/KEDA can
 	// identify the deployment's workloads.
@@ -96,6 +96,11 @@ func (r *WorkloadDeploymentReconciler) reconcileSync(ctx context.Context, deploy
 }
 
 func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
+	// The garbage collector is removing or orphaning this Deployment's ReplicaSets.
+	if !deployment.DeletionTimestamp.IsZero() {
+		return condition.ErrNoop()
+	}
+
 	// Nothing to do if deployment is synced
 	if deployment.Status.AllTrue(
 		runtimev1alpha1.WorkloadDeploymentConditionArtifact,
@@ -158,6 +163,15 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 }
 
 func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
+	if !deployment.DeletionTimestamp.IsZero() {
+		replicaSets, err := r.ownedReplicaSets(ctx, deployment)
+		if err != nil {
+			return err
+		}
+		r.setScaleStatus(ctx, deployment, replicaSets)
+		return condition.ErrNoop()
+	}
+
 	if !deployment.Status.AllTrue(runtimev1alpha1.WorkloadDeploymentConditionSync, runtimev1alpha1.WorkloadDeploymentConditionDeploy) {
 		return condition.ErrStatusUnknown(fmt.Errorf("deployment is not synced or not deployed"))
 	}
@@ -188,48 +202,22 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 		}
 	}
 
-	expectedReplicas := int32(0)
-	if deployment.Spec.Replicas != nil {
-		expectedReplicas = *deployment.Spec.Replicas
-	}
-	currentReplicas := int32(0)
-	readyReplicas := int32(0)
-	unavailableReplicas := int32(0)
-
 	// Delete any ReplicaSet except current & previous
-	replicaSets := &runtimev1alpha1.WorkloadReplicaSetList{}
-	if err := r.List(ctx, replicaSets, client.InNamespace(deployment.Namespace), client.MatchingFields{workloadDeploymentNameIndex: deployment.Name}); err != nil {
+	replicaSets, err := r.ownedReplicaSets(ctx, deployment)
+	if err != nil {
 		return err
 	}
-	for _, rs := range replicaSets.Items {
-		if rsStatus := rs.Status.Replicas; rsStatus != nil {
-			currentReplicas += rsStatus.Current
-			readyReplicas += rsStatus.Ready
-			unavailableReplicas += rsStatus.Unavailable
-		}
+	for i := range replicaSets {
+		rs := &replicaSets[i]
 		if rs.Name == curSetName || rs.Name == prevSetName {
 			continue
 		}
-		if err := r.Delete(ctx, &rs); err != nil {
+		if err := r.Delete(ctx, rs); err != nil {
 			return err
 		}
 	}
 
-	condition.ForceStatusUpdate(ctx)
-	deploymentStatus := &runtimev1alpha1.ReplicaSetStatus{
-		Expected:    expectedReplicas,
-		Current:     currentReplicas,
-		Ready:       readyReplicas,
-		Unavailable: unavailableReplicas,
-	}
-	deployment.Status.Replicas = deploymentStatus
-
-	// Populate the flat /scale subresource fields (statusReplicasPath +
-	// selectorpath) so HPA/KEDA can read the current replica count and a
-	// non-empty selector. Set even on the not-available path below so status
-	// reflects what the operator observed.
-	deployment.Status.CurrentReplicas = currentReplicas
-	deployment.Status.Selector = labels.Set{workloadDeploymentNameLabel: deployment.Name}.String()
+	replicas := r.setScaleStatus(ctx, deployment, replicaSets)
 
 	// Gate Scale on the active ReplicaSet actually being available, so
 	// WorkloadDeployment.Ready==True implies the underlying Workload is
@@ -238,7 +226,7 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 	if !currentReplica.Status.IsAvailable() {
 		return condition.ErrStatusUnknown(fmt.Errorf(
 			"current ReplicaSet not available yet: ready=%d unavailable=%d expected=%d",
-			readyReplicas, unavailableReplicas, expectedReplicas))
+			replicas.Ready, replicas.Unavailable, replicas.Expected))
 	}
 
 	if prevSetName != "" {
@@ -260,7 +248,48 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 	return nil
 }
 
+func (r *WorkloadDeploymentReconciler) ownedReplicaSets(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) ([]runtimev1alpha1.WorkloadReplicaSet, error) {
+	replicaSets := &runtimev1alpha1.WorkloadReplicaSetList{}
+	if err := r.List(ctx, replicaSets, client.InNamespace(deployment.Namespace), client.MatchingFields{workloadDeploymentOwnerIndex: string(deployment.UID)}); err != nil {
+		return nil, err
+	}
+	return replicaSets.Items, nil
+}
+
+// setScaleStatus reports the replicas of replicaSets on the Deployment.
+func (r *WorkloadDeploymentReconciler) setScaleStatus(
+	ctx context.Context,
+	deployment *runtimev1alpha1.WorkloadDeployment,
+	replicaSets []runtimev1alpha1.WorkloadReplicaSet,
+) *runtimev1alpha1.ReplicaSetStatus {
+	replicas := &runtimev1alpha1.ReplicaSetStatus{}
+	if deployment.Spec.Replicas != nil {
+		replicas.Expected = *deployment.Spec.Replicas
+	}
+	for i := range replicaSets {
+		if rsStatus := replicaSets[i].Status.Replicas; rsStatus != nil {
+			replicas.Current += rsStatus.Current
+			replicas.Ready += rsStatus.Ready
+			replicas.Unavailable += rsStatus.Unavailable
+		}
+	}
+
+	condition.ForceStatusUpdate(ctx)
+	deployment.Status.Replicas = replicas
+
+	// Populate the flat /scale subresource fields (statusReplicasPath +
+	// selectorpath) so HPA/KEDA can read the current replica count and a
+	// non-empty selector, even while the current ReplicaSet isn't available, so
+	// status reflects what the operator observed.
+	deployment.Status.CurrentReplicas = replicas.Current
+	deployment.Status.Selector = labels.Set{workloadDeploymentNameLabel: deployment.Name}.String()
+	return replicas
+}
+
 func (r *WorkloadDeploymentReconciler) reconcileReady(_ context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
+	if !deployment.DeletionTimestamp.IsZero() {
+		return condition.ErrStatusUnknown(fmt.Errorf("deployment is being deleted"))
+	}
 	if !deployment.Status.AllTrue(
 		runtimev1alpha1.WorkloadDeploymentConditionArtifact,
 		runtimev1alpha1.WorkloadDeploymentConditionSync,
@@ -297,9 +326,9 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentNameIndex, func(rawObj client.Object) []string {
-		if ownerName, ok := isOwnedByController(rawObj, deploymentGvk); ok {
-			return []string{ownerName}
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentOwnerIndex, func(rawObj client.Object) []string {
+		if ownerUID, ok := controllerUID(rawObj, deploymentGvk); ok {
+			return []string{ownerUID}
 		}
 
 		return []string{}

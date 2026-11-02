@@ -498,6 +498,16 @@ pub struct HostCommand {
     #[arg(long = "default-heap-memory", env = "WASH_DEFAULT_HEAP_MEMORY")]
     pub default_heap_memory: Option<String>,
 
+    /// The most bytes a guest may transfer to the host in one call
+    /// (e.g. `256MiB`).
+    ///
+    /// This is wasmtime's [`Store::set_hostcall_fuel`]. Unset, it is
+    /// wasmtime's default.
+    ///
+    /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
+    #[arg(long = "hostcall-fuel", env = "WASH_HOSTCALL_FUEL")]
+    pub hostcall_fuel: Option<String>,
+
     /// Linear memories the pooling allocator keeps room for, whatever
     /// triggers them, and with them the fiber stacks, component instances and
     /// GC heaps it admits, one count for all: a component instance of the
@@ -1223,6 +1233,18 @@ impl CliCommand for HostCommand {
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         let max_initial_guest_memory =
             parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
+        let hostcall_fuel = self
+            .hostcall_fuel
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+            .map(|raw| {
+                let bytes = hm::parse_bytes(raw)
+                    .map_err(|e| anyhow::anyhow!("invalid hostcall-fuel: {e}"))?;
+                anyhow::ensure!(bytes > 0, "hostcall-fuel must be greater than zero");
+                usize::try_from(bytes).context("hostcall-fuel does not fit in usize")
+            })
+            .transpose()?;
         anyhow::ensure!(
             self.max_http_ingress_connections != Some(0),
             "max_http_ingress_connections must be at least 1"
@@ -1369,6 +1391,9 @@ impl CliCommand for HostCommand {
             );
         }
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode);
+        if let Some(fuel) = hostcall_fuel {
+            engine_builder = engine_builder.with_hostcall_fuel(fuel);
+        }
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
                 engine_builder = engine_builder.with_max_process_memory_bytes(bytes);

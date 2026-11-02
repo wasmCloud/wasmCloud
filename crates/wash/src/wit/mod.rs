@@ -6,13 +6,10 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    io::ErrorKind,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
-use oci_client::errors::{OciDistributionError, OciErrorCode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tracing::{debug, instrument, warn};
@@ -26,6 +23,12 @@ use wasm_pkg_core::{
     lock::LockFile,
     wit::{OutputType, WIT_DEPS_DIR},
 };
+
+mod errors;
+mod retry;
+
+use errors::{SourceLacksPackage, missing_from_registry, multiple_versions_message};
+use retry::{WIT_FETCH_MAX_ATTEMPTS, is_transient_registry_fetch_error, wait_to_retry_wit_fetch};
 
 /// The default name of the lock file for wasmCloud projects
 pub const WKG_LOCK_FILE_NAME: &str = "wkg.lock";
@@ -692,20 +695,11 @@ impl WkgFetcher {
     /// The override that serves `package`: its own, or else its namespace's. A namespace's local
     /// source serves the package from wherever in that source it lives, and fails with
     /// [`SourceLacksPackage`] if it is not there, because the source replaces the registry for its
-    /// whole namespace.
+    /// whole namespace. Calls that share `sources` scan each namespace's source once.
     fn override_for(
         &self,
         package: &PackageRef,
-    ) -> Result<Option<wasm_pkg_core::manifest::Override>> {
-        self.override_from(package, &mut HashMap::new())
-    }
-
-    /// [`Self::override_for`], scanning each namespace's source once across the calls that share
-    /// `sources`.
-    fn override_from(
-        &self,
-        package: &PackageRef,
-        sources: &mut HashMap<String, BTreeMap<PackageRef, PathBuf>>,
+        sources: &mut BTreeMap<String, BTreeMap<PackageRef, PathBuf>>,
     ) -> Result<Option<wasm_pkg_core::manifest::Override>> {
         let Some(overrides) = self.wkg_config.overrides.as_ref() else {
             return Ok(None);
@@ -744,14 +738,14 @@ impl WkgFetcher {
         &self,
         mut pending: Vec<PackageRef>,
     ) -> Result<HashMap<String, wasm_pkg_core::manifest::Override>> {
-        let mut sources = HashMap::new();
+        let mut sources = BTreeMap::new();
         let mut visited = BTreeSet::new();
         let mut reached = HashMap::new();
         while let Some(package) = pending.pop() {
             if !visited.insert(package.clone()) {
                 continue;
             }
-            let Some(package_override) = self.override_from(&package, &mut sources)? else {
+            let Some(package_override) = self.override_for(&package, &mut sources)? else {
                 continue;
             };
             if let Some(path) = package_override.path.as_ref() {
@@ -960,7 +954,7 @@ impl WkgFetcher {
 
         // A `wkg.toml` override (which is also where a `wit.sources` local path lands) replaces
         // the registry for this package, so the registry is only searched when there is none.
-        let package_override = self.override_for(package)?;
+        let package_override = self.override_for(package, &mut BTreeMap::new())?;
 
         let local = package_override
             .as_ref()
@@ -1079,36 +1073,6 @@ impl WkgFetcher {
     }
 }
 
-/// A package in an overridden namespace that the namespace's local source does not hold.
-#[derive(Debug)]
-struct SourceLacksPackage {
-    package: PackageRef,
-    source: PathBuf,
-    held: Vec<PackageRef>,
-}
-
-impl std::fmt::Display for SourceLacksPackage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let held = self
-            .held
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        write!(
-            f,
-            "[{}] is not in the source override for its namespace at [{}], which holds [{held}].\n\
-             \n\
-             Add the package to that source, or give it its own entry under `wit.sources` in \
-             .wash/config.yaml (or in wkg.toml).",
-            self.package,
-            self.source.display(),
-        )
-    }
-}
-
-impl std::error::Error for SourceLacksPackage {}
-
 /// The packages a WIT file or directory names, without their version requirements.
 fn named_packages(path: &Path) -> Result<Vec<PackageRef>> {
     let (_, packages) = wasm_pkg_core::wit::get_packages(path)?;
@@ -1147,82 +1111,11 @@ fn namespace_source_packages(source: &Path, namespace: &str) -> BTreeMap<Package
     packages
 }
 
-const WIT_FETCH_MAX_ATTEMPTS: u32 = 3;
-const WIT_FETCH_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
-
-async fn wait_to_retry_wit_fetch(error: &anyhow::Error, attempt: u32) {
-    let delay = wit_fetch_retry_delay(attempt);
-    warn!(
-        attempt,
-        max_attempts = WIT_FETCH_MAX_ATTEMPTS,
-        delay_ms = delay.as_millis(),
-        error = %error,
-        "transient registry fetch failed; retrying"
-    );
-    tokio::time::sleep(delay).await;
-}
-
-fn wit_fetch_retry_delay(failed_attempt: u32) -> Duration {
-    let exponent = failed_attempt.saturating_sub(1).min(3);
-    let base = WIT_FETCH_INITIAL_BACKOFF.saturating_mul(1 << exponent);
-    base + Duration::from_millis(fastrand::u64(0..base.as_millis() as u64))
-}
-
-// Downcasts require the same dependency versions used by wasm-pkg-client and oci-client.
-const _: () = {
-    use wasm_pkg_client::oci::client::{Client, ClientConfig};
-    let _: fn(<Client as TryFrom<ClientConfig>>::Error) -> OciDistributionError = |error| error;
-    let _: fn(reqwest_oci::Error) -> OciDistributionError = OciDistributionError::RequestError;
-};
-
-fn is_transient_registry_fetch_error(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        if let Some(error) = cause.downcast_ref::<OciDistributionError>() {
-            return match error {
-                OciDistributionError::ServerError { code, .. } => {
-                    *code == 429 || (500..=599).contains(code)
-                }
-                OciDistributionError::RequestError(error) => is_transient_reqwest_error(error),
-                OciDistributionError::IoError(error) => is_transient_io_error(error),
-                OciDistributionError::RegistryError { envelope, .. } => {
-                    !envelope.errors.is_empty()
-                        && envelope
-                            .errors
-                            .iter()
-                            .all(|error| error.code == OciErrorCode::Toomanyrequests)
-                }
-                _ => false,
-            };
-        }
-
-        if let Some(error) = cause.downcast_ref::<reqwest_oci::Error>() {
-            return is_transient_reqwest_error(error);
-        }
-
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(is_transient_io_error)
-    })
-}
-
-fn is_transient_reqwest_error(error: &reqwest_oci::Error) -> bool {
-    error.is_timeout()
-        || error.is_connect()
-        || error.is_body()
-        || error
-            .status()
-            .is_some_and(|status| status.as_u16() == 429 || status.is_server_error())
-}
-
-fn is_transient_io_error(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        ErrorKind::ConnectionAborted
-            | ErrorKind::ConnectionReset
-            | ErrorKind::Interrupted
-            | ErrorKind::TimedOut
-            | ErrorKind::UnexpectedEof
-    )
+/// The version a requirement asks for, when it asks for exactly one. WIT carries a whole version
+/// or none, and that is what wkg turns into `=<version>` or `*`.
+fn requested_version(requirement: &semver::VersionReq) -> Option<String> {
+    let requirement = requirement.to_string();
+    requirement.strip_prefix('=').map(ToString::to_string)
 }
 
 /// The outcome of loading one package, which separates a package the source does not have from a
@@ -1259,157 +1152,6 @@ async fn override_dependency(
             },
         )),
     }
-}
-
-/// The message for a package the WIT names at more than one version.
-///
-/// Versions in different major.minor lines are separate packages that WIT is happy to resolve
-/// side by side, but a fetch only resolves one version per package name, so `wit/deps` ends up
-/// with one of them and the imports of the other have nothing to resolve against. Two versions
-/// within one major.minor line cannot coexist at all.
-fn multiple_versions_message(package: &PackageRef, requirements: &[semver::VersionReq]) -> String {
-    let versions: Vec<String> = requirements
-        .iter()
-        .map(|requirement| requested_version(requirement).unwrap_or_else(|| NO_VERSION.to_string()))
-        .collect();
-    let listed = versions.join(", ");
-
-    let parsed: Vec<semver::Version> = requirements
-        .iter()
-        .filter_map(|requirement| semver::Version::parse(&requested_version(requirement)?).ok())
-        .collect();
-    let same_line = parsed.iter().enumerate().any(|(i, version)| {
-        parsed
-            .iter()
-            .skip(i + 1)
-            .any(|other| (version.major, version.minor) == (other.major, other.minor))
-    });
-
-    // An unversioned reference asks for `*`, which no versioned package satisfies
-    if let Some(named) = versions.iter().find(|version| *version != NO_VERSION)
-        && versions.iter().any(|version| version == NO_VERSION)
-    {
-        return format!(
-            "The WIT names [{package}] both with and without a version: {listed}.\n\
-             \n\
-             An unversioned statement does not resolve against a versioned package. Give the \
-             unversioned one a version — [{named}] is what the rest of the WIT uses."
-        );
-    }
-
-    match same_line {
-        true => format!(
-            "The WIT names [{package}] at more than one version in the same major.minor line: \
-             {listed}.\n\
-             \n\
-             Those cannot coexist; the imports have to agree on one of them."
-        ),
-        false => format!(
-            "The WIT names [{package}] at more than one version: {listed}.\n\
-             \n\
-             A fetch resolves one version per package name, so only one of those reaches \
-             wit/deps and the imports of the others have nothing to resolve against. The imports \
-             have to agree on one version."
-        ),
-    }
-}
-
-/// What the report calls a statement that names no version
-const NO_VERSION: &str = "no version";
-
-/// The version a requirement asks for, when it asks for exactly one. WIT carries a whole version
-/// or none, and that is what wkg turns into `=<version>` or `*`.
-fn requested_version(requirement: &semver::VersionReq) -> Option<String> {
-    let requirement = requirement.to_string();
-    requirement.strip_prefix('=').map(ToString::to_string)
-}
-
-/// Check the registry for a package before it is resolved, so that a package or version the
-/// registry does not have is reported as such rather than as a resolution failure. Returns the
-/// message to show, or `None` when the requirement can be satisfied.
-async fn missing_from_registry(
-    client: &CachingClient<FileCache>,
-    package: &PackageRef,
-    version: Option<&str>,
-    requirement: &semver::VersionReq,
-) -> Result<Option<String>> {
-    let registry = client
-        .client()
-        .ok()
-        .and_then(|client| client.config().resolve_registry(package))
-        .map(|registry| format!(" in registry [{registry}]"))
-        .unwrap_or_default();
-
-    let versions = match client.list_all_versions(package).await {
-        Ok(versions) => versions,
-        Err(wasm_pkg_client::Error::PackageNotFound) => {
-            return Ok(Some(format!(
-                "Package [{package}] was not found{registry}.\n\
-                 \n\
-                 Check the package name, and that the registry serving it is configured under \
-                 `wit.sources` in .wash/config.yaml."
-            )));
-        }
-        Err(wasm_pkg_client::Error::NoRegistryForNamespace(namespace)) => {
-            return Ok(Some(format!(
-                "No registry is configured for the [{namespace}] namespace, so [{package}] cannot be looked up.\n\
-                 \n\
-                 Map the namespace to a registry under `wit.sources` in .wash/config.yaml."
-            )));
-        }
-        Err(e) => bail!("failed to list versions of [{package}]{registry}: {e}"),
-    };
-
-    let mut published: Vec<semver::Version> = versions
-        .into_iter()
-        .filter(|version| !version.yanked)
-        .map(|version| version.version)
-        .collect();
-    published.sort();
-
-    if published.iter().any(|v| requirement.matches(v)) {
-        return Ok(None);
-    }
-
-    if published.is_empty() {
-        return Ok(Some(format!(
-            "Package [{package}] has no published versions{registry}."
-        )));
-    }
-
-    let listed = published
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    Ok(Some(match version {
-        Some(version) => format!(
-            "Package [{package}] has no version [{version}]{registry}.\n\
-             \n\
-             Published versions: {listed}"
-        ),
-        // Every version being a pre-release is the one case where a package with published
-        // versions still selects none of them, and naming one is the way out
-        None if published.iter().all(|version| !version.pre.is_empty()) => {
-            let newest = published
-                .last()
-                .map(ToString::to_string)
-                .unwrap_or_default();
-            format!(
-                "Every published version of [{package}]{registry} is a pre-release, and a \
-                 pre-release is only selected when it is named.\n\
-                 \n\
-                 Published versions: {listed}\n\
-                 \n\
-                 Name one, for example [{package}@{newest}]."
-            )
-        }
-        None => format!(
-            "No version of [{package}] could be selected{registry}.\n\
-             \n\
-             Published versions: {listed}"
-        ),
-    }))
 }
 
 /// What a WIT package defines, as resolved from a registry
@@ -1713,8 +1455,7 @@ pub async fn load_wkg_config(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use oci_client::errors::{OciEnvelope, OciError};
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Duration};
 
     /// A `WkgFetcher` backed by a cache under `dir` and empty configs, for exercising the
     /// config-application methods.
@@ -1725,98 +1466,6 @@ mod tests {
             wkg_client_config: wasm_pkg_client::Config::default(),
             cache,
             cache_dir: dir.to_path_buf(),
-        }
-    }
-
-    fn registry_fetch_error(error: OciDistributionError) -> anyhow::Error {
-        wasm_pkg_client::Error::RegistryError(anyhow::Error::new(error)).into()
-    }
-
-    fn registry_envelope_error(codes: Vec<OciErrorCode>) -> anyhow::Error {
-        registry_fetch_error(OciDistributionError::RegistryError {
-            envelope: OciEnvelope {
-                errors: codes
-                    .into_iter()
-                    .map(|code| OciError {
-                        code,
-                        message: String::new(),
-                        detail: serde_json::Value::Null,
-                    })
-                    .collect(),
-            },
-            url: "https://registry.example.test".to_string(),
-        })
-    }
-
-    #[test]
-    fn wit_fetch_retries_only_transient_registry_statuses() {
-        for code in [429, 500, 503] {
-            let error = registry_fetch_error(OciDistributionError::ServerError {
-                code,
-                url: "https://registry.example.test".to_string(),
-                message: String::new(),
-            });
-            assert!(is_transient_registry_fetch_error(&error), "status {code}");
-        }
-
-        for code in [400, 401, 403, 404] {
-            let error = registry_fetch_error(OciDistributionError::ServerError {
-                code,
-                url: "https://registry.example.test".to_string(),
-                message: String::new(),
-            });
-            assert!(!is_transient_registry_fetch_error(&error), "status {code}");
-        }
-    }
-
-    #[test]
-    fn wit_fetch_retries_rate_limit_envelopes_but_not_authentication_errors() {
-        assert!(is_transient_registry_fetch_error(&registry_envelope_error(
-            vec![OciErrorCode::Toomanyrequests]
-        )));
-        assert!(!is_transient_registry_fetch_error(
-            &registry_envelope_error(vec![OciErrorCode::Unauthorized])
-        ));
-        assert!(!is_transient_registry_fetch_error(
-            &registry_envelope_error(vec![
-                OciErrorCode::Toomanyrequests,
-                OciErrorCode::Unauthorized,
-            ])
-        ));
-    }
-
-    #[test]
-    fn wit_fetch_retries_transient_io_errors() {
-        let reset = registry_fetch_error(OciDistributionError::IoError(std::io::Error::from(
-            ErrorKind::ConnectionReset,
-        )));
-        assert!(is_transient_registry_fetch_error(&reset));
-
-        let denied = registry_fetch_error(OciDistributionError::IoError(std::io::Error::from(
-            ErrorKind::PermissionDenied,
-        )));
-        assert!(!is_transient_registry_fetch_error(&denied));
-    }
-
-    #[tokio::test]
-    async fn wit_fetch_retries_truncated_response_bodies() {
-        let body = reqwest_oci::Body::wrap_stream(futures::stream::iter([
-            Ok(bytes::Bytes::from_static(b"partial")),
-            Err(std::io::Error::from(ErrorKind::ConnectionReset)),
-        ]));
-        let response = reqwest_oci::Response::from(http::Response::new(body));
-        let error = response.bytes().await.unwrap_err();
-
-        let error = anyhow::Error::new(std::io::Error::other(error));
-        assert!(is_transient_registry_fetch_error(&error));
-    }
-
-    #[test]
-    fn wit_fetch_retry_delay_is_exponential_with_bounded_jitter() {
-        for (failed_attempt, lower_ms, upper_ms) in [(1, 100, 200), (2, 200, 400), (3, 400, 800)] {
-            let delay = wit_fetch_retry_delay(failed_attempt);
-            assert!(delay >= Duration::from_millis(lower_ms));
-            assert!(delay < Duration::from_millis(upper_ms));
         }
     }
 
@@ -2480,5 +2129,4 @@ mod tests {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[path = "wit_contract_tests.rs"]
 mod contract_tests;

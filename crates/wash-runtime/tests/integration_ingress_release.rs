@@ -278,8 +278,18 @@ async fn a_dropped_host_with_a_component_plugin_releases_its_ingress() -> Result
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stopped_then_dropped_host_releases_the_plugin_its_workload_bound() -> Result<()> {
     let (ingress, plugin) = plugin_host_release(true).await?;
+    // The stop hands the routing tables to a detached release that clears them
+    // once the accept loop has exited, so the workload can outlive `drop(host)`
+    // by that long. With no connections to drain it is a few scheduler turns; a
+    // cycle never frees it, so the deadline still catches one.
+    let released = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while plugin.upgrade().is_some() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await;
     assert!(
-        plugin.upgrade().is_none(),
+        released.is_ok(),
         "the host component plugin outlived its host, so the workload that \
          bound it and everything that workload compiled are still alive too"
     );
