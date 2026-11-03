@@ -151,6 +151,7 @@ fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 
@@ -176,6 +177,7 @@ fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 
@@ -1083,6 +1085,7 @@ fn named_nats_interface(name: &str, interfaces: &[&str], config: &[(&str, &str)]
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 

@@ -101,6 +101,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -109,6 +110,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     version: Some(semver::Version::parse("0.3.0-rc.2").unwrap()),
                     config: HashMap::new(),
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
             ],
             volumes: vec![],

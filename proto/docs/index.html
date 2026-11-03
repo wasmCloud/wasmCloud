@@ -179,6 +179,14 @@
             <ul>
               
                 <li>
+                  <a href="#wasmcloud.runtime.v2.PluginSecretRef"><span class="badge">M</span>PluginSecretRef</a>
+                </li>
+              
+                <li>
+                  <a href="#wasmcloud.runtime.v2.PluginSecretRef.KeysEntry"><span class="badge">M</span>PluginSecretRef.KeysEntry</a>
+                </li>
+              
+                <li>
                   <a href="#wasmcloud.runtime.v2.WitInterface"><span class="badge">M</span>WitInterface</a>
                 </li>
               
@@ -356,6 +364,69 @@
       <p></p>
 
       
+        <h3 id="wasmcloud.runtime.v2.PluginSecretRef">PluginSecretRef</h3>
+        <p>A workload's reference to an entry of the host's plugin-backed `secrets:`</p><p>catalog.</p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>name</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>The catalog entry. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>keys</td>
+                  <td><a href="#wasmcloud.runtime.v2.PluginSecretRef.KeysEntry">PluginSecretRef.KeysEntry</a></td>
+                  <td>repeated</td>
+                  <td><p>Config key -&gt; the entry&#39;s key it takes. Empty takes every key of the
+entry under its own name. </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
+        <h3 id="wasmcloud.runtime.v2.PluginSecretRef.KeysEntry">PluginSecretRef.KeysEntry</h3>
+        <p></p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>key</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>value</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
         <h3 id="wasmcloud.runtime.v2.WitInterface">WitInterface</h3>
         <p></p>
 
@@ -409,6 +480,15 @@
 share the same namespace:package, each must have a unique name. Components
 use this name as the identifier in resource-opening functions (e.g.,
 store::open(name) for keyvalue, create-container(name) for blobstore). </p></td>
+                </tr>
+              
+                <tr>
+                  <td>plugin_secrets</td>
+                  <td><a href="#wasmcloud.runtime.v2.PluginSecretRef">PluginSecretRef</a></td>
+                  <td>repeated</td>
+                  <td><p>Entries of the host&#39;s plugin-backed `secrets:` catalog whose values this
+interface&#39;s config takes. The host resolves them when it binds the
+workload; a request never carries the values. </p></td>
                 </tr>
               
             </tbody>
@@ -603,6 +683,15 @@ operator passes via `--environment` to `wash host`. The
 runtime-operator records this verbatim on the resulting Host CRD&#39;s
 `spec.environment` field, and the scheduler uses it to enforce
 per-tenant isolation. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>features</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Start-request features this host acts on, which an older host would
+ignore. A scheduler places a workload that uses one only on a host that
+lists it. </p></td>
                 </tr>
               
             </tbody>

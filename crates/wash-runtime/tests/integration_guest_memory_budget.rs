@@ -115,6 +115,7 @@ fn grow_workload(name: &str) -> WorkloadStartRequest {
                 version: Some(semver::Version::parse("0.2.2").unwrap()),
                 config: HashMap::from([("host".to_string(), name.to_string())]),
                 name: None,
+                plugin_secrets: Vec::new(),
             }],
             volumes: vec![],
         },

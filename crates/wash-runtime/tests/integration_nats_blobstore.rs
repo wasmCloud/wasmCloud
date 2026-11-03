@@ -151,6 +151,7 @@ async fn start(
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -171,6 +172,7 @@ async fn start(
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
             ],
             volumes: vec![],

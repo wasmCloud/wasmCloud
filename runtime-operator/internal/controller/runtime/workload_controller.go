@@ -261,13 +261,23 @@ func (r *WorkloadReconciler) findFreeHost(ctx context.Context, workload *runtime
 	rand.Shuffle(len(hostList.Items), func(i, j int) {
 		hostList.Items[i], hostList.Items[j] = hostList.Items[j], hostList.Items[i]
 	})
+	features := requiredHostFeatures(&workload.Spec)
+	lacking := 0
 	for i := range hostList.Items {
 		host := &hostList.Items[i]
-		if isSchedulable(host) {
-			return host, nil
+		if !isSchedulable(host) {
+			continue
 		}
+		if missing := missingHostFeatures(host, features); len(missing) > 0 {
+			lacking++
+			continue
+		}
+		return host, nil
 	}
 
+	if lacking > 0 {
+		return nil, fmt.Errorf("no suitable host found: %d matching host(s) do not advertise %s", lacking, strings.Join(features, ", "))
+	}
 	return nil, fmt.Errorf("no suitable host found")
 }
 
@@ -408,6 +418,52 @@ func hostEnvironmentFilter(allowSharedHosts bool, namespace string, spec *runtim
 	return "", nil
 }
 
+// requiredHostFeatures lists the host features a start request for spec
+// uses, which a host that does not advertise them would ignore.
+func requiredHostFeatures(spec *runtimev1alpha1.WorkloadSpec) []string {
+	for _, hi := range spec.HostInterfaces {
+		if len(hi.PluginSecretFrom) > 0 {
+			return []string{runtimev1alpha1.HostFeaturePluginSecretRefs}
+		}
+	}
+	return nil
+}
+
+// missingHostFeatures returns the features host does not advertise.
+func missingHostFeatures(host *runtimev1alpha1.Host, features []string) []string {
+	var missing []string
+	for _, feature := range features {
+		if !host.HasFeature(feature) {
+			missing = append(missing, feature)
+		}
+	}
+	return missing
+}
+
+// pluginSecretRefs carries a host interface's PluginSecretFrom onto the wire
+// as names only: the host resolves them.
+func pluginSecretRefs(hi runtimev1alpha1.HostInterface) ([]*runtimev2.PluginSecretRef, error) {
+	if len(hi.PluginSecretFrom) == 0 {
+		return nil, nil
+	}
+	refs := make([]*runtimev2.PluginSecretRef, 0, len(hi.PluginSecretFrom))
+	for _, from := range hi.PluginSecretFrom {
+		ref := &runtimev2.PluginSecretRef{Name: from.Name}
+		if len(from.Keys) > 0 {
+			ref.Keys = make(map[string]string, len(from.Keys))
+		}
+		for _, key := range from.Keys {
+			configKey := key.ConfigKey()
+			if _, dup := ref.Keys[configKey]; dup {
+				return nil, fmt.Errorf("pluginSecretFrom %q delivers config key %q twice", from.Name, configKey)
+			}
+			ref.Keys[configKey] = key.Key
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
 // isSchedulable reports whether new workloads may be placed on host. A Host
 // being deleted stays Ready until it is gone, but its finalizer may already
 // have listed the workloads it cleans up, so one placed now would be missed.
@@ -500,6 +556,18 @@ func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, 
 	}
 }
 
+// releaseChosenHost sends a Workload back to host selection, unless it is
+// pinned. The optimistic lock keeps a stale read from undoing a later choice.
+func releaseChosenHost(ctx context.Context, workload *runtimev1alpha1.Workload) {
+	if workload.Spec.HostID != "" {
+		return
+	}
+	workload.Status.HostID = ""
+	workload.Status.Environment = ""
+	condition.ForceStatusUpdate(ctx)
+	condition.RequireOptimisticLock(ctx)
+}
+
 func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *runtimev1alpha1.Workload) error {
 	if workload.Status.HostID == "" {
 		return condition.ErrStatusUnknown(fmt.Errorf("waiting for Host Selection"))
@@ -519,13 +587,24 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	goingAway := host != nil && !host.DeletionTimestamp.IsZero()
 	if goingAway || (host == nil && workload.Spec.HostID == "") {
 		hostID := workload.Status.HostID
-		if workload.Spec.HostID == "" {
-			workload.Status.HostID = ""
-			workload.Status.Environment = ""
-			condition.ForceStatusUpdate(ctx)
-			condition.RequireOptimisticLock(ctx)
-		}
+		releaseChosenHost(ctx, workload)
 		return condition.ErrStatusUnknown(fmt.Errorf("host %s is gone or being deleted", hostID))
+	}
+	// A host that does not act on a feature the request uses would start the
+	// Workload without it. A pinned host not registered yet is waited for.
+	if features := requiredHostFeatures(&workload.Spec); len(features) > 0 {
+		if host == nil {
+			return condition.ErrStatusUnknown(fmt.Errorf("waiting for pinned host %s to report its features", workload.Status.HostID))
+		}
+		if missing := missingHostFeatures(host, features); len(missing) > 0 {
+			refusal := fmt.Errorf("host %s does not advertise %s, which this Workload uses", host.HostID, strings.Join(missing, ", "))
+			// Another host may serve it, unless this one is pinned.
+			if workload.Spec.HostID == "" {
+				releaseChosenHost(ctx, workload)
+				return condition.ErrStatusUnknown(refusal)
+			}
+			return refusal
+		}
 	}
 
 	volumes := make([]*runtimev2.Volume, 0, len(workload.Spec.Volumes))
@@ -556,13 +635,18 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		if err != nil {
 			return fmt.Errorf("materializing host interface config for %s/%s: %w", hi.Namespace, hi.Package, err)
 		}
+		secretRefs, err := pluginSecretRefs(hi)
+		if err != nil {
+			return fmt.Errorf("host interface %s/%s: %w", hi.Namespace, hi.Package, err)
+		}
 		witWorld.HostInterfaces = append(witWorld.HostInterfaces, &runtimev2.WitInterface{
-			Namespace:  hi.Namespace,
-			Package:    hi.Package,
-			Version:    hi.Version,
-			Interfaces: hi.Interfaces,
-			Config:     hiConfig,
-			Name:       hi.Name,
+			Namespace:     hi.Namespace,
+			Package:       hi.Package,
+			Version:       hi.Version,
+			Interfaces:    hi.Interfaces,
+			Config:        hiConfig,
+			Name:          hi.Name,
+			PluginSecrets: secretRefs,
 		})
 	}
 

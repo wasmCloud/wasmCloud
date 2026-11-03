@@ -208,6 +208,22 @@ impl<'de> serde::Deserialize<'de> for WorkloadGrant {
     }
 }
 
+/// A workload's reference, on one of its interfaces, to a plugin-backed
+/// `secrets:` entry: which of the entry's keys that interface's config takes.
+/// Resolved by [`resolve_workload_secrets`] when the workload binds.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginSecretFrom {
+    /// The `secrets:` entry.
+    pub name: CatalogName,
+    /// Config key -> the entry's key it takes. Empty takes every key of the
+    /// entry under its own name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keys: BTreeMap<String, String>,
+}
+
 /// What the host asks a [`HostSecretSource`] for, and on whose behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecretRequest {
@@ -450,6 +466,12 @@ struct WithheldKey {
 }
 
 impl BindErrors {
+    /// Also redact `values`, filled in from outside the declaration.
+    pub fn redacting(mut self, values: Vec<SecretValue>) -> Self {
+        self.filled.extend(values);
+        self
+    }
+
     /// `e` redacted, and naming each withheld key it quotes. The entry and
     /// grant that withheld the key go to the host's log, not into `e`.
     pub fn explain(&self, e: anyhow::Error) -> anyhow::Error {
@@ -612,35 +634,19 @@ pub(crate) async fn resolve_plugin_secrets(
         .map(|((binding, source), (plugin, keys))| {
             let plugin_id = plugin_id.as_str();
             async move {
-                let place = binding_place(plugin_id, binding);
-                let resolver = plugins
-                    .get(plugin.as_str())
-                    .and_then(|p| p.secret_source())
-                    .with_context(|| {
-                        format!(
-                            "secret `{source}` for {place}: plugin `{plugin}` serves no \
-                             secret-source"
-                        )
-                    })?;
-                let resolved = resolver
-                    .resolve(SecretRequest {
-                        consumer: SecretConsumer {
-                            plugin: plugin_id.into(),
-                            binding: binding.map(BindingName::from),
-                        },
-                        workload: workload.clone(),
-                        keys: keys.iter().map(|k| (*k).clone()).collect(),
-                    })
-                    .await
-                    .and_then(|answer| {
-                        check_answer(&keys, &answer)?;
-                        Ok(answer)
-                    })
-                    .map_err(|e| {
-                        anyhow::Error::new(e).context(format!(
-                            "secret `{source}` for {place}: plugin `{plugin}` did not resolve it"
-                        ))
-                    })?;
+                let resolved = ask_source(
+                    plugins,
+                    source,
+                    plugin,
+                    &binding_place(plugin_id, binding),
+                    SecretConsumer {
+                        plugin: plugin_id.into(),
+                        binding: binding.map(BindingName::from),
+                    },
+                    workload,
+                    &keys,
+                )
+                .await?;
                 anyhow::Ok(((binding.map(str::to_string), source.to_string()), resolved))
             }
         });
@@ -677,6 +683,239 @@ pub(crate) async fn resolve_plugin_secrets(
             withheld,
         },
     })
+}
+
+/// One call to `plugin` for the `keys` of `source`, held to the contract.
+/// `place` says in errors whom the values are for.
+async fn ask_source(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    source: &str,
+    plugin: &PluginId,
+    place: &str,
+    consumer: SecretConsumer,
+    workload: &RequestingWorkload,
+    keys: &BTreeSet<&SecretKey>,
+) -> anyhow::Result<BTreeMap<SecretKey, SecretValue>> {
+    let resolver = plugins
+        .get(plugin.as_str())
+        .and_then(|p| p.secret_source())
+        .with_context(|| {
+            format!("secret `{source}` for {place}: plugin `{plugin}` serves no secret-source")
+        })?;
+    resolver
+        .resolve(SecretRequest {
+            consumer,
+            workload: workload.clone(),
+            keys: keys.iter().map(|k| (*k).clone()).collect(),
+        })
+        .await
+        .and_then(|answer| {
+            check_answer(keys, &answer)?;
+            Ok(answer)
+        })
+        .map_err(|e| {
+            anyhow::Error::new(e).context(format!(
+                "secret `{source}` for {place}: plugin `{plugin}` did not resolve it"
+            ))
+        })
+}
+
+/// One config key a workload's reference fills: from which entry, and which
+/// of its keys.
+struct WorkloadSecretKey<'a> {
+    config_key: &'a str,
+    entry: &'a CatalogName,
+    entry_key: &'a str,
+    key: &'a SecretKey,
+}
+
+/// `interfaces` with each [`PluginSecretFrom`] on them filled into `config`
+/// as the workload's own keys, and the values filled in, for redacting the
+/// bind's errors. `plugin_id` is the plugin binding them, the consumer a
+/// source is told of. Each entry is resolved with one call per binding, keys
+/// deduplicated; the calls run concurrently.
+///
+/// # Errors
+///
+/// A reference to an entry that is not a plugin-backed entry of `catalog`, or
+/// whose grant leaves `workload` out, refused alike (the host log tells them
+/// apart and has the grant); a key the entry lacks; a config key, by `schema`'s
+/// identity for it, the interface also sets itself or takes from two
+/// references; or a source that is unavailable, refuses, or leaves a key out.
+/// Errors name the interface, entry and key, never a value.
+pub(crate) async fn resolve_workload_secrets(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    catalog: &BTreeMap<CatalogName, crate::config_source::PluginSecretSource>,
+    plugin_id: &str,
+    workload: &RequestingWorkload,
+    interfaces: HashSet<WitInterface>,
+    schema: &BindingSchema,
+) -> anyhow::Result<(HashSet<WitInterface>, Vec<SecretValue>)> {
+    if interfaces.iter().all(|i| i.plugin_secrets.is_empty()) {
+        return Ok((interfaces, Vec::new()));
+    }
+    let named = format!("{}/{}", workload.namespace, workload.name);
+    // In a total order, since entries can share an instance, so a workload
+    // that cannot bind is refused with the same reference named every time.
+    let mut ordered: Vec<WitInterface> = interfaces.into_iter().collect();
+    ordered.sort_by_cached_key(|interface| {
+        let mut names: Vec<String> = interface.interfaces.iter().cloned().collect();
+        names.sort_unstable();
+        let mut config: Vec<String> = interface.config.keys().cloned().collect();
+        config.sort_unstable();
+        (
+            interface.instance(),
+            names,
+            config,
+            interface.plugin_secrets.clone(),
+        )
+    });
+
+    let mut wanted: Vec<Vec<WorkloadSecretKey<'_>>> = Vec::with_capacity(ordered.len());
+    for interface in &ordered {
+        let mut keys = Vec::new();
+        for reference in &interface.plugin_secrets {
+            let name = &reference.name;
+            let place = format!("interface `{}` of workload `{named}`", interface.instance());
+            // One refusal for both, so a deployer cannot learn which entries
+            // exist for other workloads. The host log tells them apart.
+            let refusal = || {
+                anyhow::anyhow!(
+                    "{place} names secret `{name}`, which this host does not serve to it"
+                )
+            };
+            let entry = match catalog.get(name) {
+                Some(entry) if entry.workloads.admits(workload) => entry,
+                Some(entry) => {
+                    tracing::warn!(
+                        plugin_id,
+                        interface = %interface.instance(),
+                        secret = %name,
+                        grant = %entry.workloads,
+                        workload = %named,
+                        "refused a workload's reference to a secret outside its grant"
+                    );
+                    return Err(refusal());
+                }
+                None => {
+                    tracing::warn!(
+                        plugin_id,
+                        interface = %interface.instance(),
+                        secret = %name,
+                        workload = %named,
+                        "refused a workload's reference to a name that is not a plugin-backed \
+                         `secrets:` entry"
+                    );
+                    return Err(refusal());
+                }
+            };
+            let selected: Vec<(&str, &str)> = if reference.keys.is_empty() {
+                entry
+                    .keys
+                    .keys()
+                    .map(|k| (k.as_str(), k.as_str()))
+                    .collect()
+            } else {
+                reference
+                    .keys
+                    .iter()
+                    .map(|(config_key, entry_key)| (config_key.as_str(), entry_key.as_str()))
+                    .collect()
+            };
+            for (config_key, entry_key) in selected {
+                let Some(key) = entry.keys.get(entry_key) else {
+                    anyhow::bail!(
+                        "{place} takes `{entry_key}` from secret `{name}`, which has no such key"
+                    );
+                };
+                anyhow::ensure!(
+                    !interface
+                        .config
+                        .keys()
+                        .any(|set| schema.same_key(set, config_key)),
+                    "{place} sets `{config_key}` and also takes it from secret `{name}`"
+                );
+                if let Some(other) = keys
+                    .iter()
+                    .find(|k: &&WorkloadSecretKey<'_>| schema.same_key(k.config_key, config_key))
+                {
+                    anyhow::bail!(
+                        "{place} takes `{config_key}` from secrets `{}` and `{name}`",
+                        other.entry
+                    );
+                }
+                keys.push(WorkloadSecretKey {
+                    config_key,
+                    entry: name,
+                    entry_key,
+                    key,
+                });
+            }
+        }
+        wanted.push(keys);
+    }
+
+    let mut requests: BTreeMap<(Option<&str>, &CatalogName), BTreeSet<&SecretKey>> =
+        BTreeMap::new();
+    for (interface, keys) in ordered.iter().zip(&wanted) {
+        let binding = super::binding_of(plugin_id, interface.name.as_deref());
+        for key in keys {
+            requests
+                .entry((binding, key.entry))
+                .or_default()
+                .insert(key.key);
+        }
+    }
+    let calls = requests.into_iter().map(|((binding, name), keys)| {
+        let named = &named;
+        async move {
+            let resolved = ask_source(
+                plugins,
+                name.as_str(),
+                &catalog[name].plugin,
+                &format!("workload `{named}`"),
+                SecretConsumer {
+                    plugin: plugin_id.into(),
+                    binding: binding.map(BindingName::from),
+                },
+                workload,
+                &keys,
+            )
+            .await?;
+            anyhow::Ok(((binding, name), resolved))
+        }
+    });
+    let values: BTreeMap<(Option<&str>, &CatalogName), BTreeMap<SecretKey, SecretValue>> =
+        futures::future::try_join_all(calls)
+            .await?
+            .into_iter()
+            .collect();
+
+    let mut filled = Vec::new();
+    let mut bound = HashSet::with_capacity(ordered.len());
+    for (mut interface, keys) in ordered.iter().cloned().zip(&wanted) {
+        let binding = super::binding_of(plugin_id, interface.name.as_deref());
+        for key in keys {
+            // Requested above for this binding and entry, and `check_answer`
+            // refused any answer leaving a requested key out.
+            let value = values
+                .get(&(binding, key.entry))
+                .and_then(|resolved| resolved.get(key.key))
+                .cloned()
+                .context("a requested plugin secret has no answer")?;
+            filled.push(value.clone());
+            let text = value.into_text().with_context(|| {
+                format!(
+                    "secret `{}` key `{}` for workload `{named}` is not UTF-8 text, which \
+                     config takes",
+                    key.entry, key.entry_key
+                )
+            })?;
+            interface.config.insert(key.config_key.to_string(), text);
+        }
+        bound.insert(interface);
+    }
+    Ok((bound, filled))
 }
 
 /// Holds a source's answer to the contract: every requested key, and no
@@ -933,6 +1172,137 @@ mod tests {
                 let grant = WorkloadGrant::Only(vec![selector.clone()]).to_string();
                 assert!(!msg.contains("`app`") && !msg.contains(&grant), "{msg}");
             }
+        }
+    }
+
+    /// `app` reads `pg-url-app` under the config key `url`, granted to the
+    /// `billing` namespace.
+    fn workload_catalog() -> BTreeMap<CatalogName, crate::config_source::PluginSecretSource> {
+        BTreeMap::from([(
+            CatalogName::from("app"),
+            crate::config_source::PluginSecretSource::new(
+                "vault",
+                [("url".to_string(), SecretKey::from("pg-url-app"))],
+                WorkloadGrant::Only(vec![WorkloadSelector::namespace("billing")]),
+            ),
+        )])
+    }
+
+    fn reference(name: &str, keys: &[(&str, &str)]) -> PluginSecretFrom {
+        PluginSecretFrom {
+            name: name.into(),
+            keys: keys
+                .iter()
+                .map(|(config_key, key)| (config_key.to_string(), key.to_string()))
+                .collect(),
+        }
+    }
+
+    async fn resolve_references(
+        workload: &RequestingWorkload,
+        interfaces: HashSet<WitInterface>,
+        schema: &BindingSchema,
+    ) -> anyhow::Result<(HashSet<WitInterface>, Vec<SecretValue>)> {
+        resolve_workload_secrets(
+            &plugins(fixed()),
+            &workload_catalog(),
+            "wasmcloud-postgres",
+            workload,
+            interfaces,
+            schema,
+        )
+        .await
+    }
+
+    /// An entry that does not exist and one granted elsewhere are refused in
+    /// the same words, so a refusal does not say which entries exist.
+    #[tokio::test]
+    async fn an_unknown_and_an_ungranted_entry_are_refused_alike() {
+        let refused = |name: &str, workload: RequestingWorkload| {
+            let mut interface = postgres("app-db");
+            interface.plugin_secrets = vec![reference(name, &[])];
+            async move {
+                let err = resolve_references(
+                    &workload,
+                    HashSet::from([interface]),
+                    &BindingSchema::empty(),
+                )
+                .await
+                .expect_err("the reference must be refused");
+                format!("{err:#}")
+            }
+        };
+        let outsider = RequestingWorkload {
+            namespace: "other".to_string(),
+            ..requesting()
+        };
+        let unknown = refused("nope", outsider.clone()).await;
+        let ungranted = refused("app", outsider).await;
+        assert_eq!(unknown.replace("`nope`", "`app`"), ungranted);
+    }
+
+    /// A key the schema reads under two spellings is one key to the clash
+    /// checks, and two keys where the schema says nothing about it.
+    #[tokio::test]
+    async fn a_clash_is_judged_by_the_schema_identity_of_a_key() {
+        let identified = BindingSchema::with_host_owned_keys(["subject-allow"]);
+        let mut beside_literal = postgres("app-db");
+        beside_literal
+            .config
+            .insert("subject_allow".to_string(), "a".to_string());
+        beside_literal.plugin_secrets = vec![reference("app", &[("subject-allow", "url")])];
+
+        let err = resolve_references(
+            &requesting(),
+            HashSet::from([beside_literal.clone()]),
+            &identified,
+        )
+        .await
+        .expect_err("a literal beside a secret for one key must be refused");
+        assert!(format!("{err:#}").contains("also takes it"), "{err:#}");
+
+        let (bound, _) = resolve_references(
+            &requesting(),
+            HashSet::from([beside_literal]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .expect("two spellings are two keys to a schema that does not know them");
+        let config = &bound.iter().next().expect("one interface").config;
+        assert_eq!(config.len(), 2);
+
+        let mut from_two = postgres("app-db");
+        from_two.plugin_secrets = vec![
+            reference("app", &[("subject-allow", "url")]),
+            reference("app", &[("subject_allow", "url")]),
+        ];
+        let err = resolve_references(&requesting(), HashSet::from([from_two]), &identified)
+            .await
+            .expect_err("two references filling one key must be refused");
+        assert!(format!("{err:#}").contains("from secrets"), "{err:#}");
+    }
+
+    /// Entries sharing an instance are ordered by what else tells them apart,
+    /// so the same manifest is refused naming the same reference every time.
+    #[tokio::test]
+    async fn entries_sharing_an_instance_are_refused_in_a_stable_order() {
+        let entry = |spec: &str, name: &str| {
+            let mut interface = WitInterface::from(spec);
+            interface.name = Some("app-db".to_string());
+            interface.plugin_secrets = vec![reference(name, &[])];
+            interface
+        };
+        let query = entry("wasmcloud:postgres/query@0.2.0", "from-query");
+        let admin = entry("wasmcloud:postgres/admin@0.2.0", "from-admin");
+        for _ in 0..32 {
+            let err = resolve_references(
+                &requesting(),
+                HashSet::from([query.clone(), admin.clone()]),
+                &BindingSchema::empty(),
+            )
+            .await
+            .expect_err("neither entry exists");
+            assert!(format!("{err:#}").contains("`from-admin`"), "{err:#}");
         }
     }
 
@@ -1244,6 +1614,81 @@ mod tests {
             &plugins(serving(&secrets)),
         )
         .unwrap();
+    }
+
+    /// A source that also serves an interface may bind a reference to it, so
+    /// host start allows that setup while no entry-level secret relies on the
+    /// routing: the reference's own grant holds on whichever plugin binds it.
+    #[tokio::test]
+    async fn a_reference_keeps_its_grant_on_whichever_plugin_binds_it() {
+        let spec = "wasmcloud:secrets/store,reveal@2.1.0";
+        let serving = WitWorld {
+            imports: HashSet::from([WitInterface::from(spec)]),
+            exports: HashSet::new(),
+        };
+        let source = fixed();
+        let plugins: HashMap<&'static str, Arc<dyn HostPlugin>> = HashMap::from([
+            (
+                "vault",
+                Arc::new(Stub("vault", Some(source.clone()), serving.clone()))
+                    as Arc<dyn HostPlugin>,
+            ),
+            (
+                "wasmcloud-secrets",
+                Arc::new(Stub("wasmcloud-secrets", None, serving)) as Arc<dyn HostPlugin>,
+            ),
+        ]);
+        let schema = BindingSchema::empty().and_independent_keys();
+        validate_plugin_secrets(
+            "wasmcloud-secrets",
+            &PluginBindingSet::new("wasmcloud-secrets"),
+            &schema,
+            &plugins,
+        )
+        .unwrap();
+
+        let mut interface = WitInterface::from(spec);
+        interface.plugin_secrets = vec![reference("app", &[])];
+        let outsider = RequestingWorkload {
+            namespace: "other".to_string(),
+            ..requesting()
+        };
+        let binders = ["vault", "wasmcloud-secrets"];
+        for binder in binders {
+            let resolve = |workload: RequestingWorkload| {
+                let (plugins, interface, schema) = (&plugins, interface.clone(), &schema);
+                async move {
+                    resolve_workload_secrets(
+                        plugins,
+                        &workload_catalog(),
+                        binder,
+                        &workload,
+                        HashSet::from([interface]),
+                        schema,
+                    )
+                    .await
+                }
+            };
+            let (bound, _) = resolve(requesting()).await.expect("a granted workload");
+            let config = &bound.iter().next().expect("one interface").config;
+            assert_eq!(config["url"], "postgres://app:pw@db/app", "{binder}");
+            let err = resolve(outsider.clone())
+                .await
+                .expect_err("the grant must hold");
+            assert!(
+                format!("{err:#}").contains("does not serve to it"),
+                "{binder}: {err:#}"
+            );
+        }
+        // Only the granted binds reached the source.
+        let consumers: Vec<String> = source
+            .1
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.consumer.plugin.to_string())
+            .collect();
+        assert_eq!(consumers, binders);
     }
 
     /// A source's refusal reaches the bind failure as its typed case.

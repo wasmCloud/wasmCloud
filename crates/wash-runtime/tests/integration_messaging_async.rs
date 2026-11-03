@@ -56,6 +56,7 @@ fn messaging_interface(version: (u64, u64, u64), subscriptions: &str) -> WitInte
         version: Some(semver::Version::new(version.0, version.1, version.2)),
         config: HashMap::from([("subscriptions".to_string(), subscriptions.to_string())]),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

@@ -669,6 +669,7 @@ mod named {
             .collect(),
             version: Some(semver::Version::new(0, 2, 0)),
             name: Some(name.into()),
+            plugin_secrets: Vec::new(),
             config: HashMap::from([(
                 "url".into(),
                 format!("postgres://test:test@127.0.0.1/test-{size}?sslmode=disable"),

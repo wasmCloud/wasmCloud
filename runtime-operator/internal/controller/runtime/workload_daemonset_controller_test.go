@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
@@ -810,6 +811,40 @@ func TestDaemonSetsForHost_OnlyMatchingDaemonSets(t *testing.T) {
 	if len(requests) != 1 || requests[0].Name != testDaemonSetName {
 		t.Fatalf("expected only %s enqueued, got %v", testDaemonSetName, requests)
 	}
+}
+
+// A host that does not advertise a feature the template uses gets no
+// instances until a heartbeat advertises it, and that heartbeat requeues.
+func TestDaemonSetSchedule_SkipsHostLackingRequiredFeature(t *testing.T) {
+	ds := testDaemonSet(1)
+	ds.Spec.Template.Spec.HostInterfaces = []runtimev1alpha1.HostInterface{{
+		PluginSecretFrom: []runtimev1alpha1.PluginSecretReference{{Name: "billing-db"}},
+		Namespace:        "wasi",
+		Package:          "config",
+		Interfaces:       []string{"store"},
+	}}
+	upgraded := defaultGroupHost(dsHostA)
+	upgraded.Status.Features = []string{runtimev1alpha1.HostFeaturePluginSecretRefs}
+	older := defaultGroupHost(dsHostB)
+	r := newDaemonSetReconciler(t, ds, upgraded, older)
+	schedule(t, r, ds)
+
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 1})
+	if ds.Status.DesiredHosts != 1 {
+		t.Fatalf("expected DesiredHosts=1 with one capable host, got %d", ds.Status.DesiredHosts)
+	}
+
+	before := older.DeepCopy()
+	older.Status.Features = []string{runtimev1alpha1.HostFeaturePluginSecretRefs}
+	if !hostPlacementChanged.Update(event.UpdateEvent{ObjectOld: before, ObjectNew: older}) {
+		t.Fatal("a host newly advertising a feature must requeue its DaemonSets")
+	}
+	if err := r.Update(context.Background(), older); err != nil {
+		t.Fatalf("update host status: %v", err)
+	}
+	schedule(t, r, ds)
+
+	assertPerHost(t, workloadsByHost(t, r), map[string]int{dsHostA: 1, dsHostB: 1})
 }
 
 func TestDaemonSetSchedule_NewHostGetsInstances(t *testing.T) {

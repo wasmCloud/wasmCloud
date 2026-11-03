@@ -97,6 +97,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
                         config
                     },
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
                 WitInterface {
                     namespace: "wasi".to_string(),
@@ -111,6 +112,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
                     version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
                     config: HashMap::new(),
                     name: None,
+                    plugin_secrets: Vec::new(),
                 },
             ],
             volumes: vec![],
