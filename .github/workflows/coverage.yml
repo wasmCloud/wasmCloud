@@ -74,6 +74,14 @@ jobs:
         with:
           version: ${{ env.WASM_TOOLS_VERSION }}
       - uses: $/.github/actions/setup-rust
+        with:
+          # Threshold failures still leave reusable build dependencies.
+          cache-on-failure: "true"
+          # The coverage nightly is installed after cache restoration.
+          cache-key: coverage-${{ hashFiles('xtask/coverage-toolchain') }}
+          cache-workspaces: |
+            . -> target
+            crates/wash-runtime/tests/fixtures -> target
       - name: Install pinned coverage nightly and matching LLVM tools
         run: cargo xtask coverage setup
       - name: Install cargo-llvm-cov

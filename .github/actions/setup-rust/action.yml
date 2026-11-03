@@ -34,6 +34,18 @@ inputs:
     description: "Version of standalone wasm-component-ld to install"
     required: false
     default: "0.5.26"
+  cache-key:
+    description: "Additional Rust cache key"
+    required: false
+    default: ""
+  cache-on-failure:
+    description: "Save the Rust cache after a failed job; saves remain restricted to main"
+    required: false
+    default: "false"
+  cache-workspaces:
+    description: "Cargo workspace and target directory mappings, one per line"
+    required: false
+    default: ". -> target"
 
 runs:
   using: "composite"
@@ -110,6 +122,9 @@ runs:
         # Main builds keep refreshing the cache PRs read from, so PR runs
         # don't need to save anything themselves.
         save-if: ${{ github.ref == 'refs/heads/main' }}
+        key: ${{ inputs.cache-key }}
+        cache-on-failure: ${{ inputs.cache-on-failure }}
+        workspaces: ${{ inputs.cache-workspaces }}
         # Drop `target/` from the cache on Windows. Git's tar.exe + zstd
         # over the GHA cache API is the slow path, and target/ is the bulk
         # of what gets tarred. Windows builds will recompile deps from the
