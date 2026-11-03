@@ -413,13 +413,13 @@ mod tests {
     #[test]
     fn a_refused_url_is_quoted_unless_it_is_a_secret() {
         let policy = PluginEgressPolicy::allowing(&["cache.internal:6379"]);
-        let socket = "redis+unix:///hunter2.sock";
+        let refused = "redis://hunter2.example:6379";
 
-        let err = format!("{:#}", check(socket, &policy).unwrap_err());
+        let err = format!("{:#}", check(refused, &policy).unwrap_err());
         assert!(err.contains("hunter2"), "{err}");
 
         let mut secret = crate::wit::Config::new();
-        secret.insert("url", crate::plugin::SecretValue::new(socket));
+        secret.insert("url", crate::plugin::SecretValue::new(refused));
         let err = format!(
             "{:#}",
             RedisProvider.check_egress(&secret, &policy).unwrap_err()
