@@ -419,9 +419,9 @@ mod tests {
     use std::sync::OnceLock;
 
     /// The fake `cargo`, `git`, and `rustup`, compiled once per test run.
-    fn tool() -> Result<&'static [u8]> {
-        static TOOL: OnceLock<Result<Vec<u8>, String>> = OnceLock::new();
-        let build = || -> Result<Vec<u8>> {
+    fn tool() -> Result<PathBuf> {
+        static TOOL: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
+        let build = || -> Result<tempfile::TempDir> {
             let dir = tempfile::tempdir()?;
             let tool = dir
                 .path()
@@ -436,10 +436,15 @@ mod tests {
                 .arg(&tool)
                 .status()?;
             anyhow::ensure!(status.success(), "failed to build the test tool");
-            Ok(fs::read(tool)?)
+            Ok(dir)
         };
         TOOL.get_or_init(|| build().map_err(|error| format!("{error:#}")))
-            .as_deref()
+            .as_ref()
+            .map(|dir| {
+                dir.path()
+                    .join("tool")
+                    .with_extension(std::env::consts::EXE_EXTENSION)
+            })
             .map_err(|error| anyhow::anyhow!("{error}"))
     }
 
@@ -458,12 +463,8 @@ mod tests {
                 let path = bin
                     .join(name)
                     .with_extension(std::env::consts::EXE_EXTENSION);
-                fs::write(&path, tool()?)?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt as _;
-                    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
-                }
+                // Never open executables for writing while other tests spawn children.
+                fs::hard_link(tool()?, &path)?;
             }
             Ok(Self { root })
         }
