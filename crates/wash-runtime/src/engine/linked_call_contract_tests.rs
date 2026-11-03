@@ -960,6 +960,107 @@ async fn ephemeral_calls_report_guest_failures_to_the_caller() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn warm_instance_traps_reach_every_pending_caller() -> anyhow::Result<()> {
+    use crate::engine::instance_driver::{InstanceDriver, InstanceJob, LinkedCall, LinkedJob};
+    use crate::host::trigger_service::{BrokerMessage, MessagingJob};
+
+    for reserved in [false, true] {
+        let callee = Callee::new(CALLEE, warm())?;
+        let pre = callee.components.read().await["callee"].pre_instantiate_ref()?;
+        let mut store = callee.store("callee", Linked::No).await?;
+        let dropped = store.data().dropped.token();
+        let instance = pre.instantiate_async(&mut store).await?;
+        let job = || {
+            let (reply, rx) = tokio::sync::oneshot::channel();
+            let call = crate::engine::abandon::DispatchedCall::new(
+                "linked trap regression",
+                std::time::Duration::from_secs(5),
+            );
+            let job = InstanceJob::Linked(Box::new(LinkedJob {
+                call: LinkedCall {
+                    func_idx: callee.component.get_export_index(None, "trap").unwrap(),
+                    params: vec![],
+                    results_len: 0,
+                    import_name: "contract:callee/api".into(),
+                    export_name: "trap".into(),
+                    abandoned: call.flag(),
+                    attributes: Arc::from([]),
+                },
+                reply,
+            }));
+            (job, rx, call)
+        };
+        let (first, first_rx, first_call) = job();
+        let (second, second_rx, second_call) = job();
+        let driver = InstanceDriver::spawn(ComponentInstance { store, instance }, &first, 3, None)
+            .map_err(|_| anyhow::anyhow!("linked calls must be accepted"))?;
+        // A delivery of another kind, held reserved until the instance has
+        // trapped. Reserving skips admission, which an instance without the
+        // messaging export would decline.
+        let deliver = driver.reserve_send_for_test();
+        let delivery_call = crate::engine::abandon::DispatchedCall::new(
+            "queued delivery",
+            std::time::Duration::from_secs(5),
+        );
+        let (result_tx, delivered) = tokio::sync::oneshot::channel();
+        let delivery = InstanceJob::Messaging(Box::new(MessagingJob {
+            msg: BrokerMessage {
+                subject: "queued".into(),
+                body: vec![],
+                reply_to: None,
+            },
+            result_tx,
+            abandoned: delivery_call.flag(),
+            attributes: Arc::from([]),
+        }));
+        driver
+            .try_send(first)
+            .map_err(|_| anyhow::anyhow!("first call must be admitted"))?;
+        let publish = if reserved {
+            let send = driver.reserve_send_for_test();
+            Some(move || send(second))
+        } else {
+            driver
+                .try_send(second)
+                .map_err(|_| anyhow::anyhow!("second call must be admitted"))?;
+            None
+        };
+
+        let error = first_call
+            .await_reply(first_rx)
+            .await
+            .expect("a store trap must produce a reply")
+            .expect("a store trap must not drop the reply")
+            .expect_err("the first call must trap");
+        assert!(format!("{error:#}").contains("unreachable"), "{error:#}");
+        assert!(driver.is_gone());
+        assert!(dropped.is_cancelled(), "the failed store must be released");
+        if let Some(publish) = publish {
+            assert_eq!(driver.in_flight(), 2);
+            publish();
+        }
+
+        let error = second_call
+            .await_reply(second_rx)
+            .await
+            .expect("a store trap must answer queued and reserved sends")
+            .expect("a store trap must not drop the reply")
+            .expect_err("the pending call must fail with the store");
+        assert!(format!("{error:#}").contains("unreachable"), "{error:#}");
+
+        assert_eq!(driver.in_flight(), 1);
+        deliver(delivery);
+        let error = delivered
+            .await
+            .expect("a store trap must answer a queued delivery")
+            .expect_err("the delivery must fail with the store");
+        assert!(error.contains("unreachable"), "{error}");
+        assert_eq!(driver.in_flight(), 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn ephemeral_calls_report_a_callee_that_will_not_instantiate() -> anyhow::Result<()> {
     let ephemeral = Callee::new(UNSTARTABLE, instance_pool::InstancePolicy::Ephemeral)?;
     let pooled = Callee::new(UNSTARTABLE, warm())?;
