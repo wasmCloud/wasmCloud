@@ -83,6 +83,7 @@ A breach of one is a vulnerability unless mentioned in [Known limitations](#know
 5. **Egress.** Raw socket egress reaches only the addresses that the spec and the host's address policy permit, which by default excludes loopback, link-local (including cloud metadata) and multicast.
 6. **Resources.** One workload cannot exhaust the host's memory, connections or file descriptors beyond the limits the operator set.
 7. **Untrusted input.** No request, response, message or registry artifact from a peer can crash the host or corrupt its memory.
+8. **Reuse.** Component calls get fresh stores by default. A store stays warm only when the component and every component linked into it opt in. Reused memory, scratch volumes and cached artifacts must not expose data beyond a workload's grants.
 
 ## Operator settings that weaken a goal
 
@@ -121,11 +122,13 @@ For example:
 - Forging the workload identity that the host asserts to a plugin.
 - A component or an unauthenticated peer making the host use resources far out of proportion to the request.
 - A secret reaching a workload it is not bound to, a log, or a metric.
+- Component instance state surviving a call without opting into warm reuse.
 
 ## What we do not treat as a vulnerability
 
 - **Attacks that need a trusted actor.** This includes an operator flag, NATS credentials for the control plane, a native plugin, or a spec that grants the access in question.
 - **Documented relaxations.** A count mode, or reachable private ranges, allowing what this document says it allows is by design. Bypassing an enforcing setting is a vulnerability.
+- **Warm instance state.** Opt-in warm instances retain guest state and their initial configuration, including secrets supplied through it, until retirement. `max_invocations` bounds their call count; `0` means no limit.
 - **Bugs confined to the sandbox.** A component that traps, misbehaves or computes the wrong answer harms only itself.
 - **Resource use within limits.** A component may use everything it is entitled to, including the time it takes to compile a component the spec chose to run. A binary that crashes the compiler is a vulnerability; one that is merely slow to compile is not.
 - **Side channels.** Spectre-class and timing side channels between workloads sharing a host. See [Known limitations](#known-limitations).
@@ -161,4 +164,5 @@ wasmCloud is one layer. Each layer below it must hold for the guarantees above t
 ## See also
 
 - [SECURITY.md](SECURITY.md): how to report a vulnerability, and how we disclose.
+- [Capability](docs/security/capability-catalog.yaml) and [threat](docs/security/threat-catalog.yaml) catalogs: the host's attack surface and threats, in Gemara format.
 - [wasmtime security](https://docs.wasmtime.dev/security.html), and [what wasmtime considers a vulnerability](https://docs.wasmtime.dev/security-what-is-considered-a-security-vulnerability.html).
