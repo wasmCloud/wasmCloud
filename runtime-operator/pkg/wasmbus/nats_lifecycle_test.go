@@ -8,19 +8,24 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
 
-type refusedNatsDialer struct{}
+type refusedNatsDialer struct{ dialed chan<- struct{} }
 
-func (refusedNatsDialer) Dial(string, string) (net.Conn, error) {
+func (d refusedNatsDialer) Dial(string, string) (net.Conn, error) {
+	select {
+	case d.dialed <- struct{}{}:
+	default:
+	}
 	return nil, syscall.ECONNREFUSED
 }
 
-func TestNatsConnectContextCancelsStartupWait(t *testing.T) {
+func TestNatsConnectContextCanceledOnEntry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	nc, err := NatsConnectContext(ctx, NatsDefaultURL, nats.SetCustomDialer(refusedNatsDialer{}))
@@ -31,6 +36,47 @@ func TestNatsConnectContextCancelsStartupWait(t *testing.T) {
 	if !errors.Is(err, ErrTransport) || !strings.Contains(err.Error(), context.Canceled.Error()) {
 		t.Fatalf("cancelled startup = %v, want a transport error with cancellation details", err)
 	}
+}
+
+func TestNatsConnectContextCancelsStartupWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		type result struct {
+			conn *nats.Conn
+			err  error
+		}
+		dialed := make(chan struct{}, 1)
+		done := make(chan result, 1)
+		go func() {
+			nc, err := NatsConnectContext(ctx, NatsDefaultURL, nats.SetCustomDialer(refusedNatsDialer{dialed: dialed}))
+			done <- result{nc, err}
+		}()
+		select {
+		case <-dialed:
+		case got := <-done:
+			if got.conn != nil {
+				got.conn.Close()
+			}
+			t.Fatalf("returned before a failed dial: %v", got.err)
+		case <-time.After(time.Second):
+			t.Fatal("no dial attempt")
+		}
+		synctest.Wait()
+		cancel()
+		select {
+		case got := <-done:
+			if got.conn != nil {
+				got.conn.Close()
+				t.Fatal("canceled startup returned a connection")
+			}
+			if !errors.Is(got.err, ErrTransport) || !strings.Contains(got.err.Error(), context.Canceled.Error()) {
+				t.Fatalf("startup wait = %v, want cancellation", got.err)
+			}
+		case <-time.After(100 * time.Millisecond):
+			t.Fatal("cancellation did not interrupt the startup backoff")
+		}
+	})
 }
 
 func TestNatsRetryClassification(t *testing.T) {
