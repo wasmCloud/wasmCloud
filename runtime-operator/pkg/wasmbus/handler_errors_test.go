@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const handlerReplySubject = "response.inbox"
+
 type handlerTestBus struct {
 	Bus
 	publish      func(*Message) error
@@ -72,7 +74,7 @@ func TestRequestHandlerStopsOnFailure(t *testing.T) {
 			}
 			bus := &handlerTestBus{publish: func(*Message) error { return step(publishStage) }}
 			msg := NewMessage(testSubject)
-			msg.Reply = "response.inbox"
+			msg.Reply = handlerReplySubject
 			msg.bus = bus
 			msg.Data = []byte(`{"name":"request"}`)
 			if tc.stage == decodeStage {
@@ -123,7 +125,7 @@ func TestRequestHandlerEncodingFailureDoesNotPublish(t *testing.T) {
 	}
 }
 
-func TestRequestHandlerHooksPreserveRequestTemplate(t *testing.T) {
+func TestRequestHandlerHooksPreserveValueTemplate(t *testing.T) {
 	type contextKey struct{}
 	ctx := context.WithValue(t.Context(), contextKey{}, requestName)
 	bus := &handlerTestBus{}
@@ -152,7 +154,7 @@ func TestRequestHandlerHooksPreserveRequestTemplate(t *testing.T) {
 	}
 	for _, data := range []string{`{"name":"request"}`, ""} {
 		msg := NewMessage(testSubject)
-		msg.Reply = "response.inbox"
+		msg.Reply = handlerReplySubject
 		msg.Data = []byte(data)
 		msg.bus = bus
 		if err := handler.HandleMessage(ctx, msg); err != nil {
@@ -172,6 +174,55 @@ func TestRequestHandlerHooksPreserveRequestTemplate(t *testing.T) {
 	}
 	if handler.Request != template || bus.publishCalls != 2 {
 		t.Fatalf("request template or publish count changed: %+v, %d", handler.Request, bus.publishCalls)
+	}
+}
+
+func TestRequestHandlerAllocatesReferenceFieldsPerRequest(t *testing.T) {
+	type request struct {
+		Labels map[string]string `json:"labels"`
+		Values []string          `json:"values"`
+		Nested *testMessage      `json:"nested"`
+	}
+	const (
+		secondName = "second"
+		changed    = "mutated"
+	)
+	var requests []*request
+	handler := NewRequestHandler(request{}, testResponse{},
+		func(_ context.Context, req *request) (*testResponse, error) {
+			requests = append(requests, req)
+			return &testResponse{}, nil
+		})
+	bus := &handlerTestBus{}
+	for _, data := range []string{
+		`{"labels":{"name":"first"},"values":["first"],"nested":{"name":"first"}}`,
+		`{"labels":{"name":"second"},"values":["second"],"nested":{"name":"second"}}`,
+		`{}`,
+	} {
+		msg := NewMessage(testSubject)
+		msg.Reply = handlerReplySubject
+		msg.Data = []byte(data)
+		msg.bus = bus
+		if err := handler.HandleMessage(t.Context(), msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, second, empty := requests[0], requests[1], requests[2]
+	for _, req := range requests[:2] {
+		if len(req.Labels) != 1 || len(req.Values) != 1 || req.Nested == nil {
+			t.Fatalf("decoded reference fields = %+v", req)
+		}
+	}
+	first.Labels["name"] = changed
+	first.Values[0] = changed
+	first.Nested.Name = changed
+	if second.Labels["name"] != secondName || second.Values[0] != secondName || second.Nested.Name != secondName {
+		t.Fatalf("requests share decoded storage: %+v", second)
+	}
+	for _, req := range []*request{empty, &handler.Request} {
+		if req.Labels != nil || req.Values != nil || req.Nested != nil {
+			t.Fatalf("empty request or value template retained decoded storage: %+v", req)
+		}
 	}
 }
 
