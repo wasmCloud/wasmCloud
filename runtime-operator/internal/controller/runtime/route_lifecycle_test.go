@@ -30,6 +30,9 @@ func assertRouteSlice(t *testing.T, slice *discoveryv1.EndpointSlice, svc *corev
 	if slice == nil {
 		t.Fatal("expected an EndpointSlice")
 	}
+	if slice.Namespace != svc.Namespace || slice.Name != endpointSliceName(svc.Name) {
+		t.Fatalf("slice key = %s/%s, want %s/%s", slice.Namespace, slice.Name, svc.Namespace, endpointSliceName(svc.Name))
+	}
 	if slice.AddressType != discoveryv1.AddressTypeIPv4 || !metav1.IsControlledBy(slice, svc) {
 		t.Fatalf("slice address type or owner = %s, %v", slice.AddressType, slice.OwnerReferences)
 	}
@@ -101,7 +104,7 @@ func TestWorkloadRouteEndpointLifecycle(t *testing.T) {
 	if updates != 0 {
 		t.Fatalf("equivalent endpoints caused %d writes", updates)
 	}
-	for _, workload := range []client.Object{first, duplicate} {
+	for i, workload := range []client.Object{duplicate, first} {
 		current := first.DeepCopy()
 		if err := base.Get(t.Context(), client.ObjectKeyFromObject(workload), current); err != nil {
 			t.Fatal(err)
@@ -109,6 +112,13 @@ func TestWorkloadRouteEndpointLifecycle(t *testing.T) {
 		current.Status.SetConditions(condition.Unavailable())
 		if err := base.Update(t.Context(), current); err != nil {
 			t.Fatal(err)
+		}
+		if i == 0 {
+			runReconcile(t, r, svc.Name)
+			assertRouteSlice(t, getSlice(t, r, svc.Name), svc, testPodIP, routeSecondIP)
+			if updates != 0 {
+				t.Fatalf("one unready workload on a shared host caused %d writes", updates)
+			}
 		}
 	}
 	runReconcile(t, r, svc.Name)
