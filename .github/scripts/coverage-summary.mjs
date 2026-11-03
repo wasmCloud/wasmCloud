@@ -24,6 +24,6 @@ appendFileSync(destination, [
   coverage,
   '```',
   '',
-  'Download rust-coverage for HTML, JSON, LCOV, and toolchain provenance.',
+  'Download rust-coverage for HTML, JSON, and toolchain provenance.',
   '',
 ].join('\n'));
