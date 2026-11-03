@@ -140,7 +140,7 @@ func TestRequestHandler(t *testing.T) {
 	bus := NewNatsBus(nc)
 	server := NewServer(bus, "test")
 	handler := NewRequestHandler(
-		testRequest{},
+		func() testRequest { return testRequest{} },
 		testResponse{},
 		func(ctx context.Context, req *testRequest) (*testResponse, error) {
 			return &testResponse{

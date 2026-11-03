@@ -107,25 +107,25 @@ func (s *Server) RegisterHandler(subject string, handler AnyServerHandler) error
 }
 
 // NewRequestHandler returns a new server handler instance.
-// The `T` and `Y` types are used to define the Request and Response types. Both should be structs.
-// They will be used as template for request/responses.
+// newRequest must allocate fresh mutable defaults for each request.
+// A nil factory uses the request type's zero value.
 func NewRequestHandler[T any, Y any](
-	req T,
+	newRequest func() T,
 	resp Y,
 	handler func(context.Context, *T) (*Y, error),
 ) *RequestHandler[T, Y] {
 	return &RequestHandler[T, Y]{
-		Request:  req,
-		Response: resp,
-		Handler:  handler,
+		NewRequest: newRequest,
+		Response:   resp,
+		Handler:    handler,
 	}
 }
 
 // RequestHandler is a generic handler that can be used to implement a server handler.
 // It encodes the logic for handling a message and sending a response.
 type RequestHandler[T any, Y any] struct {
-	// Request is copied by value; populated reference fields share storage.
-	Request     T
+	// NewRequest allocates fresh mutable defaults; nil uses T's zero value.
+	NewRequest  func() T
 	Response    Y
 	PreRequest  func(context.Context, *T, *Message) error
 	PostRequest func(context.Context, *Y, *Message) error
@@ -134,7 +134,10 @@ type RequestHandler[T any, Y any] struct {
 
 // HandleMessage implements the `AnyServerHandler` interface.
 func (s *RequestHandler[T, Y]) HandleMessage(ctx context.Context, msg *Message) error {
-	req := s.Request
+	var req T
+	if s.NewRequest != nil {
+		req = s.NewRequest()
+	}
 	err := Decode(msg, &req)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrDecode, err)
