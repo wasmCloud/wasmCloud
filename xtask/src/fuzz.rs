@@ -9,7 +9,7 @@ use clap::{Subcommand, ValueEnum};
 use serde::Deserialize;
 
 const PARSER_DEPENDENCIES: &[&str] = &["http", "oci-client", "prost", "serde_json"];
-const FUZZ_ONLY_PACKAGES: &[&str] = &["wash-runtime-fuzz", "libfuzzer-sys", "arbitrary"];
+const FUZZ_ONLY_PACKAGES: &[&str] = &["wash-runtime-fuzz"];
 const ROUTE_INCLUDE: &str = r#"
 #[allow(unexpected_cfgs)]
 pub mod release_fuzz {
@@ -115,7 +115,7 @@ fn prepare_rust(harness: &Path, source: &Path) -> Result<()> {
         }
         parser_dependencies.insert(name.to_string(), dependency.clone());
     }
-    let mut manifest: toml::Value = read_toml(&harness.join("fuzz/Cargo.toml"))?;
+    let mut manifest: toml::Value = read_toml(&harness.join("fuzz/Cargo.toml.in"))?;
     manifest
         .get_mut("workspace")
         .and_then(toml::Value::as_table_mut)
@@ -130,6 +130,7 @@ fn prepare_rust(harness: &Path, source: &Path) -> Result<()> {
         )?;
     }
     fs::write(destination.join("Cargo.toml"), toml::to_string(&manifest)?)?;
+    fs::copy(harness.join("fuzz/build.rs"), destination.join("build.rs"))?;
     fs::copy(source.join("Cargo.lock"), destination.join("Cargo.lock"))?;
     let route_file = source.join("crates/wash-runtime/src/host/http.rs");
     let mut routes = fs::read_to_string(&route_file)?;
@@ -263,6 +264,8 @@ serde_json = "1"
         assert_eq!(fs::read_to_string(generated.join("Cargo.lock"))?, LOCK);
         assert!(generated.join("seeds/http_route/local").is_file());
         assert!(generated.join("support/http_route.rs").is_file());
+        assert!(generated.join("build.rs").is_file());
+        assert!(manifest["dependencies"].get("libfuzzer-sys").is_none());
         prepare(&harness()?, source.path(), Language::Rust)?;
         let routes =
             fs::read_to_string(source.path().join("crates/wash-runtime/src/host/http.rs"))?;
@@ -321,7 +324,7 @@ serde_json = "1"
         let lock = source.path().join("fuzz/Cargo.lock");
         fs::write(
             &lock,
-            format!("{LOCK}\n[[package]]\nname = \"libfuzzer-sys\"\nversion = \"0.4.10\"\n"),
+            format!("{LOCK}\n[[package]]\nname = \"wash-runtime-fuzz\"\nversion = \"0.0.0\"\n"),
         )?;
         verify_lock(source.path())?;
         let arbitrary = "\n[[package]]\nname = \"arbitrary\"\nversion = \"1.4.2\"\n";

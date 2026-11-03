@@ -2,8 +2,8 @@
 
 use std::net::SocketAddr;
 
-use libfuzzer_sys::fuzz_target;
 use wash_runtime::host::allowed_hosts::AllowedHost;
+use wash_runtime_fuzz::fuzz_target;
 
 fuzz_target!(|data: &str| {
     let (entry, destination) = data.split_once('\n').unwrap_or((data, data));

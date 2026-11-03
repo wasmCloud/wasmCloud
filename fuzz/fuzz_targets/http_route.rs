@@ -1,9 +1,9 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use wash_runtime::host::http::{
     NormalizedPathPrefix, parse_local_route, release_fuzz::fuzz_route_matcher,
 };
+use wash_runtime_fuzz::fuzz_target;
 
 fuzz_target!(|data: &str| {
     let mut fields = data.splitn(3, '\n');

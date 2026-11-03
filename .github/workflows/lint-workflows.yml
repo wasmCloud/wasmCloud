@@ -85,7 +85,7 @@ jobs:
       - name: Test release promotion and SBOM checks
         run: |
           node --test .github/scripts/release-*.test.mjs
-          cargo test --locked -p xtask fuzz::tests
+          cargo test --locked -p xtask fuzz
 
   gate:
     name: gate-lint-workflows

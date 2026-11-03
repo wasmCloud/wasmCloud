@@ -15,11 +15,15 @@ incompatible releases fail the gate rather than skipping targets.
 
 Rust parser dependency declarations come from the selected release's workspace.
 `cargo xtask fuzz prepare` stages the harnesses and seeds their generated lockfile
-from that release's `Cargo.lock`. After Cargo resolves the added fuzz tooling,
+from that release's `Cargo.lock`. After Cargo resolves the generated workspace,
 `cargo xtask fuzz verify-lock` rejects any runtime dependency absent from the
 release lockfile or with a different version, source, or checksum. This also
 applies to automated dependency updates; there is no separate committed fuzz
 lockfile to synchronize.
+
+`Cargo.toml.in` is a template; preparation creates the runnable `Cargo.toml` in
+the source checkout. The audit workflow stages this workspace and checks its
+dependency licenses with the root `deny.toml` policy.
 
 Each target has its own corpus cache, refreshed after every run, including
 failures. Rust seeds are committed under `seeds/`; Go seeds live in the existing
@@ -40,6 +44,19 @@ when fixing a finding.
 Rust targets depend on the production `wash-runtime` crate with only `washlet`
 and its required OCI feature enabled. Harnesses do no network or filesystem I/O.
 The HTTP matcher shim is compiled only under `cfg(fuzzing)`.
+
+The byte-slice adapter links Clang's libFuzzer archive directly. It does not use
+`libfuzzer-sys` or its bundled NCSA runtime. LLVM's runtime uses the
+[Apache-2.0 WITH LLVM-exception license](https://github.com/llvm/llvm-project/blob/main/LICENSE.TXT).
+Install `clang` and `libclang-rt-dev` on Ubuntu, or Homebrew `llvm` on macOS.
+Set `LLVM_LIBFUZZER_PATH` to that installation's archive before building:
+
+```sh
+# Linux x86_64
+export LLVM_LIBFUZZER_PATH=$(clang --print-file-name=libclang_rt.fuzzer-x86_64.a)
+# macOS with Homebrew LLVM
+export LLVM_LIBFUZZER_PATH=$(/opt/homebrew/opt/llvm/bin/clang --print-file-name=libclang_rt.fuzzer_osx.a)
+```
 
 Install nightly with `rust-src` and cargo-fuzz, then prepare a disposable source
 checkout. Run from the harness repository root, replacing `<release-sha>` with

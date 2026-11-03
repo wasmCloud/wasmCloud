@@ -1,3 +1,5 @@
+mod fuzzer;
+
 use wash_runtime::washlet::types::v2;
 
 pub fn check_workload(workload: v2::Workload) {

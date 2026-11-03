@@ -1,8 +1,8 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use oci_client::Reference;
 use wash_runtime::component_source::{ComponentSource, LoadedComponent};
+use wash_runtime_fuzz::fuzz_target;
 
 fuzz_target!(|data: &str| {
     let (reference, expected) = data.split_once('\n').unwrap_or((data, data));

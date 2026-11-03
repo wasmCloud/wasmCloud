@@ -2,8 +2,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use libfuzzer_sys::fuzz_target;
 use wash_runtime::host::egress_policy::EgressAddressPolicy;
+use wash_runtime_fuzz::fuzz_target;
 
 fn check(addr: IpAddr) {
     for deny_special in [false, true] {

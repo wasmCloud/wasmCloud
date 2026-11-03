@@ -19,6 +19,9 @@ mod coverage;
 mod e2e_images;
 mod fixtures;
 mod fuzz;
+#[cfg(test)]
+#[path = "../../fuzz/src/fuzzer.rs"]
+mod fuzz_adapter;
 mod protos;
 
 use fixtures::{P2_FIXTURES, P3_FIXTURES};

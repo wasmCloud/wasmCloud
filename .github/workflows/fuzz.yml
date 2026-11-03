@@ -141,12 +141,19 @@ jobs:
       - name: Stage Rust harnesses
         working-directory: harness
         run: cargo +nightly run --locked -p xtask -- fuzz prepare --source ../source --language rust
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Locate LLVM libFuzzer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-rt-dev
+          archive=$(clang --print-file-name=libclang_rt.fuzzer-x86_64.a)
+          test -f "$archive"
+          echo "LLVM_LIBFUZZER_PATH=$archive" >> "$GITHUB_ENV"
+      - name: Cache Rust builds
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          workspaces: source/fuzz
-          cmd-format: rustup run nightly {0}
-          shared-key: fuzz-asan
-          cache-bin: false
+          path: source/fuzz/target
+          key: fuzz-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('source/Cargo.lock', 'harness/fuzz/**') }}-${{ github.run_id }}
+          restore-keys: fuzz-build-${{ runner.os }}-${{ matrix.target }}-
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         env:

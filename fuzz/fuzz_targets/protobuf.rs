@@ -1,8 +1,8 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use prost::Message;
 use wash_runtime::washlet::types::v2;
+use wash_runtime_fuzz::fuzz_target;
 use wash_runtime_fuzz::{check_interface, check_workload};
 
 fn roundtrip<T: Message + Default + PartialEq + std::fmt::Debug>(message: &T) {

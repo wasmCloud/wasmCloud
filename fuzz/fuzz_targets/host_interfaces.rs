@@ -1,7 +1,7 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use wash_runtime::{washlet::types::v2, wit::WitInterface};
+use wash_runtime_fuzz::fuzz_target;
 use wash_runtime_fuzz::{check_interface, check_runtime_interface};
 
 fuzz_target!(|data: &str| {

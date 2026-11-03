@@ -1,8 +1,8 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use wash_runtime::washlet::types::v2;
 use wash_runtime_fuzz::check_workload;
+use wash_runtime_fuzz::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     // NATS commands use the generated protobuf JSON deserializer.
