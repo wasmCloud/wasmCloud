@@ -60,6 +60,9 @@
 //!   missing; only writes and deletes can tell the two apart.
 //! - `copy_object` and `move_object` across buckets go through host memory;
 //!   `object_store` only copies within one bucket.
+//! - A read and a listing are buffered in host memory, so each is refused
+//!   past 64 MiB (of data, or of object names). A larger object is read in
+//!   ranges, and a larger cross-bucket copy is refused.
 //! - Object names must be nonempty paths without leading/trailing slashes,
 //!   empty segments, dot segments or control characters. Unsupported names
 //!   are rejected rather than silently rewritten to a different S3 key.
@@ -68,7 +71,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use object_store::aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -94,6 +97,11 @@ use config::{builder_from_config, lookup, normalize_key, parses_a_secret, virtua
 /// the multiplexer's pooled-connection defaults.
 const MAX_BUCKET_CLIENTS: u64 = 64;
 const BUCKET_CLIENT_IDLE: Duration = Duration::from_secs(300);
+
+/// Most bytes one read, or the object names of one listing, may hold. Both are
+/// buffered in host memory outside the guest's budget, and the guest picks the
+/// bucket and range.
+const MAX_BUFFERED_BYTES: usize = super::DEFAULT_MAX_OBJECT_SIZE;
 
 /// An S3 [`BlobBackend`]: each container is one bucket, which must already exist.
 pub struct S3BlobBackend {
@@ -270,6 +278,7 @@ impl BlobBackend for S3BlobBackend {
             .map_err(|e| self.object_err(e, object))?;
         let len = usize::try_from(meta.size).unwrap_or(usize::MAX);
         let range = clamp_range(start, end, len);
+        check_read_len(range.len())?;
         if range.is_empty() {
             return Ok(Vec::new());
         }
@@ -295,7 +304,10 @@ impl BlobBackend for S3BlobBackend {
         store
             .list(None)
             .map_ok(|meta| meta.location.to_string())
-            .try_collect::<Vec<_>>()
+            .try_fold(ListedNames::default(), |names, name| {
+                futures::future::ready(names.push(name))
+            })
+            .map_ok(|names| names.names)
             .await
             .map_err(|e| self.container_err(e, container))
     }
@@ -375,6 +387,40 @@ impl BlobBackend for S3BlobBackend {
             self.write_data(dest_container, dest_object, data).await?;
         }
         Ok(())
+    }
+}
+
+fn check_read_len(len: usize) -> BlobResult<()> {
+    if len > MAX_BUFFERED_BYTES {
+        return Err(BlobBackendError::other(format!(
+            "a read of {len} bytes is over the {MAX_BUFFERED_BYTES}-byte limit; read the object in smaller ranges"
+        )));
+    }
+    Ok(())
+}
+
+/// Object names collected from a listing, up to [`MAX_BUFFERED_BYTES`]
+/// counting each name's `String` as well as its bytes.
+#[derive(Default)]
+struct ListedNames {
+    names: Vec<String>,
+    bytes: usize,
+}
+
+impl ListedNames {
+    fn push(mut self, name: String) -> Result<Self, object_store::Error> {
+        self.bytes = self
+            .bytes
+            .saturating_add(name.len() + std::mem::size_of::<String>());
+        if self.bytes > MAX_BUFFERED_BYTES {
+            return Err(object_store::Error::Generic {
+                store: "S3",
+                source: format!("listing is over the {MAX_BUFFERED_BYTES}-byte limit on names")
+                    .into(),
+            });
+        }
+        self.names.push(name);
+        Ok(self)
     }
 }
 
@@ -518,6 +564,17 @@ mod tests {
         assert_eq!(a, key(&[("Region", "us-east-1")]));
         assert_eq!(a, key(&[(" aws-region ", "us-east-1")]));
         assert_ne!(a, key(&[("region", "us-west-2")]));
+    }
+
+    #[test]
+    fn reads_and_listings_are_bounded() {
+        assert!(check_read_len(MAX_BUFFERED_BYTES).is_ok());
+        assert!(check_read_len(MAX_BUFFERED_BYTES + 1).is_err());
+
+        let names = ListedNames::default()
+            .push("a".repeat(MAX_BUFFERED_BYTES - std::mem::size_of::<String>()))
+            .unwrap();
+        assert!(names.push(String::new()).is_err());
     }
 
     #[test]
