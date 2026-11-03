@@ -123,13 +123,84 @@ are active only during nightly coverage builds. Platform-specific code is measur
 only where compiled on Linux.
 Guest Wasm components, the Go operator/gateway, and Kubernetes E2E execution are
 outside this Rust report's scope. The Rust report alone does not establish
-project-wide compliance; the Go modules need their own statement-coverage
-reports, and these scope limits need review in the badge justification.
+project-wide compliance; see the separate Go reports below. These scope limits
+need review in the badge justification.
 
 For evidence, link a successful run for the assessed commit and preserve its
 `rust-coverage` artifact before it expires. Include the commit, test results,
 metrics, and exclusions with the justification. Installing the tool or setting
 an 80% threshold does not demonstrate that the criterion is met.
+
+### Go coverage
+
+The [coverage workflow](https://github.com/wasmCloud/wasmCloud/actions/workflows/coverage.yml)
+measures `runtime-operator` and `runtime-gateway` separately on Go pull requests,
+merge groups, main pushes, and manual runs. Each job requires successful tests
+and complete reports. The Gold targets of **90% statements** and **80% branch
+outcomes** are informational; coverage percentages do not affect CI status.
+Coverage runs separately from the release gate.
+
+To reproduce a report from the repository root, install the pinned branch tool
+and run the module's collector (Node.js and Go are required):
+
+```bash
+source .github/tool-versions.env
+go install "github.com/rillig/gobco@v${GOBCO_VERSION}"
+export PATH="$(go env GOPATH)/bin:$PATH"
+node .github/scripts/go-coverage.mjs runtime-gateway
+
+# The operator also requires Kubernetes envtest assets.
+GOWORK=off make -C runtime-operator manifests generate envtest LOCALBIN=/tmp/wasmcloud-coverage-tools
+export KUBEBUILDER_ASSETS="$(/tmp/wasmcloud-coverage-tools/setup-envtest use 1.31.0 --bin-dir /tmp/wasmcloud-coverage-tools -p path)"
+node .github/scripts/go-coverage.mjs runtime-operator
+```
+
+`GOBCO` can override the branch tool's executable path. The collector sets
+`GOWORK=off` for both modules, so the gateway uses the operator dependency
+declared in its `go.mod`. Statement collection uses `go test -count=1
+-covermode=atomic -coverpkg=<all selected packages>` across the module's unit
+and integration tests. The denominator includes packages without tests. Only
+the operator's `test/e2e` package is excluded; it requires a running cluster.
+Generated bindings, generated deepcopy code, entry points, and test helper
+packages are included. Test files and external dependencies are excluded by
+the tools. Platform-specific code is measured only where compiled on the runner.
+
+Reports live in `target/go-coverage/<module>/`: `statements.out`,
+`statements.html`, function percentages in `statements.txt`, raw gobco JSON and
+logs per package, `coverage.json`, `summary.md`, and `provenance.json`. Provenance
+records the commit, working tree changes, tool versions, package scope,
+platform, informational targets, and CI run URL. `coverage.json` records whether
+the targets are met in `targetsMet`; `passed` reflects test and collection success.
+Statement percentages sum unique profile
+blocks weighted by statement count, merging repeated blocks from package test
+runs. `statements.txt` provides Go's per-function view. Branch outcomes are summed across
+packages by count, rather than averaging package percentages. Empty totals,
+failed tests, and missing or invalid report data cannot pass the checks.
+CI retains each `<module>-coverage` artifact for 90 days, including when tests
+or collection fail. Preserve the artifact for the assessed commit before expiry.
+
+#### Gold evidence limits
+
+Gold requires
+[`test_statement_coverage90`](https://www.bestpractices.dev/en/criteria#test_statement_coverage90)
+and
+[`test_branch_coverage80`](https://www.bestpractices.dev/en/criteria#test_branch_coverage80).
+Go's atomic profile measures statements; it supplies no branch counts. Branch
+measurement uses FLOSS [gobco](https://github.com/rillig/gobco) with `-branch`
+in a separate test run for each package. Gobco instruments temporary module
+copies and leaves the source files unchanged. A package's branch report counts
+only execution by that package's tests; cross-package integration execution
+does not contribute. Packages containing only test files have no branch
+counters and skip the second test run; their tests run during statement
+collection. Gobco does not instrument `select` statements or `range`
+loop outcomes, and its counters are not atomic. Its branch percentage therefore
+needs scope and concurrency review in the badge justification; meeting the
+numeric target alone does not establish full branch coverage compliance.
+
+Link successful runs and retain both Go artifacts along with the Rust evidence.
+The Rust report still measures lines and compiler regions, and this addition
+does not supply Rust branch coverage or guest Wasm/Kubernetes E2E coverage.
+Document all exclusions and tool limitations in the project-wide assessment.
 
 ## Project Structure
 
