@@ -419,10 +419,16 @@ mod tests {
     use std::sync::OnceLock;
 
     /// The fake `cargo`, `git`, and `rustup`, compiled once per test run.
-    fn tool() -> Result<PathBuf> {
-        static TOOL: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
-        let build = || -> Result<tempfile::TempDir> {
-            let dir = tempfile::tempdir()?;
+    fn tools() -> Result<&'static Path> {
+        static TOOL: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+        let build = || -> Result<PathBuf> {
+            let executable = std::env::current_exe()?;
+            let cache = executable
+                .parent()
+                .context("missing test executable directory")?
+                .join("coverage-test-tools");
+            fs::create_dir_all(&cache)?;
+            let dir = tempfile::Builder::new().prefix("tool-").tempdir_in(cache)?;
             let tool = dir
                 .path()
                 .join("tool")
@@ -436,44 +442,39 @@ mod tests {
                 .arg(&tool)
                 .status()?;
             anyhow::ensure!(status.success(), "failed to build the test tool");
-            Ok(dir)
+            for name in ["cargo", "git", "rustup"] {
+                let path = dir
+                    .path()
+                    .join(name)
+                    .with_extension(std::env::consts::EXE_EXTENSION);
+                // Never open executables for writing while other tests spawn children.
+                fs::hard_link(&tool, path)?;
+            }
+            // `cargo clean` reclaims helpers; each run gets an immutable executable.
+            Ok(dir.keep())
         };
         TOOL.get_or_init(|| build().map_err(|error| format!("{error:#}")))
-            .as_ref()
-            .map(|dir| {
-                dir.path()
-                    .join("tool")
-                    .with_extension(std::env::consts::EXE_EXTENSION)
-            })
+            .as_deref()
             .map_err(|error| anyhow::anyhow!("{error}"))
     }
 
     struct Fixture {
         root: tempfile::TempDir,
+        bin: &'static Path,
     }
 
     impl Fixture {
         fn new() -> Result<Self> {
+            let bin = tools()?;
             let root = tempfile::Builder::new()
                 .prefix("coverage runner ")
                 .tempdir()?;
-            let bin = root.path().join("bin");
-            fs::create_dir(&bin)?;
-            for name in ["cargo", "git", "rustup"] {
-                let path = bin
-                    .join(name)
-                    .with_extension(std::env::consts::EXE_EXTENSION);
-                // Never open executables for writing while other tests spawn children.
-                fs::hard_link(tool()?, &path)?;
-            }
-            Ok(Self { root })
+            Ok(Self { root, bin })
         }
 
         fn runner(&self) -> Runner<'_> {
             let program = |name| {
-                self.root
-                    .path()
-                    .join("bin")
+                self.bin
                     .join(name)
                     .with_extension(std::env::consts::EXE_EXTENSION)
                     .into_os_string()
