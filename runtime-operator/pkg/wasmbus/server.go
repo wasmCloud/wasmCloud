@@ -124,6 +124,7 @@ func NewRequestHandler[T any, Y any](
 // RequestHandler is a generic handler that can be used to implement a server handler.
 // It encodes the logic for handling a message and sending a response.
 type RequestHandler[T any, Y any] struct {
+	// Request is copied by value; populated reference fields share storage.
 	Request     T
 	Response    Y
 	PreRequest  func(context.Context, *T, *Message) error
