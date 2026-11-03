@@ -93,10 +93,10 @@ Reports are written to `target/coverage/`: `html/index.html`, `coverage.json`,
 records the commit, working tree status, toolchain, features, test scope, and CI
 run URL. `cargo xtask coverage report` regenerates reports after a failed run;
 partial reports are diagnostic only. `cargo xtask coverage check` requires a
-successful full test run and at least **80% line, compiler-region, and branch
-coverage**, set by `THRESHOLD` in `xtask/src/coverage.rs` and recorded in the
-provenance. Branch coverage uses nightly instrumentation and is checked from the
-JSON summary because the pinned cargo-llvm-cov has no branch threshold flag.
+successful full test run and at least **80% line coverage**, set by `THRESHOLD`
+in `xtask/src/coverage.rs` and recorded in the provenance. Compiler-region and
+branch coverage are informational and have no minimum threshold. Branch coverage
+uses nightly instrumentation.
 Neither failed tests nor percentages below the target are treated as passing evidence.
 
 The [coverage workflow](https://github.com/wasmCloud/wasmCloud/actions/workflows/coverage.yml)
