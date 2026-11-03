@@ -162,7 +162,7 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
         id: report
         run: cargo xtask coverage report
-      - name: Require line and region coverage thresholds
+      - name: Require line, region, and branch coverage thresholds
         if: ${{ !cancelled() && steps.report.outcome == 'success' }}
         id: threshold
         run: cargo xtask coverage check

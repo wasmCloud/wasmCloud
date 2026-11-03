@@ -85,9 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "--output-path" if args.iter().any(|arg| arg == "--json") => fs::write(
                     &pair[1],
                     format!(
-                        r#"{{"data":[{{"totals":{{"lines":{},"regions":{}}}}}]}}"#,
+                        r#"{{"data":[{{"totals":{{"lines":{},"regions":{},"branches":{}}}}}]}}"#,
                         totals("LINES_PERCENT"),
                         totals("REGIONS_PERCENT"),
+                        totals("BRANCHES_PERCENT"),
                     ),
                 )?,
                 "--output-path" => fs::write(&pair[1], "report")?,

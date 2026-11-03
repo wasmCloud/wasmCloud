@@ -17,7 +17,7 @@ appendFileSync(destination, [
   `Tests: ${process.env.TEST_RESULT}; ${thresholds}: ${process.env.THRESHOLD_RESULT}`,
   '',
   'Scope: native Rust workspace, excluding xtask and generated protobuf bindings.',
-  'Rust compiler regions and lines are reported separately from statement coverage.',
+  'Rust compiler regions, lines, and branches are reported separately from statement coverage.',
   'See CONTRIBUTING.md for scope and the OpenSSF evidence requirements.',
   '',
   '```text',

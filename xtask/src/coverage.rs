@@ -24,7 +24,11 @@ const THRESHOLD: u8 = 80;
 const REPORT_DIR: &str = "target/coverage";
 const JSON_SUMMARY: &str = "coverage.json";
 /// `llvm-cov` summary keys and the names used in threshold failures.
-const METRICS: [(&str, &str); 2] = [("lines", "line"), ("regions", "region")];
+const METRICS: [(&str, &str); 3] = [
+    ("lines", "line"),
+    ("regions", "region"),
+    ("branches", "branch"),
+];
 
 #[derive(Subcommand)]
 pub(crate) enum Task {
@@ -35,7 +39,7 @@ pub(crate) enum Task {
     /// Generate HTML, JSON, LCOV, and text reports.
     Report,
     #[command(about = format!(
-        "Require passing tests and {THRESHOLD}% line and compiler-region coverage."
+        "Require passing tests and {THRESHOLD}% line, compiler-region, and branch coverage."
     ))]
     Check,
 }
@@ -230,6 +234,7 @@ impl Runner<'_> {
         let tests = self.cargo(
             &[
                 "llvm-cov",
+                "--branch",
                 "--locked",
                 "--workspace",
                 "--features",
@@ -276,7 +281,12 @@ impl Runner<'_> {
             self.report_dir().join("tests-passed").is_file(),
             "Coverage evidence requires a successful full test run."
         );
-        let flags = METRICS.map(|(key, _)| format!("--fail-under-{key}"));
+        // cargo-llvm-cov 0.9.1 has no branch threshold flag.
+        let flags = METRICS
+            .iter()
+            .filter(|(key, _)| *key != "branches")
+            .map(|(key, _)| format!("--fail-under-{key}"))
+            .collect::<Vec<_>>();
         let threshold = THRESHOLD.to_string();
         let mut args = vec!["llvm-cov", "report"];
         args.extend_from_slice(REPORT_ARGS);
@@ -284,29 +294,43 @@ impl Runner<'_> {
             args.extend([flag.as_str(), threshold.as_str()]);
         }
         match self.cargo(&args, Some("threshold.txt")) {
-            Ok(()) => Ok(()),
+            Ok(()) => match shortfalls(&self.report_dir().join(JSON_SUMMARY))? {
+                Some(message) => anyhow::bail!(message),
+                None => Ok(()),
+            },
             // llvm-cov exits 1 without naming the metric, so explain it from the
             // summary, which `collect()` removes whenever it gathers new data.
             Err(error) => match shortfalls(&self.report_dir().join(JSON_SUMMARY)) {
-                Some(message) => Err(error.context(message)),
-                None => Err(error),
+                Ok(Some(message)) => Err(error.context(message)),
+                _ => Err(error),
             },
         }
     }
 }
 
 /// Describes each metric in the JSON summary that is below [`THRESHOLD`].
-fn shortfalls(summary: &Path) -> Option<String> {
-    let summary: serde_json::Value = serde_json::from_slice(&fs::read(summary).ok()?).ok()?;
-    let data = summary.get("data")?.as_array()?;
+fn shortfalls(summary: &Path) -> Result<Option<String>> {
+    let summary: serde_json::Value = serde_json::from_slice(
+        &fs::read(summary)
+            .context("Coverage check requires a JSON summary; run coverage report.")?,
+    )?;
+    let data = summary
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .filter(|data| !data.is_empty())
+        .context("Coverage summary has no data")?;
     let mut failures = Vec::new();
     for (key, name) in METRICS {
         // The same arithmetic as cargo-llvm-cov's `--fail-under-*` checks.
         let (mut count, mut covered) = (0.0, 0.0);
         for entry in data {
-            let totals = entry.get("totals")?.get(key)?;
-            count += totals.get("count")?.as_f64()?;
-            covered += totals.get("covered")?.as_f64()?;
+            let totals = &entry["totals"][key];
+            count += totals["count"]
+                .as_f64()
+                .with_context(|| format!("Coverage summary is missing {key} count"))?;
+            covered += totals["covered"]
+                .as_f64()
+                .with_context(|| format!("Coverage summary is missing {key} covered count"))?;
         }
         let percent = if count == 0.0 {
             0.0
@@ -319,7 +343,7 @@ fn shortfalls(summary: &Path) -> Option<String> {
             failures.push(format!("{name} coverage {shown:.2}% is below {THRESHOLD}%"));
         }
     }
-    (!failures.is_empty()).then(|| failures.join("; "))
+    Ok((!failures.is_empty()).then(|| failures.join("; ")))
 }
 
 fn execute(mut command: Command, mut log: Option<File>, mut echo: bool) -> Result<()> {
@@ -545,7 +569,7 @@ mod tests {
         let tests = calls.find("--no-report").context("missing test command")?;
         assert!(build < tests);
         assert!(calls.contains(
-            "--locked\t--workspace\t--features\twash-runtime/wasi-tls,wash/host-component-plugins"
+            "--branch\t--locked\t--workspace\t--features\twash-runtime/wasi-tls,wash/host-component-plugins"
         ));
         assert!(calls.contains("--no-report\t--no-fail-fast\t--\t--include-ignored"));
         assert!(calls.contains("--fail-under-lines\t80\t--fail-under-regions\t80"));
@@ -573,12 +597,13 @@ mod tests {
         );
         let provenance = fs::read_to_string(runner.report_dir().join("provenance.txt"))?;
         assert!(provenance.contains("test-commit") && provenance.contains("Test exit status: 0"));
-        assert!(provenance.contains("Thresholds: 80% lines, 80% regions"));
+        assert!(provenance.contains("Thresholds: 80% lines, 80% regions, 80% branches"));
         Ok(())
     }
 
     #[test]
     fn setup_installs_only_the_pinned_coverage_toolchain() -> Result<()> {
+        assert!(TOOLCHAIN.trim().starts_with("nightly-"));
         let fixture = Fixture::new()?;
         fixture.runner().run(Some(Task::Setup))?;
         let calls = fixture.calls()?;
@@ -652,7 +677,9 @@ mod tests {
         assert!(format!("{error:#}").starts_with("region coverage 77.34% is below 80%: "));
         assert_eq!(failure_code(Err(error))?, 1);
 
-        fixture.scenario("THRESHOLD_EXIT=1\nLINES_PERCENT=79.999\nREGIONS_PERCENT=12.5")?;
+        fixture.scenario(
+            "THRESHOLD_EXIT=1\nLINES_PERCENT=79.999\nREGIONS_PERCENT=12.5\nBRANCHES_PERCENT=65",
+        )?;
         let error = fixture
             .runner()
             .run(None)
@@ -660,7 +687,7 @@ mod tests {
             .context("expected failure")?;
         assert_eq!(
             error.to_string(),
-            "line coverage 79.99% is below 80%; region coverage 12.50% is below 80%"
+            "line coverage 79.99% is below 80%; region coverage 12.50% is below 80%; branch coverage 65.00% is below 80%"
         );
 
         // Without a summary to explain it, the llvm-cov failure is reported as is.
@@ -675,6 +702,44 @@ mod tests {
             .context("expected a subprocess failure")?;
         assert_eq!(error.to_string(), failure.to_string());
         assert_eq!(failure_code(Err(error))?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn branch_threshold_is_enforced_when_cli_thresholds_pass() -> Result<()> {
+        let fixture = Fixture::new()?;
+        fixture.scenario("BRANCHES_PERCENT=79.999")?;
+        let error = fixture
+            .runner()
+            .run(None)
+            .err()
+            .context("expected branch threshold failure")?;
+        assert_eq!(error.to_string(), "branch coverage 79.99% is below 80%");
+        fixture.scenario("BRANCHES_PERCENT=80")?;
+        fixture.runner().run(None)?;
+        Ok(())
+    }
+
+    #[test]
+    fn missing_branch_data_cannot_pass_the_threshold() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let runner = fixture.runner();
+        runner.run(None)?;
+        let path = runner.report_dir().join(JSON_SUMMARY);
+        let mut summary: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        summary["data"][0]["totals"]
+            .as_object_mut()
+            .context("missing totals")?
+            .remove("branches");
+        fs::write(path, serde_json::to_vec(&summary)?)?;
+        let error = runner
+            .run(Some(Task::Check))
+            .err()
+            .context("expected missing branch data failure")?;
+        assert_eq!(
+            error.to_string(),
+            "Coverage summary is missing branches count"
+        );
         Ok(())
     }
 
