@@ -290,7 +290,33 @@ Types:
 
 ### Code Review
 
-All submissions require review. We use GitHub pull requests for this process.
+All submissions require review through a GitHub pull request. GitHub automatically requests
+reviewers based on [CODEOWNERS](.github/CODEOWNERS). At least one approval from a code owner
+of the affected files is required before merging. New pushes dismiss existing approvals;
+the updated changes must be reviewed and approved again.
+
+Reviewers check:
+
+- **Correctness:** the change meets its stated purpose, handles errors and edge cases, and
+  follows the project's code style.
+- **Tests:** new functionality has automated tests, and behavior changes and bug fixes meet
+  the [test policy](#test-policy).
+- **Security:** the change preserves the [trust boundaries in THREAT_MODEL.md](THREAT_MODEL.md#trust-boundaries),
+  including component isolation, workload and plugin identity, and network access controls.
+- **Compatibility:** WIT interfaces and public APIs remain compatible, or breaking changes
+  are identified and include migration guidance.
+- **Documentation:** user-facing behavior, public APIs, and CLI help are documented as needed.
+- **Commits:** commit messages follow [Conventional Commits](#commit-message-format), and
+  every commit includes a DCO `Signed-off-by:` trailer (use `git commit -s`).
+
+A pull request is acceptable for merge only when:
+
+- CI is green, including the required `gate` and `gate-audit` checks and all other applicable
+  checks described in [Tests in CI](#tests-in-ci).
+- All review threads are resolved and the required code-owner approval is current.
+- Every use of `unsafe` has a `SAFETY:` comment explaining why its safety requirements hold.
+- New dependencies use licenses on the [deny.toml allowlist](deny.toml), or have an approved
+  per-crate exception recorded there, as required by the [dependency policy](#selecting).
 
 ### When does my change ship?
 
