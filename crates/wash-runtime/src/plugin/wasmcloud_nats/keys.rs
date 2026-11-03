@@ -199,6 +199,12 @@ pub fn auth_keys() -> impl Iterator<Item = &'static str> {
     KEYS.iter().filter(|key| key.auth).flat_map(Key::spellings)
 }
 
+/// The keys naming who a connection is: protocol credentials and the TLS
+/// client certificate, every spelling.
+pub fn identity_keys() -> impl Iterator<Item = &'static str> {
+    auth_keys().chain(["tls-cert", "tls-key"])
+}
+
 /// The grant keys a workload may narrow, every spelling.
 pub fn host_ceiling() -> impl Iterator<Item = &'static str> {
     KEYS.iter()

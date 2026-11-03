@@ -6,7 +6,7 @@ use anyhow::Context as _;
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
 };
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::TcpListener;
 
 async fn plugin() -> anyhow::Result<NatsBlobstore> {
@@ -50,6 +50,60 @@ async fn incomplete_client_identity_is_refused() -> anyhow::Result<()> {
             "{error:#}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn blank_identity_is_refused() -> anyhow::Result<()> {
+    let plugin = plugin().await?;
+    for blank in [
+        vec![("token", "")],
+        vec![("tls-cert", " "), ("tls-key", "")],
+    ] {
+        let mut config = HashMap::from([("servers".to_string(), "nats://unused:4222".to_string())]);
+        config.extend(blank.into_iter().map(|(k, v)| (k.into(), v.into())));
+        let error = plugin.connect_binding(&config).await.unwrap_err();
+        assert!(error.to_string().contains("empty values"), "{error:#}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn client_identity_requires_tls() -> anyhow::Result<()> {
+    crate::init_crypto();
+    let plugin = plugin().await?;
+    let dir = tempfile::tempdir()?;
+    let tenant = rcgen::generate_simple_self_signed(vec!["tenant".into()])?;
+    let cert_path = dir.path().join("tenant.crt");
+    let key_path = dir.path().join("tenant.key");
+    std::fs::write(&cert_path, tenant.cert.pem())?;
+    std::fs::write(&key_path, tenant.signing_key.serialize_pem())?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let config = HashMap::from([
+        (
+            "servers".into(),
+            format!("nats://{}", listener.local_addr()?),
+        ),
+        ("tls-cert".into(), cert_path.display().to_string()),
+        ("tls-key".into(), key_path.display().to_string()),
+    ]);
+    let plaintext_server = async {
+        let (mut socket, _) = listener.accept().await?;
+        socket
+            .write_all(b"INFO {\"max_payload\":1048576}\r\n")
+            .await?;
+        let mut first = [0u8; 1];
+        socket.read_exact(&mut first).await?;
+        anyhow::Ok(first[0])
+    };
+    let (first, binding) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(plaintext_server, plugin.connect_binding(&config))
+    })
+    .await
+    .context("binding neither connected nor failed")?;
+    // 0x16 opens a TLS handshake record; a plaintext client sends `CONNECT`.
+    assert_eq!(first?, 0x16);
+    assert!(binding.is_err());
     Ok(())
 }
 
