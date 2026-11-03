@@ -61,6 +61,7 @@ project:
     code-of-conduct: https://github.com/cncf/foundation/blob/main/code-of-conduct.md
     release-process: https://github.com/wasmCloud/wasmCloud/blob/main/RELEASE_RUNBOOK.md
     support-policy: https://github.com/wasmCloud/wasmCloud/blob/main/SUPPORT.md
+    design: https://github.com/wasmCloud/wasmCloud/blob/main/SELF_ASSESSMENT.md#overview
     signature-verification: https://github.com/wasmCloud/wasmCloud/blob/main/RELEASE_RUNBOOK.md#image-attestations
 
 repository:
