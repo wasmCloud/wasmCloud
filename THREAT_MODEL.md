@@ -1,6 +1,6 @@
 # wasmCloud Threat Model
 
-This document covers this repository, laying out what wasmCloud defends against, it's trust model, and what we treat as a security vulnerability.
+This document covers this repository, laying out what wasmCloud defends against, its trust model, and what we treat as a security vulnerability.
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md).
 
@@ -14,7 +14,7 @@ In scope:
 
 Out of scope:
 
-- `wash dev` and other developer-focused workflows which run code developer-controlled code on the developer's own machine.
+- `wash dev` and other developer-focused workflows which run developer-controlled code on the developer's own machine.
 - Features marked experimental, and non-default build features.
 - End-user applications deployed onto wasmCloud.
 
@@ -86,7 +86,7 @@ A breach of one is a vulnerability unless mentioned in [Known limitations](#know
 
 ## Operator settings that weaken a goal
 
-Certain settings may be set to `count` which enable host migration but weaken the security model. The `count` setting, where applicable, reports what policy would have refused, but allows the operation.
+Some settings accept `count`, which eases migration but weakens the security model. The `count` setting, where applicable, reports what policy would have refused, but allows the operation.
 
 Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator sets `--deny-private-ranges`, since reaching a sibling service on a private address is the ordinary in-cluster case.
 
@@ -111,7 +111,7 @@ The following are enforced in every mode:
 
 ## What we treat as a vulnerability
 
-Breaches of security goals that are not included in [Known limitations](#known-limitations), which should be covered by current controls are considered vulnerabilities.
+A breach of a security goal is a vulnerability unless it is listed in [Known limitations](#known-limitations).
 
 For example:
 
