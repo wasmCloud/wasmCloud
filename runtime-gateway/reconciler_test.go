@@ -65,6 +65,15 @@ func TestWorkloadHostname(t *testing.T) {
 			want: "",
 		},
 		{
+			name: "unrelated HTTP exports are skipped before the handler",
+			ifaces: []runtimev1alpha1.HostInterface{
+				httpInterface("outgoing-handler", "ignored.example"),
+				httpInterface("handler", "selected.example"),
+				httpInterface("incoming-handler", "later.example"),
+			},
+			want: "selected.example",
+		},
+		{
 			name:   "no interfaces yields no route",
 			ifaces: nil,
 			want:   "",

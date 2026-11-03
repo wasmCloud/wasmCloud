@@ -185,3 +185,45 @@ func TestHostTrackerRemovalPreservesOtherRoutes(t *testing.T) {
 		t.Fatalf("removed last workload: %+v", got)
 	}
 }
+
+func TestHostTrackerWorkloadMovePreservesSharedRoute(t *testing.T) {
+	tracker := newHostTracker(testFallback{})
+	first := types.NamespacedName{Namespace: "ns", Name: "first"}
+	second := types.NamespacedName{Namespace: "ns", Name: "second"}
+	for _, key := range []types.NamespacedName{first, second} {
+		if err := tracker.RegisterHost(t.Context(), key, key.Name, key.Name, 8080); err != nil {
+			t.Fatal(err)
+		}
+		if err := tracker.RegisterWorkload(t.Context(), key, key.Name, key.Name, "shared.example"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		if err := tracker.RegisterWorkload(t.Context(), first, second.Name, first.Name, "shared.example"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tracker.DeregisterHost(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	if got := tracker.workloads[first.Name]; got != second.Name {
+		t.Fatalf("moved workload host = %q, want %q", got, second.Name)
+	}
+	if got := tracker.hostnames["shared.example"].Len(); got != 2 {
+		t.Fatalf("shared route has %d workloads after move, want two", got)
+	}
+	if err := tracker.DeregisterWorkload(t.Context(), second); err != nil {
+		t.Fatal(err)
+	}
+	want := LookupResult{Scheme: "http", Hostname: "second:8080", WorkloadID: first.Name}
+	if got := resolve(t, tracker, "shared.example"); got != want {
+		t.Fatalf("route after removing the other workload = %+v, want %+v", got, want)
+	}
+	if err := tracker.RegisterHost(t.Context(), second, second.Name, "updated", 9090); err != nil {
+		t.Fatal(err)
+	}
+	want.Hostname = "updated:9090"
+	if got := resolve(t, tracker, "shared.example"); got != want {
+		t.Fatalf("route after host address update = %+v, want %+v", got, want)
+	}
+}
