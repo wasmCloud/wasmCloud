@@ -19,6 +19,7 @@ mod subscriber;
 mod test_server;
 pub(super) mod warm;
 
+pub use keys::credential_keys;
 pub use plugin::{ComponentData, WasmcloudNats};
 
 /// The host files a binding's config names, which no workload volume may

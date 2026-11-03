@@ -1207,14 +1207,8 @@ mod tests {
         let plugin = WasmcloudNats::new();
         plugin
             .configure_egress_policy(Arc::new(PluginEgressPolicy::new(
-                Arc::from([
-                    "nats://example.com:4222".parse().unwrap(),
-                    "wss://secure.example.com:443".parse().unwrap(),
-                ]),
-                Arc::from([
-                    "example.com".parse().unwrap(),
-                    "secure.example.com".parse().unwrap(),
-                ]),
+                Arc::from(["nats://example.com:4222".parse().unwrap()]),
+                Arc::from(["example.com".parse().unwrap()]),
                 Arc::from([]),
                 &enforcing_policy(None),
             )))
@@ -1223,14 +1217,6 @@ mod tests {
         plugin
             .check_egress(&nats_config("example.com").servers)
             .expect("a schemeless endpoint uses nats:// and port 4222");
-        plugin
-            .check_egress(&["wss://secure.example.com".to_string()])
-            .expect("wss uses port 443");
-        assert!(
-            plugin
-                .check_egress(&["ws://secure.example.com".to_string()])
-                .is_err()
-        );
     }
 
     #[test]

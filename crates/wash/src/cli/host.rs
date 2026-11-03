@@ -1318,20 +1318,26 @@ impl HostCommand {
             }
         }
 
+        // Under `verify_and_map` the client certificate, not the credentials,
+        // decides the user, so a binding naming its own credentials never gets
+        // the host's certificate. A blobstore binding naming none uses the
+        // host's connection and needs no certificate either.
+        let without_identity: Vec<_> = bundle
+            .iter()
+            .filter(|(key, _)| !matches!(*key, "tls-cert" | "tls-key"))
+            .cloned()
+            .collect();
         let nats = declared
             .for_plugin(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
-            .with_default_bundle("servers", bundle.clone());
-        // A blobstore binding with no identity of its own uses the host's
-        // connection, so the host's client certificate is never one to inherit:
-        // under `verify_and_map` it would sign a credential binding in as the host.
+            .with_default_bundle_unless_any(
+                "servers",
+                bundle,
+                plugin::wasmcloud_nats::credential_keys(),
+            )
+            .with_default_bundle("servers", without_identity.clone());
         let blobstore = declared
             .for_plugin(plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID)
-            .with_default_bundle(
-                "servers",
-                bundle
-                    .into_iter()
-                    .filter(|(key, _)| !matches!(*key, "tls-cert" | "tls-key")),
-            );
+            .with_default_bundle("servers", without_identity);
         Ok(declared.with_plugin(nats).with_plugin(blobstore))
     }
 }
@@ -2341,6 +2347,35 @@ host:
         )?;
         for key in ["tls-ca", "tls-cert", "tls-key", "tls-first"] {
             assert!(!elsewhere.contains_key(key), "{key}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nats_credentials_do_not_inherit_the_host_identity() -> anyhow::Result<()> {
+        let host = parse(&[
+            "--data-nats-url=nats://data:4222",
+            "--data-nats-tls-ca=/ca.crt",
+            "--data-nats-tls-cert=/host.crt",
+            "--data-nats-tls-key=/host.key",
+        ]);
+        let declared = nats_bindings(&host, &config_from("{}"))?
+            .with_workload_config(WorkloadConfigPolicy::Allow);
+        let anonymous = resolve(&declared, "", &[])?;
+        assert_eq!(anonymous["tls-cert"], "/host.crt");
+        assert_eq!(anonymous["tls-key"], "/host.key");
+
+        for credentials in [
+            vec![("user", "tenant"), ("password", "secret")],
+            vec![("TOKEN", "tenant-token")],
+            vec![("creds-file", "/tenant.creds")],
+            vec![("nkey", "tenant.seed")],
+        ] {
+            let resolved = resolve(&declared, "", &credentials)?;
+            assert_eq!(resolved["servers"], "nats://data:4222");
+            assert_eq!(resolved["tls-ca"], "/ca.crt");
+            assert!(!resolved.contains_key("tls-cert"), "{credentials:?}");
+            assert!(!resolved.contains_key("tls-key"), "{credentials:?}");
         }
         Ok(())
     }
