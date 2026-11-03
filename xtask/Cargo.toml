@@ -14,8 +14,10 @@ anyhow = { workspace = true, default-features = true }
 # Workspace clap is default-features=false; xtask needs std on top.
 clap = { workspace = true, features = ["std"] }
 pbjson-build = { workspace = true, default-features = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 tempfile = { workspace = true, default-features = true }
+toml = { workspace = true, features = ["parse"] }
 tonic-prost-build = { workspace = true, default-features = true }
 
 [lints.rust]

@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand};
 mod coverage;
 mod e2e_images;
 mod fixtures;
+mod fuzz;
 mod protos;
 
 use fixtures::{P2_FIXTURES, P3_FIXTURES};
@@ -31,6 +32,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Task {
+    /// Stage release fuzz harnesses or verify their dependency lockfile.
+    Fuzz {
+        #[command(subcommand)]
+        task: fuzz::Task,
+    },
     /// Collect, report, and check native Rust coverage (or run one stage).
     Coverage {
         #[command(subcommand)]
@@ -62,6 +68,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let workspace = workspace_dir().context("failed to locate workspace root")?;
     match cli.task {
+        Task::Fuzz { task } => fuzz::run(&workspace, task),
         Task::Coverage { task } => coverage::run(&workspace, task),
         Task::BuildFixtures { names } => build_fixtures(&workspace, &names),
         Task::E2eImages => e2e_images::run(&workspace),

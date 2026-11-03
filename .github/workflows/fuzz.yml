@@ -66,8 +66,8 @@ jobs:
           path: source
           persist-credentials: false
       - name: Stage Go harnesses
-        working-directory: .
-        run: python3 harness/.github/scripts/release-fuzz.py prepare --source source --language go
+        working-directory: harness
+        run: cargo run --locked -p xtask -- fuzz prepare --source ../source --language go
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: source/runtime-operator/go.mod
@@ -135,12 +135,12 @@ jobs:
           ref: ${{ inputs.sha || github.sha }}
           path: source
           persist-credentials: false
-      - name: Stage Rust harnesses
-        working-directory: .
-        run: python3 harness/.github/scripts/release-fuzz.py prepare --source source --language rust
       - uses: $/.github/actions/free-disk-space
       - name: Install nightly
         run: rustup toolchain install nightly --profile minimal --component rust-src
+      - name: Stage Rust harnesses
+        working-directory: harness
+        run: cargo +nightly run --locked -p xtask -- fuzz prepare --source ../source --language rust
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: source/fuzz
@@ -171,7 +171,7 @@ jobs:
           FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '1800' || '300' }}
         run: |
           cargo +nightly metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
-          python3 ../harness/.github/scripts/release-fuzz.py verify-lock --source .
+          cargo +nightly run --manifest-path ../harness/xtask/Cargo.toml --locked -- fuzz verify-lock --source .
           cargo +nightly fetch --manifest-path fuzz/Cargo.toml --locked
           cargo +nightly fuzz run "$TARGET" --sanitizer address --codegen-units 16 -- \
             -max_total_time="$FUZZ_SECONDS" -timeout=30 -max_len=65536 -rss_limit_mb=4096

@@ -14,11 +14,12 @@ implementation. Harnesses must remain compatible with the release's APIs;
 incompatible releases fail the gate rather than skipping targets.
 
 Rust parser dependency declarations come from the selected release's workspace.
-Preparation seeds the generated fuzz lockfile from that release's `Cargo.lock`.
-After Cargo resolves the added fuzz tooling, verification rejects any runtime
-dependency absent from the release lockfile or with a different version, source,
-or checksum. This also applies to automated dependency updates; there is no
-separate committed fuzz lockfile to synchronize.
+`cargo xtask fuzz prepare` stages the harnesses and seeds their generated lockfile
+from that release's `Cargo.lock`. After Cargo resolves the added fuzz tooling,
+`cargo xtask fuzz verify-lock` rejects any runtime dependency absent from the
+release lockfile or with a different version, source, or checksum. This also
+applies to automated dependency updates; there is no separate committed fuzz
+lockfile to synchronize.
 
 Each target has its own corpus cache, refreshed after every run, including
 failures. Rust seeds are committed under `seeds/`; Go seeds live in the existing
@@ -49,9 +50,9 @@ rustup toolchain install nightly --profile minimal --component rust-src
 cargo install cargo-fuzz --version 0.13.2 --locked
 FUZZ_SOURCE=$(mktemp -d)
 git archive <release-sha> | tar -x -C "$FUZZ_SOURCE"
-python3 .github/scripts/release-fuzz.py prepare --source "$FUZZ_SOURCE" --language rust
+cargo xtask fuzz prepare --source "$FUZZ_SOURCE" --language rust
 cargo +nightly metadata --manifest-path "$FUZZ_SOURCE/fuzz/Cargo.toml" --format-version 1 > /dev/null
-python3 .github/scripts/release-fuzz.py verify-lock --source "$FUZZ_SOURCE"
+cargo xtask fuzz verify-lock --source "$FUZZ_SOURCE"
 cd "$FUZZ_SOURCE"
 mkdir -p fuzz/corpus/http_route
 cp fuzz/seeds/http_route/* fuzz/corpus/http_route/
@@ -68,7 +69,7 @@ From the harness repository root, stage Go harnesses into the source checkout
 before running each target separately:
 
 ```sh
-python3 .github/scripts/release-fuzz.py prepare --source "$FUZZ_SOURCE" --language go
+cargo xtask fuzz prepare --source "$FUZZ_SOURCE" --language go
 cd "$FUZZ_SOURCE/runtime-operator"
 go test ./api/runtime/v1alpha1 -run='^$' -fuzz='^FuzzWorkloadSpecJSON$' -fuzztime=5m
 ```
