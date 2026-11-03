@@ -69,6 +69,21 @@ async fn blank_identity_is_refused() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn websocket_servers_are_refused() -> anyhow::Result<()> {
+    let plugin = plugin().await?;
+    for scheme in ["ws", "wss"] {
+        let config = HashMap::from([
+            ("servers".into(), format!("{scheme}://127.0.0.1:4222")),
+            ("tls-cert".into(), "/tenant.crt".into()),
+            ("tls-key".into(), "/tenant.key".into()),
+        ]);
+        let error = plugin.connect_binding(&config).await.unwrap_err();
+        assert!(error.to_string().contains("WebSocket"), "{error:#}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn client_identity_requires_tls() -> anyhow::Result<()> {
     crate::init_crypto();
     let plugin = plugin().await?;
