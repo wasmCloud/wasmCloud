@@ -9019,6 +9019,12 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "workload_supervision_tests.rs"]
+mod supervision_tests;
+
+#[cfg(test)]
 #[path = "workload_lifecycle_tests.rs"]
 mod lifecycle_tests;
 
