@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
+exclude = ["fuzz"]
 default-members = ["crates/wash"]
 members = [
     "crates/bench-scale",

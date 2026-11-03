@@ -1,0 +1,5 @@
+
+defaultfuzz*n
+E
+ registry.invalid/workload:latest2https://*.example.com:4432main%
+wasihttp0.2.0"incoming-handler

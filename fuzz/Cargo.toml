@@ -1,0 +1,68 @@
+[package]
+name = "wash-runtime-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "=0.4.10"
+http = { workspace = true }
+oci-client = { workspace = true }
+prost = { workspace = true }
+serde_json = { workspace = true }
+wash-runtime = { path = "../crates/wash-runtime", default-features = false, features = ["washlet"] }
+
+[[bin]]
+name = "workload_spec"
+path = "fuzz_targets/workload_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "protobuf"
+path = "fuzz_targets/protobuf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "allowed_hosts"
+path = "fuzz_targets/allowed_hosts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "address_policy"
+path = "fuzz_targets/address_policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oci_reference"
+path = "fuzz_targets/oci_reference.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_route"
+path = "fuzz_targets/http_route.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_interfaces"
+path = "fuzz_targets/host_interfaces.rs"
+test = false
+doc = false
+bench = false

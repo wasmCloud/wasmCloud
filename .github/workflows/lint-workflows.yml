@@ -75,7 +75,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Test release promotion and SBOM checks
-        run: node --test .github/scripts/release-*.test.mjs
+        run: |
+          node --test .github/scripts/release-*.test.mjs
+          python3 .github/scripts/release-fuzz.test.py
 
   gate:
     name: gate-lint-workflows

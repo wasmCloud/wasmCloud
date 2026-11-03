@@ -76,8 +76,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  promote:
+  fuzz:
     needs: gate
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      needs.gate.outputs.run == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    uses: $/.github/workflows/fuzz.yml
+    with:
+      sha: ${{ needs.gate.outputs.sha }}
+
+  promote:
+    needs: [gate, fuzz]
     # Release signatures identify this workflow on main.
     if: >-
       github.ref == 'refs/heads/main' &&
@@ -103,9 +113,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # workflow_run / workflow_dispatch without a sha → main HEAD.
-          # workflow_dispatch with sha → that exact release commit (recovery).
-          ref: ${{ inputs.sha || 'main' }}
+          # Promote the exact commit that passed fuzzing.
+          ref: ${{ needs.gate.outputs.sha }}
           # The tag pushes authenticate with the octo-sts token minted just
           # before them, so no credentials are left in .git/config.
           persist-credentials: false
@@ -701,6 +710,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.gate.outputs.run }}
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
       - name: ISO-week parity gate
         id: gate
@@ -724,3 +734,19 @@ jobs:
             echo "ISO week ${WEEK} does not match parity ${TRAIN_PARITY} — skipping (every-two-weeks cadence)"
             echo "run=false" >> "${GITHUB_OUTPUT}"
           fi
+      - name: Resolve release commit
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          steps.gate.outputs.run == 'true' &&
+          (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha || 'main' }}
+          persist-credentials: false
+      - name: Pin release commit
+        id: commit
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          steps.gate.outputs.run == 'true' &&
+          (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
