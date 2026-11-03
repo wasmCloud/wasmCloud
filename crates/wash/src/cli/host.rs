@@ -87,7 +87,8 @@ pub struct HostCommand {
     #[arg(long = "nats-ignore-discovered-servers", default_value_t = false)]
     pub nats_ignore_discovered_servers: bool,
 
-    /// Path to TLS CA certificate file for NATS Scheduler connection
+    /// Path to TLS CA certificate file for NATS Scheduler connection. Setting
+    /// it, or a client certificate, makes TLS required.
     #[arg(long = "scheduler-nats-tls-ca")]
     pub scheduler_nats_tls_ca: Option<PathBuf>,
 
@@ -95,7 +96,8 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-tls-first", default_value_t = false)]
     pub scheduler_nats_tls_first: bool,
 
-    /// Path to NATS TLS certificate file for NATS Scheduler connection
+    /// Path to NATS TLS certificate file for NATS Scheduler connection. Setting
+    /// it makes TLS required.
     #[arg(long = "scheduler-nats-tls-cert")]
     pub scheduler_nats_tls_cert: Option<PathBuf>,
 
@@ -147,7 +149,8 @@ pub struct HostCommand {
     )]
     pub data_nats_jwt_as_token: bool,
 
-    /// The path to TLS CA certificate file for NATS Data connection
+    /// The path to TLS CA certificate file for NATS Data connection. Setting
+    /// it, or a client certificate, makes TLS required.
     #[arg(long = "data-nats-tls-ca")]
     pub data_nats_tls_ca: Option<PathBuf>,
 
@@ -155,7 +158,8 @@ pub struct HostCommand {
     #[arg(long = "data-nats-tls-first", default_value_t = false)]
     pub data_nats_tls_first: bool,
 
-    /// Path to NATS TLS certificate file for NATS Data connection
+    /// Path to NATS TLS certificate file for NATS Data connection. Setting it
+    /// makes TLS required.
     #[arg(long = "data-nats-tls-cert")]
     pub data_nats_tls_cert: Option<PathBuf>,
 

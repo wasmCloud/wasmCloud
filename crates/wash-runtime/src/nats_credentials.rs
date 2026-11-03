@@ -540,6 +540,30 @@ pub(crate) mod tests {
         .context("NATS handshake timed out")?
     }
 
+    /// Send one connection an `INFO` that does not ask for TLS, then hand back
+    /// everything the client sent in the next second.
+    pub(crate) async fn record_after_plaintext_info(
+        listener: &tokio::net::TcpListener,
+    ) -> anyhow::Result<String> {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let (mut socket, _) = listener.accept().await?;
+        socket
+            .write_all(b"INFO {\"max_payload\":1048576,\"auth_required\":true}\r\n")
+            .await?;
+        let mut received = Vec::new();
+        let _ =
+            tokio::time::timeout(Duration::from_secs(1), socket.read_to_end(&mut received)).await;
+        Ok(String::from_utf8_lossy(&received).into_owned())
+    }
+
+    /// A self-signed CA certificate written to `dir`.
+    pub(crate) fn write_ca(dir: &Path) -> anyhow::Result<std::path::PathBuf> {
+        let ca = dir.join("ca.crt");
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+        std::fs::write(&ca, cert.cert.pem())?;
+        Ok(ca)
+    }
+
     fn file(path: &Path) -> Option<Secret> {
         Some(Secret::File(path.to_path_buf()))
     }

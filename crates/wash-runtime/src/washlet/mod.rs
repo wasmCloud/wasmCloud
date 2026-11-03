@@ -1509,6 +1509,13 @@ pub async fn connect_nats(
         opts = opts.request_timeout(Some(timeout));
     }
 
+    // Configured TLS material means TLS is required. Otherwise async-nats
+    // upgrades only when the server's plaintext INFO asks for it, and a peer
+    // on the path can drop that and read the credentials in CONNECT.
+    if options.tls_ca.is_some() || options.tls_cert.is_some() {
+        opts = opts.require_tls(true);
+    }
+
     if let Some(ca_path) = options.tls_ca {
         opts = opts.add_root_certificates(ca_path)
     }
@@ -3245,6 +3252,36 @@ mod tests {
         )?;
         assert_eq!(connect["name"], "host:test");
         assert!(client.new_inbox().starts_with("runtime.inbox."));
+        Ok(())
+    }
+
+    /// A server whose INFO omits `tls_required` gets a TLS handshake, never a
+    /// plaintext CONNECT carrying the token.
+    #[tokio::test]
+    async fn a_configured_ca_requires_tls() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::{record_after_plaintext_info, write_ca};
+        crate::init_crypto();
+
+        let dir = tempfile::tempdir()?;
+        let ca = write_ca(dir.path())?;
+        let token = dir.path().join("token");
+        std::fs::write(&token, "secret-token")?;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsConnectionOptions::default()
+            .with_tls_ca(&ca)
+            .with_auth(NatsAuth {
+                token_file: Some(token),
+                ..Default::default()
+            });
+        let (received, client) = tokio::join!(
+            record_after_plaintext_info(&listener),
+            connect_nats(format!("nats://{}", listener.local_addr()?), options),
+        );
+        let received = received?;
+        assert!(!received.contains("CONNECT"), "{received}");
+        assert!(!received.contains("secret-token"), "{received}");
+        assert!(client.is_err());
         Ok(())
     }
 
