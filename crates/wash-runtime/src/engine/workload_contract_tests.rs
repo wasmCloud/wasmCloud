@@ -285,7 +285,12 @@ async fn service_mounts_are_pinned_and_reused() -> anyhow::Result<()> {
             .len(),
         1
     );
+    // Unix permits removing an open directory; Windows keeps it locked.
+    #[cfg(unix)]
     std::fs::remove_dir(&path)?;
+    // Reopening the configured source must fail on every platform.
+    let service = resolved.service_mut().context("service is missing")?;
+    service.metadata.volume_mounts[0].0 = directory.path().join("missing");
     resolved.resolve_service_volume_mounts().await?;
     assert_eq!(
         resolved
