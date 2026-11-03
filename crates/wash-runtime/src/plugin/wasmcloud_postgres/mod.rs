@@ -13,8 +13,6 @@ mod conversions {
         Timestamp, TimestampTz,
     };
 
-    include!("conversions.rs");
-
     /// Build a `result-row` (a list of named `result-row-entry`) from a [`Row`].
     pub(super) fn into_result_row(r: Row) -> ResultRow {
         let mut rr = Vec::new();
@@ -26,6 +24,8 @@ mod conversions {
         }
         rr
     }
+
+    include!("conversions.rs");
 }
 
 use std::collections::{HashMap, HashSet};

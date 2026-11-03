@@ -2335,7 +2335,7 @@ mod tests {
             WASMTIME_DEFAULT_MAX_CORE_INSTANCES,
             derived_core_instances(WASMTIME_DEFAULT_MAX_MEMORIES)
         );
-        assert!(WASMTIME_DEFAULT_MAX_CORE_INSTANCES > WASMTIME_DEFAULT_CORE_INSTANCES);
+        const { assert!(WASMTIME_DEFAULT_MAX_CORE_INSTANCES > WASMTIME_DEFAULT_CORE_INSTANCES) };
         assert!(resolved.core_instance_advisory().is_none());
         assert!(
             resolved.max_guest_memory >= MIN_DERIVED_MAX_GUEST_MEMORY,
