@@ -359,13 +359,15 @@ fn density_exports_publish_clean_measurements_and_preserve_sparse_reports() -> R
             .count(),
         1
     );
+    repo.git(&["tag", "density-999"])?;
     let summary = success(repo.command("summary").args(["--bench", "scale_density"]))?;
+    assert!(summary.contains("_ref_ `density-999`"));
     assert!(summary.contains("| warm | served_workloads | 20.00 | workloads | higher | memory |"));
     assert!(summary.contains("| warm | request_p99_ms | 3.00 | ms | lower | memory |"));
     assert!(summary.contains(
         "| scale-to-zero@2cpu | served_workloads | 0.00 | workloads | higher | unmeasured |"
     ));
-    assert!(!summary.contains("999"));
+    assert!(!summary.contains("| warm | request_p99_ms | 999.00 |"));
     Ok(())
 }
 
