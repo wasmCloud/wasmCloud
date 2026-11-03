@@ -266,7 +266,7 @@ async fn service_mounts_are_pinned_and_reused() -> anyhow::Result<()> {
     std::fs::create_dir(&path)?;
     let mut service = service("(component)");
     service.metadata.volume_mounts.push((
-        path.clone(),
+        path,
         VolumeMount {
             name: "data".into(),
             mount_path: "/data".into(),
@@ -285,9 +285,6 @@ async fn service_mounts_are_pinned_and_reused() -> anyhow::Result<()> {
             .len(),
         1
     );
-    // Unix permits removing an open directory; Windows keeps it locked.
-    #[cfg(unix)]
-    std::fs::remove_dir(&path)?;
     // Reopening the configured source must fail on every platform.
     let service = resolved.service_mut().context("service is missing")?;
     service.metadata.volume_mounts[0].0 = directory.path().join("missing");
