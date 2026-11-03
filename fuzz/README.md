@@ -42,7 +42,8 @@ when fixing a finding.
 | `host_interfaces` | WIT shorthand, generated host interface JSON, wire conversion, version parsing and matching |
 
 Rust targets depend on the production `wash-runtime` crate with only `washlet`
-and its required OCI feature enabled. Harnesses do no network or filesystem I/O.
+and its required OCI feature enabled. Harnesses do no network I/O; component
+source classification checks whether a local path exists.
 The HTTP matcher shim is compiled only under `cfg(fuzzing)`.
 
 The byte-slice adapter links Clang's libFuzzer archive directly. It does not use
