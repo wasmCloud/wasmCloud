@@ -7,7 +7,10 @@ use wasmtime_wasi::{
     cli::{StdinStream, StdoutStream},
 };
 
-use super::{linked_call::apply_environment, workload::ResolvedWorkload};
+use super::{
+    ctx::SharedCtx, linked_call::apply_environment, pool_usage::explain_instantiate_failure,
+    workload::ResolvedWorkload,
+};
 
 /// Invocation-local command arguments and standard streams.
 ///
@@ -125,17 +128,24 @@ impl ResolvedWorkload {
             cli.stderr(stderr);
         }
 
-        let mut store = self.new_store(component_id).await?;
+        // A core start function can call wasi:cli/exit while the component
+        // or one of its linked siblings is being instantiated, so building
+        // and instantiating the store can end the command just like run.
+        let mut store = match self.new_store(component_id).await {
+            Ok(store) => store,
+            Err(error) => return setup_failure(error),
+        };
         // Only replace CLI state; keep the resolved filesystem and network
         // contexts and their retained directory handles intact.
         *store.data_mut().active_ctx.ctx.cli() = std::mem::take(cli.build().cli());
         let result = if p3 {
-            let command = wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
+            let command = match wasmtime_wasi::p3::bindings::CommandPre::new(pre)?
                 .instantiate_async(&mut store)
                 .await
-                .map_err(|e| {
-                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
-                })?;
+            {
+                Ok(command) => command,
+                Err(e) => return instantiate_failure(&store, e),
+            };
             store
                 .run_concurrent(async move |accessor| {
                     command.wasi_cli_run().call_run(accessor).await
@@ -143,21 +153,57 @@ impl ResolvedWorkload {
                 .await
                 .and_then(|result| result)
         } else {
-            let command = wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
+            let command = match wasmtime_wasi::p2::bindings::CommandPre::new(pre)?
                 .instantiate_async(&mut store)
                 .await
-                .map_err(|e| {
-                    crate::engine::pool_usage::explain_instantiate_failure(store.data(), e)
-                })?;
+            {
+                Ok(command) => command,
+                Err(e) => return instantiate_failure(&store, e),
+            };
             command.wasi_cli_run().call_run(&mut store).await
         };
         match result {
             Ok(Ok(())) => Ok(CommandOutcome { exit_code: 0 }),
             Ok(Err(())) => Ok(CommandOutcome { exit_code: 1 }),
-            Err(error) => match error.downcast_ref::<wasmtime_wasi::I32Exit>() {
-                Some(exit) => Ok(CommandOutcome { exit_code: exit.0 }),
-                None => Err(anyhow::Error::from(error).context("command trapped")),
-            },
+            Err(error) => {
+                let error = anyhow::Error::from(error);
+                match exit_outcome(&error) {
+                    Some(outcome) => Ok(outcome),
+                    None => Err(error.context("command trapped")),
+                }
+            }
         }
     }
+}
+
+/// The outcome `error` reports if it is a `wasi:cli/exit`.
+fn exit_outcome(error: &anyhow::Error) -> Option<CommandOutcome> {
+    error
+        .downcast_ref::<wasmtime_wasi::I32Exit>()
+        .map(|exit| CommandOutcome { exit_code: exit.0 })
+}
+
+/// [`setup_failure`] for instantiating into `store`, naming the remedy first
+/// if the pooling allocator refused it.
+fn instantiate_failure(
+    store: &wasmtime::Store<SharedCtx>,
+    error: wasmtime::Error,
+) -> anyhow::Result<CommandOutcome> {
+    setup_failure(explain_instantiate_failure(store.data(), error).into())
+}
+
+/// Classify a failure to build or instantiate a command's store.
+///
+/// An exit is a normal outcome, as it is from run. A trap, or a host error
+/// raised under guest code (it carries a [`wasmtime::WasmBacktrace`] while
+/// backtraces are enabled), is a command trap. Anything else, such as pool
+/// exhaustion or a run export of the wrong type, is returned as it is.
+fn setup_failure(error: anyhow::Error) -> anyhow::Result<CommandOutcome> {
+    if let Some(outcome) = exit_outcome(&error) {
+        return Ok(outcome);
+    }
+    if error.is::<wasmtime::Trap>() || error.is::<wasmtime::WasmBacktrace>() {
+        return Err(error.context("command trapped"));
+    }
+    Err(error)
 }
