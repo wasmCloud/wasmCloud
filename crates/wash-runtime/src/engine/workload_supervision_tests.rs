@@ -732,12 +732,17 @@ async fn restart_registration_failures_keep_other_ingresses_and_retry_next_resta
 }
 
 #[tokio::test]
-async fn successful_and_handler_error_commands_keep_serving_until_teardown() -> anyhow::Result<()> {
+async fn claimed_services_keep_serving_after_cli_success_or_nonfatal_error() -> anyhow::Result<()> {
     for outcome in [Outcome::Success, Outcome::Error] {
-        for ingress in CONFIGURATIONS {
-            if matches!(outcome, Outcome::Error) && !ingress.http && !ingress.messaging {
+        for (http, messaging) in [(false, false), (true, false), (false, true), (true, true)] {
+            if matches!(outcome, Outcome::Error) && !http && !messaging {
                 continue;
             }
+            let ingress = Ingresses {
+                http,
+                messaging,
+                dispatch: true,
+            };
             let host = Arc::new(RecordingHost::default());
             let (mut resolved, mut probe) = workload(outcome, 3, ingress, &host_ref(&host)).await?;
             let id = resolved.service.as_ref().unwrap().id().to_string();
@@ -784,8 +789,9 @@ async fn successful_and_handler_error_commands_keep_serving_until_teardown() -> 
 }
 
 #[tokio::test]
-async fn losing_the_only_registration_ends_the_driver_without_spending_more_restarts()
--> anyhow::Result<()> {
+async fn known_gap_sole_registration_failure_exits_with_budget_remaining() -> anyhow::Result<()> {
+    // Known gap: re-registration failure closes the last ingress.
+    // The driver reports success and bypasses the remaining restart budget.
     for http in [false, true] {
         let host = Arc::new(RecordingHost {
             fail_http: http.then_some(2),
