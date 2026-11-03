@@ -1,4 +1,4 @@
-package wasmcloud:host@0.1.5;
+package wasmcloud:host@0.1.6;
 
 /// Optionally exported by a host component plugin. The host calls these as
 /// workloads that import the plugin's capabilities are bound and unbound,
@@ -103,7 +103,8 @@ interface workload-lifecycle {
         /// declare either name, both, or neither.
         external-id: option<string>,
         /// Interface-level configuration from the workload manifest, as
-        /// key/value pairs sorted by key.
+        /// key/value pairs sorted by key. A key filled from a plugin-backed
+        /// `secrets:` entry is left out: read it with `binding-secrets`.
         config: list<tuple<string, string>>,
     }
 

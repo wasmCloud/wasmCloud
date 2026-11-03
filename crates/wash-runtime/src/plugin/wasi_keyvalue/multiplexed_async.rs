@@ -519,7 +519,7 @@ mod tests {
             package: "keyvalue".to_string(),
             interfaces: ["store".to_string()].into_iter().collect(),
             version: None,
-            config: std::collections::HashMap::from([(
+            config: crate::wit::Config::from_iter([(
                 "backend".to_string(),
                 "in-memory".to_string(),
             )]),

@@ -254,6 +254,7 @@ mod tests {
 
     fn caller(workload: &str, component: &str) -> CallerIdentity {
         CallerIdentity::Workload(WorkloadCaller {
+            bind_generation: None,
             workload_id: Arc::from(workload),
             component_id: Some(Arc::from(component)),
             binding: None,

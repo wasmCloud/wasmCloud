@@ -13,7 +13,6 @@
 //! `cargo test`.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -35,7 +34,7 @@ fn nats_blob_iface(name: &str, url: &str) -> WitInterface {
             .into_iter()
             .collect(),
         version: None,
-        config: HashMap::from([
+        config: wash_runtime::wit::Config::from_iter([
             ("backend".to_string(), "nats".to_string()),
             ("url".to_string(), url.to_string()),
         ]),

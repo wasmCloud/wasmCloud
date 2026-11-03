@@ -172,7 +172,7 @@ fn messaging_handler_workload(
                 package: "messaging".to_string(),
                 interfaces: ["handler".to_string()].into_iter().collect(),
                 version: Some(semver::Version::new(0, 2, 0)),
-                config: HashMap::from([(
+                config: wash_runtime::wit::Config::from_iter([(
                     "subscriptions".to_string(),
                     SUBSCRIPTION_SUBJECT.to_string(),
                 )]),

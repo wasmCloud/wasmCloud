@@ -22,7 +22,9 @@ use bindings::exports::wasmcloud::host::workload_lifecycle::{
 };
 use bindings::wasi::clocks::monotonic_clock;
 use bindings::wasi::clocks::system_clock;
-use bindings::wasmcloud::host::cancel;
+use bindings::wasmcloud::host::{binding_secrets, cancel};
+use bindings::wasmcloud::secrets::reveal;
+use bindings::wasmcloud::secrets::store::SecretValue;
 use wit_bindgen::{FutureReader, StreamReader, StreamResult};
 
 /// Number of `bucket` resources dropped, incremented by `Bucket`'s destructor —
@@ -75,6 +77,10 @@ static PARTITIONS: Mutex<BTreeMap<String, BTreeMap<String, Vec<u8>>>> =
 /// here; capability calls correlate back via the identity import; unbind
 /// reclaims the entry.
 static BINDS: Mutex<BTreeMap<String, WorkloadInfo>> = Mutex::new(BTreeMap::new());
+
+/// Each bound workload's revealed secrets, keyed by workload id then key: what
+/// `bound-config` answers for a key `binding-secrets` handed over as a handle.
+static REVEALED: Mutex<BTreeMap<String, BTreeMap<String, String>>> = Mutex::new(BTreeMap::new());
 
 /// Lifecycle events observed by this incarnation, oldest first — resets with
 /// the store on a supervised restart, which is what lets a test distinguish a
@@ -263,7 +269,7 @@ impl Guest for Component {
         // Correlate the call back to bind-time state via the identity import —
         // same key the host used to deliver `on-workload-bind`.
         let caller = bindings::wasmcloud::host::identity::get_workload_id();
-        BINDS.lock().unwrap().get(&caller).and_then(|info| {
+        let text = BINDS.lock().unwrap().get(&caller).and_then(|info| {
             info.interfaces.iter().find_map(|binding| {
                 binding
                     .config
@@ -271,6 +277,13 @@ impl Guest for Component {
                     .find(|(k, _)| *k == key)
                     .map(|(_, v)| v.clone())
             })
+        });
+        text.or_else(|| {
+            REVEALED
+                .lock()
+                .unwrap()
+                .get(&caller)
+                .and_then(|secrets| secrets.get(&key).cloned())
         })
     }
 
@@ -314,6 +327,30 @@ impl LifecycleGuest for Component {
         if slow_bind_ms > 0 {
             monotonic_clock::wait_for(slow_bind_ms.saturating_mul(1_000_000)).await;
         }
+        let mut revealed = BTreeMap::new();
+        for binding in &workload.interfaces {
+            // A bind the host has already given up on is refused its secrets;
+            // logged so a test can see it, and the hook still runs to the end.
+            let Ok(secrets) = binding_secrets::get(
+                &binding.namespace,
+                &binding.package,
+                binding.name.as_deref(),
+            ) else {
+                LIFECYCLE_LOG
+                    .lock()
+                    .unwrap()
+                    .push(format!("secrets-refused:{}", workload.id));
+                break;
+            };
+            for (key, secret) in secrets {
+                let value = match reveal::reveal(&secret).await {
+                    SecretValue::String(text) => text,
+                    SecretValue::Bytes(bytes) => return Err(format!("`{key}` is not text: {bytes:?}")),
+                };
+                revealed.insert(key, value);
+            }
+        }
+        REVEALED.lock().unwrap().insert(workload.id.clone(), revealed);
         record_hook_identity("bind", &workload.id);
         LIFECYCLE_LOG
             .lock()
@@ -327,6 +364,7 @@ impl LifecycleGuest for Component {
         record_hook_identity("unbind", &id);
         LIFECYCLE_LOG.lock().unwrap().push(format!("unbind:{id}"));
         BINDS.lock().unwrap().remove(&id);
+        REVEALED.lock().unwrap().remove(&id);
     }
 }
 

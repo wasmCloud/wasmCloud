@@ -400,7 +400,11 @@ fn sanitize_subject_token(raw: &str) -> String {
 
 /// Drains one connection, logging exactly one outcome line for it.
 async fn drain_one(workload_id: &str, key: &ConnKey, handle: &Arc<ConnHandle>) {
-    let servers = key.servers.join(",");
+    let servers = if key.servers_secret {
+        "<redacted>".to_string()
+    } else {
+        key.servers.join(",")
+    };
     // Before the drain, not after: the lifetime totals are what a run that
     // finished inside one report interval never got to see, and this is the
     // last moment they exist.

@@ -55,7 +55,7 @@ fn default_blob_iface() -> WitInterface {
         .into_iter()
         .collect(),
         version: Some(semver::Version::parse("0.1.0").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }

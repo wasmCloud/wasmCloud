@@ -6,4 +6,5 @@
 # from the shape the host provides. This is the only override that reaches
 # outside the fixtures tree; every other one points into the shared p3-wit-deps/.
 "wasmcloud:host" = { path = "../../../../../wit/host/wit" }
+"wasmcloud:secrets" = { path = "../../../../../wit/secrets/wit" }
 "acme:kv" = { path = "../acme-kv" }

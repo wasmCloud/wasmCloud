@@ -120,7 +120,10 @@ async fn start_msg_sleeper(
         package: "messaging".to_string(),
         interfaces: ["handler".to_string()].into_iter().collect(),
         version: Some(semver::Version::new(0, 3, 0)),
-        config: HashMap::from([("subscriptions".to_string(), subject.to_string())]),
+        config: wash_runtime::wit::Config::from_iter([(
+            "subscriptions".to_string(),
+            subject.to_string(),
+        )]),
         name: None,
     });
 

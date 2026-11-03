@@ -13,6 +13,20 @@
 - **OCI Integration**: Optional support for pulling components from OCI registries
 - **Hot-Reload Ready**: Designed for development workflows with fast iteration
 
+## Component plugin secret migration
+
+Host plugins that consume plugin-backed binding secrets must rebuild against
+`wasmcloud:host@0.1.6`, export `workload-lifecycle`, and import `binding-secrets`.
+During `on-workload-bind`, call `binding-secrets.get` for the binding, read the
+returned handles through `wasmcloud:secrets/reveal@2.1.0`, and drop them when done.
+Secret keys are omitted from `interface-binding.config`; plain text remains there.
+
+This changes compatibility with plugins that read secrets as config strings.
+The host refuses secret-bearing declarations for plugins without these interfaces.
+A timed-out bind loses access to its secrets, and the workload ID cannot bind
+again until the unfinished hook and its cleanup return. Bind rejections with
+secrets withhold guest error details.
+
 ## Usage
 
 ### Basic Example

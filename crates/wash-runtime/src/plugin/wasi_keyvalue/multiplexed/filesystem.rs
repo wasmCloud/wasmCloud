@@ -3,7 +3,6 @@
 //! A thin [`KvBackend`] adapter over the shared [`FsKvStore`] — the same
 //! storage the standalone `FilesystemKeyValue` plugin uses.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -129,10 +128,10 @@ impl BackendProvider<KvId> for FilesystemProvider {
 
     async fn instantiate(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         _egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<KvId> {
-        let root = config.get("root").ok_or_else(|| {
+        let root = config.expose("root").ok_or_else(|| {
             anyhow::anyhow!("filesystem keyvalue backend requires a 'root' config")
         })?;
         Ok(Arc::new(FilesystemBackend::new(root)))
@@ -141,7 +140,7 @@ impl BackendProvider<KvId> for FilesystemProvider {
     /// Does not connect out.
     fn check_egress(
         &self,
-        _config: &HashMap<String, String>,
+        _config: &crate::wit::Config,
         _policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         Ok(())

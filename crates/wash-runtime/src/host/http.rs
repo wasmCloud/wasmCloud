@@ -834,7 +834,7 @@ impl Router for DynamicRouter {
         let primary_host = http_iface
             .config
             .get("host")
-            .cloned()
+            .map(str::to_string)
             .context("no host header found")?;
 
         anyhow::ensure!(
@@ -5931,7 +5931,7 @@ mod tests {
     /// a comma-separated `host-aliases` config — mirrors what the wash config
     /// layer injects.
     fn http_iface(host: Option<&str>, aliases: Option<&str>) -> crate::wit::WitInterface {
-        let mut config = HashMap::new();
+        let mut config = crate::wit::Config::new();
         if let Some(host) = host {
             config.insert("host".to_string(), host.to_string());
         }
@@ -6019,9 +6019,7 @@ mod tests {
         let (callee_host, callee_url) = (value("host"), value("CALLEE_URL"));
 
         let mut iface = http_iface(Some(callee_host), None);
-        iface
-            .config
-            .insert("localRoute".to_string(), value("localRoute").into());
+        iface.config.insert("localRoute", value("localRoute"));
 
         let router = DynamicRouter::default();
         router.register_routes("callee", &http_ingress_routes(&[iface]).unwrap());
@@ -6235,7 +6233,7 @@ mod tests {
             package: "keyvalue".to_string(),
             interfaces: ["store".to_string()].into_iter().collect(),
             version: None,
-            config: HashMap::new(),
+            config: Default::default(),
             name: None,
         };
         assert!(http_ingress_routes(&[kv]).unwrap().is_empty());

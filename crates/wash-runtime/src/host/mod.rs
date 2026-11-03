@@ -538,7 +538,7 @@ impl Host {
                 package: package.to_string(),
                 interfaces: HashSet::from([interface]),
                 version,
-                config: HashMap::new(),
+                config: Default::default(),
                 name: None,
             })
         };
@@ -580,7 +580,7 @@ impl Host {
                     "outgoing-handler".to_string(),
                 ]),
                 version: None,
-                config: HashMap::new(),
+                config: Default::default(),
                 name: None,
             });
         }

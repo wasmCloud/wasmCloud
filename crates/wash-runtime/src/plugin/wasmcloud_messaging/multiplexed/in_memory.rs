@@ -5,7 +5,6 @@
 //! prove routing and for tests; each instance is isolated, so two named imports
 //! backed by two `InMemoryMsgBackend`s do not share published messages.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -73,7 +72,7 @@ impl BackendProvider<MsgId> for InMemoryMsgProvider {
 
     async fn instantiate(
         &self,
-        _config: &HashMap<String, String>,
+        _config: &crate::wit::Config,
         _egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<MsgId> {
         Ok(Arc::new(InMemoryMsgBackend::new()))
@@ -82,7 +81,7 @@ impl BackendProvider<MsgId> for InMemoryMsgProvider {
     /// Does not connect out.
     fn check_egress(
         &self,
-        _config: &HashMap<String, String>,
+        _config: &crate::wit::Config,
         _policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         Ok(())

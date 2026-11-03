@@ -47,6 +47,7 @@ async fn a_plugin_fault_keeps_its_cause_from_other_workloads() -> anyhow::Result
         workload_id: workload.into(),
         component_id: None,
         binding: None,
+        bind_generation: None,
     };
 
     // Workload B's call waits in the channel while workload A's replayed
@@ -78,6 +79,7 @@ async fn a_plugin_fault_keeps_its_cause_from_other_workloads() -> anyhow::Result
             caller: caller("workload-a"),
             args: vec![],
             result_tys: Arc::from([]),
+            redact_errors: false,
         }],
         secret_source: None,
     };

@@ -367,7 +367,6 @@ pub(super) fn is_async_version(iface: &WitInterface) -> bool {
 mod tests {
     use super::*;
     use crate::plugin::wasmcloud_messaging::{InMemoryMsgProvider, MsgError};
-    use std::collections::HashMap;
 
     fn msg_iface(name: Option<&str>, version: Option<&str>) -> WitInterface {
         WitInterface {
@@ -375,7 +374,10 @@ mod tests {
             package: "messaging".to_string(),
             interfaces: ["consumer".to_string()].into_iter().collect(),
             version: version.map(|v| semver::Version::parse(v).unwrap()),
-            config: HashMap::from([("backend".to_string(), "in-memory".to_string())]),
+            config: crate::wit::Config::from_iter([(
+                "backend".to_string(),
+                "in-memory".to_string(),
+            )]),
             name: name.map(String::from),
         }
     }

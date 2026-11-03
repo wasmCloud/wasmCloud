@@ -28,7 +28,6 @@
 //! `cargo test --include-ignored`.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -45,6 +44,7 @@ use tokio::sync::watch;
 
 use wash_runtime::plugin::multiplex::BackendProvider;
 use wash_runtime::plugin::wasi_keyvalue::RedisProvider;
+use wash_runtime::wit::Config;
 
 // The flat backend ignores the bucket identifier for key naming (the connection
 // is the keyspace), so any value works here.
@@ -66,10 +66,7 @@ async fn redis_backend_interops_with_a_raw_keyspace() -> Result<()> {
     // The multiplexed backend pointed at the same redis (no prefix => flat).
     let backend: wash_runtime::plugin::wasi_keyvalue::KvId = RedisProvider
         .instantiate(
-            &HashMap::from([
-                ("backend".to_string(), "redis".to_string()),
-                ("url".to_string(), url.clone()),
-            ]),
+            &Config::from([("backend", "redis"), ("url", url.as_str())]),
             None,
         )
         .await
@@ -121,10 +118,10 @@ async fn redis_backend_interops_with_a_raw_keyspace() -> Result<()> {
     // flat keys written above.
     let prefixed: wash_runtime::plugin::wasi_keyvalue::KvId = RedisProvider
         .instantiate(
-            &HashMap::from([
-                ("backend".to_string(), "redis".to_string()),
-                ("url".to_string(), url.clone()),
-                ("prefix".to_string(), "app1:".to_string()),
+            &Config::from([
+                ("backend", "redis"),
+                ("url", url.as_str()),
+                ("prefix", "app1:"),
             ]),
             None,
         )
@@ -328,11 +325,8 @@ async fn backend_with(
     url: &str,
     settings: &[(&str, &str)],
 ) -> Result<wash_runtime::plugin::wasi_keyvalue::KvId> {
-    let mut config = HashMap::from([
-        ("backend".to_string(), "redis".to_string()),
-        ("url".to_string(), url.to_string()),
-    ]);
-    config.extend(settings.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    let mut config = Config::from([("backend", "redis"), ("url", url)]);
+    config.extend(settings.iter().copied());
     RedisProvider
         .instantiate(&config, None)
         .await

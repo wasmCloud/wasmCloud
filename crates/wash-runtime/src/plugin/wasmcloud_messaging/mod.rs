@@ -61,6 +61,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::engine::pool_share::{PoolCost, PoolReservation, PoolShare, Share};
 use crate::engine::pool_usage::PoolTotals;
+use crate::wit::ConfigStr;
 
 pub use in_memory::InMemoryMessaging;
 #[cfg(feature = "wasm_component_model_implements")]
@@ -1720,17 +1721,20 @@ pub(crate) const ADMISSION_WAIT_CONFIG: &str = "admission_wait";
 /// would otherwise be shed, which is the point — but it buys that with the
 /// transport's buffer, and past the cap the trade stops being one anybody would
 /// make on purpose. See [`MAX_ADMISSION_WAIT`].
-pub(crate) fn parse_admission_wait(raw: Option<&str>) -> Option<Duration> {
-    let raw = raw.map(str::trim).filter(|s| !s.is_empty())?;
-    if let Ok(secs) = raw.parse::<u64>() {
+pub(crate) fn parse_admission_wait<'a>(raw: Option<impl Into<ConfigStr<'a>>>) -> Option<Duration> {
+    let raw = raw
+        .map(Into::into)
+        .map(ConfigStr::trim)
+        .filter(|s| !s.is_empty())?;
+    if let Ok(secs) = raw.expose().parse::<u64>() {
         return Some(clamp_admission_wait(Duration::from_secs(secs)));
     }
-    match humantime::parse_duration(raw) {
+    match humantime::parse_duration(raw.expose()) {
         Ok(d) => Some(clamp_admission_wait(d)),
         Err(_) => {
             tracing::warn!(
                 config_key = ADMISSION_WAIT_CONFIG,
-                value = raw,
+                value = %raw,
                 default = ?DEFAULT_ADMISSION_WAIT,
                 "messaging admission_wait is not a duration (expected e.g. `45s`, `2m`, \
                  or a bare number of seconds); falling back to the default"
@@ -1764,9 +1768,12 @@ fn clamp_admission_wait(wait: Duration) -> Duration {
 /// A malformed value warns rather than failing the component: a typo in one
 /// tuning knob should not stop a workload from starting, and the default it
 /// falls back to is the safe direction.
-pub(crate) fn parse_max_in_flight(raw: Option<&str>) -> Option<usize> {
-    let raw = raw.map(str::trim).filter(|s| !s.is_empty())?;
-    match raw.parse::<usize>() {
+pub(crate) fn parse_max_in_flight<'a>(raw: Option<impl Into<ConfigStr<'a>>>) -> Option<usize> {
+    let raw = raw
+        .map(Into::into)
+        .map(ConfigStr::trim)
+        .filter(|s| !s.is_empty())?;
+    match raw.expose().parse::<usize>() {
         // Zero spells "unset" here for the same reason it does on the pool
         // limits: it can only have meant "no ceiling of my own", never
         // "process no messages".
@@ -1775,7 +1782,7 @@ pub(crate) fn parse_max_in_flight(raw: Option<&str>) -> Option<usize> {
         Err(_) => {
             tracing::warn!(
                 config_key = MAX_IN_FLIGHT_CONFIG,
-                value = raw,
+                value = %raw,
                 "messaging max_in_flight is not a non-negative integer; \
                  falling back to the host's per-component default"
             );
@@ -1854,7 +1861,7 @@ mod tests {
             package: "messaging".to_string(),
             interfaces: ["consumer".to_string()].into_iter().collect(),
             version: version.map(|v| semver::Version::parse(v).unwrap()),
-            config: std::collections::HashMap::new(),
+            config: Default::default(),
             name: None,
         }
     }

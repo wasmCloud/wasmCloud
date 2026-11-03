@@ -573,6 +573,11 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     /// What resolves the plugin-backed `secrets:` entries naming this plugin:
     /// its `wasmcloud:host/secret-source` export, for a component plugin. The
     /// default serves none.
+    /// Whether this plugin can consume resolved plugin secrets.
+    fn takes_plugin_secrets(&self) -> bool {
+        true
+    }
+
     fn secret_source(&self) -> Option<Arc<dyn HostSecretSource>> {
         None
     }

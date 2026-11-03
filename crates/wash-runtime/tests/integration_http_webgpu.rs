@@ -96,7 +96,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     interfaces: ["incoming-handler".to_string()].into_iter().collect(),
                     version: Some(semver::Version::parse("0.2.2").unwrap()),
                     config: {
-                        let mut config = HashMap::new();
+                        let mut config = wash_runtime::wit::Config::new();
                         config.insert("host".to_string(), "foo".to_string());
                         config
                     },
@@ -107,7 +107,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     package: "webgpu".to_string(),
                     interfaces: ["webgpu".to_string()].into_iter().collect(),
                     version: Some(semver::Version::parse("0.3.0-rc.2").unwrap()),
-                    config: HashMap::new(),
+                    config: Default::default(),
                     name: None,
                 },
             ],

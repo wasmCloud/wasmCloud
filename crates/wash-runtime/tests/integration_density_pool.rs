@@ -55,7 +55,7 @@ async fn density_fixture_retains_warm_instances_and_releases_cold_ones() -> Resu
                             package: "http".into(),
                             interfaces: ["handler".into()].into(),
                             version: Some(semver::Version::new(0, 3, 0)),
-                            config: [("host".into(), hostname)].into(),
+                            config: [("host", hostname)].into(),
                             name: None,
                         }],
                         volumes: vec![],

@@ -564,7 +564,7 @@ mod tests {
             package: "blobstore".to_string(),
             interfaces: ["blobstore".to_string()].into_iter().collect(),
             version: None,
-            config: std::collections::HashMap::from([(
+            config: crate::wit::Config::from_iter([(
                 "backend".to_string(),
                 "in-memory".to_string(),
             )]),

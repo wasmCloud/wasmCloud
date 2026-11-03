@@ -87,6 +87,16 @@ use wash_runtime::{
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("../tests/wasm/kv_plugin.wasm");
 #[cfg(feature = "host-component-plugins")]
 const KV_PLUGIN_CALLER_WASM: &[u8] = include_bytes!("../tests/wasm/kv_plugin_caller.wasm");
+
+/// The natives kv-plugin links: it reads its bindings' secrets as
+/// `wasmcloud:secrets` handles.
+#[cfg(feature = "host-component-plugins")]
+fn secrets_native()
+-> std::collections::HashMap<&'static str, Arc<dyn wash_runtime::plugin::HostPlugin>> {
+    let secrets: Arc<dyn wash_runtime::plugin::HostPlugin> =
+        Arc::new(wash_runtime::plugin::wasmcloud_secrets::WasmcloudSecrets::new());
+    std::collections::HashMap::from([(secrets.id(), secrets)])
+}
 #[cfg(feature = "host-component-plugins")]
 const HTTP_HANDLER_P3_WASM: &[u8] = include_bytes!("../tests/wasm/http_handler_p3.wasm");
 
@@ -117,7 +127,7 @@ fn acme_kv_interface() -> WitInterface {
         package: "kv".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.1.0").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }
@@ -197,7 +207,7 @@ impl Call {
     }
 
     fn host_interfaces(self) -> Vec<WitInterface> {
-        let mut config = HashMap::new();
+        let mut config = wash_runtime::wit::Config::new();
         config.insert("host".to_string(), self.host_header().to_string());
         let http = WitInterface {
             namespace: "wasi".to_string(),
@@ -266,6 +276,7 @@ fn setup_bare_host(call: Call) -> Warm {
         let plugin = ComponentHostPlugin::builder()
             .id(PLUGIN_ID)
             .wasm(KV_PLUGIN_WASM)
+            .native_plugins(secrets_native())
             .engine(engine.clone())
             .build()
             .await
@@ -422,6 +433,7 @@ fn setup_lifecycle(bind_first: bool) -> Lifecycle {
             ComponentHostPlugin::builder()
                 .id(PLUGIN_ID)
                 .wasm(KV_PLUGIN_WASM)
+                .native_plugins(secrets_native())
                 .engine(engine)
                 .build(),
         )
@@ -539,6 +551,7 @@ fn setup_stopped_plugin(_unused: bool) -> Stopped {
             ComponentHostPlugin::builder()
                 .id(PLUGIN_ID)
                 .wasm(KV_PLUGIN_WASM)
+                .native_plugins(secrets_native())
                 .engine(engine)
                 .build(),
         )

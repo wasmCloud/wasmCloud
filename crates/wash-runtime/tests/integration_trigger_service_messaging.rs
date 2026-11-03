@@ -292,9 +292,9 @@ async fn test_trigger_service_restarts_and_resubscribes_on_fault() -> Result<()>
 /// receives on; the in-memory backend also accepts none, which subscribes it to
 /// everything.
 fn messaging_handler_interface(subscriptions: Option<&str>) -> WitInterface {
-    let mut config = HashMap::new();
+    let mut config = wash_runtime::wit::Config::new();
     if let Some(subscriptions) = subscriptions {
-        config.insert("subscriptions".to_string(), subscriptions.to_string());
+        config.insert("subscriptions", subscriptions);
     }
     WitInterface {
         namespace: "wasmcloud".to_string(),

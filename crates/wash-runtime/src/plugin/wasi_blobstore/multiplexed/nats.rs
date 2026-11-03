@@ -7,7 +7,6 @@
 //! bodies are buffered in memory — the host layers already buffer guest streams
 //! before handing them off, so the backend reads/writes whole `Vec<u8>`s.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_nats::jetstream::object_store::{self, ObjectStore};
@@ -220,8 +219,8 @@ impl NatsBlobProvider {
 
 #[async_trait::async_trait]
 impl BackendProvider<BlobId> for NatsBlobProvider {
-    fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-        config.get("url").cloned()
+    fn pool_key(&self, config: &crate::wit::Config) -> Option<String> {
+        config.expose("url").map(str::to_string)
     }
 
     fn backend_type(&self) -> &'static str {
@@ -230,11 +229,11 @@ impl BackendProvider<BlobId> for NatsBlobProvider {
 
     async fn instantiate(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<BlobId> {
         let url = config
-            .get("url")
+            .value("url")
             .ok_or_else(|| anyhow::anyhow!("nats blobstore backend requires a 'url' config"))?;
         let client = connect_nats(url, egress, self.ignore_discovered_servers).await?;
         let context = async_nats::jetstream::new(client);
@@ -245,7 +244,7 @@ impl BackendProvider<BlobId> for NatsBlobProvider {
 
     fn check_egress(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         check_nats_url(config, policy)

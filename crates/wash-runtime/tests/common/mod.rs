@@ -90,7 +90,7 @@ use wash_runtime::{
 /// HTTP incoming-handler (0.2.2) with `host` config, plus optional
 /// comma-separated `host-aliases`. (example :  "admin,user,customer")
 pub fn http_incoming_handler_interface(host_header: &str, aliases: Option<&str>) -> WitInterface {
-    let mut config = HashMap::new();
+    let mut config = wash_runtime::wit::Config::new();
     config.insert("host".to_string(), host_header.to_string());
     if let Some(aliases) = aliases {
         config.insert("host-aliases".to_string(), aliases.to_string());
@@ -117,7 +117,7 @@ fn wasi_blobstore_interface() -> WitInterface {
         .into_iter()
         .collect(),
         version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }
@@ -130,7 +130,7 @@ fn wasi_keyvalue_interface() -> WitInterface {
             .into_iter()
             .collect(),
         version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }
@@ -141,7 +141,7 @@ fn wasi_logging_interface() -> WitInterface {
         package: "logging".to_string(),
         interfaces: ["logging".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }
@@ -152,7 +152,7 @@ fn wasi_config_interface() -> WitInterface {
         package: "config".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.2.0-rc.1").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }
@@ -193,7 +193,7 @@ pub fn acme_kv_interface() -> WitInterface {
         package: "kv".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.1.0").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }
@@ -216,7 +216,7 @@ pub fn kv_plugin_caller_host_interfaces_with_config(
     vec![
         http_incoming_handler_interface(host_header, None),
         WitInterface {
-            config,
+            config: config.into(),
             ..acme_kv_interface()
         },
     ]
@@ -252,7 +252,7 @@ pub fn secrets_interface(config: HashMap<String, String>) -> WitInterface {
             .into_iter()
             .collect(),
         version: Some(semver::Version::parse("2.1.0").unwrap()),
-        config,
+        config: config.into(),
         name: None,
     }
 }

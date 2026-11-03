@@ -16,7 +16,7 @@
     feature = "wasm_component_model_implements"
 ))]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -42,7 +42,7 @@ fn pg_iface(name: &str, url: &str) -> WitInterface {
         .into_iter()
         .collect(),
         version: None,
-        config: HashMap::from([("url".to_string(), url.to_string())]),
+        config: wash_runtime::wit::Config::from_iter([("url".to_string(), url.to_string())]),
         name: Some(name.to_string()),
     }
 }

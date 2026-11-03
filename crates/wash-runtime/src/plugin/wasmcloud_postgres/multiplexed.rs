@@ -50,6 +50,12 @@ pub struct PgId {
     pool: Pool,
 }
 
+fn check_url_egress(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
+    let pg_config: tokio_postgres::Config =
+        url.parse().context("failed to parse postgres config")?;
+    super::check_egress(&pg_config, policy)
+}
+
 /// Build a deadpool connection pool from a full postgres URL (credentials +
 /// database). Unlike the legacy bouncer config, the URL here is complete: the
 /// named interface owns its role and target database.
@@ -204,34 +210,32 @@ impl BackendProvider<PgId> for PostgresProvider {
         POSTGRES_BACKEND
     }
 
-    fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-        config.get("url").cloned()
+    fn pool_key(&self, config: &crate::wit::Config) -> Option<String> {
+        config.expose("url").map(str::to_string)
     }
 
     async fn instantiate(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         _egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<PgId> {
-        let url = config.get("url").ok_or_else(|| {
+        let url = config.value("url").ok_or_else(|| {
             anyhow::anyhow!("named wasmcloud:postgres interface requires a 'url' config")
         })?;
         Ok(PgId {
-            pool: build_pool_from_url(url)?,
+            pool: url.guard("url", build_pool_from_url(url.expose()))?,
         })
     }
 
     fn check_egress(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
-        let Some(url) = config.get("url") else {
+        let Some(url) = config.value("url") else {
             return Ok(());
         };
-        let pg_config: tokio_postgres::Config =
-            url.parse().context("failed to parse postgres config")?;
-        super::check_egress(&pg_config, policy)
+        url.guard("url", check_url_egress(url.expose(), policy))
     }
 }
 
@@ -312,5 +316,31 @@ impl<'a> bindings::named_imports::wasmcloud::postgres0_1_1_draft::prepared::Host
         Ok(id
             .exec(&plugin.prepared_statements, &stmt_token, &params)
             .await)
+    }
+}
+
+#[cfg(test)]
+mod secret_url_tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_url_is_quoted_unless_it_is_a_secret() {
+        let policy = PluginEgressPolicy::allowing(&["db.internal:5432"]);
+        let url = "postgres://db.internal/app?hunter2=1";
+
+        let text: crate::wit::Config = [("url", url)].into_iter().collect();
+        let err = format!(
+            "{:#}",
+            PostgresProvider.check_egress(&text, &policy).unwrap_err()
+        );
+        assert!(err.contains("hunter2"), "{err}");
+
+        let mut secret = crate::wit::Config::new();
+        secret.insert("url", crate::plugin::SecretValue::new(url));
+        let err = format!(
+            "{:#}",
+            PostgresProvider.check_egress(&secret, &policy).unwrap_err()
+        );
+        assert!(!err.contains("hunter2"), "{err}");
     }
 }

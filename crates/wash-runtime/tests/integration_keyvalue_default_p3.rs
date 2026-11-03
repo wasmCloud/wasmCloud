@@ -48,7 +48,7 @@ fn default_kv_iface() -> WitInterface {
         package: "keyvalue".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.2.0").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }

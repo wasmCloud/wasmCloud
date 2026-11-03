@@ -688,7 +688,7 @@ mod tests {
     use super::*;
 
     fn blob_iface(name: Option<&str>, backend: Option<&str>, root: Option<&str>) -> WitInterface {
-        let mut config = HashMap::new();
+        let mut config = crate::wit::Config::new();
         if let Some(b) = backend {
             config.insert("backend".to_string(), b.to_string());
         }
@@ -905,11 +905,8 @@ mod tests {
         assert!(!schema.is_closed());
     }
 
-    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    fn map(pairs: &[(&str, &str)]) -> crate::wit::Config {
+        pairs.iter().copied().collect()
     }
 
     #[tokio::test]
@@ -934,7 +931,12 @@ mod tests {
 
         // The operator's binding reaches the backend, and the backend accepts it.
         let resolved = set
-            .resolve("assets", &HashMap::new(), &schema, never_narrows())
+            .resolve(
+                "assets",
+                &crate::wit::Config::new(),
+                &schema,
+                never_narrows(),
+            )
             .expect("a workload asking for `assets` is served");
         assert!(S3BlobProvider.instantiate(&resolved, None).await.is_ok());
 

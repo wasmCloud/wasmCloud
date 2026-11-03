@@ -1,7 +1,6 @@
 //! Settings for the density experiment.
 use anyhow::{Context as _, Result, bail};
 use std::{
-    collections::HashMap,
     hash::{Hash as _, Hasher as _},
     path::Path,
     time::Duration,
@@ -258,7 +257,10 @@ pub(super) fn http_interface(host_header: &str, fixture: &str) -> WitInterface {
         package: "http".to_string(),
         interfaces: [interface.to_string()].into_iter().collect(),
         version: Some(version),
-        config: HashMap::from([("host".to_string(), host_header.to_string())]),
+        config: wash_runtime::wit::Config::from_iter([(
+            "host".to_string(),
+            host_header.to_string(),
+        )]),
         name: None,
     }
 }

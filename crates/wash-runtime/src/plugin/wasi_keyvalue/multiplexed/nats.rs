@@ -334,8 +334,8 @@ impl NatsProvider {
 
 #[async_trait::async_trait]
 impl BackendProvider<KvId> for NatsProvider {
-    fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-        config.get("url").cloned()
+    fn pool_key(&self, config: &crate::wit::Config) -> Option<String> {
+        config.expose("url").map(str::to_string)
     }
     fn backend_type(&self) -> &'static str {
         "nats"
@@ -343,11 +343,11 @@ impl BackendProvider<KvId> for NatsProvider {
 
     async fn instantiate(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<KvId> {
         let url = config
-            .get("url")
+            .value("url")
             .ok_or_else(|| anyhow::anyhow!("nats keyvalue backend requires a 'url' config"))?;
         let client = connect_nats(url, egress, self.ignore_discovered_servers).await?;
         let context = async_nats::jetstream::new(client);
@@ -359,7 +359,7 @@ impl BackendProvider<KvId> for NatsProvider {
 
     fn check_egress(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         check_nats_url(config, policy)

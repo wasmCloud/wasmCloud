@@ -45,7 +45,7 @@ const KEYVALUE_COUNTER_WASM: &[u8] = include_bytes!("wasm/keyvalue_counter.wasm"
 const KV_VERSION: &str = "0.2.0-draft";
 
 fn kv_interface(name: Option<&str>, backend: Option<&str>) -> WitInterface {
-    let mut config = HashMap::new();
+    let mut config = wash_runtime::wit::Config::new();
     if let Some(backend) = backend {
         config.insert("backend".to_string(), backend.to_string());
     }

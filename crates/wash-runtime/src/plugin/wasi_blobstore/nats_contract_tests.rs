@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use super::NatsBlobstore;
+use crate::wit::Config;
 
 use anyhow::Context as _;
 use rcgen::{
@@ -31,7 +32,12 @@ async fn absent_credentials_preserve_the_host_connection() -> anyhow::Result<()>
             ("tls-first".into(), "true".into()),
         ]),
     ] {
-        assert!(plugin.connect_binding(&config).await?.is_none());
+        assert!(
+            plugin
+                .connect_binding(&Config::from(config))
+                .await?
+                .is_none()
+        );
     }
     Ok(())
 }
@@ -44,7 +50,10 @@ async fn incomplete_client_identity_is_refused() -> anyhow::Result<()> {
             ("servers".into(), "nats://unused:4222".into()),
             (key.into(), "/tenant.pem".into()),
         ]);
-        let error = plugin.connect_binding(&config).await.unwrap_err();
+        let error = plugin
+            .connect_binding(&Config::from(config))
+            .await
+            .unwrap_err();
         assert!(
             error.to_string().contains("must be set together"),
             "{error:#}"
@@ -62,7 +71,10 @@ async fn blank_identity_is_refused() -> anyhow::Result<()> {
     ] {
         let mut config = HashMap::from([("servers".to_string(), "nats://unused:4222".to_string())]);
         config.extend(blank.into_iter().map(|(k, v)| (k.into(), v.into())));
-        let error = plugin.connect_binding(&config).await.unwrap_err();
+        let error = plugin
+            .connect_binding(&Config::from(config))
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("empty values"), "{error:#}");
     }
     Ok(())
@@ -77,7 +89,10 @@ async fn websocket_servers_are_refused() -> anyhow::Result<()> {
             ("tls-cert".into(), "/tenant.crt".into()),
             ("tls-key".into(), "/tenant.key".into()),
         ]);
-        let error = plugin.connect_binding(&config).await.unwrap_err();
+        let error = plugin
+            .connect_binding(&Config::from(config))
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("WebSocket"), "{error:#}");
     }
     Ok(())
@@ -94,14 +109,14 @@ async fn client_identity_requires_tls() -> anyhow::Result<()> {
     std::fs::write(&cert_path, tenant.cert.pem())?;
     std::fs::write(&key_path, tenant.signing_key.serialize_pem())?;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let config = HashMap::from([
+    let config = Config::from(HashMap::from([
         (
             "servers".into(),
             format!("nats://{}", listener.local_addr()?),
         ),
         ("tls-cert".into(), cert_path.display().to_string()),
         ("tls-key".into(), key_path.display().to_string()),
-    ]);
+    ]));
     let plaintext_server = async {
         let (mut socket, _) = listener.accept().await?;
         socket
@@ -162,7 +177,7 @@ async fn certificate_only_binding_presents_its_own_identity() -> anyhow::Result<
         )?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let config = HashMap::from([
+    let config = Config::from(HashMap::from([
         (
             "servers".into(),
             format!("tls://localhost:{}", listener.local_addr()?.port()),
@@ -170,7 +185,7 @@ async fn certificate_only_binding_presents_its_own_identity() -> anyhow::Result<
         ("tls-ca".into(), ca_path.display().to_string()),
         ("TLS_CERT".into(), cert_path.display().to_string()),
         ("TLS_KEY".into(), key_path.display().to_string()),
-    ]);
+    ]));
     let handshake = async {
         let (mut socket, _) = listener.accept().await?;
         socket

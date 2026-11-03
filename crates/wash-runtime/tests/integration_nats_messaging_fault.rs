@@ -205,7 +205,7 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
         .build()?;
     let host = host.start().await.context("Failed to start host")?;
 
-    let mut subscription_config = HashMap::new();
+    let mut subscription_config = wash_runtime::wit::Config::new();
     subscription_config.insert(
         "subscriptions".to_string(),
         SUBSCRIPTION_SUBJECT.to_string(),

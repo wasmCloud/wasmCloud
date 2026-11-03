@@ -34,6 +34,7 @@ use wash_runtime::engine::workload::{UnresolvedWorkload, WorkloadComponent};
 use wash_runtime::host::http::{DevRouter, DynamicRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
 use wash_runtime::plugin::component_host::ComponentHostPlugin;
+use wash_runtime::plugin::wasmcloud_secrets::WasmcloudSecrets;
 use wash_runtime::plugin::{HostPlugin, WitInterfaces};
 use wash_runtime::types::{
     LocalResources, WorkloadState, WorkloadStatusRequest, WorkloadStopRequest,
@@ -52,6 +53,13 @@ const KV_PLUGIN_SERVICE_WASM: &[u8] = include_bytes!("wasm/kv_plugin_service.was
 const BRIDGE_BACKEND_WASM: &[u8] = include_bytes!("wasm/bridge_backend.wasm");
 const BADLIFECYCLE_WASM: &[u8] = include_bytes!("wasm/badlifecycle.wasm");
 const CONFIG_CALLEE_WASM: &[u8] = include_bytes!("wasm/config_callee.wasm");
+
+/// The natives a `kv-plugin` built here links: it reads its bindings' secrets
+/// as `wasmcloud:secrets` handles.
+fn secrets_native() -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+    let secrets: Arc<dyn HostPlugin> = Arc::new(WasmcloudSecrets::new());
+    HashMap::from([(secrets.id(), secrets)])
+}
 const PLUGIN_ID: &str = "acme-kv-plugin";
 
 /// Compilation-cache key for the one component every workload in this file
@@ -577,7 +585,8 @@ async fn test_bind_timeout_defers_rollback_unbind() -> Result<()> {
 
     // The hook keeps running; once it returns (~6s) the deferred rollback fires.
     // Eventually the log shows the slow bind both completed AND was unbound, and
-    // its late-provisioned state is reclaimed (bind-info 404).
+    // its late-provisioned state is reclaimed (bind-info 404). The late hook is
+    // refused its binding secrets: the host has already forgotten the workload.
     let mut settled = false;
     for _ in 0..240 {
         let (ls, log) = req(&client, &addr, "obs", "/lifecycle-log").await?;
@@ -589,6 +598,9 @@ async fn test_bind_timeout_defers_rollback_unbind() -> Result<()> {
         )
         .await?;
         if ls.as_u16() == 200
+            && log
+                .lines()
+                .any(|l| l == format!("secrets-refused:{slow_id}"))
             && log.lines().any(|l| l == format!("bind:{slow_id}"))
             && log.lines().any(|l| l == format!("unbind:{slow_id}"))
             && bs.as_u16() == 404
@@ -711,6 +723,7 @@ async fn test_reserved_lifecycle_export_not_workload_matchable() -> Result<()> {
     let plugin = ComponentHostPlugin::builder()
         .id(PLUGIN_ID)
         .wasm(KV_PLUGIN_WASM)
+        .native_plugins(secrets_native())
         .engine(engine)
         .build()
         .await?;
@@ -766,6 +779,7 @@ async fn test_lifecycle_hooks_driven_directly() -> Result<()> {
     let plugin = ComponentHostPlugin::builder()
         .id(PLUGIN_ID)
         .wasm(KV_PLUGIN_WASM)
+        .native_plugins(secrets_native())
         .engine(engine)
         .build()
         .await?;
@@ -778,7 +792,8 @@ async fn test_lifecycle_hooks_driven_directly() -> Result<()> {
     let mut labeled = acme_kv_interface();
     labeled.name = Some("cache".to_string());
     labeled.version = Some(semver::Version::parse("0.1.0-rc.1+build5").unwrap());
-    labeled.config = HashMap::from([("tier".to_string(), "gold".to_string())]);
+    labeled.config =
+        wash_runtime::wit::Config::from_iter([("tier".to_string(), "gold".to_string())]);
     let labeled: HashSet<WitInterface> = [labeled].into_iter().collect();
     plugin
         .on_workload_bind(&bare_workload("wl-labeled"), WitInterfaces::new(&labeled))
@@ -820,6 +835,7 @@ async fn test_lifecycle_bind_fails_when_plugin_not_running() -> Result<()> {
     let plugin = ComponentHostPlugin::builder()
         .id(PLUGIN_ID)
         .wasm(KV_PLUGIN_WASM)
+        .native_plugins(secrets_native())
         .engine(engine)
         .build()
         .await?;
@@ -869,6 +885,7 @@ async fn start_host_keeping_plugin_router(
         ComponentHostPlugin::builder()
             .id(PLUGIN_ID)
             .wasm(KV_PLUGIN_WASM)
+            .native_plugins(secrets_native())
             .engine(engine.clone())
             .build()
             .await?,
@@ -895,6 +912,7 @@ async fn start_host_with_lifecycle_timeout(
     let plugin = ComponentHostPlugin::builder()
         .id(PLUGIN_ID)
         .wasm(KV_PLUGIN_WASM)
+        .native_plugins(secrets_native())
         .engine(engine.clone())
         .build()
         .await?
@@ -1036,7 +1054,8 @@ async fn test_lifecycle_optional_fields_round_trip() -> Result<()> {
     let mut labeled = acme_kv_interface();
     labeled.name = Some("cache".to_string());
     labeled.version = Some(semver::Version::parse("0.1.0-rc.1+build5").unwrap());
-    labeled.config = HashMap::from([("tier".to_string(), "gold".to_string())]);
+    labeled.config =
+        wash_runtime::wit::Config::from_iter([("tier".to_string(), "gold".to_string())]);
     let labeled: HashSet<WitInterface> = [labeled].into_iter().collect();
     plugin
         .on_workload_bind(&bare_workload("wl-optional"), WitInterfaces::new(&labeled))
@@ -1084,7 +1103,7 @@ async fn test_plugin_without_lifecycle_export_is_unaffected() -> Result<()> {
 /// it is handed. It links nothing: the workload's plain import stays with the
 /// component plugin, and this one only receives the entry named after it.
 struct RecordingKv {
-    seen: std::sync::Mutex<Vec<HashMap<String, String>>>,
+    seen: std::sync::Mutex<Vec<wash_runtime::wit::Config>>,
 }
 
 const RECORDING_KV_ID: &str = "other-kv";
@@ -1128,6 +1147,7 @@ async fn test_lifecycle_bind_delivers_only_this_plugins_entries() -> Result<()> 
         ComponentHostPlugin::builder()
             .id(PLUGIN_ID)
             .wasm(KV_PLUGIN_WASM)
+            .native_plugins(secrets_native())
             .engine(engine.clone())
             .build()
             .await?,
@@ -1166,12 +1186,18 @@ async fn test_lifecycle_bind_delivers_only_this_plugins_entries() -> Result<()> 
         ..Default::default()
     });
     let mut wasi_config = WitInterface::from("wasi:config/store@0.2.0-rc.1");
-    wasi_config.config = HashMap::from([("api-key".to_string(), "config-secret".to_string())]);
+    wasi_config.config = wash_runtime::wit::Config::from_iter([(
+        "api-key".to_string(),
+        "config-secret".to_string(),
+    )]);
     workload.host_interfaces.push(wasi_config);
     // A second `acme:kv` binding, routed by name to the native plugin.
     workload.host_interfaces.push(WitInterface {
         name: Some(RECORDING_KV_ID.to_string()),
-        config: HashMap::from([("backend-key".to_string(), "kv-secret".to_string())]),
+        config: wash_runtime::wit::Config::from_iter([(
+            "backend-key".to_string(),
+            "kv-secret".to_string(),
+        )]),
         ..acme_kv_interface()
     });
 
@@ -1214,9 +1240,9 @@ async fn test_lifecycle_bind_delivers_only_this_plugins_entries() -> Result<()> 
     let seen = other.seen.lock().unwrap().clone();
     assert_eq!(
         seen,
-        vec![HashMap::from([(
-            "backend-key".to_string(),
-            "kv-secret".to_string()
+        vec![wash_runtime::wit::Config::from_iter([(
+            "backend-key",
+            "kv-secret"
         )])],
         "the named binding's plugin must see only its own entry"
     );

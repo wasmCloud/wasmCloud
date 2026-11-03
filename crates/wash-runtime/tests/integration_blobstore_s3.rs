@@ -16,7 +16,6 @@
 //! `cargo test -- --ignored` (CI's Linux leg) and not a plain `cargo test`.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,7 +28,7 @@ use testcontainers::{GenericImage, ImageExt, core::IntoContainerPort, runners::A
 use wash_runtime::plugin::wasi_blobstore::{
     BlobBackendError, MultiplexedAsyncBlobstore, S3BlobProvider,
 };
-use wash_runtime::wit::WitInterface;
+use wash_runtime::wit::{Config, WitInterface};
 
 /// The server's own credentials: RustFS checks signatures, so the binding's
 /// keys have to be these.
@@ -45,7 +44,7 @@ fn s3_blob_iface(name: &str, endpoint: &str) -> WitInterface {
             .into_iter()
             .collect(),
         version: None,
-        config: HashMap::from([
+        config: Config::from([
             ("backend".to_string(), "s3".to_string()),
             ("endpoint".to_string(), endpoint.to_string()),
             ("region".to_string(), "us-east-1".to_string()),
@@ -309,7 +308,7 @@ async fn multiplexed_blobstore_routes_to_s3() -> Result<()> {
 
 /// Config for a real bucket, with one of the two credential sources.
 fn real_s3_iface(name: &str, region: &str, credentials: &[(&str, &str)]) -> WitInterface {
-    let mut config = HashMap::from([
+    let mut config = Config::from([
         ("backend".to_string(), "s3".to_string()),
         ("region".to_string(), region.to_string()),
     ]);

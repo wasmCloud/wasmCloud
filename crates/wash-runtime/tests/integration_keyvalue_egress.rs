@@ -50,7 +50,7 @@ fn redis_store(name: &str, url: &str) -> WitInterface {
         package: "keyvalue".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-        config: HashMap::from([
+        config: wash_runtime::wit::Config::from_iter([
             ("backend".to_string(), "redis".to_string()),
             ("url".to_string(), url.to_string()),
             ("prefix".to_string(), name.to_string()),

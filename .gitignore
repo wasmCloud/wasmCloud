@@ -28,6 +28,7 @@ CLAUDE.md
 examples/*/wit/deps/
 plugins/*/wit/deps/
 crates/wash-runtime/tests/fixtures/*/wit/deps/
+wit/*/wit/deps/
 
 # Local WIT build output (root /wit/ publish workflow)
 /wit-build/

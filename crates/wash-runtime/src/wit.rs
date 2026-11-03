@@ -15,11 +15,11 @@
 //! specification can satisfy another. This is crucial for matching component
 //! requirements with plugin capabilities.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt::Display,
-    hash::DefaultHasher,
-};
+mod config;
+
+pub use config::{Config, ConfigStr, ConfigValue};
+
+use std::{collections::HashSet, fmt::Display, hash::DefaultHasher};
 
 use serde::{Deserialize, Serialize};
 
@@ -204,7 +204,7 @@ pub struct WitInterface {
     /// Additional configuration parameters for this interface. Defaulted: an
     /// entry bound under an operator-declared binding configures nothing here.
     #[serde(default)]
-    pub config: HashMap<String, String>,
+    pub config: Config,
     /// Optional name identifying this specific instance when multiple entries
     /// of the same namespace:package exist. Three meanings, all routing keys:
     /// the `identifier` a multiplexing plugin opens with (store::open, etc.);
@@ -219,31 +219,16 @@ pub struct WitInterface {
     pub name: Option<String>,
 }
 
-/// Config keys, never config values.
-///
-/// Once bindings resolve, `config` carries whatever the operator's `secretFrom`
-/// resolved to — creds, tokens, TLS keys — and this type is `?`-logged on
-/// several paths. A plugin that wants a value in a log names that value itself.
+/// Config keys, never config values: see [`Config`].
 impl std::fmt::Debug for WitInterface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        struct Keys<'a>(&'a HashMap<String, String>);
-        impl std::fmt::Debug for Keys<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                let mut keys: Vec<&str> = self.0.keys().map(String::as_str).collect();
-                keys.sort_unstable();
-                f.debug_map()
-                    .entries(keys.into_iter().map(|k| (k, format_args!("<redacted>"))))
-                    .finish()
-            }
-        }
-
         f.debug_struct("WitInterface")
             .field("namespace", &self.namespace)
             .field("package", &self.package)
             .field("interfaces", &self.interfaces)
             .field("version", &self.version)
             .field("name", &self.name)
-            .field("config", &Keys(&self.config))
+            .field("config", &self.config)
             .finish()
     }
 }
@@ -415,7 +400,7 @@ impl std::hash::Hash for WitInterface {
         self.namespace.hash(state);
         self.package.hash(state);
         self.name.hash(state);
-        // HashSet and HashMap have non-deterministic iteration order,
+        // HashSet has non-deterministic iteration order,
         // so we XOR individual hashes to produce an order-independent result.
         let mut interfaces_hash = 0u64;
         for iface in &self.interfaces {
@@ -425,14 +410,11 @@ impl std::hash::Hash for WitInterface {
         }
         interfaces_hash.hash(state);
         self.version.hash(state);
-        let mut config_hash = 0u64;
+        // A secret hashes by key alone; equal configs still hash alike.
         for (k, v) in &self.config {
-            let mut h = DefaultHasher::new();
-            k.hash(&mut h);
-            v.hash(&mut h);
-            config_hash ^= std::hash::Hasher::finish(&h);
+            k.hash(state);
+            v.as_text().hash(state);
         }
-        config_hash.hash(state);
     }
 }
 
@@ -469,7 +451,7 @@ impl From<&str> for WitInterface {
             package: package.to_string(),
             interfaces,
             version,
-            config: HashMap::new(),
+            config: Config::new(),
             name: None,
         }
     }
@@ -497,11 +479,14 @@ mod tests {
             interfaces: ["core".to_string()].into_iter().collect(),
             version: Some(semver::Version::new(0, 1, 0)),
             config: [
-                ("creds".to_string(), "SUPERSECRET".to_string()),
-                ("password".to_string(), "hunter2".to_string()),
+                ("creds", ConfigValue::from("SUPERSECRET")),
+                (
+                    "password",
+                    crate::plugin::SecretValue::new("hunter2").into(),
+                ),
             ]
             .into_iter()
-            .collect(),
+            .collect::<Config>(),
             name: None,
         };
 
@@ -524,7 +509,7 @@ mod tests {
             package: package.to_string(),
             interfaces: interfaces.iter().map(|s| s.to_string()).collect(),
             version: None,
-            config: HashMap::new(),
+            config: Config::new(),
             name: None,
         }
     }
@@ -540,7 +525,7 @@ mod tests {
             package: package.to_string(),
             interfaces: interfaces.iter().map(|s| s.to_string()).collect(),
             version: Some(semver::Version::parse(version).unwrap()),
-            config: HashMap::new(),
+            config: Config::new(),
             name: None,
         }
     }

@@ -107,6 +107,8 @@ pub struct LifecycleReplay {
     pub func: Arc<str>,
     /// The workload the bind concerns (its id, with no component id).
     pub caller: WorkloadCaller,
+    /// Guest errors may quote revealed binding secrets.
+    pub redact_errors: bool,
     /// The `workload-info` argument (handle-free).
     pub args: Vec<Relocated>,
     /// The bind function's result types.

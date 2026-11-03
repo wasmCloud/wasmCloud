@@ -13,7 +13,6 @@
 #![cfg(feature = "host-component-plugins")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -74,7 +73,7 @@ fn fetch_interface() -> WitInterface {
         package: "httpegress".to_string(),
         interfaces: ["fetch".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.1.0").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }

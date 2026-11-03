@@ -236,7 +236,7 @@ async fn plugin_host_release(
                     package: "httpegress".to_string(),
                     interfaces: ["fetch".to_string()].into_iter().collect(),
                     version: Some(semver::Version::parse("0.1.0")?),
-                    config: HashMap::new(),
+                    config: Default::default(),
                     name: None,
                 },
             ],

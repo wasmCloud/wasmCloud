@@ -121,13 +121,13 @@ pub(super) async fn fixture() -> anyhow::Result<Fixture> {
     crate::init_crypto();
     let server = NatsServer::start().await?;
     let scope = Scope::new();
-    let config = NatsConfig::from_map(&HashMap::from([
-        ("servers".into(), server.url.clone()),
-        ("subject-allow".into(), format!("{}.>", scope.subjects)),
-        ("stream-allow".into(), scope.stream.clone()),
-        ("stream-delete-allow".into(), scope.stream.clone()),
-        ("bucket-allow".into(), scope.bucket.clone()),
-        ("request-timeout-ms".into(), "1000".into()),
+    let config = NatsConfig::from_map(&crate::wit::Config::from([
+        ("servers", server.url.clone()),
+        ("subject-allow", format!("{}.>", scope.subjects)),
+        ("stream-allow", scope.stream.clone()),
+        ("stream-delete-allow", scope.stream.clone()),
+        ("bucket-allow", scope.bucket.clone()),
+        ("request-timeout-ms", "1000".into()),
     ]))?;
     let plugin = Arc::new(WasmcloudNats::new());
     let conn = acquire(&plugin, "workload", "", &config).await?;
@@ -166,8 +166,8 @@ async fn acquire(
 /// A deny-all binding with no time for a round trip, so a resource method
 /// wrongly routed through its id is refused or runs out of time.
 async fn deny_all(fixture: &Fixture) -> anyhow::Result<Arc<ConnHandle>> {
-    let mut denied = NatsConfig::from_map(&HashMap::from([(
-        "servers".into(),
+    let mut denied = NatsConfig::from_map(&crate::wit::Config::from([(
+        "servers",
         fixture.server.url.clone(),
     )]))?;
     denied.request_timeout = Some(Duration::ZERO);
@@ -941,9 +941,9 @@ async fn a_bucket_writes_to_the_server_it_was_opened_on() -> anyhow::Result<()> 
     let south = NatsServer::container().await?;
     let scope = Scope::new();
     let config = |url: &str| {
-        NatsConfig::from_map(&HashMap::from([
-            ("servers".into(), url.to_string()),
-            ("bucket-allow".into(), scope.bucket.clone()),
+        NatsConfig::from_map(&crate::wit::Config::from([
+            ("servers", url.to_string()),
+            ("bucket-allow", scope.bucket.clone()),
         ]))
     };
     let plugin = Arc::new(WasmcloudNats::new());

@@ -259,11 +259,8 @@ async fn start_host_with(declared: PluginBindingSet) -> Result<impl HostApi> {
 }
 
 /// The config map an operator writes for one declared binding.
-fn declared(config: &[(&str, &str)]) -> HashMap<String, String> {
-    config
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect()
+fn declared(config: &[(&str, &str)]) -> wash_runtime::wit::Config {
+    config.iter().copied().collect()
 }
 
 /// Collects result lines the fixture publishes, up to `count` or the deadline.

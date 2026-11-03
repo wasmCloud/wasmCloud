@@ -107,8 +107,8 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     interfaces: ["incoming-handler".to_string()].into_iter().collect(),
                     version: Some(semver::Version::new(0, 2, 2)),
                     config: {
-                        let mut config = HashMap::new();
-                        config.insert("host".to_string(), "foo".to_string());
+                        let mut config = wash_runtime::wit::Config::new();
+                        config.insert("host", "foo");
                         config
                     },
                     name: None,
@@ -126,7 +126,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
                     version: Some(
                         semver::Version::parse("0.2.0-draft").expect("valid semver version"),
                     ),
-                    config: HashMap::new(),
+                    config: Default::default(),
                     name: None,
                 },
             ],

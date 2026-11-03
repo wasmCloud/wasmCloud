@@ -121,10 +121,12 @@ jobs:
         # Layout (per `wash wit build`'s convention):
         #   wit/<pkg>/
         #     wit/world.wit   ← WIT source
+        #     wit/deps/       ← fetched by `wash wit fetch`, never committed
         #     wkg.lock        ← lock file at project root
-        # For each <pkg>: wasm-tools round-trips the WIT source as an
-        # independent sanity check, then `wash wit build` produces the
-        # canonical component and the wkg.lock at the package root.
+        # For each <pkg>: `wash wit fetch` pulls the dependencies wkg.lock
+        # pins, wasm-tools round-trips the WIT source as an independent
+        # sanity check, then `wash wit build` produces the canonical
+        # component and the wkg.lock at the package root.
         # The raw wasm is then enriched with provenance metadata via
         # `wasm-tools metadata add`; those fields are surfaced as
         # `org.opencontainers.image.*` annotations by `wash oci push`
@@ -147,6 +149,9 @@ jobs:
           for pkg in "${PKGS[@]}"; do
             name=$(basename "${pkg}")
             wit_dir="${pkg}wit"
+            echo "::group::wash wit fetch ${pkg}"
+            ( cd "${pkg}" && wash wit fetch )
+            echo "::endgroup::"
             echo "::group::wasm-tools component wit ${wit_dir}"
             wasm-tools component wit "${wit_dir}"
             echo "::endgroup::"

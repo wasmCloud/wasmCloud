@@ -4,7 +4,7 @@
 //! a plugin sees this map, so credentials arrive here already resolved and are
 //! never read from a manifest by this module.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -12,6 +12,7 @@ use anyhow::{Context as _, bail};
 use zeroize::Zeroizing;
 
 use crate::nats_credentials::{AuthHook, Credentials, Secret};
+use crate::wit::{Config, ConfigStr, ConfigValue};
 
 /// Default per-consumer in-flight limit.
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
@@ -298,8 +299,8 @@ pub enum AckMode {
 ///
 /// `A` is how it authenticates: [`NatsAuth`] once every value is known, and
 /// `Option<NatsAuth>` while a key a plugin secret supplies may decide it.
-#[derive(Debug)]
 pub struct NatsConfig<A = NatsAuth> {
+    pub secret_keys: BTreeSet<String>,
     pub servers: Vec<String>,
     pub name: Option<String>,
     pub jetstream_domain: Option<String>,
@@ -317,7 +318,7 @@ pub struct NatsConfig<A = NatsAuth> {
 /// A pending key counts as set for every rule its presence decides. Its value
 /// is not read, so each rule on a value is checked at bind, once it has one.
 struct Layer<'a> {
-    cfg: &'a HashMap<String, String>,
+    cfg: &'a Config,
     pending: &'a BTreeSet<String>,
 }
 
@@ -330,7 +331,7 @@ impl Layer<'_> {
     /// asked for here that the table does not name trips a debug assertion, and
     /// a key in the table nothing asks for is dead weight the table's own tests
     /// name.
-    fn get(&self, key: &str) -> Option<&str> {
+    fn get(&self, key: &str) -> Option<ConfigStr<'_>> {
         super::keys::get(self.cfg, key)
     }
 
@@ -351,7 +352,7 @@ impl Layer<'_> {
         let mut blank: Vec<&str> = self
             .cfg
             .iter()
-            .filter(|(_, value)| value.trim().is_empty())
+            .filter(|(_, value)| value.expose().is_some_and(|v| v.trim().is_empty()))
             .filter(|(key, _)| {
                 super::keys::find(key).is_some_and(|row| {
                     row.identity != super::keys::Identity::None
@@ -375,7 +376,8 @@ impl Layer<'_> {
     fn list(&self, key: &str) -> Vec<String> {
         self.get(key)
             .map(|raw| {
-                raw.split(',')
+                raw.expose()
+                    .split(',')
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .map(String::from)
@@ -387,6 +389,7 @@ impl Layer<'_> {
     fn parse_usize(&self, key: &str, default: usize) -> anyhow::Result<usize> {
         match self.get(key) {
             Some(raw) => raw
+                .expose()
                 .parse()
                 .with_context(|| format!("`{key}` must be a positive integer, got `{raw}`")),
             None => Ok(default),
@@ -396,6 +399,7 @@ impl Layer<'_> {
     fn parse_bool(&self, key: &str) -> anyhow::Result<bool> {
         match self.get(key) {
             Some(raw) => raw
+                .expose()
                 .parse()
                 .with_context(|| format!("`{key}` must be `true` or `false`, got `{raw}`")),
             None => Ok(false),
@@ -409,8 +413,8 @@ impl Layer<'_> {
             bail!("`{key}` and `{file_key}` were both supplied; set one");
         }
         Ok(match (self.get(key), self.get(file_key)) {
-            (Some(value), _) => Some(Secret::Value(Zeroizing::new(value.to_string()))),
-            (None, Some(path)) => Some(Secret::File(PathBuf::from(path))),
+            (Some(value), _) => Some(Secret::Value(Zeroizing::new(value.expose().to_string()))),
+            (None, Some(path)) => Some(Secret::File(PathBuf::from(path.expose()))),
             (None, None) => None,
         })
     }
@@ -464,7 +468,7 @@ fn parse_layer_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
     if has_creds {
         return Ok(match (creds, jwt_as_token_pending) {
             (Some(path), false) => Some(NatsAuth::CredsFile {
-                path: PathBuf::from(path),
+                path: PathBuf::from(path.expose()),
                 jwt_as_token,
             }),
             _ => None,
@@ -477,7 +481,7 @@ fn parse_layer_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
         (true, true) => {
             return Ok(match (jwt, seed, jwt_as_token_pending) {
                 (Some(jwt), Some(seed), false) => Some(NatsAuth::JwtNkey {
-                    jwt: jwt.to_string(),
+                    jwt: jwt.expose().to_string(),
                     seed,
                     jwt_as_token,
                 }),
@@ -493,7 +497,7 @@ fn parse_layer_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
             return Ok(username
                 .zip(password)
                 .map(|(username, password)| NatsAuth::UserPassword {
-                    username: username.to_string(),
+                    username: username.expose().to_string(),
                     password,
                 }));
         }
@@ -520,7 +524,7 @@ pub(crate) enum BindingIdentity {
 /// Classifies a binding's identity after all its secrets have resolved. A blank
 /// identity key is an error rather than absent.
 #[cfg_attr(not(feature = "wasi-blobstore"), allow(dead_code))]
-pub(crate) fn binding_identity(cfg: &HashMap<String, String>) -> anyhow::Result<BindingIdentity> {
+pub(crate) fn binding_identity(cfg: &Config) -> anyhow::Result<BindingIdentity> {
     let layer = Layer {
         cfg,
         pending: &BTreeSet::new(),
@@ -568,15 +572,18 @@ fn read<A>(
     }
 
     let ack_mode = match r.get("ack-mode") {
-        None | Some("auto") => AckMode::Auto,
-        Some("manual") => AckMode::Manual,
-        Some(other) => bail!("`ack-mode` must be `auto` or `manual`, got `{other}`"),
+        None => AckMode::Auto,
+        Some(raw) => match raw.expose() {
+            "auto" => AckMode::Auto,
+            "manual" => AckMode::Manual,
+            _ => bail!("`ack-mode` must be `auto` or `manual`, got `{raw}`"),
+        },
     };
 
     let request_timeout = match r.get("request-timeout-ms") {
-        Some(raw) => Some(Duration::from_millis(raw.parse().with_context(|| {
-            format!("`request-timeout-ms` must be a positive integer, got `{raw}`")
-        })?)),
+        Some(raw) => Some(Duration::from_millis(raw.expose().parse().with_context(
+            || format!("`request-timeout-ms` must be a positive integer, got `{raw}`"),
+        )?)),
         None => None,
     };
 
@@ -591,7 +598,7 @@ fn read<A>(
         // Zero is meaningful here -- it is how an operator says "server
         // default" -- so unlike the other two it is not rejected.
         max_ack_pending: match r.get("max-ack-pending") {
-            Some(raw) => Some(raw.parse().with_context(|| {
+            Some(raw) => Some(raw.expose().parse().with_context(|| {
                 format!("`max-ack-pending` must be a non-negative integer, got `{raw}`")
             })?),
             None => None,
@@ -599,7 +606,7 @@ fn read<A>(
         // Zero is meaningful here too: it is how an operator asks for the
         // server's unlimited redelivery back.
         max_deliver: match r.get("max-deliver") {
-            Some(raw) => Some(raw.parse().with_context(|| {
+            Some(raw) => Some(raw.expose().parse().with_context(|| {
                 format!("`max-deliver` must be a non-negative integer, got `{raw}`")
             })?),
             None => None,
@@ -621,14 +628,18 @@ fn read<A>(
         ("subscription-capacity", limits.subscription_capacity),
     ] {
         if value > MAX_PERMITS {
+            let value = r
+                .get(key)
+                .map(|value| value.to_string())
+                .unwrap_or_default();
             bail!("`{key}` must be at most {MAX_PERMITS}, got {value}");
         }
     }
 
     let tls = TlsConfig {
-        ca: r.get("tls-ca").map(PathBuf::from),
-        cert: r.get("tls-cert").map(PathBuf::from),
-        key: r.get("tls-key").map(PathBuf::from),
+        ca: r.get("tls-ca").map(|v| PathBuf::from(v.expose())),
+        cert: r.get("tls-cert").map(|v| PathBuf::from(v.expose())),
+        key: r.get("tls-key").map(|v| PathBuf::from(v.expose())),
         first: r.parse_bool("tls-first")?,
     };
     if r.is_set("tls-cert") != r.is_set("tls-key") {
@@ -636,10 +647,16 @@ fn read<A>(
     }
 
     Ok(NatsConfig {
+        secret_keys: r
+            .cfg
+            .iter()
+            .filter(|(_, value)| value.is_secret())
+            .map(|(key, _)| super::keys::canonical(key))
+            .collect(),
         servers,
-        name: r.get("name").map(String::from),
-        jetstream_domain: r.get("jetstream-domain").map(String::from),
-        inbox_prefix: r.get("inbox-prefix").map(String::from),
+        name: r.get("name").map(|v| v.expose().to_string()),
+        jetstream_domain: r.get("jetstream-domain").map(|v| v.expose().to_string()),
+        inbox_prefix: r.get("inbox-prefix").map(|v| v.expose().to_string()),
         auth: auth(parse_layer_auth(r)?)?,
         tls,
         policy: PolicySpec {
@@ -654,18 +671,21 @@ fn read<A>(
     })
 }
 
+impl<A> std::fmt::Debug for NatsConfig<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NatsConfig").finish_non_exhaustive()
+    }
+}
+
 impl NatsConfig {
     /// Checks a binding's layer before bind, with the keys in `pending` still
     /// waiting on a plugin secret, and returns the servers known now.
-    pub fn check_layer(
-        cfg: &HashMap<String, String>,
-        pending: &BTreeSet<String>,
-    ) -> anyhow::Result<Vec<String>> {
+    pub fn check_layer(cfg: &Config, pending: &BTreeSet<String>) -> anyhow::Result<Vec<String>> {
         Ok(read(&Layer { cfg, pending }, Ok)?.servers)
     }
 
     /// Parses and validates a workload's config map.
-    pub fn from_map(cfg: &HashMap<String, String>) -> anyhow::Result<Self> {
+    pub fn from_map(cfg: &Config) -> anyhow::Result<Self> {
         let layer = Layer {
             cfg,
             pending: &BTreeSet::new(),
@@ -754,6 +774,7 @@ impl NatsConfig {
         self.request_timeout.hash(&mut hasher);
 
         ConnKey {
+            servers_secret: self.secret_keys.contains("servers"),
             servers: self.servers.clone(),
             name: self.name.clone(),
             jetstream_domain: self.jetstream_domain.clone(),
@@ -780,13 +801,20 @@ fn hash_secret(secret: &Secret, hasher: &mut impl std::hash::Hasher) {
 }
 
 /// Identity of a connection within a workload. Never shared across workloads.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ConnKey {
+    pub servers_secret: bool,
     pub servers: Vec<String>,
     pub name: Option<String>,
     pub jetstream_domain: Option<String>,
     pub inbox_prefix: Option<String>,
     pub credential_fingerprint: u64,
+}
+
+impl std::fmt::Debug for ConnKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnKey").finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1008,11 +1036,21 @@ pub(super) fn parse_kv_watches(binding: &str, raw: &str) -> anyhow::Result<Vec<K
 /// One declared subscription as the author wrote it, used both to recognise the
 /// same subscription arriving on a second component and to name it in the error
 /// that refuses the pair.
-pub(super) fn subscription_spec(key: &str, binding: &str, value: String) -> String {
-    if binding.is_empty() {
+pub(super) fn subscription_spec(
+    key: &str,
+    binding: &str,
+    source: ConfigStr<'_>,
+    value: String,
+) -> ConfigValue {
+    let spec = if binding.is_empty() {
         format!("`{key}: {value}`")
     } else {
         format!("`{key}: {value}` on binding `{binding}`")
+    };
+    if source.is_secret() {
+        ConfigValue::Secret(crate::plugin::SecretValue::new(spec))
+    } else {
+        ConfigValue::Text(spec)
     }
 }
 #[cfg(test)]
@@ -1092,11 +1130,25 @@ mod tests {
         NatsConfig::check_layer(&cfg, &pending(&["token"])).unwrap();
     }
 
-    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    #[test]
+    fn oversized_secret_limits_are_not_quoted() {
+        for key in ["max-in-flight", "subscription-capacity"] {
+            let value = usize::MAX.to_string();
+            for secret in [false, true] {
+                let mut config = map(&[("servers", "nats://localhost:4222")]);
+                if secret {
+                    config.insert(key, crate::plugin::SecretValue::new(value.clone()));
+                } else {
+                    config.insert(key, value.clone());
+                }
+                let error = NatsConfig::from_map(&config).unwrap_err().to_string();
+                assert_eq!(error.contains(&value), !secret, "{error}");
+            }
+        }
+    }
+
+    fn map(pairs: &[(&str, &str)]) -> Config {
+        pairs.iter().copied().collect()
     }
 
     fn pending(keys: &[&str]) -> BTreeSet<String> {
@@ -1104,7 +1156,7 @@ mod tests {
     }
 
     fn read_pending(
-        cfg: &HashMap<String, String>,
+        cfg: &Config,
         pending: &BTreeSet<String>,
     ) -> anyhow::Result<NatsConfig<Option<NatsAuth>>> {
         read(&Layer { cfg, pending }, Ok)
@@ -1672,9 +1724,10 @@ mod tests {
             ("token", "super-secret"),
         ]))
         .unwrap();
-        let rendered = format!("{cfg:?}");
-        assert!(!rendered.contains("super-secret"));
-        assert!(rendered.contains("token"));
+        assert!(!format!("{cfg:?}").contains("super-secret"));
+        let auth = format!("{:?}", cfg.auth);
+        assert!(!auth.contains("super-secret"));
+        assert!(auth.contains("token"), "{auth}");
     }
     #[test]
     fn jetstream_subs_basic() {

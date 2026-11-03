@@ -2023,7 +2023,7 @@ impl From<types::v2::WitInterface> for crate::wit::WitInterface {
                 wi.version.parse::<semver::Version>().ok()
             },
             interfaces: wi.interfaces.into_iter().collect(),
-            config: wi.config,
+            config: wi.config.into(),
             name: if wi.name.is_empty() {
                 None
             } else {
@@ -2144,7 +2144,7 @@ impl From<crate::wit::WitInterface> for types::v2::WitInterface {
             package: wi.package,
             version: wi.version.map(|v| v.to_string()).unwrap_or_default(),
             interfaces: wi.interfaces.into_iter().collect(),
-            config: wi.config,
+            config: wi.config.redacted().into_iter().collect(),
             name: wi.name.unwrap_or_default(),
         }
     }

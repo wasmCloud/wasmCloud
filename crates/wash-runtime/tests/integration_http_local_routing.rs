@@ -111,7 +111,7 @@ fn http_workload(
         .iter()
         .map(|s| s.parse().expect("test gave invalid allowed_hosts entry"))
         .collect();
-    let mut config = HashMap::new();
+    let mut config = wash_runtime::wit::Config::new();
     config.insert("host".to_string(), host_header.to_string());
     for (k, v) in extra_http_config {
         config.insert((*k).to_string(), (*v).to_string());

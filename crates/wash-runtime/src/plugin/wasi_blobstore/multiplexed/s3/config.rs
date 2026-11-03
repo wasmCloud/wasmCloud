@@ -2,12 +2,13 @@
 //! `object_store`, how spellings fold, and where a binding's credentials
 //! may come from.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use object_store::ClientConfigKey;
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
 use crate::plugin::multiplex::BACKEND_CONFIG_KEY;
+use crate::wit::Config;
 
 /// Opts a binding into the host's own AWS identity (`AWS_*` env, then IMDS).
 /// Host-owned: see the plugins' `binding_schema`.
@@ -130,14 +131,15 @@ struct Folded<'a> {
 
 /// The bucket-less base builder from a binding's config. Errors name keys,
 /// never values (#5470).
-pub(super) fn builder_from_config(
-    config: &HashMap<String, String>,
-) -> anyhow::Result<AmazonS3Builder> {
-    // Fold every spelling onto its canonical name first: two spellings of
-    // one key with different values would otherwise be applied in `HashMap`
-    // order, and the host only folds spellings for keys a schema declares.
+pub(super) fn builder_from_config(config: &Config) -> anyhow::Result<AmazonS3Builder> {
+    // Fold every spelling onto its canonical name first: of two spellings of
+    // one key with different values, the one sorting last would otherwise win,
+    // and the host only folds spellings for keys a schema declares.
     let mut folded: BTreeMap<&'static str, Folded<'_>> = BTreeMap::new();
     for (key, value) in config {
+        let Some(value) = value.expose() else {
+            anyhow::bail!("s3 blobstore config key '{key}' is not text");
+        };
         let normalized = normalize_key(key);
         if normalized == BACKEND_CONFIG_KEY {
             continue;
@@ -250,20 +252,29 @@ pub(super) fn builder_from_config(
     Ok(builder)
 }
 
+/// Whether a secret sits under a key whose value `object_store` parses, and
+/// so may quote in an error. It passes credentials through as given.
+pub(super) fn parses_a_secret(config: &Config) -> bool {
+    config.iter().any(|(key, value)| {
+        value.is_secret()
+            && !matches!(
+                lookup(&normalize_key(key)).map(|spec| spec.name),
+                Some("access_key_id" | "secret_access_key" | "session_token")
+            )
+    })
+}
+
 #[cfg(test)]
 pub(super) mod test_support {
-    use std::collections::HashMap;
+    use crate::wit::Config;
 
-    pub fn cfg(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    pub fn cfg(pairs: &[(&str, &str)]) -> Config {
+        pairs.iter().copied().collect()
     }
 
     /// `pairs` plus static keys, for tests about something other than where
     /// credentials come from.
-    pub fn keyed(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pub fn keyed(pairs: &[(&str, &str)]) -> Config {
         let mut config = cfg(&[("access_key_id", "AKIA"), ("secret_access_key", "s")]);
         config.extend(cfg(pairs));
         config
@@ -338,8 +349,8 @@ mod tests {
 
     #[test]
     fn builder_rejects_conflicting_spellings_naming_both() {
-        // Two spellings of one key with different values would otherwise be
-        // applied in `HashMap` order, so the winner would change per bind.
+        // Of two spellings of one key with different values, the one sorting
+        // last would otherwise win, silently.
         let err = builder_from_config(&cfg(&[
             ("endpoint", "http://ONE-MUST-NOT-LEAK"),
             ("aws_endpoint", "http://TWO-MUST-NOT-LEAK"),

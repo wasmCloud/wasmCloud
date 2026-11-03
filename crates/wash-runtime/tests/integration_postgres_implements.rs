@@ -64,7 +64,7 @@ fn named_pg(name: &str, url: &str) -> WitInterface {
         package: "postgres".to_string(),
         interfaces: ["query".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse(PG_VERSION).unwrap()),
-        config: HashMap::from([("url".to_string(), url.to_string())]),
+        config: wash_runtime::wit::Config::from_iter([("url".to_string(), url.to_string())]),
         name: Some(name.to_string()),
     }
 }
@@ -74,7 +74,7 @@ fn named_pg(name: &str, url: &str) -> WitInterface {
 /// `url` is the operator's.
 fn pg_label(name: &str) -> WitInterface {
     WitInterface {
-        config: HashMap::new(),
+        config: Default::default(),
         ..named_pg(name, "")
     }
 }
@@ -147,8 +147,14 @@ async fn implements_imports_route_to_per_credential_connections() -> Result<()> 
         .with_plugin_bindings(
             PluginBindings::new().with_plugin(
                 PluginBindingSet::new("wasmcloud-postgres")
-                    .with_binding("team-a", HashMap::from([("url".to_string(), team_a_url)]))
-                    .with_binding("team-b", HashMap::from([("url".to_string(), team_b_url)])),
+                    .with_binding(
+                        "team-a",
+                        wash_runtime::wit::Config::from_iter([("url".to_string(), team_a_url)]),
+                    )
+                    .with_binding(
+                        "team-b",
+                        wash_runtime::wit::Config::from_iter([("url".to_string(), team_b_url)]),
+                    ),
             ),
         )
         .build()?;
