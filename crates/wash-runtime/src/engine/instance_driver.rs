@@ -53,19 +53,25 @@ use wasmtime_wasi_http::p3::bindings::Service;
 use crate::engine::ctx::SharedCtx;
 use crate::engine::dispatch::{GuestJob, GuestTask, Placement};
 use crate::engine::instance_pool::ComponentInstance;
+use crate::engine::lent_reply::{LentReplies, LentReply};
 use crate::host::http::ServiceHttpJob;
 use crate::host::trigger_service::HttpTask;
 
 /// A plain-value call from another component in the workload, routed to this
-/// one's instance. Handle-free by construction (that is what puts it on this
-/// path), so its arguments and results cross a channel as plain data.
+/// one's instance, and where its answer goes.
 pub(crate) struct LinkedJob {
+    pub(crate) call: LinkedCall,
+    pub(crate) reply: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<Val>>>,
+}
+
+/// A linked call. Handle-free by construction (that is what puts it on this
+/// path), so its arguments and results cross a channel as plain data.
+pub(crate) struct LinkedCall {
     pub(crate) func_idx: ComponentExportIndex,
     pub(crate) params: Vec<Val>,
     pub(crate) results_len: usize,
     pub(crate) import_name: Arc<str>,
     pub(crate) export_name: Arc<str>,
-    pub(crate) reply: tokio::sync::oneshot::Sender<wasmtime::Result<Vec<Val>>>,
     /// The abandonment flag of the dispatched call enforcing this job's
     /// deadline (see [`crate::engine::abandon`]).
     pub(crate) abandoned: Arc<crate::engine::abandon::AbandonFlag>,
@@ -101,6 +107,27 @@ pub(crate) enum InstanceJob {
     /// Unboxed: it is a handful of pointers, and the call it carries is already
     /// behind one.
     Guest(GuestJob),
+}
+
+impl InstanceJob {
+    /// Answer this job, which never ran, with the fault that ended its
+    /// instance.
+    fn fail(self, err: &wasmtime::Error) {
+        match self {
+            InstanceJob::Http(job) => {
+                let _ = job.resp_tx.send(Err(anyhow::anyhow!("{FAULTED}: {err:#}")));
+            }
+            InstanceJob::Linked(job) => {
+                let _ = job
+                    .reply
+                    .send(Err(wasmtime::format_err!("{FAULTED}: {err:#}")));
+            }
+            InstanceJob::Messaging(job) => {
+                let _ = job.result_tx.send(Err(format!("{FAULTED}: {err:#}")));
+            }
+            InstanceJob::Guest(job) => job.refuse(anyhow::anyhow!("{FAULTED}: {err:#}")),
+        }
+    }
 }
 
 /// Times one guest invocation, and records it when dropped.
@@ -209,27 +236,35 @@ impl PoolSlot {
     }
 }
 
+/// What a call on a pooled instance hears when the instance traps.
+const FAULTED: &str = "pooled instance faulted";
+
 /// Serves one linked call on a shared instance. Uses `call_concurrent`, so
 /// calls interleave rather than taking the store in turn.
 struct LinkedTask {
     instance: Instance,
-    job: Box<LinkedJob>,
+    call: LinkedCall,
+    reply: LentReply<wasmtime::Result<Vec<Val>>>,
     slot: PoolSlot,
 }
 
 impl AccessorTask<SharedCtx> for LinkedTask {
     async fn run(self, accessor: &Accessor<SharedCtx>) -> wasmtime::Result<()> {
-        let LinkedJob {
-            func_idx,
-            params,
-            results_len,
-            import_name,
-            export_name,
+        let LinkedTask {
+            instance,
+            call:
+                LinkedCall {
+                    func_idx,
+                    params,
+                    results_len,
+                    import_name,
+                    export_name,
+                    abandoned,
+                    attributes,
+                },
             reply,
-            abandoned,
-            attributes,
-        } = *self.job;
-        let instance = self.instance;
+            slot,
+        } = self;
 
         // The epoch deadline measures this call's own execution, so re-arm it
         // here. `watch_until_abandoned` below owns the registration.
@@ -248,7 +283,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
         let func = match func {
             Ok(func) => func,
             Err(e) => {
-                let _ = reply.send(Err(e));
+                reply.send(Err(e));
                 return Ok(());
             }
         };
@@ -279,7 +314,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
                     %export_name,
                     "pooled call failed in the host; retiring the instance"
                 );
-                self.slot.retire_instance();
+                slot.retire_instance();
                 Err(e)
             }
             // A guest subtask cannot be cancelled from the host, so the timed
@@ -294,7 +329,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
                     timeout = ?call_timeout,
                     "pooled call timed out; retiring the instance to end the stalled guest work"
                 );
-                self.slot.retire_instance();
+                slot.retire_instance();
                 Err(wasmtime::format_err!(
                     "function call timed out after {call_timeout:?}: {e}"
                 ))
@@ -302,7 +337,7 @@ impl AccessorTask<SharedCtx> for LinkedTask {
         };
         // The caller may have gone; its call still ran to completion, because
         // a guest subtask cannot be cancelled from the host.
-        let _ = reply.send(outcome);
+        reply.send(outcome);
         Ok(())
     }
 }
@@ -433,6 +468,7 @@ impl InstanceDriver {
             drained: tokio::sync::Notify::new(),
         });
         let task_state = Arc::clone(&state);
+        let replies = Arc::new(LentReplies::default());
 
         tokio::spawn(async move {
             // One `run_concurrent` for the life of the instance. Each call is
@@ -512,16 +548,24 @@ impl InstanceDriver {
                                     pool_slot: Some(slot),
                                 })
                             }
-                            InstanceJob::Linked(job) => accessor.spawn(LinkedTask {
+                            InstanceJob::Linked(job) => {
+                                let LinkedJob { call, reply } = *job;
+                                accessor.spawn(LinkedTask {
+                                    instance,
+                                    call,
+                                    reply: replies.lend(reply, |err| {
+                                        Err(wasmtime::format_err!("{FAULTED}: {err:#}"))
+                                    }),
+                                    slot,
+                                })
+                            }
+                            InstanceJob::Guest(job) => accessor.spawn(GuestTask::new(
                                 instance,
                                 job,
-                                slot,
-                            }),
-                            InstanceJob::Guest(job) => accessor.spawn(GuestTask {
-                                instance,
-                                job,
-                                placement: Placement::Pooled(slot),
-                            }),
+                                Placement::Pooled(slot),
+                                &replies,
+                                FAULTED,
+                            )),
                         };
                         if let Err(e) = spawned {
                             tracing::error!(err = %e, "failed to spawn pooled invocation task");
@@ -529,12 +573,22 @@ impl InstanceDriver {
                     }
                 })
                 .await;
+            // Gone before any caller hears of a fault, so a call made on
+            // hearing it is not admitted here.
+            rx.close();
             if let Err(e) = outcome {
                 // The store is poisoned: every call in flight on this instance
-                // died with it. The pool reaps the handle and the next call
-                // starts a fresh instance.
+                // died with it, and is answered with the fault. The pool reaps
+                // the handle and the next call starts a fresh instance.
                 tracing::error!(err = ?e, "pooled instance faulted; its in-flight calls failed");
                 crate::engine::trap_remediation::note_guest_fault(store.data(), &e);
+                task_state.retire();
+                replies.fault(&e);
+                drop(store);
+                // Sends reserved before close can still arrive.
+                while let Some((job, _guard)) = rx.recv().await {
+                    job.fail(&e);
+                }
             }
         });
 
@@ -674,6 +728,14 @@ impl InstanceDriver {
             tokio::sync::mpsc::error::TrySendError::Full((job, _))
             | tokio::sync::mpsc::error::TrySendError::Closed((job, _)) => job,
         })
+    }
+
+    /// Pause a send after admission and capacity reservation.
+    #[cfg(test)]
+    pub(crate) fn reserve_send_for_test(&self) -> impl FnOnce(InstanceJob) + '_ {
+        let guard = self.try_admit().expect("call must be admitted");
+        let permit = self.tx.try_reserve().expect("channel must have capacity");
+        move |job| permit.send((job, guard))
     }
 }
 

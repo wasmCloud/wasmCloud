@@ -15,6 +15,7 @@ use wasmtime::error::Context as _;
 
 use super::InFlightGuard;
 use crate::engine::ctx::{CallerIdentity, SharedCtx, WorkloadCaller};
+use crate::engine::lent_reply::{LentReplies, LentReply};
 use crate::engine::store::relocate::{self, Relocated};
 use crate::host::job_registry::{JobGuard, JobRegistry};
 use crate::plugin::SecretValue;
@@ -169,6 +170,7 @@ pub(super) fn admit_and_spawn_call(
     func_map: &BTreeMap<Arc<str>, BTreeMap<Arc<str>, ComponentExportIndex>>,
     registry: &Arc<JobRegistry>,
     in_flight: &Arc<AtomicUsize>,
+    replies: &Arc<LentReplies>,
     call: CapabilityCall,
 ) {
     let guard = match admit(in_flight) {
@@ -197,15 +199,37 @@ pub(super) fn admit_and_spawn_call(
     // guest unwinds itself.
     let job = registry.admit(call.caller.clone());
     let job_guard = JobGuard::new(Arc::clone(registry), job);
+    let CapabilityCall {
+        interface,
+        func,
+        caller,
+        args,
+        result_tys,
+        reply,
+        abandoned,
+    } = call;
     if let Err(e) = accessor.spawn(CapabilityTask {
         instance,
         func_idx,
-        call,
+        interface,
+        func,
+        caller,
+        args,
+        result_tys,
+        reply: replies.lend(reply, |_| Err(plugin_faulted())),
+        abandoned,
         in_flight: guard,
         job_guard,
     }) {
         tracing::error!(err = %e, "failed to spawn capability call task");
     }
+}
+
+/// What a caller hears when the plugin's store faults. One store serves every
+/// workload, and the trap may come from another workload's call, so the cause
+/// stays in the host log rather than reaching each caller.
+pub(super) fn plugin_faulted() -> wasmtime::Error {
+    wasmtime::format_err!("host component plugin faulted; the host log has the cause")
 }
 
 /// Take one in-flight slot under [`MAX_INFLIGHT_CAPABILITY_CALLS`], without
@@ -325,16 +349,22 @@ impl AccessorTask<SharedCtx> for SecretSourceTask {
 /// Because the plugin is a host-scoped singleton, that restart drops every
 /// tenant's in-memory state — the blast radius of the shared-singleton model.
 pub(super) struct CapabilityTask {
-    pub(super) instance: Instance,
-    pub(super) func_idx: ComponentExportIndex,
-    pub(super) call: CapabilityCall,
+    instance: Instance,
+    func_idx: ComponentExportIndex,
+    interface: Arc<str>,
+    func: Arc<str>,
+    caller: CallerIdentity,
+    args: Vec<Relocated>,
+    result_tys: Arc<[Type]>,
+    reply: LentReply<wasmtime::Result<Vec<Relocated>>>,
+    abandoned: Arc<crate::engine::abandon::AbandonFlag>,
     /// Releases this call's in-flight slot when the task completes (or is
     /// dropped, e.g. on cancellation).
-    pub(super) in_flight: InFlightGuard,
+    in_flight: InFlightGuard,
     /// Retires this call's registry job (and its task binding) when the call
     /// completes or the task is otherwise dropped (e.g. store teardown). Held
     /// across the `.await` so the retire runs however the task ends.
-    pub(super) job_guard: JobGuard,
+    job_guard: JobGuard,
 }
 
 /// Free every resource whose proxy a caller has dropped since the last flush,
@@ -375,11 +405,6 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         let CapabilityTask {
             instance,
             func_idx,
-            call,
-            in_flight: _in_flight,
-            mut job_guard,
-        } = self;
-        let CapabilityCall {
             interface,
             func,
             caller,
@@ -387,7 +412,9 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
             result_tys,
             reply,
             abandoned,
-        } = call;
+            in_flight: _in_flight,
+            mut job_guard,
+        } = self;
 
         // The epoch deadline measures this call's own execution, so re-arm it
         // here. `watch_until_abandoned` below owns the registration.
@@ -411,7 +438,7 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         let (func_handle, arg_vals) = match prepared {
             Ok(prepared) => prepared,
             Err(e) => {
-                let _ = reply.send(Err(e));
+                reply.send(Err(e));
                 return Ok(());
             }
         };
@@ -434,7 +461,7 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         let (call, task_id) = match started {
             Ok(started) => started,
             Err(e) => {
-                let _ = reply.send(Err(e));
+                reply.send(Err(e));
                 return Ok(());
             }
         };
@@ -454,7 +481,7 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
         )
         .await;
         if let Err(e) = call_result {
-            let _ = reply.send(Err(
+            reply.send(Err(
                 e.context(format!("capability call {interface}/{func} trapped"))
             ));
             return Ok(());
@@ -476,7 +503,7 @@ impl AccessorTask<SharedCtx> for CapabilityTask {
             }
             Ok(out)
         });
-        let _ = reply.send(extracted);
+        reply.send(extracted);
         Ok(())
     }
 }

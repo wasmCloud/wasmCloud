@@ -646,3 +646,709 @@ async fn linked_store_applies_the_engine_hostcall_fuel() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// A callee exporting `add-one`, a `bump` that counts the calls its instance
+/// has served, a trapping `trap`, and an `iface` instance that is no function.
+const CALLEE: &str = r#"(component
+    (core module $m
+        (global $calls (mut i32) (i32.const 0))
+        (func (export "add-one") (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+        (func (export "bump") (result i32)
+            global.get $calls
+            i32.const 1
+            i32.add
+            global.set $calls
+            global.get $calls)
+        (func (export "trap") unreachable))
+    (core instance $i (instantiate $m))
+    (func $add-one (param "x" u32) (result u32) (canon lift (core func $i "add-one")))
+    (func $bump (result u32) (canon lift (core func $i "bump")))
+    (func $trap (canon lift (core func $i "trap")))
+    (instance $iface (export "add-one" (func $add-one)))
+    (export "add-one" (func $add-one))
+    (export "bump" (func $bump))
+    (export "trap" (func $trap))
+    (export "iface" (instance $iface)))"#;
+
+/// A callee whose instantiation traps in its start function.
+const UNSTARTABLE: &str = r#"(component
+    (core module $m
+        (func $start unreachable)
+        (start $start)
+        (func (export "add-one") (param i32) (result i32) local.get 0))
+    (core instance $i (instantiate $m))
+    (func (export "add-one") (param "x" u32) (result u32) (canon lift (core func $i "add-one"))))"#;
+
+/// One warm instance, serving one call at a time.
+fn warm() -> instance_pool::InstancePolicy {
+    instance_pool::InstancePolicy::Warm {
+        pool_size: std::num::NonZeroUsize::MIN,
+        max_invocations: None,
+        max_concurrency: std::num::NonZeroUsize::MIN,
+        reclaim: None,
+    }
+}
+
+/// The callee of a linked call, registered in a workload's component map.
+struct Callee {
+    engine: crate::engine::Engine,
+    component: Component,
+    components: Arc<ComponentMap>,
+    pool: Arc<InstancePool>,
+}
+
+impl Callee {
+    fn new(wat: &str, policy: instance_pool::InstancePolicy) -> anyhow::Result<Self> {
+        #[cfg(feature = "wasi-tls")]
+        crate::init_crypto();
+        let engine = engine_builder().build()?;
+        let component = Component::new(engine.inner(), wat::parse_str(wat)?)?;
+        let linker = Arc::new(wasmtime::component::Linker::<SharedCtx>::new(
+            engine.inner(),
+        ));
+        let mut entry = WorkloadComponent::new(
+            "contract-workload",
+            "contract",
+            "tests",
+            "callee",
+            component.clone(),
+            linker,
+            vec![],
+            crate::types::LocalResources::default(),
+            Arc::new(std::sync::Mutex::new(loopback::Network::default())),
+            policy,
+        );
+        entry.metadata.id = "callee".into();
+        let pool = Arc::clone(&entry.instances);
+        let components = Arc::new(RwLock::new(BTreeMap::from([("callee".into(), entry)])));
+        Ok(Self {
+            engine,
+            component,
+            components,
+            pool,
+        })
+    }
+
+    async fn ephemeral(
+        &self,
+        mode: EphemeralCallMode,
+        invocation: crate::observability::InvocationMeter,
+    ) -> anyhow::Result<Arc<EphemeralLinkedCall>> {
+        let pre = self.components.read().await["callee"].pre_instantiate_ref()?;
+        Ok(Arc::new(EphemeralLinkedCall {
+            pre,
+            engine: self.engine.inner().clone(),
+            stream_payloads: Arc::clone(self.engine.stream_payloads()),
+            http_handler: crate::host::HostRef::detached(),
+            invocation,
+            components: Arc::downgrade(&self.components),
+            active_component_id: "callee".into(),
+            linked_component_ids: vec![],
+            #[cfg(feature = "wasi-tls")]
+            tls_provider: None,
+            mode,
+        }))
+    }
+
+    fn invocation(&self, export: &str, target: LinkedTarget) -> LinkedExportInvocation {
+        LinkedExportInvocation {
+            import_name: "contract:callee/api".into(),
+            export_name: export.into(),
+            plugin_component_id: "callee".into(),
+            func_idx: self.component.get_export_index(None, export).unwrap(),
+            param_tys: Arc::default(),
+            target,
+        }
+    }
+
+    /// `export`'s param and result types.
+    fn signature(&self, export: &str) -> (Arc<[Type]>, Arc<[Type]>) {
+        let Some(ComponentItem::ComponentFunc(func)) = self
+            .component
+            .get_export(None, export)
+            .map(|(item, _)| item)
+        else {
+            panic!("{export} is not a function export");
+        };
+        (
+            func.params().map(|(_, ty)| ty).collect(),
+            func.results().collect(),
+        )
+    }
+
+    /// Both ways an ephemeral call can carry `export`'s signature.
+    fn modes(&self, export: &str) -> [EphemeralCallMode; 2] {
+        let (param_tys, result_tys) = self.signature(export);
+        [
+            EphemeralCallMode::PlainValue,
+            EphemeralCallMode::Relocated {
+                param_tys,
+                result_tys,
+            },
+        ]
+    }
+
+    /// A store for `id`, carrying as much of the callee as `linked` says.
+    async fn store(&self, id: &str, linked: Linked) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
+        let templates = match linked {
+            Linked::No => vec![],
+            Linked::ContextOnly | Linked::Instantiated => vec![template(&self.engine, "callee")],
+        };
+        let instances = match linked {
+            Linked::No | Linked::ContextOnly => vec![],
+            Linked::Instantiated => {
+                let pre = self.components.read().await["callee"].pre_instantiate_ref()?;
+                vec![(Arc::from("callee"), pre)]
+            }
+        };
+        new_store_from_templates(
+            self.engine.inner(),
+            self.engine.stream_payloads(),
+            &crate::host::HostRef::detached(),
+            &template(&self.engine, id),
+            &templates,
+            &instances,
+            false,
+        )
+        .await
+    }
+}
+
+/// How much of the callee a caller's store carries.
+#[derive(Clone, Copy)]
+enum Linked {
+    No,
+    ContextOnly,
+    Instantiated,
+}
+
+/// Run `inv` from inside `store`, as a guest import would.
+async fn invoke(
+    store: &mut wasmtime::Store<SharedCtx>,
+    inv: &LinkedExportInvocation,
+    params: &[Val],
+    results_len: usize,
+) -> wasmtime::Result<Vec<Val>> {
+    store
+        .run_concurrent(async |accessor| {
+            let mut results = vec![Val::Bool(false); results_len];
+            invoke_linked_async_export(accessor, params, &mut results, inv).await?;
+            Ok::<_, wasmtime::Error>(results)
+        })
+        .await?
+}
+
+async fn ephemeral_invoke(
+    callee: &Callee,
+    call: &Arc<EphemeralLinkedCall>,
+    export: &str,
+    params: &[Val],
+    results_len: usize,
+) -> wasmtime::Result<Vec<Val>> {
+    let inv = callee.invocation(export, LinkedTarget::Ephemeral(Arc::clone(call)));
+    let mut caller = callee
+        .store("caller", Linked::No)
+        .await
+        .map_err(|e| wasmtime::format_err!("{e:#}"))?;
+    invoke(&mut caller, &inv, params, results_len).await
+}
+
+#[tokio::test]
+async fn ephemeral_calls_run_each_call_on_a_fresh_instance() -> anyhow::Result<()> {
+    let callee = Callee::new(CALLEE, instance_pool::InstancePolicy::Ephemeral)?;
+    for invocation in [
+        crate::observability::InvocationMeter::default(),
+        crate::observability::InvocationMeter::new(true),
+    ] {
+        for mode in callee.modes("add-one") {
+            let call = callee.ephemeral(mode, invocation.clone()).await?;
+            let sum = ephemeral_invoke(&callee, &call, "add-one", &[Val::U32(41)], 1).await?;
+            assert_eq!(sum, [Val::U32(42)]);
+        }
+        for mode in callee.modes("bump") {
+            let call = callee.ephemeral(mode, invocation.clone()).await?;
+            for _ in 0..2 {
+                let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
+                assert_eq!(
+                    calls,
+                    [Val::U32(1)],
+                    "an ephemeral call must not share state"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn warm_linked_calls_reuse_an_instance_until_it_traps() -> anyhow::Result<()> {
+    let callee = Callee::new(CALLEE, warm())?;
+    let call = callee
+        .ephemeral(EphemeralCallMode::PlainValue, Default::default())
+        .await?;
+    for expected in 1..=2 {
+        let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
+        assert_eq!(
+            calls,
+            [Val::U32(expected)],
+            "a warm instance keeps its state"
+        );
+    }
+    let error = ephemeral_invoke(&callee, &call, "trap", &[], 0)
+        .await
+        .expect_err("a trapping callee must fail the call");
+    assert!(format!("{error:?}").contains("unreachable"), "{error:?}");
+    let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
+    assert_eq!(
+        calls,
+        [Val::U32(1)],
+        "the trapped instance must not serve again"
+    );
+
+    let error = ephemeral_invoke(&callee, &call, "iface", &[Val::U32(1)], 1)
+        .await
+        .expect_err("an export that is no function must fail the call");
+    assert!(
+        format!("{error:#}").contains("function not found for contract:callee/api.iface"),
+        "{error:#}"
+    );
+    let sum = ephemeral_invoke(&callee, &call, "add-one", &[Val::U32(1)], 1).await?;
+    assert_eq!(sum, [Val::U32(2)]);
+
+    // A closed pool declines every call, which then runs in a store of its own
+    // on the params the pool handed back.
+    callee.pool.close();
+    for _ in 0..2 {
+        let calls = ephemeral_invoke(&callee, &call, "bump", &[], 1).await?;
+        assert_eq!(calls, [Val::U32(1)]);
+    }
+    let sum = ephemeral_invoke(&callee, &call, "add-one", &[Val::U32(7)], 1).await?;
+    assert_eq!(sum, [Val::U32(8)]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ephemeral_calls_report_guest_failures_to_the_caller() -> anyhow::Result<()> {
+    let callee = Callee::new(CALLEE, instance_pool::InstancePolicy::Ephemeral)?;
+    for mode in callee.modes("trap") {
+        let call = callee.ephemeral(mode, Default::default()).await?;
+        let error = ephemeral_invoke(&callee, &call, "trap", &[], 0)
+            .await
+            .expect_err("a trapping callee must fail the call");
+        assert!(format!("{error:?}").contains("unreachable"), "{error:?}");
+    }
+    // Wired as the importer declared it, which the callee's export is not.
+    for mode in callee.modes("add-one") {
+        let call = callee.ephemeral(mode, Default::default()).await?;
+        let error = ephemeral_invoke(&callee, &call, "iface", &[Val::U32(1)], 1)
+            .await
+            .expect_err("an export that is no function must fail the call");
+        assert!(
+            format!("{error:#}")
+                .contains("function not found for linked import contract:callee/api.iface"),
+            "{error:#}"
+        );
+
+        // The callee still serves calls after both failures.
+        let sum = ephemeral_invoke(&callee, &call, "add-one", &[Val::U32(1)], 1).await?;
+        assert_eq!(sum, [Val::U32(2)]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn warm_instance_traps_reach_every_pending_caller() -> anyhow::Result<()> {
+    use crate::engine::instance_driver::{InstanceDriver, InstanceJob, LinkedCall, LinkedJob};
+    use crate::host::trigger_service::{BrokerMessage, MessagingJob};
+
+    for reserved in [false, true] {
+        let callee = Callee::new(CALLEE, warm())?;
+        let pre = callee.components.read().await["callee"].pre_instantiate_ref()?;
+        let mut store = callee.store("callee", Linked::No).await?;
+        let dropped = store.data().dropped.token();
+        let instance = pre.instantiate_async(&mut store).await?;
+        let job = || {
+            let (reply, rx) = tokio::sync::oneshot::channel();
+            let call = crate::engine::abandon::DispatchedCall::new(
+                "linked trap regression",
+                std::time::Duration::from_secs(5),
+            );
+            let job = InstanceJob::Linked(Box::new(LinkedJob {
+                call: LinkedCall {
+                    func_idx: callee.component.get_export_index(None, "trap").unwrap(),
+                    params: vec![],
+                    results_len: 0,
+                    import_name: "contract:callee/api".into(),
+                    export_name: "trap".into(),
+                    abandoned: call.flag(),
+                    attributes: Arc::from([]),
+                },
+                reply,
+            }));
+            (job, rx, call)
+        };
+        let (first, first_rx, first_call) = job();
+        let (second, second_rx, second_call) = job();
+        let driver = InstanceDriver::spawn(ComponentInstance { store, instance }, &first, 3, None)
+            .map_err(|_| anyhow::anyhow!("linked calls must be accepted"))?;
+        // A delivery of another kind, held reserved until the instance has
+        // trapped. Reserving skips admission, which an instance without the
+        // messaging export would decline.
+        let deliver = driver.reserve_send_for_test();
+        let delivery_call = crate::engine::abandon::DispatchedCall::new(
+            "queued delivery",
+            std::time::Duration::from_secs(5),
+        );
+        let (result_tx, delivered) = tokio::sync::oneshot::channel();
+        let delivery = InstanceJob::Messaging(Box::new(MessagingJob {
+            msg: BrokerMessage {
+                subject: "queued".into(),
+                body: vec![],
+                reply_to: None,
+            },
+            result_tx,
+            abandoned: delivery_call.flag(),
+            attributes: Arc::from([]),
+        }));
+        driver
+            .try_send(first)
+            .map_err(|_| anyhow::anyhow!("first call must be admitted"))?;
+        let publish = if reserved {
+            let send = driver.reserve_send_for_test();
+            Some(move || send(second))
+        } else {
+            driver
+                .try_send(second)
+                .map_err(|_| anyhow::anyhow!("second call must be admitted"))?;
+            None
+        };
+
+        let error = first_call
+            .await_reply(first_rx)
+            .await
+            .expect("a store trap must produce a reply")
+            .expect("a store trap must not drop the reply")
+            .expect_err("the first call must trap");
+        assert!(format!("{error:#}").contains("unreachable"), "{error:#}");
+        assert!(driver.is_gone());
+        assert!(dropped.is_cancelled(), "the failed store must be released");
+        if let Some(publish) = publish {
+            assert_eq!(driver.in_flight(), 2);
+            publish();
+        }
+
+        let error = second_call
+            .await_reply(second_rx)
+            .await
+            .expect("a store trap must answer queued and reserved sends")
+            .expect("a store trap must not drop the reply")
+            .expect_err("the pending call must fail with the store");
+        assert!(format!("{error:#}").contains("unreachable"), "{error:#}");
+
+        assert_eq!(driver.in_flight(), 1);
+        deliver(delivery);
+        let error = delivered
+            .await
+            .expect("a store trap must answer a queued delivery")
+            .expect_err("the delivery must fail with the store");
+        assert!(error.contains("unreachable"), "{error}");
+        assert_eq!(driver.in_flight(), 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ephemeral_calls_report_a_callee_that_will_not_instantiate() -> anyhow::Result<()> {
+    let ephemeral = Callee::new(UNSTARTABLE, instance_pool::InstancePolicy::Ephemeral)?;
+    let pooled = Callee::new(UNSTARTABLE, warm())?;
+    let [plain, relocated] = ephemeral.modes("add-one");
+    // Only a plain call consults the pool, which builds the instance itself.
+    let cases = [
+        (&ephemeral, plain),
+        (&ephemeral, relocated),
+        (&pooled, EphemeralCallMode::PlainValue),
+    ];
+    for (callee, mode) in cases {
+        let call = callee.ephemeral(mode, Default::default()).await?;
+        let error = ephemeral_invoke(callee, &call, "add-one", &[Val::U32(1)], 1)
+            .await
+            .expect_err("a callee whose start traps must fail the call");
+        assert!(format!("{error:?}").contains("unreachable"), "{error:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn linked_calls_into_a_stopped_workload_are_refused() -> anyhow::Result<()> {
+    let mut callee = Callee::new(CALLEE, instance_pool::InstancePolicy::Ephemeral)?;
+    let mut ephemeral = Vec::new();
+    for mode in callee.modes("add-one") {
+        ephemeral.push(
+            callee
+                .ephemeral(mode, crate::observability::InvocationMeter::new(true))
+                .await?,
+        );
+    }
+    // A stopped workload's map is gone before its pool is consulted, so the
+    // instance policy makes no difference here.
+    callee.components = Arc::new(RwLock::new(BTreeMap::new()));
+    for call in &ephemeral {
+        let inv = callee.invocation("add-one", LinkedTarget::Ephemeral(Arc::clone(call)));
+        assert!(linked_attributes(call, &inv).await.is_empty());
+        let error = ephemeral_invoke(&callee, call, "add-one", &[Val::U32(1)], 1)
+            .await
+            .expect_err("a stopped workload must refuse the call");
+        assert!(
+            format!("{error:#}")
+                .contains("linked component 'callee' belongs to a workload that has stopped"),
+            "{error:#}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn linked_calls_are_measured_under_the_callee_and_operation() -> anyhow::Result<()> {
+    let callee = Callee::new(CALLEE, instance_pool::InstancePolicy::Ephemeral)?;
+    let attribute = |attributes: &[opentelemetry::KeyValue], key: &str| {
+        attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == key)
+            .map(|kv| kv.value.to_string())
+    };
+
+    let quiet = callee
+        .ephemeral(EphemeralCallMode::PlainValue, Default::default())
+        .await?;
+    let inv = callee.invocation("add-one", LinkedTarget::Ephemeral(Arc::clone(&quiet)));
+    assert!(linked_attributes(&quiet, &inv).await.is_empty());
+
+    let measured = callee
+        .ephemeral(
+            EphemeralCallMode::PlainValue,
+            crate::observability::InvocationMeter::new(true),
+        )
+        .await?;
+    let attributes = linked_attributes(&measured, &inv).await;
+    assert_eq!(attribute(&attributes, "plugin").as_deref(), Some("linked"));
+    assert_eq!(
+        attribute(&attributes, "operation").as_deref(),
+        Some("contract:callee/api#add-one")
+    );
+    assert_eq!(
+        attribute(&attributes, "component").as_deref(),
+        Some("callee")
+    );
+    assert_eq!(
+        attribute(&attributes, "workload.name").as_deref(),
+        Some("contract")
+    );
+    assert_eq!(
+        attribute(&attributes, "workload.namespace").as_deref(),
+        Some("tests")
+    );
+
+    // A callee that has left the map is about to fail its call anyway.
+    callee.components.write().await.clear();
+    assert!(linked_attributes(&measured, &inv).await.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn shared_store_async_calls_reach_the_callee_in_the_callers_store() -> anyhow::Result<()> {
+    let callee = Callee::new(CALLEE, instance_pool::InstancePolicy::Ephemeral)?;
+    let mut store = callee.store("caller", Linked::Instantiated).await?;
+
+    let add_one = callee.invocation("add-one", LinkedTarget::SharedStore);
+    assert_eq!(
+        invoke(&mut store, &add_one, &[Val::U32(41)], 1).await?,
+        [Val::U32(42)]
+    );
+    assert!(
+        add_one
+            .param_tys
+            .get()
+            .is_some_and(|tys| matches!(**tys, [Type::U32]))
+    );
+    let bump = callee.invocation("bump", LinkedTarget::SharedStore);
+    for expected in 1..=2 {
+        assert_eq!(
+            invoke(&mut store, &bump, &[], 1).await?,
+            [Val::U32(expected)],
+            "the callee lives as long as the caller's store"
+        );
+    }
+    assert_eq!(store.data().active_ctx.component_id.as_ref(), "caller");
+
+    let trap = callee.invocation("trap", LinkedTarget::SharedStore);
+    let error = invoke(&mut store, &trap, &[], 0)
+        .await
+        .expect_err("a trapping callee must fail the call");
+    assert!(format!("{error:?}").contains("unreachable"), "{error:?}");
+    assert_eq!(store.data().active_ctx.component_id.as_ref(), "caller");
+
+    let mut unlinked = callee.store("caller", Linked::No).await?;
+    let error = invoke(&mut unlinked, &add_one, &[Val::U32(1)], 1)
+        .await
+        .expect_err("a callee with no context in the store must be refused");
+    assert!(
+        format!("{error:#}").contains("Context for component callee not found"),
+        "{error:#}"
+    );
+    let mut uninstantiated = callee.store("caller", Linked::ContextOnly).await?;
+    let error = invoke(&mut uninstantiated, &add_one, &[Val::U32(1)], 1)
+        .await
+        .expect_err("a callee absent from the store must be refused");
+    assert!(
+        format!("{error:#}")
+            .contains("linked component 'callee' was not pre-instantiated in this store"),
+        "{error:#}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "host-component-plugins")]
+mod service {
+    use super::*;
+    use crate::engine::dispatch::ServiceCalls;
+    use crate::host::trigger_service::{CliRunError, Ingress, run_trigger_driver};
+
+    /// Run the service's driver on `calls`, with a fresh incarnation each time
+    /// one faults. The watch counts incarnations whose ingress is in place.
+    fn serve(
+        engine: crate::engine::Engine,
+        pre: InstancePre<SharedCtx>,
+        calls: Arc<ServiceCalls>,
+    ) -> (AbortOnDropHandle<()>, tokio::sync::watch::Receiver<usize>) {
+        let (started, incarnations) = tokio::sync::watch::channel(0);
+        let server = AbortOnDropHandle::new(tokio::spawn(async move {
+            while let Some(rx) = calls.next_incarnation() {
+                started.send_modify(|n| *n += 1);
+                let mut store = new_store_from_templates(
+                    engine.inner(),
+                    engine.stream_payloads(),
+                    &crate::host::HostRef::detached(),
+                    &template(&engine, "service"),
+                    &[],
+                    &[],
+                    true,
+                )
+                .await
+                .expect("service store");
+                let _ = run_trigger_driver(
+                    &mut store,
+                    &pre,
+                    vec![Ingress::Guest(rx)],
+                    CliRunError::Logged,
+                )
+                .await;
+            }
+        }));
+        (server, incarnations)
+    }
+
+    /// A service call carrying `signature`'s types.
+    fn service_call(
+        calls: &Arc<ServiceCalls>,
+        (param_tys, result_tys): (Arc<[Type]>, Arc<[Type]>),
+        plain: bool,
+    ) -> LinkedTarget {
+        LinkedTarget::Service(Arc::new(ServiceExportCall {
+            calls: Arc::clone(calls),
+            param_tys,
+            result_tys,
+            plain,
+            attributes: Arc::from([]),
+        }))
+    }
+
+    #[tokio::test]
+    async fn service_calls_run_on_the_running_service() -> anyhow::Result<()> {
+        let callee = Callee::new(CALLEE, instance_pool::InstancePolicy::Ephemeral)?;
+        let calls = Arc::new(ServiceCalls::default());
+        let _claim = calls.claim()?;
+        let pre = callee.components.read().await["callee"].pre_instantiate_ref()?;
+        let (_server, mut incarnations) = serve(callee.engine.clone(), pre, Arc::clone(&calls));
+        let mut caller = callee.store("caller", Linked::No).await?;
+        let service = |export: &str, signature: &str, plain: bool| {
+            callee.invocation(
+                export,
+                service_call(&calls, callee.signature(signature), plain),
+            )
+        };
+
+        for plain in [true, false] {
+            assert_eq!(
+                invoke(
+                    &mut caller,
+                    &service("add-one", "add-one", plain),
+                    &[Val::U32(41)],
+                    1
+                )
+                .await?,
+                [Val::U32(42)]
+            );
+
+            // Wired as the importer declared it, which the service's export is not.
+            let error = invoke(
+                &mut caller,
+                &service("iface", "add-one", plain),
+                &[Val::U32(1)],
+                1,
+            )
+            .await
+            .expect_err("an export that is no function must fail the call");
+            assert!(
+                format!("{error:#}")
+                    .contains("function not found for service export contract:callee/api.iface"),
+                "{error:#}"
+            );
+
+            let restarted = *incarnations.borrow() + 1;
+            let error = invoke(&mut caller, &service("trap", "trap", plain), &[], 0)
+                .await
+                .expect_err("a trapping service export must fail the call");
+            let rendered = format!("{error:#}");
+            assert!(
+                rendered.contains("contract:callee/api.trap") && rendered.contains("unreachable"),
+                "{rendered}"
+            );
+            // The trap ended the incarnation; wait for the next one's ingress.
+            // Its state starts over, even after the previous round's calls.
+            incarnations.wait_for(|n| *n >= restarted).await?;
+            for expected in 1..=2 {
+                assert_eq!(
+                    invoke(&mut caller, &service("bump", "bump", plain), &[], 1).await?,
+                    [Val::U32(expected)],
+                    "the service keeps its state between calls"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn service_calls_need_a_service_accepting_them() -> anyhow::Result<()> {
+        let callee = Callee::new(CALLEE, instance_pool::InstancePolicy::Ephemeral)?;
+        let calls = Arc::new(ServiceCalls::default());
+        let mut caller = callee.store("caller", Linked::No).await?;
+        for plain in [true, false] {
+            let add_one = callee.invocation(
+                "add-one",
+                service_call(&calls, callee.signature("add-one"), plain),
+            );
+            let error = invoke(&mut caller, &add_one, &[Val::U32(1)], 1)
+                .await
+                .expect_err("an unclaimed service must refuse the call");
+            assert!(
+                format!("{error:#}")
+                    .contains("the workload's service is not accepting dispatched calls"),
+                "{error:#}"
+            );
+        }
+        Ok(())
+    }
+}
