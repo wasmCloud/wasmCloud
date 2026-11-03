@@ -547,6 +547,12 @@ fn read<A>(
                  `username`/`password`, `token`, or their `-file` keys instead"
             );
         }
+        // Without async-nats's `websockets` feature these dial plain TCP and
+        // skip the TLS upgrade, `require_tls` included.
+        let scheme = server.split_once("://").map(|(scheme, _)| scheme);
+        if scheme.is_some_and(|s| s.eq_ignore_ascii_case("ws") || s.eq_ignore_ascii_case("wss")) {
+            bail!("`{server}`: WebSocket NATS servers are not supported");
+        }
     }
 
     let ack_mode = match r.get("ack-mode") {
@@ -1028,6 +1034,19 @@ mod tests {
             .is_err()
         );
         Ok(())
+    }
+
+    #[test]
+    fn websocket_servers_are_refused() {
+        for server in ["ws://data:443", "wss://data:443", "WSS://data:443"] {
+            let cfg = map(&[("servers", &format!("nats://ok:4222, {server}"))]);
+            let error = NatsConfig::from_map(&cfg).err().unwrap().to_string();
+            assert!(error.contains("WebSocket"), "{error}");
+            assert!(NatsConfig::check_layer(&cfg, &BTreeSet::new()).is_err());
+        }
+        for server in ["nats://data:4222", "tls://data:4222", "data:4222"] {
+            NatsConfig::from_map(&map(&[("servers", server)])).unwrap();
+        }
     }
 
     #[test]

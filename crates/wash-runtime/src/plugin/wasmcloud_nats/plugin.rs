@@ -1224,11 +1224,11 @@ mod tests {
             .check_egress(&nats_config("example.com").servers)
             .expect("a schemeless endpoint uses nats:// and port 4222");
         plugin
-            .check_egress(&nats_config("wss://secure.example.com").servers)
+            .check_egress(&["wss://secure.example.com".to_string()])
             .expect("wss uses port 443");
         assert!(
             plugin
-                .check_egress(&nats_config("ws://secure.example.com").servers)
+                .check_egress(&["ws://secure.example.com".to_string()])
                 .is_err()
         );
     }
