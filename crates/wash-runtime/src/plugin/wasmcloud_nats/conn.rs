@@ -206,8 +206,10 @@ async fn build_options(
     // becomes the sole timer when the operator configures no cap of their own.
     opts = opts.request_timeout(config.request_timeout);
     opts = opts.subscription_capacity(config.limits.subscription_capacity);
+    // A CA means TLS is required, not left to the server's plaintext INFO,
+    // which a peer on the path can rewrite.
     if let Some(ca) = &config.tls.ca {
-        opts = opts.add_root_certificates(ca.clone());
+        opts = opts.add_root_certificates(ca.clone()).require_tls(true);
     }
     if config.tls.first {
         opts = opts.tls_first();
@@ -725,6 +727,45 @@ mod tests {
         std::fs::write(&token, "second\n")?;
         let second = accept_connect(&listener, "second-nonce").await?;
         assert_eq!(second["auth_token"], "second");
+        Ok(())
+    }
+
+    /// A binding with a `tls-ca` gets a TLS handshake from a server whose INFO
+    /// omits `tls_required`, never a plaintext CONNECT carrying its token.
+    #[tokio::test]
+    async fn a_binding_ca_requires_tls() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::{record_after_plaintext_info, write_ca};
+        crate::init_crypto();
+
+        let dir = tempfile::tempdir()?;
+        let ca = write_ca(dir.path())?;
+        let token = dir.path().join("token");
+        std::fs::write(&token, "secret-token")?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let config = NatsConfig::from_map(
+            &[
+                ("servers", format!("nats://{}", listener.local_addr()?)),
+                ("token-file", token.display().to_string()),
+                ("tls-ca", ca.display().to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        )?;
+
+        let (received, client) = tokio::join!(
+            record_after_plaintext_info(&listener),
+            connect(
+                &config,
+                tokio::sync::watch::channel(0).0,
+                tokio::sync::broadcast::channel(1).0,
+                false,
+            ),
+        );
+        let received = received?;
+        assert!(!received.contains("CONNECT"), "{received}");
+        assert!(!received.contains("secret-token"), "{received}");
+        assert!(client.is_err());
         Ok(())
     }
 
