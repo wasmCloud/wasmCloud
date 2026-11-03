@@ -140,3 +140,48 @@ func TestHostTrackerReregisterHostReplacesPreviousID(t *testing.T) {
 		t.Errorf("hosts[host-id-2] = %q, want %q", got, "10.0.0.2:8080")
 	}
 }
+
+func TestHostTrackerWorkloadBeforeHost(t *testing.T) {
+	tracker := newHostTracker(&ExternalFallback{Scheme: "https", Endpoint: "fallback.example"})
+	key := types.NamespacedName{Namespace: "ns", Name: "workload"}
+	if err := tracker.RegisterWorkload(t.Context(), key, "host-id", "workload-id", "route.example"); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, tracker, "route.example"); got != (LookupResult{Scheme: "https", Hostname: "fallback.example"}) {
+		t.Fatalf("host not registered yet: %+v", got)
+	}
+	if err := tracker.RegisterHost(t.Context(), key, "host-id", "::1", 8080); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, tracker, "route.example"); got.Hostname != "[::1]:8080" || got.WorkloadID != "workload-id" {
+		t.Fatalf("host registered: %+v", got)
+	}
+}
+
+func TestHostTrackerRemovalPreservesOtherRoutes(t *testing.T) {
+	tracker := newHostTracker(testFallback{})
+	for _, id := range []string{"a", "b"} {
+		key := types.NamespacedName{Namespace: "ns", Name: id}
+		if err := tracker.RegisterHost(t.Context(), key, id, id, 8080); err != nil {
+			t.Fatal(err)
+		}
+		if err := tracker.RegisterWorkload(t.Context(), key, id, id, "shared.example"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := types.NamespacedName{Namespace: "ns", Name: "a"}
+	for range 2 {
+		if err := tracker.DeregisterHost(t.Context(), key); err != nil {
+			t.Fatal(err)
+		}
+		if got := resolve(t, tracker, "shared.example"); got.Hostname != "b:8080" || got.WorkloadID != "b" {
+			t.Fatalf("remaining route: %+v", got)
+		}
+	}
+	if err := tracker.DeregisterWorkload(t.Context(), types.NamespacedName{Namespace: "ns", Name: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, tracker, "shared.example"); got.Hostname != fallbackEndpoint {
+		t.Fatalf("removed last workload: %+v", got)
+	}
+}
