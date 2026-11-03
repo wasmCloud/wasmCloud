@@ -1796,10 +1796,23 @@ impl HostBuilder {
     /// [`crate::plugin::multiplexed_plugins`], which is what makes
     /// `(implements ..)` named imports resolvable. Without it, every
     /// registered plugin reports `supports_named_instances() == false` and a
-    /// workload needing named multiplexing fails to bind.
+    /// workload needing named multiplexing fails to bind. NATS discovery is
+    /// enabled unless an egress policy disables it; use
+    /// [`Self::with_multiplexed_plugins_ignoring_discovered`] to disable it explicitly.
     #[cfg(feature = "wasm_component_model_implements")]
-    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
-        for plugin in crate::plugin::multiplexed_plugins() {
+    pub fn with_multiplexed_plugins(self) -> anyhow::Result<Self> {
+        self.with_multiplexed_plugins_ignoring_discovered(false)
+    }
+
+    /// Registers multiplexed plugins with the given NATS discovery policy.
+    /// Pass the same value used for the host's NATS connections. Egress
+    /// policies always disable discovery, regardless of `ignore`.
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins_ignoring_discovered(
+        mut self,
+        ignore: bool,
+    ) -> anyhow::Result<Self> {
+        for plugin in crate::plugin::multiplexed_plugins_ignoring_discovered_nats_servers(ignore) {
             self = self.with_plugin(plugin)?;
         }
         Ok(self)

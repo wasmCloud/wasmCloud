@@ -81,7 +81,7 @@ pub struct HostCommand {
     #[arg(long = "nats-connect-timeout", default_value = "0s", value_parser = humantime::parse_duration)]
     pub nats_connect_timeout: Duration,
 
-    /// Restrict host and binding NATS connections to their configured URLs.
+    /// Restrict host and workload NATS connections to their configured URLs.
     /// Set this when each URL is a load-balanced address such as a Kubernetes
     /// Service. A single-server URL loses discovery-based cluster failover.
     #[arg(long = "nats-ignore-discovered-servers", default_value_t = false)]
@@ -1077,6 +1077,54 @@ impl HostCommand {
         )
     }
 
+    fn scheduler_nats_options(
+        &self,
+        host_id: &str,
+    ) -> wash_runtime::washlet::NatsConnectionOptions {
+        let mut options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{host_id}"))
+            .with_auth(self.scheduler_nats_auth())
+            .with_tls_first(self.scheduler_nats_tls_first)
+            .with_ignore_discovered_servers(self.nats_ignore_discovered_servers);
+        options.tls_ca = self.scheduler_nats_tls_ca.clone();
+        options.tls_cert = self.scheduler_nats_tls_cert.clone();
+        options.tls_key = self.scheduler_nats_tls_key.clone();
+        options
+    }
+
+    fn data_nats_options(&self, host_id: &str) -> wash_runtime::washlet::NatsConnectionOptions {
+        let mut options = wash_runtime::washlet::NatsConnectionOptions::default()
+            .with_name(format!("host:{host_id}:data"))
+            .with_auth(self.data_nats_auth())
+            .with_tls_first(self.data_nats_tls_first)
+            .with_ignore_discovered_servers(self.nats_ignore_discovered_servers);
+        options.tls_ca = self.data_nats_tls_ca.clone();
+        options.tls_cert = self.data_nats_tls_cert.clone();
+        options.tls_key = self.data_nats_tls_key.clone();
+        options
+    }
+
+    fn with_workload_nats_plugins(
+        &self,
+        builder: wash_runtime::washlet::ClusterHostBuilder,
+        max_guest_memory: u64,
+    ) -> anyhow::Result<wash_runtime::washlet::ClusterHostBuilder> {
+        let builder = builder.with_plugin(Arc::new(
+            plugin::wasmcloud_nats::WasmcloudNats::new()
+                // Subscription backlogs share the host's guest-memory budget.
+                .with_memory_budget(max_guest_memory)
+                .with_ignore_discovered_servers(self.nats_ignore_discovered_servers)
+                .with_lattice_prefixes(vec![
+                    format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
+                    format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
+                ]),
+        ))?;
+        #[cfg(feature = "wasm_component_model_implements")]
+        let builder = builder
+            .with_multiplexed_plugins_ignoring_discovered(self.nats_ignore_discovered_servers)?;
+        Ok(builder)
+    }
+
     /// Every path this host reads credentials or configuration from, which no
     /// workload volume may expose.
     fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
@@ -1346,29 +1394,22 @@ impl CliCommand for HostCommand {
         let connect_retry =
             (!self.nats_connect_timeout.is_zero()).then_some(self.nats_connect_timeout);
 
+        if self.nats_ignore_discovered_servers {
+            info!(
+                "Host and workload NATS connections ignore cluster-advertised servers; \
+                 failover is limited to configured URLs. Use a Service or list every required member"
+            );
+        }
+
         let cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default();
-        let mut scheduler_options = wash_runtime::washlet::NatsConnectionOptions::default()
-            .with_name(format!("host:{}", cluster_host_builder.host_id()))
-            .with_auth(self.scheduler_nats_auth())
-            .with_tls_first(self.scheduler_nats_tls_first)
-            .with_ignore_discovered_servers(self.nats_ignore_discovered_servers);
-        scheduler_options.tls_ca = self.scheduler_nats_tls_ca.clone();
-        scheduler_options.tls_cert = self.scheduler_nats_tls_cert.clone();
-        scheduler_options.tls_key = self.scheduler_nats_tls_key.clone();
+        let mut scheduler_options = self.scheduler_nats_options(cluster_host_builder.host_id());
         scheduler_options.connect_retry = connect_retry;
         let scheduler_nats_client =
             wash_runtime::washlet::connect_nats(self.scheduler_nats_url.clone(), scheduler_options)
                 .await
                 .context("failed to connect to NATS Scheduler URL")?;
 
-        let mut data_options = wash_runtime::washlet::NatsConnectionOptions::default()
-            .with_name(format!("host:{}:data", cluster_host_builder.host_id()))
-            .with_auth(self.data_nats_auth())
-            .with_tls_first(self.data_nats_tls_first)
-            .with_ignore_discovered_servers(self.nats_ignore_discovered_servers);
-        data_options.tls_ca = self.data_nats_tls_ca.clone();
-        data_options.tls_cert = self.data_nats_tls_cert.clone();
-        data_options.tls_key = self.data_nats_tls_key.clone();
+        let mut data_options = self.data_nats_options(cluster_host_builder.host_id());
         // Whatever the scheduler connection left of the budget. A budget
         // already spent becomes `None`, so the failure reads as the refusal it
         // is rather than as a timeout of no length.
@@ -1552,35 +1593,9 @@ impl CliCommand for HostCommand {
             .with_plugin(Arc::new(plugin::wasi_keyvalue::NatsKeyValue::new(
                 &data_nats_client,
             )))?
-            // Opens its own per-workload connections rather than borrowing the
-            // host's client, and denies the host's control subjects to every
-            // workload. What each binding *is* — its servers, its credentials,
-            // and its grants — comes from the host's own declaration, so a
-            // workload asks for a capability by name and cannot widen one.
-            .with_plugin(Arc::new(
-                plugin::wasmcloud_nats::WasmcloudNats::new()
-                    // A subscription's byte budget is per subscription and
-                    // this host's memory is not. Without the budget the plugin
-                    // cannot tell whether the subscriptions it is about to
-                    // start fit, and the first sign of the mismatch is an
-                    // OOMKill.
-                    .with_memory_budget(host_memory.max_guest_memory)
-                    .with_ignore_discovered_servers(self.nats_ignore_discovered_servers)
-                    .with_lattice_prefixes(vec![
-                        format!("{}.", wash_runtime::washlet::HOST_API_PREFIX),
-                        format!("{}.", wash_runtime::washlet::OPERATOR_API_PREFIX),
-                    ]),
-            ))?
             .with_meters(Meters::new(ctx.meters()));
-
-        #[cfg(feature = "wasm_component_model_implements")]
-        {
-            for plugin in
-                plugin::multiplexed_plugins_with_nats_discovery(self.nats_ignore_discovered_servers)
-            {
-                cluster_host_builder = cluster_host_builder.with_plugin(plugin)?;
-            }
-        }
+        cluster_host_builder =
+            self.with_workload_nats_plugins(cluster_host_builder, host_memory.max_guest_memory)?;
 
         if let Some(postgres_url) = &self.postgres_url {
             cluster_host_builder = cluster_host_builder.with_plugin(Arc::new(
@@ -1952,6 +1967,188 @@ mod nats_tests {
 
     fn parse(args: &[&str]) -> HostCommand {
         TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    // An invalid advertised URL exposes discovery during the handshake,
+    // without waiting for a reconnect or inspecting provider internals.
+    async fn check_discovery<F, Fut>(ignore: bool, connect: F) -> anyhow::Result<()>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+    {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("nats://{}", listener.local_addr()?);
+        let server = async {
+            let (mut socket, _) = listener.accept().await?;
+            socket
+                .write_all(b"INFO {\"max_payload\":1048576,\"connect_urls\":[\"nats://[\"]}\r\n")
+                .await?;
+            let mut reader = BufReader::new(&mut socket);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).await? == 0 {
+                    break;
+                }
+                if line.starts_with("PING") {
+                    socket.write_all(b"PONG\r\n").await?;
+                    break;
+                }
+            }
+            Ok::<_, anyhow::Error>(socket)
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let connection = connect(url);
+            tokio::pin!(server, connection);
+            tokio::select! {
+                result = &mut connection => result,
+                socket = &mut server => {
+                    let _socket = socket?;
+                    connection.await
+                }
+            }
+        })
+        .await?;
+        assert_eq!(result.is_ok(), ignore, "ignore={ignore}: {result:?}");
+        if let Err(error) = result {
+            assert_eq!(
+                error
+                    .downcast_ref::<async_nats::ConnectError>()
+                    .map(|e| e.kind()),
+                Some(async_nats::ConnectErrorKind::ServerParse),
+                "{error:#}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_flag_reaches_scheduler_and_data_clients() -> anyhow::Result<()> {
+        for args in [vec![], vec!["--nats-ignore-discovered-servers"]] {
+            let host = parse(&args);
+            let ignore = !args.is_empty();
+            for options in [
+                host.scheduler_nats_options("test"),
+                host.data_nats_options("test"),
+            ] {
+                check_discovery(ignore, |url| async move {
+                    wash_runtime::washlet::connect_nats(url, options).await?;
+                    Ok(())
+                })
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(
+        feature = "host-component-plugins",
+        feature = "wasm_component_model_implements"
+    ))]
+    #[tokio::test]
+    async fn discovery_flag_reaches_every_workload_nats_plugin() -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        use std::any::Any;
+        use std::collections::{HashMap, HashSet};
+        use wash_runtime::engine::workload::UnresolvedWorkload;
+        use wash_runtime::plugin::{self, HostPlugin, WitInterfaces};
+        use wash_runtime::wit::WitInterface;
+
+        fn interface(namespace: &str, package: &str, url: String) -> WitInterface {
+            WitInterface {
+                namespace: namespace.into(),
+                package: package.into(),
+                interfaces: HashSet::new(),
+                version: None,
+                config: if package == "nats" {
+                    HashMap::from([("servers".into(), url)])
+                } else {
+                    HashMap::from([("backend".into(), "nats".into()), ("url".into(), url)])
+                },
+                name: None,
+            }
+        }
+
+        for args in [vec![], vec!["--nats-ignore-discovered-servers"]] {
+            let host = parse(&args);
+            let ignore = !args.is_empty();
+            let builder = host.with_workload_nats_plugins(
+                wash_runtime::washlet::ClusterHostBuilder::default(),
+                256 * 1024 * 1024,
+            )?;
+            let plugins = builder.native_plugins();
+            assert_eq!(plugins.len(), 7);
+            for plugin in plugins.values() {
+                let any: &dyn Any = plugin.as_ref();
+                if let Some(nats) = any.downcast_ref::<wasmcloud_nats::WasmcloudNats>() {
+                    check_discovery(ignore, |url| async move {
+                        let interfaces = HashSet::from([interface("wasmcloud", "nats", url)]);
+                        let workload = UnresolvedWorkload::new(
+                            "discovery-test",
+                            "test",
+                            "test",
+                            None,
+                            [],
+                            vec![],
+                        );
+                        nats.on_workload_bind(&workload, WitInterfaces::new(&interfaces))
+                            .await
+                    })
+                    .await
+                    .with_context(|| format!("{} ignore={ignore}", plugin.id()))?;
+                    continue;
+                }
+                macro_rules! check_multiplexed {
+                    ($ty:ty, $namespace:literal, $package:literal) => {
+                        if let Some(multiplexed) = any.downcast_ref::<$ty>() {
+                            check_discovery(ignore, |url| async move {
+                                let iface = interface($namespace, $package, url);
+                                let registry = multiplexed.build_registry([&iface]).await?;
+                                assert_eq!(registry.len(), 1);
+                                Ok(())
+                            })
+                            .await
+                            .with_context(|| format!("{} ignore={ignore}", plugin.id()))?;
+                            continue;
+                        }
+                    };
+                }
+                check_multiplexed!(
+                    plugin::wasi_keyvalue::MultiplexedKeyValue,
+                    "wasi",
+                    "keyvalue"
+                );
+                check_multiplexed!(
+                    plugin::wasi_keyvalue::MultiplexedAsyncKeyValue,
+                    "wasmcloud",
+                    "keyvalue"
+                );
+                check_multiplexed!(
+                    plugin::wasi_blobstore::MultiplexedBlobstore,
+                    "wasi",
+                    "blobstore"
+                );
+                check_multiplexed!(
+                    plugin::wasi_blobstore::MultiplexedAsyncBlobstore,
+                    "wasmcloud",
+                    "blobstore"
+                );
+                check_multiplexed!(
+                    plugin::wasmcloud_messaging::MultiplexedMessaging,
+                    "wasmcloud",
+                    "messaging"
+                );
+                check_multiplexed!(
+                    plugin::wasmcloud_messaging::MultiplexedAsyncMessaging,
+                    "wasmcloud",
+                    "messaging"
+                );
+                anyhow::bail!("untested NATS plugin {}", plugin.id());
+            }
+        }
+        Ok(())
     }
 
     #[test]

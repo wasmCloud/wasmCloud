@@ -465,7 +465,7 @@ impl ClusterHostBuilder {
         self
     }
 
-    pub fn with_plugin(mut self, plugin: Arc<dyn HostPlugin>) -> anyhow::Result<Self> {
+    pub fn with_plugin<T: HostPlugin>(mut self, plugin: Arc<T>) -> anyhow::Result<Self> {
         self.host_builder = self.host_builder.with_plugin(plugin)?;
         Ok(self)
     }
@@ -500,8 +500,21 @@ impl ClusterHostBuilder {
     /// Registers the multiplexed plugin set. See
     /// [`crate::host::HostBuilder::with_multiplexed_plugins`].
     #[cfg(feature = "wasm_component_model_implements")]
-    pub fn with_multiplexed_plugins(mut self) -> anyhow::Result<Self> {
-        self.host_builder = self.host_builder.with_multiplexed_plugins()?;
+    pub fn with_multiplexed_plugins(self) -> anyhow::Result<Self> {
+        self.with_multiplexed_plugins_ignoring_discovered(false)
+    }
+
+    /// Registers multiplexed plugins with the host's NATS discovery policy.
+    /// Pass the same value used for the host's [`NatsConnectionOptions`].
+    /// See [`HostBuilder::with_multiplexed_plugins_ignoring_discovered`].
+    #[cfg(feature = "wasm_component_model_implements")]
+    pub fn with_multiplexed_plugins_ignoring_discovered(
+        mut self,
+        ignore: bool,
+    ) -> anyhow::Result<Self> {
+        self.host_builder = self
+            .host_builder
+            .with_multiplexed_plugins_ignoring_discovered(ignore)?;
         Ok(self)
     }
 
@@ -3257,6 +3270,7 @@ mod tests {
         Ok(())
     }
 
+    // Records the compatibility default. A safer default should break this test.
     #[tokio::test]
     async fn a_reconnect_follows_advertised_servers_by_default() -> anyhow::Result<()> {
         use crate::nats_test::accept_advertising;

@@ -911,28 +911,21 @@ pub(crate) fn lock_root(root: impl AsRef<Path>, untrusted: &str) -> Result<PathB
 /// The multiplexed plugin set a host registers to serve `(implements ..)`
 /// named imports.
 ///
-/// Every single-backend plugin leaves [`HostPlugin::supports_named_instances`]
-/// at its default of `false`, so a workload declaring two entries of one
-/// namespace:package under distinct names fails to bind unless a multiplexed
-/// plugin is registered alongside. That makes this list load-bearing rather
-/// than optional, and it was previously written out by hand in every embedder:
-/// `wash host`, `wash dev`, and downstream hosts each kept their own copy.
-/// The copies drift — a downstream host lost `(implements ..)` support
-/// entirely for three weeks after a refactor rebuilt its registration list and
-/// omitted the block, with nothing at compile time to notice. One list here
-/// means adding a multiplexed plugin reaches every embedder at once.
+/// Register these alongside single-backend plugins to resolve named imports.
+/// NATS discovery stays enabled unless an egress policy restricts it. Use
+/// [`multiplexed_plugins_ignoring_discovered_nats_servers`] to disable it.
 ///
 /// Postgres is deliberately absent: whether it registers at all, and whether
 /// as `multiplex_only`, depends on the host's own configuration.
 #[cfg(feature = "wasm_component_model_implements")]
 pub fn multiplexed_plugins() -> Vec<std::sync::Arc<dyn HostPlugin>> {
-    multiplexed_plugins_with_nats_discovery(false)
+    multiplexed_plugins_ignoring_discovered_nats_servers(false)
 }
 
 /// Register multiplexed plugins with a shared NATS discovery policy.
 /// Egress policies always restrict NATS connections to their configured URLs.
 #[cfg(feature = "wasm_component_model_implements")]
-pub fn multiplexed_plugins_with_nats_discovery(
+pub fn multiplexed_plugins_ignoring_discovered_nats_servers(
     ignore_discovered_servers: bool,
 ) -> Vec<std::sync::Arc<dyn HostPlugin>> {
     #[allow(unused_mut)]

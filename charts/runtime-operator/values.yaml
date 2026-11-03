@@ -664,10 +664,12 @@ runtime:
   # rather than a reason to exit and spend a pod restart. Zero fails on the
   # first refusal. `probes.endpoint.startupFailureThreshold` has to cover this.
   natsConnectTimeoutSeconds: 60
-  # -- Restrict host and binding NATS connections to their configured URLs.
-  # Enable when each URL is a Service. A single-server URL loses cluster
-  # discovery failover; advertised pod IPs can be reused by another cluster.
-  natsIgnoreDiscoveredServers: false
+  # -- Restrict host and workload NATS connections to their configured URLs.
+  # Defaults to true for the chart's NATS Service; advertised pod IPs can be
+  # reused by another cluster. Set false when a host group uses a single pod
+  # URL and needs discovery for cluster failover, or runs an older host image
+  # without --nats-ignore-discovered-servers. Applies to every host group.
+  natsIgnoreDiscoveredServers: true
   # -- How long a terminating host pod has to shut down before it is killed.
   #
   # Three numbers in sequence, and this is the budget for all of them:
