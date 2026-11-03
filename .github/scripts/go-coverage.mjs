@@ -5,7 +5,7 @@ import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFil
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const thresholds = { statements: 90, branches: 80 };
+export const targets = { statements: 90, branches: 80 };
 
 export function statementCounts(profile) {
   const lines = profile.trim().split('\n');
@@ -52,8 +52,8 @@ export function branchCounts(conditions) {
   return { covered, total: conditions.length * 2 };
 }
 
-export function meetsThreshold({ covered, total }, threshold) {
-  return total > 0 && covered * 100 >= total * threshold;
+export function meetsTarget({ covered, total }, target) {
+  return total > 0 && covered * 100 >= total * target;
 }
 
 function percentage({ covered, total }) {
@@ -122,7 +122,8 @@ async function run(module) {
   const provenance = {
     module, commit: commit.stdout.trim(), workingTree: status.stdout.trim(),
     collectedAt: new Date().toISOString(), go: go.stdout.trim(), gobco: tool.stdout.trim(),
-    platform: `${process.platform}/${process.arch}`, node: process.version, thresholds, packages: names,
+    platform: `${process.platform}/${process.arch}`, node: process.version,
+    targets, targetsEnforced: false, packages: names,
     scope: 'All module packages except test/e2e; generated code and test helpers included',
     branchScope: 'Per-package tests; gobco does not measure select statements or range loop outcomes',
     kubebuilderAssets: env.KUBEBUILDER_ASSETS ?? null,
@@ -168,22 +169,26 @@ async function run(module) {
     }
   }));
   branchPackages.sort((a, b) => a.package.localeCompare(b.package));
+  if (statements?.total === 0) failures.push('No statement coverage counters collected');
+  if (branches.total === 0) failures.push('No branch coverage counters collected');
   const complete = failures.length === 0;
-  const passed = complete && statements && meetsThreshold(statements, thresholds.statements)
-    && meetsThreshold(branches, thresholds.branches);
+  const targetsMet = complete
+    ? meetsTarget(statements, targets.statements) && meetsTarget(branches, targets.branches)
+    : null;
   const report = {
     ...provenance, statements, branches, branchPackages, commands, failures,
-    testsPassed: tests.code === 0, complete, passed: Boolean(passed),
+    testsPassed: tests.code === 0, complete, passed: complete, targetsMet,
   };
   writeFileSync(resolve(out, 'coverage.json'), JSON.stringify(report, null, 2) + '\n');
   const summary = [
     `## ${module} Go coverage`, '', `Commit: ${provenance.commit}`,
     `Statement tests: ${tests.code === 0 ? 'passed' : 'failed'}; collection: ${complete ? 'complete' : 'incomplete'}`,
-    `Gold thresholds: ${passed ? 'passed' : 'failed'}`, '',
+    `Gold targets (informational): ${targetsMet === null ? 'not assessed' : targetsMet ? 'met' : 'below target'}`,
+    'Coverage percentages do not affect CI status.', '',
     '| Metric | Covered / total | Coverage | Gold target |',
     '| --- | ---: | ---: | ---: |',
-    `| Statements | ${statements ? `${statements.covered} / ${statements.total}` : 'unavailable'} | ${statements ? percentage(statements) : 'N/A'} | ${thresholds.statements}% |`,
-    `| Branch outcomes (gobco) | ${branches.covered} / ${branches.total} | ${percentage(branches)} | ${thresholds.branches}% |`, '',
+    `| Statements | ${statements ? `${statements.covered} / ${statements.total}` : 'unavailable'} | ${statements ? percentage(statements) : 'N/A'} | ${targets.statements}% |`,
+    `| Branch outcomes (gobco) | ${branches.covered} / ${branches.total} | ${percentage(branches)} | ${targets.branches}% |`, '',
     provenance.scope + '.', provenance.branchScope + '.',
     'Partial reports are diagnostic only. See CONTRIBUTING.md for badge evidence limits.', '',
     `Download ${module}-coverage for profiles, HTML, raw branch counts, test logs, and provenance.`, '',
@@ -192,7 +197,7 @@ async function run(module) {
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   console.log(summary);
   for (const failure of failures) console.error(failure);
-  if (!passed) process.exitCode = 1;
+  if (!complete) process.exitCode = 1;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

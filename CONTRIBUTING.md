@@ -135,10 +135,10 @@ an 80% threshold does not demonstrate that the criterion is met.
 
 The [coverage workflow](https://github.com/wasmCloud/wasmCloud/actions/workflows/coverage.yml)
 measures `runtime-operator` and `runtime-gateway` separately on Go pull requests,
-merge groups, main pushes, and manual runs. Each job requires successful tests,
-complete reports, and the Gold targets of **90% statements** and **80% branch
-outcomes**. A failed coverage job retains diagnostic reports and does not pass
-the thresholds. Coverage runs separately from the release gate.
+merge groups, main pushes, and manual runs. Each job requires successful tests
+and complete reports. The Gold targets of **90% statements** and **80% branch
+outcomes** are informational; coverage percentages do not affect CI status.
+Coverage runs separately from the release gate.
 
 To reproduce a report from the repository root, install the pinned branch tool
 and run the module's collector (Node.js and Go are required):
@@ -169,13 +169,15 @@ Reports live in `target/go-coverage/<module>/`: `statements.out`,
 `statements.html`, function percentages in `statements.txt`, raw gobco JSON and
 logs per package, `coverage.json`, `summary.md`, and `provenance.json`. Provenance
 records the commit, working tree changes, tool versions, package scope,
-platform, thresholds, and CI run URL. Statement percentages sum unique profile
+platform, informational targets, and CI run URL. `coverage.json` records whether
+the targets are met in `targetsMet`; `passed` reflects test and collection success.
+Statement percentages sum unique profile
 blocks weighted by statement count, merging repeated blocks from package test
 runs. `statements.txt` provides Go's per-function view. Branch outcomes are summed across
 packages by count, rather than averaging package percentages. Empty totals,
 failed tests, and missing or invalid report data cannot pass the checks.
-CI retains each `<module>-coverage` artifact for 90 days, including when a
-threshold fails. Preserve the artifact for the assessed commit before expiry.
+CI retains each `<module>-coverage` artifact for 90 days, including when tests
+or collection fail. Preserve the artifact for the assessed commit before expiry.
 
 #### Gold evidence limits
 
@@ -192,8 +194,8 @@ does not contribute. Packages containing only test files have no branch
 counters and skip the second test run; their tests run during statement
 collection. Gobco does not instrument `select` statements or `range`
 loop outcomes, and its counters are not atomic. Its branch percentage therefore
-needs scope and concurrency review in the badge justification; passing the
-numeric check alone does not establish full branch coverage compliance.
+needs scope and concurrency review in the badge justification; meeting the
+numeric target alone does not establish full branch coverage compliance.
 
 Link successful runs and retain both Go artifacts along with the Rust evidence.
 The Rust report still measures lines and compiler regions, and this addition

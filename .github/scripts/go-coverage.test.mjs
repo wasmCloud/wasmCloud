@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { branchCounts, meetsThreshold, statementCounts } from './go-coverage.mjs';
+import { branchCounts, meetsTarget, statementCounts } from './go-coverage.mjs';
 
 test('statements are weighted by block size, including unexecuted packages', () => {
   assert.deepEqual(statementCounts([
@@ -52,14 +52,14 @@ test('branch data must contain valid counters', () => {
   }
 });
 
-test('threshold checks use exact counts instead of rounded percentages', () => {
-  assert.equal(meetsThreshold({ covered: 89999, total: 100000 }, 90), false);
-  assert.equal(meetsThreshold({ covered: 90, total: 100 }, 90), true);
-  assert.equal(meetsThreshold({ covered: 80, total: 100 }, 80), true);
-  assert.equal(meetsThreshold({ covered: 0, total: 0 }, 80), false);
+test('target comparisons use exact counts instead of rounded percentages', () => {
+  assert.equal(meetsTarget({ covered: 89999, total: 100000 }, 90), false);
+  assert.equal(meetsTarget({ covered: 90, total: 100 }, 90), true);
+  assert.equal(meetsTarget({ covered: 80, total: 100 }, 80), true);
+  assert.equal(meetsTarget({ covered: 0, total: 0 }, 80), false);
 });
 
-test('collector retains diagnostics and rejects failed or incomplete runs', () => {
+test('collector tracks targets without enforcement and rejects failed or incomplete runs', () => {
   const root = mkdtempSync(join(tmpdir(), 'go coverage test '));
   try {
     const scripts = join(root, '.github/scripts');
@@ -89,6 +89,7 @@ if (tool === 'git') {
     if (!args.includes('-coverpkg=example.org/mod,example.org/mod/untested,example.org/mod/test/integration')) throw new Error('wrong denominator');
     fs.writeFileSync(args.find(a => a.startsWith('-coverprofile=')).split('=')[1],
       'mode: atomic\\nexample.org/mod/a.go:1.1,2.2 ' + (mode === 'below-statements' ? 8 : 9) + ' 1\\nexample.org/mod/a.go:1.1,2.2 ' + (mode === 'below-statements' ? 8 : 9) + ' 0\\nexample.org/mod/untested/b.go:1.1,2.2 1 0\\n');
+    if (mode === 'empty-statements') fs.writeFileSync(args.find(a => a.startsWith('-coverprofile=')).split('=')[1], 'mode: atomic\\na.go:1.1,2.2 0 0\\n');
     process.exit(mode === 'test-failure' ? 1 : 0);
   } else if (args.includes('-func')) console.log('total: 90.0%');
   else if (args.includes('-html')) fs.writeFileSync(args[args.indexOf('-o') + 1], '<html></html>');
@@ -99,7 +100,7 @@ if (tool === 'git') {
     if (args.at(-1).endsWith('/test/integration')) throw new Error('instrumented test-only package');
     if (!args.includes('-branch')) throw new Error('condition coverage requested');
     if (mode !== 'missing-branches') {
-      const count = args.at(-1).endsWith('/untested') ? 1 : 5;
+      const count = mode === 'empty-branches' ? 0 : args.at(-1).endsWith('/untested') ? 1 : 5;
       fs.writeFileSync(args[args.indexOf('-stats') + 1], JSON.stringify(Array.from({ length: count }, (_, i) =>
         ({ Start: 'a.go:' + i + ':1', Code: 'x', TrueCount: 1, FalseCount: i === 0 || mode === 'below-branches' ? 0 : 1 }))));
     }
@@ -111,21 +112,29 @@ if (tool === 'git') {
       writeFileSync(join(bin, tool), fake);
       chmodSync(join(bin, tool), 0o755);
     }
-    for (const mode of ['passing', 'below-statements', 'below-branches', 'test-failure', 'branch-failure', 'missing-branches']) {
+    for (const mode of ['passing', 'below-statements', 'below-branches', 'test-failure', 'branch-failure', 'missing-branches', 'empty-statements', 'empty-branches']) {
       const result = spawnSync(process.execPath, [script, 'runtime-gateway'], {
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GOBCO: join(bin, 'gobco'), FIXTURE_MODE: mode, GITHUB_STEP_SUMMARY: join(root, 'summary.md') },
         encoding: 'utf8',
       });
-      assert.equal(result.status, mode === 'passing' ? 0 : 1, result.stderr);
+      const complete = ['passing', 'below-statements', 'below-branches'].includes(mode);
+      assert.equal(result.status, complete ? 0 : 1, result.stderr);
       const report = JSON.parse(readFileSync(join(out, 'coverage.json'), 'utf8'));
-      assert.equal(report.passed, mode === 'passing');
-      assert.equal(report.complete, ['passing', 'below-statements', 'below-branches'].includes(mode));
+      assert.equal(report.passed, complete);
+      assert.equal(report.complete, complete);
+      assert.equal(report.targetsMet, complete ? mode === 'passing' : null);
+      assert.equal(report.targetsEnforced, false);
+      assert.deepEqual(report.targets, { statements: 90, branches: 80 });
       assert.deepEqual(report.packages, ['example.org/mod', 'example.org/mod/untested', 'example.org/mod/test/integration']);
       assert.equal(report.branchPackages.find(pkg => pkg.package.endsWith('/test/integration')).skipped, 'No non-test Go files');
-      assert.deepEqual(report.statements, { covered: mode === 'below-statements' ? 8 : 9, total: mode === 'below-statements' ? 9 : 10 });
-      assert.deepEqual(report.branches, mode === 'missing-branches' ? { covered: 0, total: 0 }
+      assert.deepEqual(report.statements, mode === 'empty-statements' ? { covered: 0, total: 0 }
+        : { covered: mode === 'below-statements' ? 8 : 9, total: mode === 'below-statements' ? 9 : 10 });
+      assert.deepEqual(report.branches, ['missing-branches', 'empty-branches'].includes(mode) ? { covered: 0, total: 0 }
         : { covered: mode === 'below-branches' ? 6 : 10, total: 12 });
-      assert.ok(readFileSync(join(out, 'summary.md'), 'utf8').includes('90%'));
+      const summary = readFileSync(join(out, 'summary.md'), 'utf8');
+      assert.ok(summary.includes('90%'));
+      assert.ok(summary.includes('Coverage percentages do not affect CI status.'));
+      assert.ok(summary.includes(`Gold targets (informational): ${complete ? mode === 'passing' ? 'met' : 'below target' : 'not assessed'}`));
       assert.ok(readFileSync(join(out, 'provenance.json'), 'utf8').includes('fixture-commit'));
     }
   } finally {

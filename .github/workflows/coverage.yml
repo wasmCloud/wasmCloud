@@ -91,7 +91,7 @@ jobs:
           make manifests generate envtest LOCALBIN="$RUNNER_TEMP/operator-tools"
           assets=$("$RUNNER_TEMP/operator-tools/setup-envtest" use 1.31.0 --bin-dir "$RUNNER_TEMP/operator-tools" -p path)
           echo "KUBEBUILDER_ASSETS=$assets" >> "$GITHUB_ENV"
-      - name: Collect statement and branch coverage and check Gold thresholds
+      - name: Collect statement and branch coverage
         id: collect
         env:
           MODULE: ${{ matrix.module }}
