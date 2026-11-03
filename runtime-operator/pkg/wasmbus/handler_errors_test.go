@@ -80,7 +80,7 @@ func TestRequestHandlerStopsOnFailure(t *testing.T) {
 			if tc.stage == decodeStage {
 				msg.Data = []byte("{")
 			}
-			handler := NewRequestHandler(testMessage{}, testResponse{},
+			handler := NewRequestHandler(func() testMessage { return testMessage{} }, testResponse{},
 				func(context.Context, *testMessage) (*testResponse, error) {
 					return &testResponse{Hello: "response"}, step(handlerStage)
 				})
@@ -111,7 +111,7 @@ func TestRequestHandlerEncodingFailureDoesNotPublish(t *testing.T) {
 	bus := &handlerTestBus{}
 	msg := NewMessage(testSubject)
 	msg.bus = bus
-	handler := NewRequestHandler(testRequest{}, testMessageErr{},
+	handler := NewRequestHandler(func() testRequest { return testRequest{} }, testMessageErr{},
 		func(context.Context, *testRequest) (*testMessageErr, error) { return &testMessageErr{}, nil })
 	handler.PostRequest = func(context.Context, *testMessageErr, *Message) error {
 		t.Fatal("post hook ran after encoding failed")
@@ -125,12 +125,12 @@ func TestRequestHandlerEncodingFailureDoesNotPublish(t *testing.T) {
 	}
 }
 
-func TestRequestHandlerHooksPreserveValueTemplate(t *testing.T) {
+func TestRequestHandlerHooksPreserveRequestDefaults(t *testing.T) {
 	type contextKey struct{}
 	ctx := context.WithValue(t.Context(), contextKey{}, requestName)
 	bus := &handlerTestBus{}
 	template := testMessage{Name: "default", NotDecoded: "template"}
-	handler := NewRequestHandler(template, testResponse{},
+	handler := NewRequestHandler(func() testMessage { return template }, testResponse{},
 		func(ctx context.Context, req *testMessage) (*testResponse, error) {
 			if ctx.Value(contextKey{}) != requestName || req.NotDecoded != template.NotDecoded {
 				t.Fatalf("handler context or request defaults lost: %+v", req)
@@ -172,8 +172,8 @@ func TestRequestHandlerHooksPreserveValueTemplate(t *testing.T) {
 			t.Fatalf("response headers = %v", reply.Header)
 		}
 	}
-	if handler.Request != template || bus.publishCalls != 2 {
-		t.Fatalf("request template or publish count changed: %+v, %d", handler.Request, bus.publishCalls)
+	if handler.NewRequest() != template || bus.publishCalls != 2 {
+		t.Fatalf("request template or publish count changed: %+v, %d", handler.NewRequest(), bus.publishCalls)
 	}
 }
 
@@ -188,7 +188,7 @@ func TestRequestHandlerAllocatesReferenceFieldsPerRequest(t *testing.T) {
 		changed    = "mutated"
 	)
 	var requests []*request
-	handler := NewRequestHandler(request{}, testResponse{},
+	handler := NewRequestHandler(func() request { return request{} }, testResponse{},
 		func(_ context.Context, req *request) (*testResponse, error) {
 			requests = append(requests, req)
 			return &testResponse{}, nil
@@ -219,9 +219,10 @@ func TestRequestHandlerAllocatesReferenceFieldsPerRequest(t *testing.T) {
 	if second.Labels["name"] != secondName || second.Values[0] != secondName || second.Nested.Name != secondName {
 		t.Fatalf("requests share decoded storage: %+v", second)
 	}
-	for _, req := range []*request{empty, &handler.Request} {
+	defaults := handler.NewRequest()
+	for _, req := range []*request{empty, &defaults} {
 		if req.Labels != nil || req.Values != nil || req.Nested != nil {
-			t.Fatalf("empty request or value template retained decoded storage: %+v", req)
+			t.Fatalf("empty request or fresh defaults retained decoded storage: %+v", req)
 		}
 	}
 }
