@@ -7,7 +7,11 @@
 //! and read it back correctly — exercising the TempFileOutputStream-based write path.
 
 use anyhow::{Context, Result};
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
+use rcgen::{
+    BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+    KeyUsagePurpose,
+};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use testcontainers::{
     GenericImage, ImageExt,
@@ -394,6 +398,111 @@ async fn test_nats_blobstore_credentials_choose_the_account() -> Result<()> {
             .is_err(),
         "the container must not be in the host's account"
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn test_nats_blobstore_mtls_identity_chooses_the_account() -> Result<()> {
+    wash_runtime::init_crypto();
+    let dir = tempfile::tempdir()?;
+    let mut ca_params = CertificateParams::new(Vec::new())?;
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate()?)?;
+    let ca_path = dir.path().join("ca.crt");
+    std::fs::write(&ca_path, ca.pem())?;
+
+    let issue = |name: &str, names: Vec<String>, usage| -> Result<_> {
+        let key = KeyPair::generate()?;
+        let mut params = CertificateParams::new(names)?;
+        params.extended_key_usages = vec![usage];
+        let cert = params.signed_by(&key, &ca)?;
+        let cert_path = dir.path().join(format!("{name}.crt"));
+        let key_path = dir.path().join(format!("{name}.key"));
+        std::fs::write(&cert_path, cert.pem())?;
+        std::fs::write(&key_path, key.serialize_pem())?;
+        Ok((cert_path, key_path))
+    };
+    let (server_cert, server_key) = issue(
+        "server",
+        vec!["localhost".into(), "127.0.0.1".into()],
+        ExtendedKeyUsagePurpose::ServerAuth,
+    )?;
+    let (host_cert, host_key) = issue(
+        "host",
+        vec!["host".into()],
+        ExtendedKeyUsagePurpose::ClientAuth,
+    )?;
+    let (node_cert, node_key) = issue(
+        "node",
+        vec!["node".into()],
+        ExtendedKeyUsagePurpose::ClientAuth,
+    )?;
+
+    let config = r#"
+jetstream {}
+tls {
+  cert_file: "/etc/nats/server.crt"
+  key_file: "/etc/nats/server.key"
+  ca_file: "/etc/nats/ca.crt"
+  verify_and_map: true
+}
+accounts {
+  HOST: { jetstream: enabled, users: [{ user: host }] }
+  NODE: { jetstream: enabled, users: [{ user: node }] }
+}
+"#;
+    let container = GenericImage::new("nats", "2.12.8-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .with_copy_to("/etc/nats/test.conf", config.as_bytes().to_vec())
+        .with_copy_to("/etc/nats/ca.crt", std::fs::read(&ca_path)?)
+        .with_copy_to("/etc/nats/server.crt", std::fs::read(server_cert)?)
+        .with_copy_to("/etc/nats/server.key", std::fs::read(server_key)?)
+        .with_cmd(["-c", "/etc/nats/test.conf"])
+        .start()
+        .await?;
+    let port = container.get_host_port_ipv4(4222).await?;
+    let url = format!("tls://127.0.0.1:{port}");
+    let host = async_nats::ConnectOptions::new()
+        .add_root_certificates(ca_path.clone())
+        .add_client_certificate(host_cert, host_key)
+        .connect(&url)
+        .await
+        .context("Failed to connect with the host certificate")?;
+    let node = async_nats::ConnectOptions::new()
+        .add_root_certificates(ca_path.clone())
+        .add_client_certificate(node_cert.clone(), node_key.clone())
+        .connect(&url)
+        .await
+        .context("Failed to connect with the binding certificate")?;
+
+    let binding = HashMap::from([
+        ("servers".into(), url),
+        ("tls-ca".into(), ca_path.display().to_string()),
+        ("tls-cert".into(), node_cert.display().to_string()),
+        ("tls-key".into(), node_key.display().to_string()),
+    ]);
+    let bindings = PluginBindings::new().with_plugin(
+        PluginBindingSet::new(PLUGIN_BLOBSTORE_ID)
+            .with_workload_config(WorkloadConfigPolicy::Allow),
+    );
+    let harness = start(container, host.clone(), binding, bindings).await?;
+    assert_eq!(harness.state, WorkloadState::Running, "{}", harness.message);
+
+    let (status, body) = blobstore_request(&reqwest::Client::new(), harness.addr, "/").await?;
+    assert_eq!((status, body.as_str()), (200, "hello"));
+
+    async_nats::jetstream::new(node)
+        .get_object_store("my-container-real")
+        .await
+        .context("the container must be in the certificate's account")?;
+    let host_streams: Vec<_> = async_nats::jetstream::new(host)
+        .stream_names()
+        .try_collect()
+        .await?;
+    assert!(host_streams.is_empty(), "host streams: {host_streams:?}");
     Ok(())
 }
 
