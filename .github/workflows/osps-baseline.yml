@@ -1,7 +1,8 @@
 name: osps-baseline
 
 # Assesses this repo against OSPS Baseline Maturity Level 1 with the
-# OpenSSF GitHub repository scanner. Results land on the run summary page,
+# OpenSSF GitHub repository scanner. The project targets Level 3, but the
+# action only evaluates Level 1. Results land on the run summary page,
 # as code scanning alerts for failed controls, and in a results artifact.
 
 on:
