@@ -32,7 +32,7 @@ pub(crate) enum Task {
     Setup,
     /// Collect native workspace coverage, including ignored tests.
     Test,
-    /// Generate HTML, JSON, LCOV, and text reports.
+    /// Generate HTML, JSON, and text reports.
     Report,
     #[command(about = format!(
         "Require passing tests and {THRESHOLD}% line coverage."
@@ -259,10 +259,9 @@ impl Runner<'_> {
         args.extend_from_slice(REPORT_ARGS);
         self.cargo(&args, Some("summary.txt"))?;
         let json = format!("{REPORT_DIR}/{JSON_SUMMARY}");
-        let lcov = format!("{REPORT_DIR}/lcov.info");
+        // No LCOV: the pinned nightly's llvm-cov segfaults exporting branch data as LCOV.
         for format in [
             vec!["--json", "--summary-only", "--output-path", json.as_str()],
-            vec!["--lcov", "--output-path", lcov.as_str()],
             vec!["--html", "--output-dir", REPORT_DIR],
         ] {
             let mut command = args.clone();
@@ -525,7 +524,6 @@ mod tests {
             "tests.txt",
             "summary.txt",
             "coverage.json",
-            "lcov.info",
             "html/index.html",
             "threshold.txt",
         ] {

@@ -89,7 +89,7 @@ coverage uses the dated nightly pinned in `xtask/coverage-toolchain`; fixture
 builds and ordinary builds/tests continue to use `rust-toolchain.toml`.
 
 Reports are written to `target/coverage/`: `html/index.html`, `coverage.json`,
-`lcov.info`, `summary.txt`, test/threshold logs, and `provenance.txt`. The provenance
+`summary.txt`, test/threshold logs, and `provenance.txt`. The provenance
 records the commit, working tree status, toolchain, features, test scope, and CI
 run URL. `cargo xtask coverage report` regenerates reports after a failed run;
 partial reports are diagnostic only. `cargo xtask coverage check` requires a
