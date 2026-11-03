@@ -972,6 +972,7 @@ mod tests {
     /// not granted to the workload fails the bind rather than leaving the
     /// rest of the layer to connect anonymously. The error names neither the
     /// entry nor its grant, and the source is never asked.
+    #[cfg(feature = "wasmcloud-nats")]
     #[tokio::test]
     async fn an_ungranted_nats_credential_fails_the_bind() {
         use crate::plugin::wasmcloud_nats::{PLUGIN_NATS_ID, binding_schema};

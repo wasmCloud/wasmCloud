@@ -459,6 +459,20 @@ pub async fn pull_component(
     Ok((bytes.to_vec(), digest))
 }
 
+fn parse_reference(reference: &str) -> Result<Reference> {
+    let parsed = Reference::try_from(reference)
+        .with_context(|| format!("invalid OCI reference: {reference}"))?;
+    // Repository names are lowercase; registry hosts and tags may contain uppercase.
+    if parsed
+        .repository()
+        .bytes()
+        .any(|byte| byte.is_ascii_uppercase())
+    {
+        bail!("invalid OCI reference: {reference}: repository name must be lowercase");
+    }
+    Ok(parsed)
+}
+
 /// [`pull_component`] without the copy into a `Vec`.
 ///
 /// Concurrent pulls of one reference with the same credentials and settings
@@ -477,8 +491,7 @@ pub(crate) async fn pull_component_bytes(
     // future. A CLI's `async fn main` holds all of its subcommands' futures at
     // once, on a main thread whose stack is 1 MiB on Windows.
     Box::pin(with_pull_timeout(reference, config.timeout, async {
-        let reference_parsed = Reference::try_from(reference)
-            .with_context(|| format!("invalid OCI reference: {reference}"))?;
+        let reference_parsed = parse_reference(reference)?;
 
         let auth = CredentialResolver::new(config.credentials.clone())
             .resolve_credentials(reference_parsed.registry())
@@ -812,9 +825,7 @@ pub async fn push_component(
     config: OciConfig,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<String> {
-    // Parse OCI reference
-    let reference_parsed = Reference::try_from(reference)
-        .with_context(|| format!("invalid OCI reference: {reference}"))?;
+    let reference_parsed = parse_reference(reference)?;
 
     // Validate the component before pushing
     validate_component(component_data)
@@ -958,6 +969,62 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_validation_preserves_valid_references() {
+        for (input, registry, repository, tag) in [
+            ("busybox", "docker.io", "library/busybox", Some("latest")),
+            (
+                "ghiw/wasr:Release",
+                "docker.io",
+                "ghiw/wasr",
+                Some("Release"),
+            ),
+            (
+                "GHCR.IO/acme/workload:RC1",
+                "GHCR.IO",
+                "acme/workload",
+                Some("RC1"),
+            ),
+            (
+                "Registry:5000/repo:Tag",
+                "Registry:5000",
+                "repo",
+                Some("Tag"),
+            ),
+        ] {
+            let parsed = parse_reference(input).unwrap();
+            assert_eq!(parsed.registry(), registry);
+            assert_eq!(parsed.repository(), repository);
+            assert_eq!(parsed.tag(), tag);
+        }
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let parsed = parse_reference(&format!("GHCR.IO/acme/workload@{digest}")).unwrap();
+        assert_eq!(parsed.digest(), Some(digest.as_str()));
+        assert!(parsed.tag().is_none());
+    }
+
+    #[tokio::test]
+    async fn reference_validation_rejects_uppercase_repositories_before_pull_or_push() {
+        for reference in ["ghiW/wasr", "A/b:Tag", "ghcr.io/UPPER:tag"] {
+            let config = OciConfig::new_with_credentials("unused", "unused");
+            let pull_error = tokio::time::timeout(
+                Duration::from_secs(2),
+                pull_component(reference, config.clone(), OciPullPolicy::Never),
+            )
+            .await
+            .expect("invalid references must fail before registry access")
+            .unwrap_err();
+            let push_error = push_component(reference, b"not wasm", config, None)
+                .await
+                .unwrap_err();
+            for error in [pull_error, push_error] {
+                let message = error.to_string();
+                assert!(message.contains("invalid OCI reference"), "{message}");
+                assert!(message.contains(reference), "{message}");
+            }
+        }
+    }
 
     /// Open `gate` once `joined` holds, so work held at the gate is provably
     /// still in flight while every caller joins it.
