@@ -1,6 +1,6 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-10-30'
+  last-updated: '2026-11-03'
   last-reviewed: '2026-10-27'
   url: https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/security-insights.yml
 
@@ -117,9 +117,9 @@ repository:
         evidence: https://github.com/wasmCloud/wasmCloud/blob/main/SELF_ASSESSMENT.md
         date: '2026-10-27'
         comment: >-
-          Written with the OpenSSF self-assessment template. THREAT_MODEL.md
-          holds the trust boundaries, security goals and known limitations it
-          refers to. Gemara v1.6.0 capability and threat catalogs for the host
+          Written with the OpenSSF self-assessment template. The threat model
+          it refers to, THREAT_MODEL.md, holds the trust boundaries, security
+          goals and known limitations. Gemara v1.6.0 capability and threat catalogs for the host
           are in docs/security/.
       third-party:
         - name: OSTIF and Trail of Bits security audit
@@ -255,7 +255,8 @@ repository:
         type: other
         comment: >-
           OSPS Baseline Maturity Level 1 assessment on every push to main and
-          weekly. Failed controls are uploaded to code scanning.
+          weekly, the only level the scanner action evaluates. The project
+          targets Level 3. Failed controls are uploaded to code scanning.
         rulesets:
           - osps-baseline-2026-08
         integration:

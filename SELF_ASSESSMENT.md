@@ -141,7 +141,7 @@ These are settings that strengthen or weaken a deployment. The threat model's [s
 
 ## Project compliance
 
-wasmCloud is not documented as meeting any regulatory or industry standard such as PCI-DSS, ISO 27001 or SOC 2. The project publishes an [OpenSSF Security Insights](security-insights.yml) file and is working toward [OSPS Baseline](https://baseline.openssf.org/) Level 2.
+wasmCloud is not documented as meeting any regulatory or industry standard such as PCI-DSS, ISO 27001 or SOC 2. The project publishes an [OpenSSF Security Insights](security-insights.yml) file and is working toward [OSPS Baseline](https://baseline.openssf.org/) Level 3 in this repository and in the [go](https://github.com/wasmCloud/go), [typescript](https://github.com/wasmCloud/typescript) and [wasmcloud.com](https://github.com/wasmCloud/wasmcloud.com) repositories.
 
 **EU CRA.** The Linux Foundation is wasmCloud's CRA steward; manufacturer obligations apply to vendors placing wasmCloud-based products on the market. Our [security policy](SECURITY.md), Security Insights file and signed SLSA provenance support their due diligence.
 
