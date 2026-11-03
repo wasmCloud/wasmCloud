@@ -451,26 +451,17 @@ impl FromSql<'_> for MacAddressEui64 {
     }
 }
 
-/// Postgres types whose binary form is a fixed-width value (or a structured
-/// one, like `uuid` or `numeric`), so the bytes of a `text` value are never a
-/// valid encoding of them.
-const NON_TEXT_TYPES: [PgType; 15] = [
-    PgType::BOOL,
-    PgType::INT2,
-    PgType::INT4,
-    PgType::INT8,
-    PgType::OID,
-    PgType::FLOAT4,
-    PgType::FLOAT8,
-    PgType::MONEY,
-    PgType::DATE,
-    PgType::TIME,
-    PgType::TIMESTAMP,
-    PgType::TIMESTAMPTZ,
-    PgType::INTERVAL,
-    PgType::NUMERIC,
-    PgType::UUID,
-];
+/// Whether Postgres reads the binary form of `ty` as the value's text.
+///
+/// These are the types `&str` binds to (`text`, `varchar`, `bpchar`, `name`,
+/// `unknown`, `citext` and the `ltree` types), plus `json`, `xml` and enums.
+/// Any other type, including fixed-width and extension types, would read the
+/// bytes of the text as a different value.
+fn reads_text(ty: &PgType) -> bool {
+    <&str as ToSql>::accepts(ty)
+        || matches!(*ty, PgType::JSON | PgType::XML)
+        || matches!(ty.kind(), Kind::Enum(_))
+}
 
 /// `oid` and the `reg*` aliases share `int4`'s four-byte encoding, so an `int4`
 /// value can stand in for them (`WHERE oid = $1`).
@@ -548,12 +539,19 @@ fn check_scalar_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error +
             matches!(*base, PgType::TIMESTAMP | PgType::TIMESTAMPTZ),
             WrongType::new::<DateTime<Utc>>,
         ),
-        // `json`, `xml`, enums and domains over text still read text as is.
-        PgValue::Text(_)
-        | PgValue::Name(_)
-        | PgValue::Xml(_)
-        | PgValue::Char(_)
-        | PgValue::Varchar(_) => wrong(!NON_TEXT_TYPES.contains(base), WrongType::new::<String>),
+        PgValue::Text(_) | PgValue::Name(_) | PgValue::Varchar(_) | PgValue::Xml(_) => {
+            wrong(reads_text(base), WrongType::new::<String>)
+        }
+        // A `"char"` column is read back as `char`, so it binds there too.
+        PgValue::Char(_) => wrong(
+            reads_text(base) || *base == PgType::CHAR,
+            WrongType::new::<String>,
+        ),
+        PgValue::Bytea(_) => wrong(*base == PgType::BYTEA, WrongType::new::<Vec<u8>>),
+        PgValue::Json(_) | PgValue::Jsonb(_) => wrong(
+            matches!(*base, PgType::JSON | PgType::JSONB),
+            WrongType::new::<serde_json::Value>,
+        ),
         // Sixteen bytes each, as are an `interval` and one another.
         PgValue::Uuid(_) => wrong(*base == PgType::UUID, WrongType::new::<Uuid>),
         PgValue::Point(_) => wrong(*base == PgType::POINT, WrongType::new::<Point<f64>>),
@@ -1440,6 +1438,73 @@ mod tests {
         }
         for ty in [PgType::TEXT, PgType::VARCHAR, PgType::JSON, PgType::UNKNOWN] {
             assert!(bind(&PgValue::Text("x".into()), &ty).is_ok(), "{ty}");
+        }
+    }
+
+    #[test]
+    fn string_and_byte_values_bind_only_to_types_that_read_them() {
+        let regclass = PgType::REGCLASS;
+        let int8 = PgType::INT8;
+        for (value, ty) in [
+            (PgValue::Text("abcd".into()), &regclass),
+            (PgValue::Text("abcd".into()), &PgType::XID),
+            (PgValue::Text("abcdefgh".into()), &PgType::PG_LSN),
+            (PgValue::Text("abcdef".into()), &PgType::MACADDR),
+            (PgValue::Text("{}".into()), &PgType::JSONB),
+            (PgValue::Name("12345678".into()), &int8),
+            (PgValue::Varchar((None, b"12345678".to_vec())), &int8),
+            (PgValue::Char((8, b"12345678".to_vec())), &int8),
+            (PgValue::Xml("12345678".into()), &int8),
+            (PgValue::Bytea(b"12345678".to_vec()), &int8),
+            (PgValue::Bytea(b"abc".to_vec()), &PgType::TEXT),
+            (PgValue::Json("1234".into()), &PgType::INT4),
+            (PgValue::Jsonb("1234".into()), &PgType::TEXT),
+        ] {
+            let err = bind(&value, ty).unwrap_err();
+            assert!(err.is::<WrongType>(), "{value:?} as {ty}: {err}");
+            assert!(err.to_string().contains(ty.name()), "{err}");
+        }
+
+        let citext = PgType::new("citext".into(), 0, Kind::Simple, "public".into());
+        let mood = PgType::new(
+            "mood".into(),
+            0,
+            Kind::Enum(vec!["happy".into()]),
+            "public".into(),
+        );
+        let label = PgType::new(
+            "label".into(),
+            0,
+            Kind::Domain(PgType::TEXT),
+            "public".into(),
+        );
+        for ty in [
+            PgType::TEXT,
+            PgType::VARCHAR,
+            PgType::BPCHAR,
+            PgType::NAME,
+            PgType::UNKNOWN,
+            PgType::JSON,
+            PgType::XML,
+            citext,
+            mood,
+            label,
+        ] {
+            for value in [
+                PgValue::Text("happy".into()),
+                PgValue::Name("happy".into()),
+                PgValue::Varchar((None, b"happy".to_vec())),
+                PgValue::Char((5, b"happy".to_vec())),
+                PgValue::Xml("happy".into()),
+            ] {
+                assert!(bind(&value, &ty).is_ok(), "{value:?} as {ty}");
+            }
+        }
+        assert!(bind(&PgValue::Char((1, b"a".to_vec())), &PgType::CHAR).is_ok());
+        assert!(bind(&PgValue::Bytea(vec![0, 255]), &PgType::BYTEA).is_ok());
+        for ty in [PgType::JSON, PgType::JSONB] {
+            assert!(bind(&PgValue::Json("{}".into()), &ty).is_ok(), "{ty}");
+            assert!(bind(&PgValue::Jsonb("{}".into()), &ty).is_ok(), "{ty}");
         }
     }
 
