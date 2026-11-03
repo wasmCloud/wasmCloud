@@ -1321,15 +1321,11 @@ impl HostCommand {
         let nats = declared
             .for_plugin(plugin::wasmcloud_nats::PLUGIN_NATS_ID)
             .with_default_bundle("servers", bundle.clone());
-        // Inherited client certificates must not select a blobstore connection.
-        // Protocol credentials still inherit the data plane's TLS identity.
+        // A blobstore binding with no identity of its own uses the host's
+        // connection, so the host's client certificate is never one to inherit:
+        // under `verify_and_map` it would sign a credential binding in as the host.
         let blobstore = declared
             .for_plugin(plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID)
-            .with_default_bundle_if_any(
-                "servers",
-                bundle.clone(),
-                plugin::wasmcloud_nats::auth_keys(),
-            )
             .with_default_bundle(
                 "servers",
                 bundle
@@ -2289,7 +2285,7 @@ host:
     }
 
     #[test]
-    fn blobstore_tls_defaults_preserve_host_and_explicit_identities() -> anyhow::Result<()> {
+    fn blobstore_tls_defaults_never_inherit_the_host_identity() -> anyhow::Result<()> {
         let host = parse(&[
             "--data-nats-url=nats://data:4222",
             "--data-nats-tls-ca=/ca.crt",
@@ -2320,8 +2316,10 @@ host:
             vec![("jwt", "tenant.jwt"), ("nkey-seed", "tenant.seed")],
         ] {
             let resolved = resolve(&declared, "", &credentials)?;
-            assert_eq!(resolved["tls-cert"], "/host.crt");
-            assert_eq!(resolved["tls-key"], "/host.key");
+            assert_eq!(resolved["servers"], "nats://data:4222");
+            assert_eq!(resolved["tls-ca"], "/ca.crt");
+            assert!(!resolved.contains_key("tls-cert"), "{credentials:?}");
+            assert!(!resolved.contains_key("tls-key"), "{credentials:?}");
         }
 
         let explicit = resolve(
