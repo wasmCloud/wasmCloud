@@ -65,8 +65,6 @@ mod conversions {
         Timestamp, TimestampTz,
     };
 
-    include!("conversions.rs");
-
     /// Build a `row` (bare list of values, positionally aligned with the query's
     /// column list) from a tokio-postgres [`Row`].
     ///
@@ -81,6 +79,8 @@ mod conversions {
             })
             .collect()
     }
+
+    include!("conversions.rs");
 }
 
 /// Map a `tokio_postgres::Error` to the WIT `error`.

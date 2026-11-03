@@ -481,6 +481,7 @@ fn parse_layer_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
 }
 
 /// Parses credentials after all binding secrets have resolved.
+#[cfg_attr(not(feature = "wasi-blobstore"), allow(dead_code))]
 pub(crate) fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
     parse_layer_auth(&Layer {
         cfg,

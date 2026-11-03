@@ -65,6 +65,7 @@ impl Credentials {
 
     /// The options to build a connection on: plain ones when there is nothing
     /// to present, so an unauthenticated connection is unchanged.
+    #[cfg_attr(not(feature = "washlet"), allow(dead_code))]
     pub(crate) fn connect_options(self) -> anyhow::Result<async_nats::ConnectOptions> {
         Ok(match self.presenter()? {
             Some(presenter) => presenter.connect_options(),
