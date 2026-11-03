@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,15 +63,20 @@ func newCleanupReconciler(t *testing.T, funcs interceptor.Funcs, objects ...clie
 }
 
 func TestReplicaSetCleanupPreservesRecoverableAndUnrelatedWorkloads(t *testing.T) {
+	synctest.Test(t, testCleanupPreservesProtectedWorkloads)
+}
+
+func testCleanupPreservesProtectedWorkloads(t *testing.T) {
 	rs := cleanupReplicaSet()
 	now := time.Now()
-	healthy := cleanupWorkload(rs, "healthy")
+	expiredAt := now.Add(-time.Hour)
+	healthy := failedCleanupWorkload(rs, "healthy", expiredAt)
 	healthy.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
-	expired := failedCleanupWorkload(rs, "expired", now.Add(-time.Hour))
+	expired := failedCleanupWorkload(rs, "expired", expiredAt)
 	recent := failedCleanupWorkload(rs, "recent", now)
 	pending := cleanupWorkload(rs, "pending")
-	synced := cleanupWorkload(rs, "synced")
-	synced.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionSync))
+	synced := failedCleanupWorkload(rs, "synced", expiredAt)
+	synced.Status.Conditions[0].Status = condition.ConditionTrue
 	previous := cleanupWorkload(rs, "previous")
 	previous.Annotations[workloadReplicaSetGenerationAnnotation] = cleanupPreviousHash
 	unversioned := cleanupWorkload(rs, "unversioned")
@@ -84,8 +91,22 @@ func TestReplicaSetCleanupPreservesRecoverableAndUnrelatedWorkloads(t *testing.T
 	predecessor.OwnerReferences[0].UID = "previous-owner"
 	otherNamespace := expired.DeepCopy()
 	otherNamespace.Namespace = "cleanup-elsewhere"
-	objects := []client.Object{healthy, expired, recent, pending, synced, previous, unversioned, deleting, predecessor, otherNamespace}
-	r := newCleanupReconciler(t, interceptor.Funcs{}, objects...)
+	previousPredecessor := previous.DeepCopy()
+	previousPredecessor.Name = "previous-predecessor"
+	previousPredecessor.OwnerReferences[0].UID = predecessor.OwnerReferences[0].UID
+	previousOtherNamespace := previous.DeepCopy()
+	previousOtherNamespace.Namespace = otherNamespace.Namespace
+	objects := []client.Object{
+		healthy, expired, recent, pending, synced, previous, unversioned, deleting,
+		predecessor, otherNamespace, previousPredecessor, previousOtherNamespace,
+	}
+	deletes := make(map[client.ObjectKey]int)
+	r := newCleanupReconciler(t, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes[client.ObjectKeyFromObject(obj)]++
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, objects...)
 	if err := r.reconcileCleanup(t.Context(), rs); err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +123,37 @@ func TestReplicaSetCleanupPreservesRecoverableAndUnrelatedWorkloads(t *testing.T
 	if err := r.reconcileCleanup(t.Context(), rs); err != nil {
 		t.Fatalf("repeat cleanup: %v", err)
 	}
+	wantDeletes := map[client.ObjectKey]int{
+		client.ObjectKeyFromObject(expired):  1,
+		client.ObjectKeyFromObject(previous): 1,
+	}
+	if !reflect.DeepEqual(deletes, wantDeletes) {
+		t.Fatalf("delete attempts = %v, want %v", deletes, wantDeletes)
+	}
+}
+
+func TestReplicaSetCleanupGracePeriod(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rs := cleanupReplicaSet()
+		w := failedCleanupWorkload(rs, "recovering", time.Now())
+		r := newCleanupReconciler(t, interceptor.Funcs{}, w)
+		for _, advance := range []time.Duration{0, workloadReplicaSetReplicaGracePeriod - time.Nanosecond} {
+			time.Sleep(advance)
+			if err := r.reconcileCleanup(t.Context(), rs); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Get(t.Context(), client.ObjectKeyFromObject(w), &runtimev1alpha1.Workload{}); err != nil {
+				t.Fatalf("workload removed before the grace period expired: %v", err)
+			}
+		}
+		time.Sleep(time.Nanosecond)
+		if err := r.reconcileCleanup(t.Context(), rs); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Get(t.Context(), client.ObjectKeyFromObject(w), &runtimev1alpha1.Workload{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("expired workload: Get = %v, want NotFound", err)
+		}
+	})
 }
 
 func TestReplicaSetCleanupWaitsForScaling(t *testing.T) {
@@ -131,32 +183,64 @@ func TestReplicaSetCleanupWaitsForScaling(t *testing.T) {
 }
 
 func TestReplicaSetCleanupPropagatesAPIErrors(t *testing.T) {
-	for _, operation := range []string{"list previous", "delete previous", "list unhealthy", "delete unhealthy"} {
-		t.Run(operation, func(t *testing.T) {
+	previousKey := client.ObjectKey{Namespace: testNamespace, Name: "previous-failure"}
+	currentKey := client.ObjectKey{Namespace: testNamespace, Name: "current-failure"}
+	for _, tc := range []struct {
+		operation   string
+		failList    int
+		failDelete  client.ObjectKey
+		wantLists   int
+		wantDeletes []client.ObjectKey
+	}{
+		{"list previous", 1, client.ObjectKey{}, 1, nil},
+		{"delete previous", 0, previousKey, 1, []client.ObjectKey{previousKey}},
+		{"list unhealthy", 2, client.ObjectKey{}, 2, []client.ObjectKey{previousKey}},
+		{"delete unhealthy", 0, currentKey, 2, []client.ObjectKey{previousKey, currentKey}},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
 			rs := cleanupReplicaSet()
-			w := failedCleanupWorkload(rs, "failed", time.Now().Add(-time.Hour))
-			if operation == "delete previous" {
-				w.Annotations[workloadReplicaSetGenerationAnnotation] = cleanupPreviousHash
-			}
+			previous := cleanupWorkload(rs, previousKey.Name)
+			previous.Annotations[workloadReplicaSetGenerationAnnotation] = cleanupPreviousHash
+			current := failedCleanupWorkload(rs, currentKey.Name, time.Now().Add(-time.Hour))
 			want := errors.New("API unavailable")
 			lists := 0
+			var deletes []client.ObjectKey
+			injected := false
 			r := newCleanupReconciler(t, interceptor.Funcs{
 				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 					lists++
-					if (operation == "list previous" && lists == 1) || (operation == "list unhealthy" && lists == 2) {
+					if !injected && lists == tc.failList {
+						injected = true
 						return want
 					}
 					return c.List(ctx, list, opts...)
 				},
-				Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
-					return want
+				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					key := client.ObjectKeyFromObject(obj)
+					deletes = append(deletes, key)
+					if !injected && key == tc.failDelete {
+						injected = true
+						return want
+					}
+					return c.Delete(ctx, obj, opts...)
 				},
-			}, w)
+			}, previous, current)
 			if err := r.reconcileCleanup(t.Context(), rs); !errors.Is(err, want) {
 				t.Fatalf("cleanup = %v, want %v", err, want)
 			}
-			if err := r.Get(t.Context(), client.ObjectKeyFromObject(w), &runtimev1alpha1.Workload{}); err != nil {
-				t.Fatalf("failed write removed the workload: %v", err)
+			if !injected || lists != tc.wantLists || !reflect.DeepEqual(deletes, tc.wantDeletes) {
+				t.Fatalf("cleanup calls: injected=%t lists=%d deletes=%v; want lists=%d deletes=%v", injected, lists, deletes, tc.wantLists, tc.wantDeletes)
+			}
+			for _, key := range []client.ObjectKey{previousKey, currentKey} {
+				err := r.Get(t.Context(), key, &runtimev1alpha1.Workload{})
+				previousRemoved := key == previousKey && tc.wantLists == 2
+				if previousRemoved {
+					if !apierrors.IsNotFound(err) {
+						t.Fatalf("previous revision: Get = %v, want NotFound", err)
+					}
+				} else if err != nil {
+					t.Fatalf("failed operation removed %s: %v", key, err)
+				}
 			}
 		})
 	}
