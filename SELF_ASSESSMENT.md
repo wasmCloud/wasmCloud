@@ -89,6 +89,7 @@ The [threat model's security goals](THREAT_MODEL.md#security-goals) hold for a h
 5. **Egress.** Raw socket egress reaches only addresses the spec and the address policy permit.
 6. **Resources.** One workload cannot exhaust the host's memory, connections or file descriptors beyond operator-set limits.
 7. **Untrusted input.** No request, response, message or registry artifact from a peer can crash the host or corrupt its memory.
+8. **Reuse.** Component instance state is discarded after each call by default; warm reuse requires every component in the store to opt in. Reused memory, scratch volumes and cached artifacts must respect workload grants.
 
 ### Non-goals
 
@@ -141,6 +142,8 @@ These are settings that strengthen or weaken a deployment. The threat model's [s
 ## Project compliance
 
 wasmCloud is not documented as meeting any regulatory or industry standard such as PCI-DSS, ISO 27001 or SOC 2. The project publishes an [OpenSSF Security Insights](security-insights.yml) file and is working toward [OSPS Baseline](https://baseline.openssf.org/) Level 2.
+
+**EU CRA.** The Linux Foundation is wasmCloud's CRA steward; manufacturer obligations apply to vendors placing wasmCloud-based products on the market. Our [security policy](SECURITY.md), Security Insights file and signed SLSA provenance support their due diligence.
 
 ## Secure development practices
 

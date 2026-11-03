@@ -181,3 +181,11 @@ capabilities:
       and --allow-insecure-registries (crates/wash/src/cli/host.rs). The
       table in THREAT_MODEL.md lists each one and the goal it weakens.
     group: configuration
+  - id: WASMCLOUD.WASH.HOST.CAP14
+    title: Opt-In Warm Instances
+    description: |
+      Keeps a component's store across calls only when every component in
+      it opts in, retaining guest state and the store's initial context
+      until retirement (crates/wash-runtime/src/engine/instance_pool.rs,
+      crates/wash-runtime/src/engine/instance_driver.rs).
+    group: execution

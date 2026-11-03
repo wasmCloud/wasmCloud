@@ -395,3 +395,22 @@ threats:
       - id: hostile-component
         name: Hostile component code
         type: Software
+
+  - id: WASMCLOUD.WASH.HOST.THR18
+    title: Unintended State Retention across Calls
+    description: |
+      A later call reads or changes instance state left by an earlier call
+      in a component that did not opt into warm reuse, including through a
+      pooled caller that keeps an unpooled linked component alive (security
+      goal 8). State retained by an opted-in warm instance is intentional.
+    group: information-disclosure
+    capabilities:
+      - reference-id: WASMCLOUD.WASH.HOST.CAPS
+        entries:
+          - reference-id: WASMCLOUD.WASH.HOST.CAP01
+          - reference-id: WASMCLOUD.WASH.HOST.CAP10
+          - reference-id: WASMCLOUD.WASH.HOST.CAP14
+    actors:
+      - id: hostile-component
+        name: Hostile component code
+        type: Software
