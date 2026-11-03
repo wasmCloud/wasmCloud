@@ -383,6 +383,125 @@ fn check_scalar_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error +
     }
 }
 
+/// How many array levels the encoder for `value` expects its parameter type to
+/// have.
+fn array_depth(value: &PgValue) -> usize {
+    match value {
+        PgValue::Int2VectorArray(_) => 2,
+        PgValue::Int8Array(_)
+        | PgValue::BoolArray(_)
+        | PgValue::Float8Array(_)
+        | PgValue::Float4Array(_)
+        | PgValue::Int4Array(_)
+        | PgValue::NumericArray(_)
+        | PgValue::Int2Array(_)
+        | PgValue::Int2Vector(_)
+        | PgValue::BitArray(_)
+        | PgValue::VarbitArray(_)
+        | PgValue::ByteaArray(_)
+        | PgValue::CharArray(_)
+        | PgValue::VarcharArray(_)
+        | PgValue::CidrArray(_)
+        | PgValue::InetArray(_)
+        | PgValue::MacaddrArray(_)
+        | PgValue::Macaddr8Array(_)
+        | PgValue::BoxArray(_)
+        | PgValue::CircleArray(_)
+        | PgValue::LineArray(_)
+        | PgValue::LsegArray(_)
+        | PgValue::PathArray(_)
+        | PgValue::PointArray(_)
+        | PgValue::PolygonArray(_)
+        | PgValue::DateArray(_)
+        | PgValue::IntervalArray(_)
+        | PgValue::TimeArray(_)
+        | PgValue::TimeTzArray(_)
+        | PgValue::TimestampArray(_)
+        | PgValue::TimestampTzArray(_)
+        | PgValue::JsonArray(_)
+        | PgValue::JsonbArray(_)
+        | PgValue::MoneyArray(_)
+        | PgValue::PgLsnArray(_)
+        | PgValue::NameArray(_)
+        | PgValue::TextArray(_)
+        | PgValue::XmlArray(_)
+        | PgValue::UuidArray(_) => 1,
+        PgValue::Null
+        | PgValue::BigInt(_)
+        | PgValue::Int8(_)
+        | PgValue::BigSerial(_)
+        | PgValue::Serial8(_)
+        | PgValue::Bool(_)
+        | PgValue::Boolean(_)
+        | PgValue::Double(_)
+        | PgValue::Float8(_)
+        | PgValue::Real(_)
+        | PgValue::Float4(_)
+        | PgValue::Integer(_)
+        | PgValue::Int(_)
+        | PgValue::Int4(_)
+        | PgValue::Numeric(_)
+        | PgValue::Decimal(_)
+        | PgValue::Serial(_)
+        | PgValue::Serial4(_)
+        | PgValue::SmallInt(_)
+        | PgValue::Int2(_)
+        | PgValue::SmallSerial(_)
+        | PgValue::Serial2(_)
+        | PgValue::Bit(_)
+        | PgValue::BitVarying(_)
+        | PgValue::Varbit(_)
+        | PgValue::Bytea(_)
+        | PgValue::Char(_)
+        | PgValue::Varchar(_)
+        | PgValue::Cidr(_)
+        | PgValue::Inet(_)
+        | PgValue::Macaddr(_)
+        | PgValue::Macaddr8(_)
+        | PgValue::Box(_)
+        | PgValue::Circle(_)
+        | PgValue::Line(_)
+        | PgValue::Lseg(_)
+        | PgValue::Path(_)
+        | PgValue::Point(_)
+        | PgValue::Polygon(_)
+        | PgValue::Date(_)
+        | PgValue::Interval(_)
+        | PgValue::Time(_)
+        | PgValue::TimeTz(_)
+        | PgValue::Timestamp(_)
+        | PgValue::TimestampTz(_)
+        | PgValue::Json(_)
+        | PgValue::Jsonb(_)
+        | PgValue::Money(_)
+        | PgValue::PgLsn(_)
+        | PgValue::PgSnapshot(_)
+        | PgValue::TxidSnapshot(_)
+        | PgValue::Name(_)
+        | PgValue::Text(_)
+        | PgValue::Xml(_)
+        | PgValue::TsQuery(_)
+        | PgValue::TsVector(_)
+        | PgValue::Uuid(_)
+        | PgValue::Hstore(_) => 0,
+    }
+}
+
+/// Refuse an array value bound to a parameter that is not an array as deep.
+///
+/// postgres-types' slice encoder panics on any other parameter type, and the
+/// value and the SQL both come from the guest.
+fn check_array_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut level = ty;
+    for _ in 0..array_depth(value) {
+        match level.kind() {
+            Kind::Array(member) => level = member,
+            _ => return Err(Box::new(WrongType::new::<Vec<PgValue>>(ty.clone()))),
+        }
+    }
+    Ok(())
+}
+
 // ── ToSql for PgValue ───────────────────────────────────────────────────────
 
 impl ToSql for PgValue {
@@ -391,6 +510,7 @@ impl ToSql for PgValue {
         ty: &PgType,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
+        check_array_type(self, ty)?;
         check_scalar_type(self, ty)?;
         match self {
             PgValue::Null => Ok(IsNull::Yes),
@@ -1173,6 +1293,25 @@ mod tests {
             assert!(bind(&PgValue::Int4(1259), &ty).is_ok(), "{ty}");
         }
         assert!(bind(&PgValue::Int8(1259), &PgType::OID).is_err());
+    }
+
+    #[test]
+    fn array_bound_to_a_shallower_type_is_refused_not_a_panic() {
+        let err = bind(&PgValue::Int4Array(vec![1]), &PgType::INT4).unwrap_err();
+        assert!(err.is::<WrongType>(), "{err}");
+        assert!(bind(&PgValue::TextArray(vec!["x".into()]), &PgType::TEXT).is_err());
+        assert!(bind(&PgValue::Int2Vector(vec![1]), &PgType::INT2).is_err());
+        assert!(bind(&PgValue::Int2VectorArray(vec![vec![1]]), &PgType::INT2_ARRAY).is_err());
+
+        assert!(bind(&PgValue::Int4Array(vec![1]), &PgType::INT4_ARRAY).is_ok());
+        assert!(bind(&PgValue::Int2Vector(vec![1]), &PgType::INT2_VECTOR).is_ok());
+        assert!(
+            bind(
+                &PgValue::Int2VectorArray(vec![vec![1]]),
+                &PgType::INT2_VECTOR_ARRAY
+            )
+            .is_ok()
+        );
     }
 
     #[test]
