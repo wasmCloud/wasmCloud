@@ -146,6 +146,10 @@ const WORKLOAD_CLIENT_IDLE: Duration = Duration::from_secs(60);
 /// Shortest gap between two [`warn_permits_exhausted`] lines for one workload.
 const PERMIT_WARN_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Most bytes [`drain_unsent`] discards from a body hyper will never send
+/// before closing it under the guest, as hyper itself would have.
+const UNSENT_BODY_DRAIN_LIMIT: usize = 64 * 1024;
+
 /// Built-in roots to start from before layering on
 /// [`ClientTlsOptions::extra_ca_paths`].
 ///
@@ -762,7 +766,20 @@ impl PooledClient {
         request: hyper::Request<WasiBody>,
         options: Option<RequestOptions>,
     ) -> SendResult {
-        self.send(&self.client, request, options).await
+        let (parts, body) = request.into_parts();
+        let (body, upload_rx) = UploadProbe::new(body);
+        let body = if http1_sends_no_body(&parts, &body) {
+            // hyper would drop the body unwritten, closing it under a guest
+            // that has yet to finish it.
+            drain_unsent(body);
+            http_body_util::Empty::new()
+                .map_err(|never| match never {})
+                .boxed_unsync()
+        } else {
+            client_body(body)
+        };
+        let request = hyper::Request::from_parts(parts, body);
+        self.send(&self.client, request, upload_rx, options).await
     }
 
     /// Send a gRPC request through the HTTP/2 pool.
@@ -771,13 +788,17 @@ impl PooledClient {
         request: hyper::Request<WasiBody>,
         options: Option<RequestOptions>,
     ) -> SendResult {
-        self.send(&self.grpc, request, options).await
+        let (parts, body) = request.into_parts();
+        let (body, upload_rx) = UploadProbe::new(body);
+        let request = hyper::Request::from_parts(parts, client_body(body));
+        self.send(&self.grpc, request, upload_rx, options).await
     }
 
     async fn send(
         &self,
         pool: &PoolClient,
-        request: hyper::Request<WasiBody>,
+        request: hyper::Request<ClientBody>,
+        mut upload_rx: UploadOutcome,
         options: Option<RequestOptions>,
     ) -> SendResult {
         let connect_timeout = options
@@ -789,11 +810,6 @@ impl PooledClient {
         let between_bytes_timeout = options
             .and_then(|o| o.between_bytes_timeout)
             .unwrap_or(Duration::from_secs(600));
-
-        let (parts, body) = request.into_parts();
-        let (body, mut upload_rx) = UploadProbe::new(body);
-        let body = body.map_err(|e| Box::new(e) as BoxError).boxed_unsync();
-        let request = hyper::Request::from_parts(parts, body);
 
         let resp = send_head(pool, request, connect_timeout, first_byte_timeout)
             .await
@@ -1384,6 +1400,56 @@ impl hyper::body::Body for UploadProbe {
     fn size_hint(&self) -> hyper::body::SizeHint {
         self.inner.size_hint()
     }
+}
+
+/// Whether hyper's HTTP/1.1 client would frame `parts` with no body, though
+/// the body it is handed is still open: a zero `content-length`, or a GET,
+/// HEAD or CONNECT of unknown length (hyper's `Client::set_length`). When
+/// upgrading hyper, `unsent_body_predicate_matches_hyper` pins the two.
+fn http1_sends_no_body(parts: &http::request::Parts, body: &impl hyper::body::Body) -> bool {
+    if body.is_end_stream() || parts.headers.contains_key(hyper::header::TRANSFER_ENCODING) {
+        return false;
+    }
+    let mut declared = parts
+        .headers
+        .get_all(hyper::header::CONTENT_LENGTH)
+        .iter()
+        .peekable();
+    if declared.peek().is_some() {
+        return declared.all(|value| {
+            value
+                .to_str()
+                .is_ok_and(|v| v.split(',').all(|len| len.trim().parse::<u64>() == Ok(0)))
+        });
+    }
+    match body.size_hint().exact() {
+        Some(len) => len == 0,
+        None => matches!(
+            parts.method,
+            hyper::Method::GET | hyper::Method::HEAD | hyper::Method::CONNECT
+        ),
+    }
+}
+
+/// Read a body hyper will never send to its end, so a guest still writing it
+/// is not closed out mid-write. Past [`UNSENT_BODY_DRAIN_LIMIT`] the body is
+/// dropped, closing it under the guest. Detached: aborting it early would
+/// close the body too, and the guest's store dropping its writer ends it.
+fn drain_unsent(mut body: UploadProbe) {
+    tokio::spawn(async move {
+        let mut discarded = 0;
+        while let Some(Ok(frame)) = body.frame().await {
+            discarded += frame.data_ref().map_or(0, Bytes::len);
+            if discarded > UNSENT_BODY_DRAIN_LIMIT {
+                return;
+            }
+        }
+    });
+}
+
+/// The form hyper's pools take a guest body in.
+fn client_body(body: UploadProbe) -> ClientBody {
+    body.map_err(|e| Box::new(e) as BoxError).boxed_unsync()
 }
 
 /// What the nested layers of an `io::Error` say about a failed connect.
@@ -2446,6 +2512,177 @@ mod tests {
         let (probe, outcome) = UploadProbe::new(empty);
         drop(probe);
         assert!(Box::into_pin(upload_io(outcome)).await.is_ok());
+    }
+
+    /// The shape of wasmtime's p2 outgoing body: a channel the guest writes,
+    /// of unknown length until the guest drops its end.
+    struct ChannelBody(tokio::sync::mpsc::Receiver<Bytes>);
+
+    impl hyper::body::Body for ChannelBody {
+        type Data = Bytes;
+        type Error = HttpError;
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, HttpError>>> {
+            self.0
+                .poll_recv(cx)
+                .map(|chunk| chunk.map(|b| Ok(hyper::body::Frame::data(b))))
+        }
+    }
+
+    /// A GET whose body the guest has yet to write, sent through `client`.
+    async fn send_unwritten_get(
+        client: &PooledClient,
+        addr: std::net::SocketAddr,
+    ) -> (tokio::sync::mpsc::Sender<Bytes>, RequestIoFuture) {
+        let (guest, body) = tokio::sync::mpsc::channel(1);
+        let request = hyper::Request::get(format!("http://{addr}/"))
+            .body(ChannelBody(body).boxed_unsync())
+            .unwrap();
+        let (response, io) = timeout(Duration::from_secs(5), client.send_request(request, None))
+            .await
+            .expect("response head timed out")
+            .expect("request failed");
+        assert_eq!(response.status(), 200);
+        (guest, io)
+    }
+
+    /// A guest writes its request body after `handle` returns. hyper sends no
+    /// body for a GET of unknown length and drops the one it was handed, so
+    /// the body has to stay writable past the response; otherwise the guest's
+    /// write fails as a closed stream, which wstd reports as "connection reset".
+    #[tokio::test]
+    async fn an_unsent_body_stays_writable_for_the_guest() {
+        let (addr, _) = spawn_counting_server().await;
+        let client = PooledClient::new(default_client_tls_config());
+        let (guest, io) = send_unwritten_get(&client, addr).await;
+
+        guest
+            .send(Bytes::new())
+            .await
+            .expect("the guest's body was closed under it");
+        drop(guest);
+        assert!(Box::into_pin(io).await.is_ok());
+    }
+
+    /// Draining a body hyper never sends is bounded: a guest that keeps
+    /// writing past the limit has the body closed under it.
+    #[tokio::test]
+    async fn an_unsent_body_is_closed_past_the_drain_limit() {
+        let (addr, _) = spawn_counting_server().await;
+        let client = PooledClient::new(default_client_tls_config());
+        let (guest, _io) = send_unwritten_get(&client, addr).await;
+
+        let chunk = Bytes::from(vec![0u8; 1024]);
+        let chunks = 2 * UNSENT_BODY_DRAIN_LIMIT / chunk.len();
+        let mut sent = 0;
+        while sent < chunks && guest.send(chunk.clone()).await.is_ok() {
+            sent += 1;
+        }
+        assert!(
+            sent < chunks,
+            "the drain read {sent} KiB of a body that is never sent"
+        );
+    }
+
+    /// [`http1_sends_no_body`] mirrors hyper's own framing rule. hyper drops
+    /// a body it will not send before writing the head, so whether the
+    /// guest's end is closed once the response arrives is what hyper decided.
+    #[tokio::test]
+    async fn unsent_body_predicate_matches_hyper() {
+        use hyper::Method;
+        let (addr, _) = spawn_counting_server().await;
+        let cases: &[(Method, &[(&str, &str)])] = &[
+            (Method::GET, &[]),
+            (Method::HEAD, &[]),
+            (Method::POST, &[]),
+            (Method::PUT, &[]),
+            (Method::GET, &[("content-length", "0")]),
+            (Method::POST, &[("content-length", "0")]),
+            (Method::POST, &[("content-length", "00")]),
+            (Method::POST, &[("content-length", "5")]),
+            (Method::GET, &[("transfer-encoding", "chunked")]),
+        ];
+        for (method, headers) in cases {
+            // A bare hyper pool: no `PooledClient`, so nothing replaces the body.
+            let client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+                .build::<_, ChannelBody>(HttpConnector::new());
+            let (guest, body) = tokio::sync::mpsc::channel(1);
+            let mut request = hyper::Request::builder()
+                .method(method.clone())
+                .uri(format!("http://{addr}/"));
+            for (name, value) in *headers {
+                request = request.header(*name, *value);
+            }
+            let (parts, body) = request.body(ChannelBody(body)).unwrap().into_parts();
+            let predicted = http1_sends_no_body(&parts, &body);
+
+            let response = timeout(
+                Duration::from_secs(5),
+                client.request(hyper::Request::from_parts(parts, body)),
+            )
+            .await
+            .expect("response head timed out")
+            .expect("request failed");
+            assert_eq!(response.status(), 200);
+            assert_eq!(
+                guest.is_closed(),
+                predicted,
+                "{method} with {headers:?}: hyper and `http1_sends_no_body` disagree \
+                 on whether the body is sent"
+            );
+        }
+    }
+
+    /// A POST of unknown length is not caught by the GET rule: its body still
+    /// reaches the server, chunked, though the guest writes it late.
+    #[tokio::test]
+    async fn an_unknown_length_post_still_uploads_its_body() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (received_tx, received) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !buf.ends_with(b"\r\n0\r\n\r\n") {
+                match sock.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                .await;
+            let _ = received_tx.send(buf);
+        });
+
+        let client = PooledClient::new(default_client_tls_config());
+        let (guest, body) = tokio::sync::mpsc::channel(1);
+        let request = hyper::Request::post(format!("http://{addr}/"))
+            .body(ChannelBody(body).boxed_unsync())
+            .unwrap();
+        let send = tokio::spawn(async move { client.send_request(request, None).await });
+        guest.send(Bytes::from_static(b"hello")).await.unwrap();
+        drop(guest);
+
+        let (response, _io) = timeout(Duration::from_secs(5), send)
+            .await
+            .expect("response head timed out")
+            .unwrap()
+            .expect("request failed");
+        assert_eq!(response.status(), 200);
+        let received = String::from_utf8(received.await.unwrap()).unwrap();
+        assert!(
+            received
+                .to_ascii_lowercase()
+                .contains("transfer-encoding: chunked")
+                && received.contains("hello"),
+            "the POST body never reached the server: {received:?}"
+        );
     }
 
     /// A server that hangs up mid-body must surface as an error on the
