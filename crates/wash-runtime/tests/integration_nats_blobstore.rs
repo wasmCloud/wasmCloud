@@ -150,7 +150,7 @@ async fn start(
                     interfaces: ["incoming-handler".to_string()].into_iter().collect(),
                     version: Some(semver::Version::new(0, 2, 2)),
                     config: {
-                        let mut config = HashMap::new();
+                        let mut config = wash_runtime::wit::Config::new();
                         config.insert("host".to_string(), "foo".to_string());
                         config
                     },
@@ -170,7 +170,7 @@ async fn start(
                         anyhow::anyhow!("invalid blobstore interface version: {e}")
                     })?),
                     config: {
-                        let mut config = binding;
+                        let mut config = wash_runtime::wit::Config::from(binding);
                         config.insert("buckets".to_string(), "my-container-real".to_string());
                         config
                     },

@@ -113,7 +113,10 @@ fn grow_workload(name: &str) -> WorkloadStartRequest {
                 package: "http".to_string(),
                 interfaces: ["incoming-handler".to_string()].into_iter().collect(),
                 version: Some(semver::Version::parse("0.2.2").unwrap()),
-                config: HashMap::from([("host".to_string(), name.to_string())]),
+                config: wash_runtime::wit::Config::from_iter([(
+                    "host".to_string(),
+                    name.to_string(),
+                )]),
                 name: None,
             }],
             volumes: vec![],

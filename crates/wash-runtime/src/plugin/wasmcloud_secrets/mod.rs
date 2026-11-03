@@ -36,7 +36,7 @@ use zeroize::Zeroize;
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::{HostPlugin, WitInterfaces};
-use crate::wit::{WitInterface, WitWorld};
+use crate::wit::{ConfigValue, WitInterface, WitWorld};
 
 /// The resolved value behind one labeled `wasmcloud:secrets/secret` import,
 /// looked up once per label at bind time (see `named_imports` below) and
@@ -68,6 +68,35 @@ pub struct SecretState {
     value: SecretValue,
 }
 
+/// A `wasmcloud:secrets` `secret` handle holding `value`, built in `store`:
+/// how the host hands a secret to a plugin's guest, which reads it with
+/// `reveal`.
+#[cfg_attr(
+    not(all(feature = "host-component-plugins", feature = "oci")),
+    allow(dead_code)
+)]
+pub(crate) fn secret_handle(
+    mut store: wasmtime::StoreContextMut<'_, SharedCtx>,
+    value: &crate::plugin::SecretValue,
+) -> wasmtime::Result<wasmtime::component::Val> {
+    let value = match value.expose_bytes() {
+        Ok(text) => SecretValue::String(text.to_string()),
+        Err(bytes) => SecretValue::Bytes(bytes.to_vec()),
+    };
+    let handle = store.data_mut().table.push(SecretState { value })?;
+    let rep = handle.rep();
+    match handle.try_into_resource_any(&mut store) {
+        Ok(handle) => Ok(wasmtime::component::Val::Resource(handle)),
+        Err(error) => {
+            let _ = store
+                .data_mut()
+                .table
+                .delete(wasmtime::component::Resource::<SecretState>::new_own(rep));
+            Err(error)
+        }
+    }
+}
+
 impl Drop for SecretState {
     /// Each `get` resolves a fresh copy of the value into a new `SecretState`;
     /// scrub it when the resource is dropped so a revealed secret doesn't
@@ -80,7 +109,17 @@ impl Drop for SecretState {
     }
 }
 
-type ComponentSecrets = BTreeMap<String, String>;
+/// One component's secret config. Every value is held as a
+/// [`crate::plugin::SecretValue`], text or not, so each is zeroed on drop.
+type ComponentSecrets = BTreeMap<String, crate::plugin::SecretValue>;
+
+/// `value` held as a secret.
+fn held(value: &ConfigValue) -> crate::plugin::SecretValue {
+    match value {
+        ConfigValue::Text(text) => crate::plugin::SecretValue::new(text.clone()),
+        ConfigValue::Secret(secret) => secret.clone(),
+    }
+}
 
 /// Native `wasmcloud:secrets` plugin. Bind-time secret configuration, keyed
 /// by workload id then by component id.
@@ -92,14 +131,6 @@ pub struct WasmcloudSecrets {
 impl WasmcloudSecrets {
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-/// Zeroizes every value in a captured component's secret config before it's
-/// dropped, whether because the component unbound or a rebind replaced it.
-fn zeroize_config(config: &mut ComponentSecrets) {
-    for value in config.values_mut() {
-        value.zeroize();
     }
 }
 
@@ -152,7 +183,8 @@ impl<T: 'static + Send> bindings::wasmcloud::secrets::store::HostWithStore<T> fo
             binds
                 .get(&*workload_id)
                 .and_then(|components| resolve(components, &component_id))
-                .and_then(|config| config.get(&key).cloned())
+                .and_then(|config| config.get(&key))
+                .and_then(|value| value.expose().map(str::to_string))
         };
         match value {
             Some(value) => {
@@ -207,7 +239,8 @@ impl bindings::wasmcloud::secrets::reveal::Host for ActiveCtx<'_> {}
 impl<T: 'static + Send> bindings::named_imports::wasmcloud::secrets::secret::HostWithStore<T>
     for SharedCtx
 {
-    #[instrument(name = "wasmcloud.secrets.secret.get", skip(accessor))]
+    // `id` is the secret's value, so it stays off the span.
+    #[instrument(name = "wasmcloud.secrets.secret.get", skip(accessor, id))]
     async fn get(
         accessor: &Accessor<T, Self>,
         id: SecretRef,
@@ -258,13 +291,14 @@ impl HostPlugin for WasmcloudSecrets {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        let has_dynamic = interfaces.contains("wasmcloud", "secrets", &["store", "reveal"]);
+        // `binding-secrets` uses the secret resource type defined by `store`.
+        let has_dynamic = interfaces.contains("wasmcloud", "secrets", &["store"]);
 
         // Every labeled `wasmcloud:secrets/secret` import: label -> the value
         // at that same key in the label's own resolved config, if present.
         // The label *is* the config key by convention — there's no separate
         // `key` argument for a labeled import to carry one.
-        let mut labeled: BTreeMap<String, Option<String>> = interfaces
+        let labeled: BTreeMap<String, Option<crate::plugin::SecretValue>> = interfaces
             .iter()
             .filter(|i| {
                 i.namespace == "wasmcloud"
@@ -273,7 +307,7 @@ impl HostPlugin for WasmcloudSecrets {
             })
             .filter_map(|i| {
                 let label = i.name.clone()?;
-                let value = i.config.get(&label).cloned();
+                let value = i.config.get_value(&label).map(held);
                 Some((label, value))
             })
             .collect();
@@ -304,15 +338,10 @@ impl HostPlugin for WasmcloudSecrets {
             // refused by the fold, with the key named. `store.get` takes only a
             // key and cannot say which binding it asks on behalf of, so that
             // check still has to happen — it just is not this plugin's.
-            let config: BTreeMap<String, String> = interfaces
+            let config: ComponentSecrets = interfaces
                 .iter()
                 .find(|i| i.name.is_none())
-                .map(|i| {
-                    i.config
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
-                })
+                .map(|i| i.config.iter().map(|(k, v)| (k.clone(), held(v))).collect())
                 .unwrap_or_default();
 
             bindings::wasmcloud::secrets::reveal::add_to_linker::<_, SharedCtx>(
@@ -321,13 +350,10 @@ impl HostPlugin for WasmcloudSecrets {
             )?;
 
             // A rebind (e.g. the host replaying binds after a plugin restart)
-            // replaces this component's entry; scrub whatever it replaced
-            // instead of just letting it drop.
+            // replaces this component's entry, zeroing the one it replaced.
             let mut binds = self.binds.write().await;
             let components = binds.entry(item.workload_id().to_string()).or_default();
-            if let Some(mut previous) = components.insert(item.id().to_string(), config) {
-                zeroize_config(&mut previous);
-            }
+            components.insert(item.id().to_string(), config);
         }
 
         if !labeled.is_empty() {
@@ -351,23 +377,21 @@ impl HostPlugin for WasmcloudSecrets {
             // Borrows `labeled` rather than moving it in: `add_to_linker`
             // only calls `lookup` synchronously, inline, while resolving
             // each matched label — never after it returns — so `labeled`'s
-            // plaintext values can be scrubbed right after, rather than
-            // living on unzeroized for as long as this closure would.
+            // values are zeroed when it drops below, rather than living on
+            // for as long as this closure would.
             bindings::named_imports::wasmcloud::secrets::secret::add_to_linker::<_, SharedCtx>(
                 item.linker()?,
                 &component,
-                |label: &str| match labeled.get(label) {
-                    Some(Some(value)) => Ok(Arc::<str>::from(value.as_str())),
-                    _ => Err(wasmtime::Error::msg(format!(
+                |label: &str| match labeled.get(label).and_then(|v| v.as_ref()?.expose()) {
+                    Some(value) => Ok(Arc::<str>::from(value)),
+                    None => Err(wasmtime::Error::msg(format!(
                         "component `{id}` requires secret `{label}` but it was not provided in \
                          its resolved bind-time config"
                     ))),
                 },
                 extract_active_ctx,
             )?;
-            for value in labeled.values_mut().flatten() {
-                value.zeroize();
-            }
+            drop(labeled);
         }
 
         Ok(())
@@ -384,15 +408,8 @@ impl HostPlugin for WasmcloudSecrets {
         // so scrubbing the whole workload entry on the first call and no-op'ing
         // on the rest is correct, not a race.
         //
-        // Scrub the reclaimed credential strings rather than just dropping
-        // them, so plaintext secrets don't linger in freed heap after the
-        // workload they belonged to is gone.
-        let mut binds = self.binds.write().await;
-        if let Some(mut components) = binds.remove(workload_id) {
-            for config in components.values_mut() {
-                zeroize_config(config);
-            }
-        }
+        // Dropping the reclaimed values zeroes them.
+        self.binds.write().await.remove(workload_id);
         Ok(())
     }
 }
@@ -412,25 +429,41 @@ mod tests {
         let mut binds: BTreeMap<String, ComponentSecrets> = BTreeMap::new();
         binds.insert(
             "component-a".to_string(),
-            BTreeMap::from([("DB_PASSWORD".to_string(), "a-secret".to_string())]),
+            BTreeMap::from([(
+                "DB_PASSWORD".to_string(),
+                crate::plugin::SecretValue::new("a-secret"),
+            )]),
         );
         binds.insert(
             "component-b".to_string(),
-            BTreeMap::from([("API_KEY".to_string(), "b-secret".to_string())]),
+            BTreeMap::from([(
+                "API_KEY".to_string(),
+                crate::plugin::SecretValue::new("b-secret"),
+            )]),
         );
 
         let a = resolve(&binds, "component-a").expect("component-a has its own entry");
-        assert_eq!(a.get("DB_PASSWORD"), Some(&"a-secret".to_string()));
         assert_eq!(
-            a.get("API_KEY"),
+            a.get("DB_PASSWORD")
+                .and_then(crate::plugin::SecretValue::expose),
+            Some("a-secret")
+        );
+        assert_eq!(
+            a.get("API_KEY")
+                .and_then(crate::plugin::SecretValue::expose),
             None,
             "component-a must not see component-b's key"
         );
 
         let b = resolve(&binds, "component-b").expect("component-b has its own entry");
-        assert_eq!(b.get("API_KEY"), Some(&"b-secret".to_string()));
         assert_eq!(
-            b.get("DB_PASSWORD"),
+            b.get("API_KEY")
+                .and_then(crate::plugin::SecretValue::expose),
+            Some("b-secret")
+        );
+        assert_eq!(
+            b.get("DB_PASSWORD")
+                .and_then(crate::plugin::SecretValue::expose),
             None,
             "component-b must not see component-a's key"
         );
@@ -447,12 +480,20 @@ mod tests {
         let mut binds: BTreeMap<String, ComponentSecrets> = BTreeMap::new();
         binds.insert(
             "some-random-uuid".to_string(),
-            BTreeMap::from([("api-key".to_string(), "s3cr3t".to_string())]),
+            BTreeMap::from([(
+                "api-key".to_string(),
+                crate::plugin::SecretValue::new("s3cr3t"),
+            )]),
         );
 
         let resolved =
             resolve(&binds, "a-completely-different-caller-id").expect("single-entry fallback");
-        assert_eq!(resolved.get("api-key"), Some(&"s3cr3t".to_string()));
+        assert_eq!(
+            resolved
+                .get("api-key")
+                .and_then(crate::plugin::SecretValue::expose),
+            Some("s3cr3t")
+        );
     }
 
     /// The fallback must NOT apply once there is genuine ambiguity — an
@@ -463,11 +504,11 @@ mod tests {
         let mut binds: BTreeMap<String, ComponentSecrets> = BTreeMap::new();
         binds.insert(
             "component-a".to_string(),
-            BTreeMap::from([("k".to_string(), "a".to_string())]),
+            BTreeMap::from([("k".to_string(), crate::plugin::SecretValue::new("a"))]),
         );
         binds.insert(
             "component-b".to_string(),
-            BTreeMap::from([("k".to_string(), "b".to_string())]),
+            BTreeMap::from([("k".to_string(), crate::plugin::SecretValue::new("b"))]),
         );
 
         assert!(resolve(&binds, "component-c").is_none());

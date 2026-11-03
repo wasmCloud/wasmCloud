@@ -444,7 +444,7 @@ mod tests {
     use super::*;
 
     fn kv_iface(name: Option<&str>, backend: Option<&str>) -> WitInterface {
-        let mut config = HashMap::new();
+        let mut config = crate::wit::Config::new();
         if let Some(b) = backend {
             config.insert("backend".to_string(), b.to_string());
         }
@@ -507,7 +507,7 @@ mod tests {
             package: "keyvalue".to_string(),
             interfaces: ["store".to_string()].into_iter().collect(),
             version: None,
-            config: HashMap::from([
+            config: crate::wit::Config::from_iter([
                 ("backend".to_string(), "filesystem".to_string()),
                 ("root".to_string(), dir.to_string_lossy().to_string()),
             ]),

@@ -16,9 +16,8 @@
 //! key: `creds` and `creds-file` are the same setting, and classifying only one
 //! of them would both deny nothing and refuse the other spelling as unknown.
 
-use std::collections::HashMap;
-
 use crate::plugin::KeyOwnership;
+use crate::wit::{Config, ConfigStr};
 
 /// One config key, its aliases, and who it belongs to.
 pub struct Key {
@@ -187,7 +186,7 @@ pub fn find(key: &str) -> Option<&'static Key> {
 /// Debug builds only, when `canonical` is not in [`KEYS`]: a key the reader
 /// asks for and the table does not name would be one the schema cannot
 /// classify, which is the drift this module exists to prevent.
-pub fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
+pub fn get<'a>(cfg: &'a Config, key: &str) -> Option<ConfigStr<'a>> {
     let row = find(key);
     debug_assert!(
         row.is_some(),
@@ -200,10 +199,25 @@ pub fn get<'a>(cfg: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
     spellings.into_iter().find_map(|spelling| {
         cfg.iter()
             .find(|(k, _)| canonical(k) == spelling)
-            .map(|(_, v)| v.as_str())
-            .map(str::trim)
+            .and_then(|(_, v)| v.as_config_str())
+            .map(ConfigStr::trim)
             .filter(|v| !v.is_empty())
     })
+}
+
+/// Connection errors can quote server URLs and credential or TLS file paths.
+pub(crate) fn guard_connection<T>(cfg: &Config, result: anyhow::Result<T>) -> anyhow::Result<T> {
+    let secret = std::iter::once("servers")
+        .chain(FILES.iter().copied())
+        .find_map(|key| {
+            get(cfg, key)
+                .filter(|value| value.is_secret())
+                .map(|value| (key, value))
+        });
+    match secret {
+        Some((key, value)) => value.guard(key, result),
+        None => result,
+    }
 }
 
 /// The keys the host owns outright, every spelling.
@@ -247,7 +261,7 @@ mod tests {
             let row = find(key).unwrap_or_else(|| panic!("`{key}` is not declared"));
             assert_eq!(row.ownership, KeyOwnership::Host, "{key}");
         }
-        let config: HashMap<String, String> = [
+        let config: Config = [
             ("creds-file", "/s/creds"),
             ("nkey-file", "/s/seed"),
             ("Token_File", "/s/token"),
@@ -305,39 +319,48 @@ mod tests {
     /// a `HashMap` happened to put them — for `creds` that is a credential.
     #[test]
     fn an_alias_loses_to_the_canonical_spelling_every_time() {
-        let cfg: HashMap<String, String> = [
+        let cfg: Config = [
             ("creds".to_string(), "/canonical.creds".to_string()),
             ("creds-file".to_string(), "/alias.creds".to_string()),
         ]
         .into_iter()
         .collect();
         for _ in 0..64 {
-            assert_eq!(get(&cfg, "creds"), Some("/canonical.creds"));
+            assert_eq!(
+                get(&cfg, "creds").map(ConfigStr::expose),
+                Some("/canonical.creds")
+            );
             // Asking by the alias is asking for the same key, so it answers the
             // same way.
-            assert_eq!(get(&cfg, "creds-file"), Some("/canonical.creds"));
+            assert_eq!(
+                get(&cfg, "creds-file").map(ConfigStr::expose),
+                Some("/canonical.creds")
+            );
         }
 
         // A blank canonical is unset rather than empty, so the alias is read.
-        let blank: HashMap<String, String> = [
+        let blank: Config = [
             ("creds".to_string(), "  ".to_string()),
             ("creds-file".to_string(), "/alias.creds".to_string()),
         ]
         .into_iter()
         .collect();
-        assert_eq!(get(&blank, "creds"), Some("/alias.creds"));
+        assert_eq!(
+            get(&blank, "creds").map(ConfigStr::expose),
+            Some("/alias.creds")
+        );
     }
 
     #[test]
     fn get_reads_any_spelling_of_an_alias() {
-        let cfg: HashMap<String, String> = [("Creds_File".to_string(), " /x.creds ".to_string())]
+        let cfg: Config = [("Creds_File".to_string(), " /x.creds ".to_string())]
             .into_iter()
             .collect();
-        assert_eq!(get(&cfg, "creds"), Some("/x.creds"));
+        assert_eq!(get(&cfg, "creds").map(ConfigStr::expose), Some("/x.creds"));
 
-        let blank: HashMap<String, String> = [("creds".to_string(), "   ".to_string())]
+        let blank: Config = [("creds".to_string(), "   ".to_string())]
             .into_iter()
             .collect();
-        assert_eq!(get(&blank, "creds"), None);
+        assert_eq!(get(&blank, "creds").map(ConfigStr::expose), None);
     }
 }

@@ -2058,10 +2058,10 @@ mod nats_tests {
     async fn discovery_flag_reaches_every_workload_nats_plugin() -> anyhow::Result<()> {
         use anyhow::Context as _;
         use std::any::Any;
-        use std::collections::{HashMap, HashSet};
+        use std::collections::HashSet;
         use wash_runtime::engine::workload::UnresolvedWorkload;
         use wash_runtime::plugin::{self, HostPlugin, WitInterfaces};
-        use wash_runtime::wit::WitInterface;
+        use wash_runtime::wit::{Config, WitInterface};
 
         fn interface(namespace: &str, package: &str, url: String) -> WitInterface {
             WitInterface {
@@ -2070,9 +2070,9 @@ mod nats_tests {
                 interfaces: HashSet::new(),
                 version: None,
                 config: if package == "nats" {
-                    HashMap::from([("servers".into(), url)])
+                    Config::from([("servers", url)])
                 } else {
-                    HashMap::from([("backend".into(), "nats".into()), ("url".into(), url)])
+                    Config::from([("backend", "nats".to_string()), ("url", url)])
                 },
                 name: None,
             }
@@ -2304,9 +2304,9 @@ host:
             .for_plugin(wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID)
             .with_workload_config(WorkloadConfigPolicy::Allow);
         let inherited = resolve(&declared, "", &[])?;
-        assert_eq!(inherited["servers"], "nats://data:4222");
-        assert_eq!(inherited["tls-ca"], "/ca.crt");
-        assert_eq!(inherited["tls-first"], "true");
+        assert_eq!(inherited.expose("servers"), Some("nats://data:4222"));
+        assert_eq!(inherited.expose("tls-ca"), Some("/ca.crt"));
+        assert_eq!(inherited.expose("tls-first"), Some("true"));
         assert!(!inherited.contains_key("tls-cert"));
         assert!(!inherited.contains_key("tls-key"));
 
@@ -2322,8 +2322,8 @@ host:
             vec![("jwt", "tenant.jwt"), ("nkey-seed", "tenant.seed")],
         ] {
             let resolved = resolve(&declared, "", &credentials)?;
-            assert_eq!(resolved["servers"], "nats://data:4222");
-            assert_eq!(resolved["tls-ca"], "/ca.crt");
+            assert_eq!(resolved.expose("servers"), Some("nats://data:4222"));
+            assert_eq!(resolved.expose("tls-ca"), Some("/ca.crt"));
             assert!(!resolved.contains_key("tls-cert"), "{credentials:?}");
             assert!(!resolved.contains_key("tls-key"), "{credentials:?}");
         }
@@ -2333,9 +2333,9 @@ host:
             "",
             &[("TLS_CERT", "/tenant.crt"), ("TLS_KEY", "/tenant.key")],
         )?;
-        assert_eq!(explicit["TLS_CERT"], "/tenant.crt");
-        assert_eq!(explicit["TLS_KEY"], "/tenant.key");
-        assert_eq!(explicit["servers"], "nats://data:4222");
+        assert_eq!(explicit.expose("TLS_CERT"), Some("/tenant.crt"));
+        assert_eq!(explicit.expose("TLS_KEY"), Some("/tenant.key"));
+        assert_eq!(explicit.expose("servers"), Some("nats://data:4222"));
 
         let partial = resolve(&declared, "", &[("tls-cert", "/tenant.crt")])?;
         assert!(!partial.contains_key("tls-key"));
@@ -2362,8 +2362,8 @@ host:
         let declared = nats_bindings(&host, &config_from("{}"))?
             .with_workload_config(WorkloadConfigPolicy::Allow);
         let anonymous = resolve(&declared, "", &[])?;
-        assert_eq!(anonymous["tls-cert"], "/host.crt");
-        assert_eq!(anonymous["tls-key"], "/host.key");
+        assert_eq!(anonymous.expose("tls-cert"), Some("/host.crt"));
+        assert_eq!(anonymous.expose("tls-key"), Some("/host.key"));
 
         for credentials in [
             vec![("user", "tenant"), ("password", "secret")],
@@ -2372,8 +2372,8 @@ host:
             vec![("nkey", "tenant.seed")],
         ] {
             let resolved = resolve(&declared, "", &credentials)?;
-            assert_eq!(resolved["servers"], "nats://data:4222");
-            assert_eq!(resolved["tls-ca"], "/ca.crt");
+            assert_eq!(resolved.expose("servers"), Some("nats://data:4222"));
+            assert_eq!(resolved.expose("tls-ca"), Some("/ca.crt"));
             assert!(!resolved.contains_key("tls-cert"), "{credentials:?}");
             assert!(!resolved.contains_key("tls-key"), "{credentials:?}");
         }
@@ -2394,7 +2394,7 @@ host:
         declared: &wash_runtime::plugin::PluginBindingSet,
         binding: &str,
         workload: &[(&str, &str)],
-    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    ) -> anyhow::Result<wash_runtime::wit::Config> {
         declared.resolve(
             binding,
             &workload
@@ -2419,10 +2419,7 @@ host:
         ]);
         let declared = nats_bindings(&host, &config_from("{}")).unwrap();
         let resolved = resolve(&declared, "", &[]).unwrap();
-        assert_eq!(
-            resolved.get("servers").map(String::as_str),
-            Some("nats://workloads:4222")
-        );
+        assert_eq!(resolved.get("servers"), Some("nats://workloads:4222"));
     }
 
     /// With no `host.plugins` entry a host denies by default — and, owning
@@ -2440,10 +2437,7 @@ host:
         let host = parse(&["--data-nats-url", "nats://data:4222"]);
         let declared = nats_bindings(&host, &config_from("{}")).expect("the flags must resolve");
         let resolved = resolve(&declared, "", &[]).unwrap();
-        assert_eq!(
-            resolved.get("servers").map(String::as_str),
-            Some("nats://data:4222")
-        );
+        assert_eq!(resolved.get("servers"), Some("nats://data:4222"));
     }
 
     /// The data plane's TLS material rides with its address as one bundle. A
@@ -2461,7 +2455,7 @@ host:
 
         let inherited = resolve(&declared, "", &[]).unwrap();
         assert_eq!(
-            inherited.get("tls-ca").map(String::as_str),
+            inherited.get("tls-ca"),
             Some("/certs/ca.crt"),
             "a binding on the data plane gets its certs"
         );
@@ -2476,10 +2470,7 @@ host:
             &[("servers", "nats://elsewhere:4222")],
         )
         .unwrap();
-        assert_eq!(
-            elsewhere.get("servers").map(String::as_str),
-            Some("nats://elsewhere:4222")
-        );
+        assert_eq!(elsewhere.get("servers"), Some("nats://elsewhere:4222"));
         assert!(
             !elsewhere.contains_key("tls-ca"),
             "the data plane's certs say nothing about another NATS: {elsewhere:?}"
@@ -2526,10 +2517,7 @@ host:
 
         let resolved = resolve(&declared, "", &[("subject-allow", "orders.>")])
             .expect("allow accepts a workload's own grant");
-        assert_eq!(
-            resolved.get("subject-allow").map(String::as_str),
-            Some("orders.>")
-        );
+        assert_eq!(resolved.get("subject-allow"), Some("orders.>"));
     }
 
     /// An unparseable policy is a config error, named as one.

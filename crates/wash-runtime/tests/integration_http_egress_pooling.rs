@@ -196,7 +196,7 @@ fn egress_workload_with(
                 interfaces: ["incoming-handler".to_string()].into_iter().collect(),
                 version: Some(semver::Version::parse("0.2.2").unwrap()),
                 config: {
-                    let mut config = HashMap::new();
+                    let mut config = wash_runtime::wit::Config::new();
                     config.insert("host".to_string(), "test".to_string());
                     config
                 },

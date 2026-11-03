@@ -278,7 +278,7 @@ fn inter_component_host_interfaces(host_header: &str) -> Vec<WitInterface> {
             interfaces: ["incoming-handler".to_string()].into_iter().collect(),
             version: None,
             config: {
-                let mut config = HashMap::new();
+                let mut config = wash_runtime::wit::Config::new();
                 config.insert("host".to_string(), host_header.to_string());
                 config
             },
@@ -289,7 +289,7 @@ fn inter_component_host_interfaces(host_header: &str) -> Vec<WitInterface> {
             package: "logging".to_string(),
             interfaces: ["logging".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
-            config: HashMap::new(),
+            config: Default::default(),
             name: None,
         },
     ]

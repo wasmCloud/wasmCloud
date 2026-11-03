@@ -64,7 +64,6 @@
 //!   empty segments, dot segments or control characters. Unsupported names
 //!   are rejected rather than silently rewritten to a different S3 key.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,6 +77,7 @@ use sha2::{Digest, Sha256};
 use crate::host::declared_port::Protocol;
 use crate::plugin::PluginEgressPolicy;
 use crate::plugin::multiplex::{BACKEND_CONFIG_KEY, BackendProvider};
+use crate::wit::Config;
 
 use super::{
     BlobBackend, BlobBackendError, BlobId, BlobResult, ContainerInfo, ObjectInfo, clamp_range,
@@ -86,7 +86,7 @@ use super::{
 mod config;
 
 pub(crate) use config::host_owned_spellings;
-use config::{builder_from_config, lookup, normalize_key, virtual_hosted};
+use config::{builder_from_config, lookup, normalize_key, parses_a_secret, virtual_hosted};
 
 /// Ceiling on bucket clients kept per backend, and how long an unused one
 /// stays. Each client owns an HTTP connection pool, and a guest can name as
@@ -98,13 +98,15 @@ const BUCKET_CLIENT_IDLE: Duration = Duration::from_secs(300);
 /// An S3 [`BlobBackend`]: each container is one bucket, which must already exist.
 pub struct S3BlobBackend {
     base: AmazonS3Builder,
+    redact_errors: bool,
     stores: moka::sync::Cache<String, Arc<AmazonS3>>,
 }
 
 impl S3BlobBackend {
-    fn new(base: AmazonS3Builder, max_clients: u64) -> Self {
+    fn new(base: AmazonS3Builder, max_clients: u64, redact_errors: bool) -> Self {
         Self {
             base,
+            redact_errors,
             stores: moka::sync::Cache::builder()
                 .max_capacity(max_clients)
                 .time_to_idle(BUCKET_CLIENT_IDLE)
@@ -135,9 +137,15 @@ impl S3BlobBackend {
                     .build()
                     .map(Arc::new)
                     .map_err(|e| {
-                        BlobBackendError::other(format!(
-                            "failed to build s3 client for container '{container}': {e}"
-                        ))
+                        let context =
+                            format!("failed to build s3 client for container '{container}'");
+                        if self.redact_errors {
+                            BlobBackendError::other(format!(
+                                "{context}; details withheld because they may quote a secret"
+                            ))
+                        } else {
+                            BlobBackendError::other(format!("{context}: {e}"))
+                        }
                     })
             })
             .map_err(|e| (*e).clone())
@@ -158,24 +166,34 @@ impl S3BlobBackend {
         Ok(path)
     }
 
+    fn request_error(&self, error: object_store::Error) -> BlobBackendError {
+        if self.redact_errors {
+            BlobBackendError::other(
+                "s3 request failed; details withheld because they may quote a secret",
+            )
+        } else {
+            BlobBackendError::other(format!("s3 error: {error}"))
+        }
+    }
+
     /// Errors from an operation addressed at an object: a 404 is the object.
-    fn object_err(e: object_store::Error, object: &str) -> BlobBackendError {
+    fn object_err(&self, e: object_store::Error, object: &str) -> BlobBackendError {
         match e {
             object_store::Error::NotFound { .. } => {
                 BlobBackendError::NoSuchObject(object.to_string())
             }
-            _ => BlobBackendError::other(format!("s3 error: {e}")),
+            _ => self.request_error(e),
         }
     }
 
     /// Errors from an operation addressed at the bucket (put, delete, list): S3
     /// answers 204 for a missing key, so a 404 here is the bucket.
-    fn container_err(e: object_store::Error, container: &str) -> BlobBackendError {
+    fn container_err(&self, e: object_store::Error, container: &str) -> BlobBackendError {
         match e {
             object_store::Error::NotFound { .. } => {
                 BlobBackendError::NoSuchContainer(container.to_string())
             }
-            _ => BlobBackendError::other(format!("s3 error: {e}")),
+            _ => self.request_error(e),
         }
     }
 }
@@ -215,7 +233,7 @@ impl BlobBackend for S3BlobBackend {
             // Unreachable while object_store#851 turns a list 404 into
             // `Generic`; kept so the fix lands without a code change here.
             Some(Err(object_store::Error::NotFound { .. })) => Ok(false),
-            Some(Err(e)) => Err(Self::container_err(e, name)),
+            Some(Err(e)) => Err(self.container_err(e, name)),
         }
     }
 
@@ -234,7 +252,7 @@ impl BlobBackend for S3BlobBackend {
             .delete_stream(locations)
             .try_for_each(|_| futures::future::ok(()))
             .await
-            .map_err(|e| Self::container_err(e, name))
+            .map_err(|e| self.container_err(e, name))
     }
 
     async fn get_data(
@@ -249,7 +267,7 @@ impl BlobBackend for S3BlobBackend {
         let meta = store
             .head(&path)
             .await
-            .map_err(|e| Self::object_err(e, object))?;
+            .map_err(|e| self.object_err(e, object))?;
         let len = usize::try_from(meta.size).unwrap_or(usize::MAX);
         let range = clamp_range(start, end, len);
         if range.is_empty() {
@@ -258,7 +276,7 @@ impl BlobBackend for S3BlobBackend {
         let bytes = store
             .get_range(&path, range.start as u64..range.end as u64)
             .await
-            .map_err(|e| Self::object_err(e, object))?;
+            .map_err(|e| self.object_err(e, object))?;
         Ok(bytes.into())
     }
 
@@ -268,7 +286,7 @@ impl BlobBackend for S3BlobBackend {
         store
             .put(&path, data.into())
             .await
-            .map_err(|e| Self::container_err(e, container))?;
+            .map_err(|e| self.container_err(e, container))?;
         Ok(())
     }
 
@@ -279,7 +297,7 @@ impl BlobBackend for S3BlobBackend {
             .map_ok(|meta| meta.location.to_string())
             .try_collect::<Vec<_>>()
             .await
-            .map_err(|e| Self::container_err(e, container))
+            .map_err(|e| self.container_err(e, container))
     }
 
     async fn delete_object(&self, container: &str, object: &str) -> BlobResult<()> {
@@ -288,7 +306,7 @@ impl BlobBackend for S3BlobBackend {
         store
             .delete(&path)
             .await
-            .map_err(|e| Self::container_err(e, container))?;
+            .map_err(|e| self.container_err(e, container))?;
         Ok(())
     }
 
@@ -305,7 +323,7 @@ impl BlobBackend for S3BlobBackend {
             .delete_stream(futures::stream::iter(paths.into_iter().map(Ok)).boxed())
             .try_for_each(|_| futures::future::ok(()))
             .await
-            .map_err(|e| Self::container_err(e, container))
+            .map_err(|e| self.container_err(e, container))
     }
 
     async fn has_object(&self, container: &str, object: &str) -> BlobResult<bool> {
@@ -314,7 +332,7 @@ impl BlobBackend for S3BlobBackend {
         match store.head(&path).await {
             Ok(_) => Ok(true),
             Err(object_store::Error::NotFound { .. }) => Ok(false),
-            Err(e) => Err(Self::object_err(e, object)),
+            Err(e) => Err(self.object_err(e, object)),
         }
     }
 
@@ -324,7 +342,7 @@ impl BlobBackend for S3BlobBackend {
         let meta = store
             .head(&path)
             .await
-            .map_err(|e| Self::object_err(e, object))?;
+            .map_err(|e| self.object_err(e, object))?;
         Ok(ObjectInfo {
             name: object.to_string(),
             container: container.to_string(),
@@ -349,7 +367,7 @@ impl BlobBackend for S3BlobBackend {
                     &Self::object_path(dest_object)?,
                 )
                 .await
-                .map_err(|e| Self::object_err(e, src_object))?;
+                .map_err(|e| self.object_err(e, src_object))?;
         } else {
             let data = self
                 .get_data(src_container, src_object, 0, u64::MAX)
@@ -373,10 +391,11 @@ impl BackendProvider<BlobId> for S3BlobProvider {
     /// Hash of the whole config, length-prefixed: no plaintext secret in the
     /// pool map. Secrets and session tokens are *in* it on purpose, since a
     /// pool hit refreshes `last_used` and would otherwise pin a stale token.
-    fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
+    fn pool_key(&self, config: &Config) -> Option<String> {
         let mut pairs: Vec<(String, &str)> = config
             .iter()
             .filter_map(|(key, value)| {
+                let value = value.expose().unwrap_or_default();
                 let normalized = normalize_key(key);
                 if normalized == BACKEND_CONFIG_KEY {
                     return None;
@@ -384,7 +403,7 @@ impl BackendProvider<BlobId> for S3BlobProvider {
                 let name = lookup(&normalized)
                     .map(|spec| spec.name.to_string())
                     .unwrap_or(normalized);
-                Some((name, value.as_str()))
+                Some((name, value))
             })
             .collect();
         pairs.sort();
@@ -400,25 +419,32 @@ impl BackendProvider<BlobId> for S3BlobProvider {
 
     async fn instantiate(
         &self,
-        config: &HashMap<String, String>,
+        config: &Config,
         _egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<BlobId> {
         let base = builder_from_config(config)?;
         // Probe-build so a config error fails the bind, not the first request.
-        base.clone()
-            .with_bucket_name("probe")
-            .build()
-            .context("invalid s3 blobstore config")?;
-        Ok(Arc::new(S3BlobBackend::new(base, MAX_BUCKET_CLIENTS)))
+        let probe = base.clone().with_bucket_name("probe").build();
+        if parses_a_secret(config) {
+            probe.map_err(|_| {
+                anyhow::anyhow!(
+                    "invalid s3 blobstore config; the reason is withheld because it may quote a \
+                     secret"
+                )
+            })?;
+        } else {
+            probe.context("invalid s3 blobstore config")?;
+        }
+        Ok(Arc::new(S3BlobBackend::new(
+            base,
+            MAX_BUCKET_CLIENTS,
+            config.iter().any(|(_, value)| value.is_secret()),
+        )))
     }
 
     /// The endpoint the client dials, derived as `AmazonS3Builder::build`
     /// derives it, without the bucket.
-    fn check_egress(
-        &self,
-        config: &HashMap<String, String>,
-        policy: &PluginEgressPolicy,
-    ) -> anyhow::Result<()> {
+    fn check_egress(&self, config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
         // A config the builder refuses fails in `instantiate`, as the config
         // error it is rather than an egress refusal.
         let Ok(builder) = builder_from_config(config) else {
@@ -437,7 +463,17 @@ impl BackendProvider<BlobId> for S3BlobProvider {
                 let region = get(AmazonS3ConfigKey::Region).unwrap_or_else(|| "us-east-1".into());
                 format!("https://s3.{region}.amazonaws.com")
             });
-        policy.check_url(&url, Protocol::Tcp, 443)
+        let checked = policy.check_url(&url, Protocol::Tcp, 443);
+        if parses_a_secret(config) {
+            checked.map_err(|_| {
+                anyhow::anyhow!(
+                    "s3 blobstore endpoint was refused; the reason is withheld because it may \
+                     quote a secret"
+                )
+            })
+        } else {
+            checked
+        }
     }
 }
 
@@ -445,6 +481,32 @@ impl BackendProvider<BlobId> for S3BlobProvider {
 mod tests {
     use super::config::test_support::{cfg, keyed};
     use super::*;
+
+    #[test]
+    fn secret_s3_request_errors_withhold_endpoints_and_keep_not_found() {
+        let endpoint = "http://private-storage:9000";
+        for secret in [false, true] {
+            let backend = S3BlobBackend::new(AmazonS3Builder::new(), 2, secret);
+            let error = || object_store::Error::Generic {
+                store: "S3",
+                source: std::io::Error::other(format!("request failed at {endpoint}")).into(),
+            };
+            for rendered in [
+                backend.container_err(error(), "bucket").to_string(),
+                backend.object_err(error(), "key").to_string(),
+            ] {
+                assert_eq!(rendered.contains(endpoint), !secret, "{rendered}");
+            }
+            let missing = object_store::Error::NotFound {
+                path: "key".to_string(),
+                source: std::io::Error::other(endpoint).into(),
+            };
+            assert!(matches!(
+                backend.object_err(missing, "key"),
+                BlobBackendError::NoSuchObject(_)
+            ));
+        }
+    }
 
     fn key(pairs: &[(&str, &str)]) -> String {
         S3BlobProvider.pool_key(&cfg(pairs)).unwrap()
@@ -494,7 +556,7 @@ mod tests {
 
     #[test]
     fn pool_key_is_some_for_empty_config() {
-        assert!(S3BlobProvider.pool_key(&HashMap::new()).is_some());
+        assert!(S3BlobProvider.pool_key(&Config::new()).is_some());
     }
 
     #[test]
@@ -503,7 +565,7 @@ mod tests {
         // leaves behind must not grow without limit. `build()` is local, so
         // this needs no server.
         let base = builder_from_config(&keyed(&[])).unwrap();
-        let backend = S3BlobBackend::new(base, 2);
+        let backend = S3BlobBackend::new(base, 2, false);
         for name in ["probe-1", "probe-2", "probe-3", "probe-4"] {
             backend.store(name).unwrap();
         }
@@ -527,7 +589,7 @@ mod tests {
             let base =
                 builder_from_config(&keyed(&[("virtual_hosted_style_request", virtual_hosted)]))
                     .unwrap();
-            let backend = S3BlobBackend::new(base, 2);
+            let backend = S3BlobBackend::new(base, 2, false);
             for invalid in [
                 "",
                 ".",
@@ -595,7 +657,38 @@ mod tests {
         assert!(err.contains("invalid s3 blobstore config"), "{err}");
     }
 
-    fn egress(config: &HashMap<String, String>, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn a_secret_object_store_parses_is_never_quoted() {
+        use crate::plugin::SecretValue;
+
+        // Secret credentials are passed through as given, so the reason stays.
+        let mut config = cfg(&[("allow_http", "maybe")]);
+        config.insert("access_key_id", SecretValue::new("AKIA-SECRET"));
+        config.insert("secret_access_key", SecretValue::new("s"));
+        let Err(err) = S3BlobProvider.instantiate(&config, None).await else {
+            panic!("a bad bool must fail the bind");
+        };
+        assert!(format!("{err:#}").contains("maybe"), "{err:#}");
+
+        // A secret object_store parses could be quoted, so the reason goes.
+        let mut config = keyed(&[]);
+        config.insert("allow_http", SecretValue::new("SECRET-MUST-NOT-LEAK"));
+        let Err(err) = S3BlobProvider.instantiate(&config, None).await else {
+            panic!("a bad bool must fail the bind");
+        };
+        assert!(!format!("{err:#}").contains("MUST-NOT-LEAK"), "{err:#}");
+
+        let mut config = keyed(&[]);
+        config.insert(
+            "endpoint",
+            SecretValue::new("http://secret-must-not-leak.internal:9000"),
+        );
+        let policy = PluginEgressPolicy::allowing(&[]);
+        let err = egress(&config, &policy).expect_err("an unlisted endpoint is refused");
+        assert!(!format!("{err:#}").contains("must-not-leak"), "{err:#}");
+    }
+
+    fn egress(config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
         S3BlobProvider.check_egress(config, policy)
     }
 

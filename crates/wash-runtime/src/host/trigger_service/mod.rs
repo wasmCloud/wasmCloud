@@ -429,10 +429,21 @@ impl PreparedIngress {
                     let LifecycleReplay {
                         interface,
                         func,
-                        caller,
+                        mut caller,
                         args,
                         result_tys,
+                        redact_errors,
                     } = replay;
+                    if caller
+                        .bind_generation
+                        .as_ref()
+                        .is_some_and(|generation| !generation.is_active())
+                    {
+                        continue;
+                    }
+                    caller.bind_generation = caller.bind_generation.map(|generation| {
+                        generation.for_call(crate::timeouts::plugin_lifecycle_call())
+                    });
                     let workload_id = Arc::clone(&caller.workload_id);
                     registry.replay_begin(caller.clone());
                     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -463,7 +474,7 @@ impl PreparedIngress {
                             abandoned,
                         },
                     );
-                    await_replay_outcome(workload_id, reply_rx).await;
+                    await_replay_outcome(workload_id, reply_rx, redact_errors).await;
                     registry.replay_finish();
                 }
                 registry.replay_complete();
@@ -518,25 +529,29 @@ async fn await_replay_outcome(
     reply_rx: tokio::sync::oneshot::Receiver<
         wasmtime::Result<Vec<crate::engine::store::relocate::Relocated>>,
     >,
+    redact_errors: bool,
 ) {
+    // Only what the guest wrote, or what its trap carries, can quote a
+    // revealed secret; the rest is the host's own.
+    const WITHHELD: &str = "withheld because the bind carried secrets";
     let reply = tokio::time::timeout(crate::timeouts::plugin_lifecycle_call(), reply_rx).await;
     match reply {
         Ok(Ok(Ok(results))) => match decode_bind_reply(&results) {
             Ok(Ok(())) => {}
             Ok(Err(msg)) => tracing::warn!(
                 %workload_id,
-                msg,
+                msg = if redact_errors { WITHHELD } else { msg.as_str() },
                 "plugin rejected a replayed workload bind"
             ),
             Err(e) => tracing::warn!(
                 %workload_id,
-                err = %e,
+                err = %if redact_errors { WITHHELD.to_string() } else { e.to_string() },
                 "replayed workload bind returned a malformed reply"
             ),
         },
         Ok(Ok(Err(e))) => tracing::warn!(
             %workload_id,
-            err = %e,
+            err = %if redact_errors { WITHHELD.to_string() } else { e.to_string() },
             "replayed workload bind failed"
         ),
         Ok(Err(_)) => tracing::warn!(

@@ -159,9 +159,14 @@ impl HostPlugin for DynamicConfig {
             let mut config_map = ComponentConfig::new();
 
             for entry in entries {
+                // A component reads its config as text, so a secret is exposed
+                // here, where it is handed over.
                 for (key, value) in entry.config.iter() {
-                    if let Some(previous) = config_map.insert(key.clone(), value.clone())
-                        && &previous != value
+                    let Some(value) = value.expose() else {
+                        continue;
+                    };
+                    if let Some(previous) = config_map.insert(key.clone(), value.to_string())
+                        && previous != value
                     {
                         tracing::warn!(
                             key,
@@ -233,7 +238,6 @@ mod tests {
         InstancePolicy, workload::UnresolvedWorkload, workload::WorkloadComponent,
     };
     use crate::types::LocalResources;
-    use std::collections::HashMap;
     use wasmtime::component::{Component, Linker};
 
     fn config_importer(name: &str, config: &[(&str, &str)]) -> WorkloadComponent {
@@ -307,7 +311,8 @@ mod tests {
 
     fn shared(entry: &str) -> WitInterface {
         let mut interface = WitInterface::from(entry);
-        interface.config = HashMap::from([("shared".to_string(), "yes".to_string())]);
+        interface.config =
+            crate::wit::Config::from_iter([("shared".to_string(), "yes".to_string())]);
         interface
     }
 
@@ -334,7 +339,8 @@ mod tests {
     #[tokio::test]
     async fn every_matching_entry_lands_in_one_view() {
         let mut package_only = WitInterface::from("wasi:config");
-        package_only.config = HashMap::from([("extra".to_string(), "1".to_string())]);
+        package_only.config =
+            crate::wit::Config::from_iter([("extra".to_string(), "1".to_string())]);
 
         // Repeated because the order under test comes from a `HashSet`: one
         // run proves nothing.

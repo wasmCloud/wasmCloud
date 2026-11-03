@@ -52,7 +52,7 @@ const KEYVALUE_IMPLEMENTS_P3_WASM: &[u8] = include_bytes!("wasm/keyvalue_impleme
 /// A `wasi:keyvalue@0.2.0-draft` interface (store+atomics). `name = None` is the
 /// unnamed import (→ standalone); a name routes to the sync multiplexed plugin.
 fn wasi_kv_iface(name: Option<&str>) -> WitInterface {
-    let mut config = HashMap::new();
+    let mut config = wash_runtime::wit::Config::new();
     if name.is_some() {
         config.insert("backend".to_string(), "in-memory".to_string());
     }
@@ -75,7 +75,10 @@ fn wasmcloud_kv_store(name: &str) -> WitInterface {
         package: "keyvalue".to_string(),
         interfaces: ["store".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.2.0").unwrap()),
-        config: HashMap::from([("backend".to_string(), "in-memory".to_string())]),
+        config: wash_runtime::wit::Config::from_iter([(
+            "backend".to_string(),
+            "in-memory".to_string(),
+        )]),
         name: Some(name.to_string()),
     }
 }

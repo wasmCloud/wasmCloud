@@ -211,7 +211,7 @@ async fn an_operator_root_serves_a_workload_that_only_picks_the_backend() -> Res
     let team_a = tempfile::tempdir()?;
     let team_b = tempfile::tempdir()?;
     let root = |dir: &tempfile::TempDir| {
-        HashMap::from([(
+        wash_runtime::wit::Config::from_iter([(
             "root".to_string(),
             dir.path().to_string_lossy().into_owned(),
         )])

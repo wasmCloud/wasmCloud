@@ -59,7 +59,7 @@ fn nats_blob_iface(name: &str, iface: &str) -> WitInterface {
         package: "blobstore".to_string(),
         interfaces: [iface.to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.1.0").unwrap()),
-        config: HashMap::from([("backend".to_string(), "nats".to_string())]),
+        config: wash_runtime::wit::Config::from_iter([("backend".to_string(), "nats".to_string())]),
         name: Some(name.to_string()),
     }
 }
@@ -88,12 +88,11 @@ async fn p3_guest_streams_blobstore_through_nats() -> Result<()> {
         .with_plugin(Arc::new(
             MultiplexedAsyncBlobstore::new().with_provider(Arc::new(NatsBlobProvider::default())),
         ))?
-        .with_plugin_bindings(
-            PluginBindings::new().with_plugin(
-                PluginBindingSet::new("wasmcloud-blobstore-multiplexed")
-                    .with_base(HashMap::from([("url".to_string(), nats_url)])),
+        .with_plugin_bindings(PluginBindings::new().with_plugin(
+            PluginBindingSet::new("wasmcloud-blobstore-multiplexed").with_base(
+                wash_runtime::wit::Config::from_iter([("url".to_string(), nats_url)]),
             ),
-        )
+        ))
         .build()?;
     let host = host.start().await.context("failed to start host")?;
 

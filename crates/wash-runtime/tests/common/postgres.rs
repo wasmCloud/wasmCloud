@@ -40,7 +40,10 @@ pub fn async_pg_interface(database: &str) -> WitInterface {
             .into_iter()
             .collect(),
         version: Some(semver::Version::parse("0.2.0").unwrap()),
-        config: HashMap::from([("database".to_string(), database.to_string())]),
+        config: wash_runtime::wit::Config::from_iter([(
+            "database".to_string(),
+            database.to_string(),
+        )]),
         name: None,
     }
 }
@@ -101,10 +104,12 @@ pub async fn start_postgres_workload(
         // Under the default `deny`, the databases a workload may select are the
         // operator's to list.
         .with_plugin_bindings(PluginBindings::new().with_plugin(
-            PluginBindingSet::new("wasmcloud-postgres").with_base(HashMap::from([(
-                "database".to_string(),
-                "postgres".to_string(),
-            )])),
+            PluginBindingSet::new("wasmcloud-postgres").with_base(
+                wash_runtime::wit::Config::from_iter([(
+                    "database".to_string(),
+                    "postgres".to_string(),
+                )]),
+            ),
         ))
         .build()?;
     let host = host.start().await.context("failed to start host")?;

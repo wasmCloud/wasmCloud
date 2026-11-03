@@ -99,6 +99,7 @@ use crate::host::trigger_service::{
 use crate::oci::OciConfig;
 use crate::plugin::binding_of;
 use crate::plugin::component_plugin_spec::ComponentPluginSpec;
+use crate::plugin::wasmcloud_secrets::secret_handle;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::sockets::loopback;
 use crate::types::LocalResources;
@@ -109,9 +110,10 @@ mod secret_source;
 mod workload_call;
 
 use lifecycle::{
-    BindReply, HOST_LIFECYCLE_EXPORT, LifecycleFuncs, POISON_EVICT_STRIKES, attribute_replay_fault,
-    await_bind_reply, evict_workload, lifecycle_funcs, remove_and_unbind, replay_snapshot,
-    report_workload_failed, send_lifecycle_job, spawn_deferred_unbind, workload_info_val,
+    BindInfo, BindLease, BindReply, HOST_LIFECYCLE_EXPORT, LifecycleFuncs, POISON_EVICT_STRIKES,
+    attribute_replay_fault, await_bind_reply, bind_info, evict_workload, lifecycle_funcs,
+    remove_and_unbind, replay_snapshot, report_workload_failed, send_lifecycle_job,
+    spawn_deferred_unbind,
 };
 use secret_source::{ComponentSecretSource, HOST_SECRET_SOURCE_EXPORT, check_secret_source_export};
 pub(crate) use secret_source::{
@@ -193,10 +195,12 @@ struct ComponentHostPluginState {
     /// registry. Lock-free reads for the same reason as `tx`.
     registry: ArcSwapOption<JobRegistry>,
     /// Workloads currently bound to this plugin, as workload id → the
-    /// `workload-info` value delivered to `on-workload-bind`. The supervisor
+    /// `workload-info` delivered to `on-workload-bind`. The supervisor
     /// snapshots it on each (re)start to replay binds into the fresh
     /// incarnation. Empty unless the plugin exports the lifecycle interface.
-    bound: Mutex<BTreeMap<Arc<str>, Val>>,
+    bound: Mutex<BTreeMap<Arc<str>, BindInfo>>,
+    /// Workload IDs reserved until their bind and rollback finish.
+    binding: Mutex<std::collections::BTreeSet<Arc<str>>>,
     /// Consecutive `on-workload-bind` traps attributed to each workload since it
     /// last bound cleanly — the quarantine strike count. Harvested from the
     /// faulted incarnation's registry after each fault; a workload reaching
@@ -239,10 +243,7 @@ impl ComponentHostPluginState {
         self.tx.load_full().map(|tx| (*tx).clone())
     }
 
-    /// The current incarnation's sender as a shared handle, whose `Arc` identity
-    /// names the incarnation: a restart publishes a new `Arc`, so
-    /// [`Arc::ptr_eq`] against a captured handle tells a deferred task whether
-    /// the incarnation it spoke to is still the live one.
+    /// A shared handle to the current incarnation's sender.
     fn sender_arc(&self) -> Option<Arc<CapabilitySender>> {
         self.tx.load_full()
     }
@@ -251,10 +252,14 @@ impl ComponentHostPluginState {
     /// unbind. Used when a bind never reached the guest (its enqueue failed) or
     /// when its unbind is being deferred separately.
     fn forget_workload(&self, workload_id: &str) {
-        self.bound
+        if let Some(info) = self
+            .bound
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(workload_id);
+            .remove(workload_id)
+        {
+            info.generation.revoke();
+        }
     }
 
     /// The current incarnation's job registry, or `None` if the plugin is not
@@ -433,6 +438,7 @@ impl ComponentHostPlugin {
             supervisor: Mutex::new(None),
             registry: ArcSwapOption::empty(),
             bound: Mutex::new(BTreeMap::new()),
+            binding: Mutex::new(Default::default()),
             poison: Mutex::new(BTreeMap::new()),
             bind_trap_log: Mutex::new(Vec::new()),
             failure_sink: ArcSwapOption::empty(),
@@ -811,6 +817,12 @@ impl HostPlugin for ComponentHostPlugin {
         self.state.failure_sink.store(Some(Arc::new(sink)));
     }
 
+    fn takes_plugin_secrets(&self) -> bool {
+        self.lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.takes_secrets)
+    }
+
     fn secret_source(&self) -> Option<Arc<dyn crate::plugin::HostSecretSource>> {
         self.secret_source.as_ref()?;
         Some(Arc::new(ComponentSecretSource {
@@ -858,10 +870,22 @@ impl HostPlugin for ComponentHostPlugin {
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
         let Some(lifecycle) = &self.lifecycle else {
+            if let Some(key) = interfaces
+                .iter()
+                .flat_map(|iface| &iface.config)
+                .find_map(|(key, value)| value.is_secret().then_some(key))
+            {
+                anyhow::bail!(
+                    "host component plugin '{}' exports no workload-lifecycle, so it cannot read \
+                     the secret in `{key}`",
+                    self.id
+                );
+            }
             return Ok(());
         };
-        let info = workload_info_val(workload, &interfaces);
+        let info = bind_info(self.id, workload, &interfaces, lifecycle.takes_secrets)?;
         let workload_id: Arc<str> = Arc::from(workload.id());
+        let lease = BindLease::acquire(&self.state, &workload_id)?;
         // Record the workload and read the current sender (as an incarnation
         // handle) under one `bound` lock: the supervisor swaps incarnations
         // under the same lock (see [`replay_snapshot`]), so this bind is either
@@ -896,8 +920,9 @@ impl HostPlugin for ComponentHostPlugin {
             &self.state,
             lifecycle,
             &lifecycle.bind,
-            info,
+            info.relocate(),
             &workload_id,
+            Some(info.generation.clone()),
         )
         .await
         {
@@ -917,14 +942,23 @@ impl HostPlugin for ComponentHostPlugin {
         // hook actually returns — guaranteeing bind-then-unbind ordering so
         // whatever it provisions late is still reclaimed (see
         // [`spawn_deferred_unbind`]).
-        let failure = match await_bind_reply(reply_rx, call, &self.state).await {
+        let failure = match await_bind_reply(reply_rx, call, &self.state, &info.generation).await {
             BindReply::Completed(Ok(results)) => match decode_bind_reply(&results) {
                 Ok(Ok(())) => {
                     debug!(id = self.id, %workload_id, "workload bound to host component plugin");
                     return Ok(());
                 }
-                Ok(Err(msg)) => anyhow::anyhow!(
-                    "host component plugin '{}' rejected workload '{workload_id}': {msg}",
+                Ok(Err(msg)) => {
+                    let msg = info.rejection_message(msg);
+                    anyhow::anyhow!(
+                        "host component plugin '{}' rejected workload '{workload_id}': {msg}",
+                        self.id
+                    )
+                }
+                // The error quotes the guest's payload.
+                Err(_) if info.has_secrets() => anyhow::anyhow!(
+                    "host component plugin '{}' returned a malformed on-workload-bind reply; \
+                     its payload is withheld because the bind carried secrets",
                     self.id
                 ),
                 Err(e) => anyhow::Error::from(e).context(format!(
@@ -938,12 +972,12 @@ impl HostPlugin for ComponentHostPlugin {
             )),
             BindReply::TimedOut(pending) => {
                 self.state.forget_workload(&workload_id);
-                spawn_deferred_unbind(
-                    sender_arc,
+                let _cleanup = spawn_deferred_unbind(
                     pending,
                     Arc::clone(&workload_id),
                     Arc::clone(lifecycle),
                     Arc::clone(&self.state),
+                    lease,
                 );
                 return Err(anyhow::anyhow!(
                     "on-workload-bind to host component plugin '{}' timed out; deploy failed, \
@@ -957,9 +991,10 @@ impl HostPlugin for ComponentHostPlugin {
         // after the hook ran): the hook is no longer in flight, so roll back
         // immediately with a best-effort unbind.
         if let Err(e) = remove_and_unbind(&self.state, lifecycle, &workload_id).await {
-            warn!(id = self.id, %workload_id, err = %e, "post-failure unbind not delivered");
+            let err = info.scrub(e);
+            warn!(id = self.id, %workload_id, err = %format!("{err:#}"), "post-failure unbind not delivered");
         }
-        Err(failure)
+        Err(info.scrub(failure))
     }
 
     async fn on_workload_item_bind<'a>(
@@ -1140,7 +1175,7 @@ async fn link_native_imports(
     let native_imports: Vec<WitInterface> = merged
         .into_values()
         .map(|mut wit| {
-            wit.config = config.clone();
+            wit.config = config.clone().into();
             wit
         })
         .collect();
@@ -1216,7 +1251,8 @@ fn introspect_capability_exports(
             // anywhere in it must not break a plugin built against the
             // previous patch version of an interface it already exports.
             if export.wit.interfaces.contains(HOST_LIFECYCLE_EXPORT) {
-                lifecycle = Some(lifecycle_funcs(id, export)?);
+                let takes_secrets = imports_binding_secrets(component);
+                lifecycle = Some(lifecycle_funcs(id, export, takes_secrets)?);
             } else if export.wit.interfaces.contains(HOST_SECRET_SOURCE_EXPORT) {
                 check_secret_source_export(id, &export)?;
                 secret_source = Some(export.name);
@@ -1361,8 +1397,8 @@ fn classify_workload_imports(
 /// This is the single place that declares the plugin's whole import surface:
 ///
 /// - the WASI (and `wasi:http`) base, from [`Engine::prepare_host_component`];
-/// - the `wasmcloud:host` identity/cancel/workload imports (unused unless the
-///   plugin imports them);
+/// - the `wasmcloud:host` identity/cancel/workload/binding-secrets imports
+///   (unused unless the plugin imports them);
 /// - a route back to the plugin's own capability channel for any interface it
 ///   both imports and exports (a self-import);
 /// - a route out to a workload's export for every import
@@ -1387,6 +1423,8 @@ async fn build_plugin_linker(
         .with_context(|| format!("failed to install host cancel on plugin '{id}'"))?;
     install_host_workload(&mut linker, state)
         .with_context(|| format!("failed to install host workload targeting on plugin '{id}'"))?;
+    install_host_binding_secrets(&mut linker, state)
+        .with_context(|| format!("failed to install host binding secrets on plugin '{id}'"))?;
 
     let mut linked = std::collections::HashSet::new();
     for imported in introspect_imports(component)? {
@@ -1535,6 +1573,137 @@ fn install_host_identity(
         )
         .map_err(|e| e.context("failed to define wasmcloud:host/identity#get-binding-name"))?;
     Ok(())
+}
+
+/// Interface name of the host import a plugin reads its bindings' secrets
+/// through, and its bare name, matched against the plugin's imports.
+const HOST_BINDING_SECRETS_INTERFACE: &str = "wasmcloud:host/binding-secrets@0.1.6";
+const HOST_BINDING_SECRETS: &str = "binding-secrets";
+
+/// Whether the plugin imports `wasmcloud:host/binding-secrets`, read from its
+/// import names alone.
+fn imports_binding_secrets(component: &Component) -> bool {
+    component
+        .component_type()
+        .imports(component.engine())
+        .any(|(name, _)| {
+            let wit = WitInterface::from(name);
+            is_reserved(&wit) && wit.interfaces.contains(HOST_BINDING_SECRETS)
+        })
+}
+
+/// Install the `wasmcloud:host/binding-secrets` import on the plugin's own
+/// linker. `get` answers only inside `on-workload-bind`: the caller's root
+/// task must be a lifecycle call, which carries no component, for a workload
+/// still in `bound`. A plugin that does not import it leaves it unused.
+fn install_host_binding_secrets(
+    linker: &mut Linker<SharedCtx>,
+    state: &Arc<ComponentHostPluginState>,
+) -> anyhow::Result<()> {
+    let mut instance = linker
+        .instance(HOST_BINDING_SECRETS_INTERFACE)
+        .map_err(|e| e.context("failed to open the host binding-secrets linker instance"))?;
+    let state = Arc::clone(state);
+    instance
+        .func_new("get", move |mut store, _ty, params, results| {
+            let (namespace, package, name) = match params {
+                [
+                    Val::String(namespace),
+                    Val::String(package),
+                    Val::Option(name),
+                ] => {
+                    let name = match name.as_deref() {
+                        None => None,
+                        Some(Val::String(name)) => Some(name.as_str()),
+                        Some(_) => wasmtime::bail!("binding-secrets#get expects an option<string>"),
+                    };
+                    (namespace.as_str(), package.as_str(), name)
+                }
+                _ => wasmtime::bail!("binding-secrets#get expects a namespace, package and name"),
+            };
+            let caller = caller_root_task(&mut store)
+                .and_then(|task| state.registry()?.caller_for_task(task));
+            let result = bound_secrets_for_caller(
+                &state,
+                caller.as_ref(),
+                namespace,
+                package,
+                name,
+                |secrets| binding_secret_handles(&mut store, secrets),
+            )
+            .map(|handles| Some(Box::new(Val::List(handles))))
+            .map_err(|message| Some(Box::new(Val::String(message))));
+            if let Some(slot) = results.first_mut() {
+                *slot = Val::Result(result);
+            }
+            Ok(())
+        })
+        .map_err(|e| e.context("failed to define wasmcloud:host/binding-secrets#get"))?;
+    Ok(())
+}
+
+fn binding_secret_handles(
+    store: &mut StoreContextMut<'_, SharedCtx>,
+    secrets: &[(String, crate::plugin::SecretValue)],
+) -> Result<Vec<Val>, String> {
+    let mut handles = Vec::with_capacity(secrets.len());
+    for (key, value) in secrets {
+        match secret_handle(store.as_context_mut(), value) {
+            Ok(handle) => handles.push((key.clone(), handle)),
+            Err(_) => {
+                for (_, value) in handles {
+                    if let Val::Resource(handle) = value
+                        && let Ok(resource) = handle
+                            .try_into_resource::<crate::plugin::wasmcloud_secrets::SecretState>(
+                                store.as_context_mut(),
+                            )
+                    {
+                        let _ = store.data_mut().table.delete(resource);
+                    }
+                }
+                return Err("unable to allocate binding secret handles".to_string());
+            }
+        }
+    }
+    Ok(handles
+        .into_iter()
+        .map(|(key, handle)| Val::Tuple(vec![Val::String(key), handle]))
+        .collect())
+}
+
+/// `read` applied, under the `bound` lock, to the secrets of `caller`'s
+/// binding of `namespace:package` labeled `name`, or why there are none to
+/// hand over.
+fn bound_secrets_for_caller<T>(
+    state: &ComponentHostPluginState,
+    caller: Option<&CallerIdentity>,
+    namespace: &str,
+    package: &str,
+    name: Option<&str>,
+    read: impl FnOnce(&[(String, crate::plugin::SecretValue)]) -> Result<T, String>,
+) -> Result<T, String> {
+    let (workload_id, generation) = match caller.and_then(CallerIdentity::workload) {
+        Some(workload) if workload.bind_generation.is_some() => {
+            (&workload.workload_id, workload.bind_generation.as_ref())
+        }
+        _ => return Err("binding-secrets answers only inside on-workload-bind".to_string()),
+    };
+    let bound = state
+        .bound
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(info) = bound.get(workload_id).filter(|info| {
+        generation.is_some_and(|generation| generation.authorizes(&info.generation))
+    }) else {
+        return Err(format!("workload {workload_id} is not being bound"));
+    };
+    let Some(secrets) = info.secrets(namespace, package, name) else {
+        let label = name.map(|n| format!(" labeled {n}")).unwrap_or_default();
+        return Err(format!(
+            "workload {workload_id} has no binding of {namespace}:{package}{label}"
+        ));
+    };
+    read(secrets)
 }
 
 /// Interface name of the host cancel import a plugin may use to cancel one of its
@@ -1756,6 +1925,7 @@ async fn route_capability_call(
             let caller = {
                 let ctx = &access.data_mut().active_ctx;
                 CallerIdentity::Workload(WorkloadCaller {
+                    bind_generation: None,
                     workload_id: Arc::clone(&ctx.workload_id),
                     component_id: Some(Arc::clone(&ctx.component_id)),
                     // Fixed when the shim was installed, not read from the
@@ -2415,11 +2585,14 @@ mod tests {
             bind: Some("192.0.2.10".parse().unwrap()),
         }]);
 
+        // kv-plugin reads its bindings' secrets as `wasmcloud:secrets` handles.
+        let secrets: Arc<dyn HostPlugin> =
+            Arc::new(crate::plugin::wasmcloud_secrets::WasmcloudSecrets::new());
         let plugin = load_component_plugin(
             &spec,
             &engine,
             crate::oci::OciConfig::default(),
-            &HashMap::new(),
+            &HashMap::from([(secrets.id(), secrets)]),
             None,
             Some(host_policy),
         )
@@ -2521,7 +2694,7 @@ mod tests {
     /// records the config it was bound with.
     #[derive(Default)]
     struct HostOwnedUrlPlugin {
-        seen_config: Mutex<Option<HashMap<String, String>>>,
+        seen_config: Mutex<Option<crate::wit::Config>>,
     }
 
     #[async_trait]
@@ -2874,6 +3047,167 @@ mod tests {
         );
     }
 
+    fn secret_bind_info(value: &str) -> BindInfo {
+        let workload = UnresolvedWorkload::new(
+            "same-workload",
+            "test",
+            "test",
+            None,
+            std::iter::empty::<crate::engine::workload::WorkloadComponent>(),
+            Vec::new(),
+        );
+        let mut interface = WitInterface::from("acme:kv/store@0.1.0");
+        interface
+            .config
+            .insert("password", crate::plugin::SecretValue::new(value));
+        let interfaces = HashSet::from([interface]);
+        bind_info("test", &workload, &WitInterfaces::new(&interfaces), true).unwrap()
+    }
+
+    #[test]
+    fn binding_secrets_reject_a_stale_generation_for_the_same_workload() {
+        let state = idle_state("test");
+        let old = secret_bind_info("old-password");
+        let current = secret_bind_info("new-password");
+        let caller = |info: &BindInfo| {
+            CallerIdentity::Workload(WorkloadCaller {
+                workload_id: Arc::from("same-workload"),
+                component_id: None,
+                binding: None,
+                bind_generation: Some(info.generation.clone()),
+            })
+        };
+        state
+            .bound
+            .lock()
+            .unwrap()
+            .insert(Arc::from("same-workload"), old.clone());
+        let read = |caller: &CallerIdentity| {
+            bound_secrets_for_caller(&state, Some(caller), "acme", "kv", None, |s| Ok(s.to_vec()))
+        };
+        assert!(read(&caller(&old)).is_ok());
+        let mut expired = caller(&old);
+        if let CallerIdentity::Workload(caller) = &mut expired {
+            caller.bind_generation = Some(old.generation.for_call(Duration::ZERO));
+        }
+        assert!(read(&expired).is_err());
+        old.generation.revoke();
+        assert!(read(&caller(&old)).is_err());
+        state
+            .bound
+            .lock()
+            .unwrap()
+            .insert(Arc::from("same-workload"), current.clone());
+        assert!(read(&caller(&old)).is_err());
+        let secrets = read(&caller(&current)).unwrap();
+        assert_eq!(secrets.first().unwrap().1.expose(), Some("new-password"));
+        let mut unbind = caller(&current);
+        if let CallerIdentity::Workload(caller) = &mut unbind {
+            caller.bind_generation = None;
+        }
+        assert!(read(&unbind).is_err());
+    }
+
+    #[tokio::test]
+    async fn deferred_cleanup_reserves_the_workload_until_unbind_returns() {
+        let state = idle_state("test");
+        let workload_id = Arc::from("same-workload");
+        let (sender, mut jobs) = tokio::sync::mpsc::channel(1);
+        state.tx.store(Some(Arc::new(sender)));
+        let lease = BindLease::acquire(&state, &workload_id).unwrap();
+        let lifecycle = Arc::new(LifecycleFuncs {
+            interface: Arc::from("wasmcloud:host/workload-lifecycle@0.1.6"),
+            bind: one_func_interface("lifecycle", "on-workload-bind", true)
+                .funcs
+                .remove(0),
+            unbind: one_func_interface("lifecycle", "on-workload-unbind", true)
+                .funcs
+                .remove(0),
+            takes_secrets: true,
+        });
+        let (reply, pending) = tokio::sync::oneshot::channel();
+        let cleanup = spawn_deferred_unbind(
+            pending,
+            Arc::clone(&workload_id),
+            lifecycle,
+            Arc::clone(&state),
+            lease,
+        );
+        assert!(BindLease::acquire(&state, &workload_id).is_err());
+        assert!(jobs.try_recv().is_err());
+        assert!(reply.send(Ok(Vec::new())).is_ok());
+        let job = tokio::time::timeout(Duration::from_secs(1), jobs.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let CapabilityJob::Call(call) = job else {
+            panic!("expected an unbind");
+        };
+        assert_eq!(call.func.as_ref(), "on-workload-unbind");
+        assert!(BindLease::acquire(&state, &workload_id).is_err());
+        assert!(call.reply.send(Ok(Vec::new())).is_ok());
+        cleanup.await.unwrap();
+        assert!(BindLease::acquire(&state, &workload_id).is_ok());
+    }
+
+    #[test]
+    fn revoked_bind_is_excluded_from_replay() {
+        let state = idle_state("test");
+        let info = secret_bind_info("password");
+        let lifecycle = LifecycleFuncs {
+            interface: Arc::from("lifecycle"),
+            bind: one_func_interface("lifecycle", "on-workload-bind", true)
+                .funcs
+                .remove(0),
+            unbind: one_func_interface("lifecycle", "on-workload-unbind", true)
+                .funcs
+                .remove(0),
+            takes_secrets: true,
+        };
+        state
+            .bound
+            .lock()
+            .unwrap()
+            .insert(Arc::from("same-workload"), info.clone());
+        assert_eq!(
+            replay_snapshot(&state.bound.lock().unwrap(), Some(&lifecycle)).len(),
+            1
+        );
+        info.generation.revoke();
+        assert!(replay_snapshot(&state.bound.lock().unwrap(), Some(&lifecycle)).is_empty());
+        assert!(
+            !info
+                .rejection_message("password".to_string())
+                .contains("password")
+        );
+    }
+
+    #[test]
+    fn binding_secret_allocation_failure_releases_partial_handles() {
+        let engine = Engine::builder().build().unwrap();
+        let mut store = Store::new(
+            engine.inner(),
+            SharedCtx::new(Ctx::builder("test", "test").build()),
+        );
+        store.data_mut().table.set_max_capacity(1);
+        let secrets = vec![
+            (
+                "first".to_string(),
+                crate::plugin::SecretValue::new("first-password"),
+            ),
+            (
+                "second".to_string(),
+                crate::plugin::SecretValue::new("second-password"),
+            ),
+        ];
+        let error = binding_secret_handles(&mut store.as_context_mut(), &secrets).unwrap_err();
+        assert!(!error.contains("password"));
+        assert!(
+            store.data_mut().table.push(()).is_ok(),
+            "partial handles must be released"
+        );
+    }
+
     /// A plugin's own state, with nothing running — enough to install linker
     /// shims, which is all the workload-facing import tests need.
     pub(super) fn idle_state(id: &'static str) -> Arc<ComponentHostPluginState> {
@@ -2883,6 +3217,7 @@ mod tests {
             supervisor: Mutex::new(None),
             registry: ArcSwapOption::empty(),
             bound: Mutex::new(BTreeMap::new()),
+            binding: Mutex::new(Default::default()),
             poison: Mutex::new(BTreeMap::new()),
             bind_trap_log: Mutex::new(Vec::new()),
             failure_sink: ArcSwapOption::empty(),
@@ -3023,6 +3358,9 @@ mod tests {
         .await
         .expect("the plugin's own config is operator config");
 
-        assert_eq!(native.seen_config.lock().unwrap().as_ref(), Some(&config));
+        assert_eq!(
+            native.seen_config.lock().unwrap().clone(),
+            Some(config.into())
+        );
     }
 }

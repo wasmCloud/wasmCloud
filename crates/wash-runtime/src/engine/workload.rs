@@ -4106,7 +4106,7 @@ impl UnresolvedWorkload {
     }
 
     /// Retrieves the interface configuration for a given WIT interface, if it exists.
-    pub fn interface_config(&self, interface: &WitInterface) -> Option<&HashMap<String, String>> {
+    pub fn interface_config(&self, interface: &WitInterface) -> Option<&crate::wit::Config> {
         self.host_interfaces
             .iter()
             .find(|i| i.contains(interface))
@@ -4721,7 +4721,7 @@ mod tests {
 
         /// The config this plugin saw for `binding`, from whichever callback
         /// ran first.
-        fn seen_config(&self, binding: Option<&str>) -> HashMap<String, String> {
+        fn seen_config(&self, binding: Option<&str>) -> crate::wit::Config {
             self.bound_interfaces
                 .lock()
                 .unwrap()
@@ -6634,7 +6634,7 @@ mod tests {
         ]);
         let bindings = crate::plugin::PluginBindings::new().with_plugin(
             crate::plugin::PluginBindingSet::new("kv")
-                .with_binding("cache", HashMap::new())
+                .with_binding("cache", Default::default())
                 .with_binding_secrets(
                     "cache",
                     HashMap::from([(
@@ -6735,7 +6735,7 @@ mod tests {
 
         let bindings = crate::plugin::PluginBindings::new().with_plugin(
             crate::plugin::PluginBindingSet::new("kv")
-                .with_binding("cache", HashMap::new())
+                .with_binding("cache", Default::default())
                 .with_workload_config(crate::plugin::WorkloadConfigPolicy::Deny),
         );
 
@@ -7087,7 +7087,7 @@ mod tests {
 
         let declared = crate::plugin::PluginBindings::new().with_plugin(
             crate::plugin::PluginBindingSet::new("zzz-component")
-                .with_binding("tenant-a", HashMap::new()),
+                .with_binding("tenant-a", Default::default()),
         );
         let bound_plugins = workload.bind_plugins(&plugins, &declared).await.unwrap();
 
@@ -8010,7 +8010,7 @@ mod tests {
             package: "messaging".to_string(),
             interfaces: ["handler".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.2.0").unwrap()),
-            config: std::collections::HashMap::new(),
+            config: Default::default(),
             name: None,
         };
 
@@ -8021,7 +8021,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             version: Some(semver::Version::parse("0.2.0").unwrap()),
-            config: std::collections::HashMap::new(),
+            config: Default::default(),
             name: None,
         };
 
@@ -8030,7 +8030,7 @@ mod tests {
             package: "logging".to_string(),
             interfaces: ["logging".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
-            config: std::collections::HashMap::new(),
+            config: Default::default(),
             name: None,
         };
 
@@ -8073,7 +8073,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     version: Some(semver::Version::parse("0.2.0").unwrap()),
-                    config: std::collections::HashMap::new(),
+                    config: Default::default(),
                     name: None,
                 },
                 logging,
@@ -8105,7 +8105,7 @@ mod tests {
             package: "logging".to_string(),
             interfaces: ["logging".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.1.0-draft").unwrap()),
-            config: std::collections::HashMap::new(),
+            config: Default::default(),
             name: None,
         };
 
@@ -8153,7 +8153,7 @@ mod tests {
             package: "keyvalue".to_string(),
             interfaces: ["store".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: std::collections::HashMap::new(),
+            config: Default::default(),
             name: name.map(String::from),
         }
     }
@@ -8425,7 +8425,7 @@ mod tests {
             package: "blobstore".to_string(),
             interfaces: ["container".to_string()].into_iter().collect(),
             version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
-            config: std::collections::HashMap::new(),
+            config: Default::default(),
             name: None,
         };
 

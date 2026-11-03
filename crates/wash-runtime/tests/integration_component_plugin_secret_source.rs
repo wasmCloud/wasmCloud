@@ -80,9 +80,10 @@ fn caller(host: &str) -> wash_runtime::types::WorkloadStartRequest {
     )
 }
 
-/// The secret reaches the consuming plugin's bind as config, and the source
-/// was told which plugin and binding it was resolving for and which workload's
-/// bind needed it.
+/// The secret reaches the consuming plugin's bind as a `wasmcloud:secrets`
+/// handle it reads through `binding-secrets` and reveals, never as text
+/// config, and the source was told which plugin and binding it was resolving
+/// for and which workload's bind needed it.
 #[tokio::test]
 async fn a_plugin_secret_reaches_the_consuming_plugin() -> Result<()> {
     let host = "secret-source-ok";
@@ -92,7 +93,9 @@ async fn a_plugin_secret_reaches_the_consuming_plugin() -> Result<()> {
         ("workload", "workload"),
     ]))
     .await?;
-    let resp = h.workload_start(caller(host)).await?;
+    let request = caller(host);
+    let workload_id = request.workload_id.clone();
+    let resp = h.workload_start(request).await?;
     assert_eq!(
         resp.workload_status.workload_state,
         WorkloadState::Running,
@@ -103,6 +106,17 @@ async fn a_plugin_secret_reaches_the_consuming_plugin() -> Result<()> {
     let (status, body) = req(&client, &addr, host, "/bound-config?key=tier").await?;
     assert_eq!(status.as_u16(), 200);
     assert_eq!(body, "platinum");
+    let (_, info) = req(
+        &client,
+        &addr,
+        host,
+        &format!("/bind-info?workload={workload_id}"),
+    )
+    .await?;
+    assert!(
+        !info.contains("platinum"),
+        "the secret is not text config: {info}"
+    );
     let (_, body) = req(&client, &addr, host, "/bound-config?key=who").await?;
     assert_eq!(body, format!("{KV_ID}/-"));
     let (_, body) = req(&client, &addr, host, "/bound-config?key=workload").await?;

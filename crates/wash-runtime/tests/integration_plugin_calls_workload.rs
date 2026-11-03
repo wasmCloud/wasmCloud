@@ -42,7 +42,7 @@ fn acme_events_interface() -> WitInterface {
             .into_iter()
             .collect(),
         version: Some(semver::Version::parse("0.1.0").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }
@@ -434,7 +434,7 @@ fn acme_events_handler_interface() -> WitInterface {
         package: "events".to_string(),
         interfaces: ["handler".to_string()].into_iter().collect(),
         version: Some(semver::Version::parse("0.1.0").unwrap()),
-        config: HashMap::new(),
+        config: Default::default(),
         name: None,
     }
 }

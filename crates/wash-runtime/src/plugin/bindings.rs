@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use super::secret_source::{CatalogName, PluginId, SecretKey, SecretValue, WorkloadGrant};
-use crate::wit::WitInterface;
+use crate::wit::{Config, ConfigStr, ConfigValue, WitInterface};
 
 /// The binding name of a plain, unlabeled import.
 pub const UNNAMED_BINDING: &str = "";
@@ -511,11 +511,7 @@ impl BindingSchema {
     ///
     /// Names every unrecognized key, sorted, with the closest known spelling
     /// where there is an obvious one.
-    pub fn reject_unknown_keys(
-        &self,
-        config: &HashMap<String, String>,
-        owner: &str,
-    ) -> anyhow::Result<()> {
+    pub fn reject_unknown_keys(&self, config: &Config, owner: &str) -> anyhow::Result<()> {
         self.reject_unknown_key_names(config.keys(), owner)
     }
 
@@ -631,14 +627,14 @@ pub struct PluginSecretRef {
 /// One plugin's operator declaration: a base config, the named bindings it
 /// serves, and who may configure them.
 ///
-/// Stored as the plain string maps a manifest writes, so an operator's config
-/// and a workload's go through exactly the same plugin parser — an operator
-/// cannot write a value the manifest parser would have rejected.
+/// Stored as the same [`Config`] a manifest's entries carry, so an operator's
+/// config and a workload's go through exactly the same plugin parser — an
+/// operator cannot write a value the manifest parser would have rejected.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginBindingSet {
     plugin_id: String,
-    base: HashMap<String, String>,
-    bindings: BTreeMap<String, HashMap<String, String>>,
+    base: Config,
+    bindings: BTreeMap<String, Config>,
     /// Keys of `base`/`bindings` whose values are still to come from a plugin
     /// secret. Cleared per layer once [`Self::fill_plugin_secrets`] fills it.
     base_secrets: HashMap<String, PluginSecretRef>,
@@ -684,18 +680,14 @@ impl PluginBindingSet {
 
     /// Config applied to every binding of this plugin, named or not.
     #[must_use]
-    pub fn with_base(mut self, config: HashMap<String, String>) -> Self {
+    pub fn with_base(mut self, config: Config) -> Self {
         self.base = config;
         self
     }
 
     /// Declare the binding `name`, with config layered over the base.
     #[must_use]
-    pub fn with_binding(
-        mut self,
-        name: impl Into<String>,
-        config: HashMap<String, String>,
-    ) -> Self {
+    pub fn with_binding(mut self, name: impl Into<String>, config: Config) -> Self {
         self.bindings.insert(name.into(), config);
         self
     }
@@ -784,7 +776,7 @@ impl PluginBindingSet {
     pub fn with_default(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.base
             .entry(canonical_key(&key.into()))
-            .or_insert_with(|| value.into());
+            .or_insert_with(|| ConfigValue::Text(value.into()));
         self
     }
 
@@ -863,7 +855,7 @@ impl PluginBindingSet {
     /// The operator's config for `binding`: the base with the named entry
     /// layered over it, in the spellings the operator wrote.
     #[must_use]
-    pub fn host_layer(&self, binding: &str) -> HashMap<String, String> {
+    pub fn host_layer(&self, binding: &str) -> Config {
         self.host_layer_with(binding, &BindingSchema::empty())
     }
 
@@ -874,13 +866,13 @@ impl PluginBindingSet {
     /// are one grant, and `extend` alone would leave both in the map for a
     /// plugin to pick between.
     #[must_use]
-    fn host_layer_with(&self, binding: &str, schema: &BindingSchema) -> HashMap<String, String> {
+    fn host_layer_with(&self, binding: &str, schema: &BindingSchema) -> Config {
         // Normalize each operator layer on its own before applying precedence
         // between them. Besides collapsing aliases written within `base`, the
         // ordering makes the result stable if a caller reaches this helper
         // without first running the conflict validation performed at startup
         // and by `resolve`.
-        let mut layer = HashMap::new();
+        let mut layer = Config::new();
         extend_layer(&mut layer, &self.base, schema);
         if let Some(named) = self.bindings.get(binding) {
             extend_layer(&mut layer, named, schema);
@@ -983,25 +975,21 @@ impl PluginBindingSet {
         &self,
         interfaces: &[&'a WitInterface],
         schema: &BindingSchema,
-    ) -> anyhow::Result<BTreeMap<&'a str, HashMap<String, String>>> {
+    ) -> anyhow::Result<BTreeMap<&'a str, Config>> {
         // Entries arrive out of a `HashSet`, so they are ordered before they
         // are folded: a manifest that cannot be deployed has to be refused with
         // the same key named every time.
         let mut ordered = interfaces.to_vec();
         ordered.sort_by_cached_key(|interface| {
-            let mut keys: Vec<&str> = interface.config.keys().map(String::as_str).collect();
-            keys.sort_unstable();
+            let keys: Vec<&str> = interface.config.keys().map(String::as_str).collect();
             (interface.instance(), keys.join(","))
         });
 
-        let mut folded: BTreeMap<&str, HashMap<String, String>> = BTreeMap::new();
+        let mut folded: BTreeMap<&str, Config> = BTreeMap::new();
         for interface in ordered {
             let binding = self.binding_name(interface);
-            let mut pairs: Vec<(&String, &String)> = interface.config.iter().collect();
-            pairs.sort_by_key(|(key, _)| *key);
-
             let config = folded.entry(binding).or_default();
-            for (key, value) in pairs {
+            for (key, value) in &interface.config {
                 // Two spellings are one key only where the plugin says so.
                 // `subject_allow` and `subject-allow` are one grant, because
                 // `wasmcloud:nats` reads them as one. A pair of keys a *guest*
@@ -1015,12 +1003,10 @@ impl PluginBindingSet {
                         .find(|(k, _)| schema.canonical(k) == canonical)
                         .map(|(k, v)| (k.clone(), v.clone()))
                 } else {
-                    config
-                        .get_key_value(key.as_str())
-                        .map(|(k, v)| (k.clone(), v.clone()))
+                    config.get_value(key).map(|v| (key.clone(), v.clone()))
                 };
                 match matched {
-                    Some((spelling, existing)) if &existing != value => anyhow::bail!(
+                    Some((spelling, existing)) if existing != *value => anyhow::bail!(
                         // Named by the spelling the plugin itself uses, so one
                         // manifest is refused with one message however its
                         // entries spelled the key; the written spellings follow
@@ -1073,7 +1059,7 @@ impl PluginBindingSet {
         interfaces: &HashSet<WitInterface>,
         schema: &BindingSchema,
         narrows: NarrowsFn<'_>,
-    ) -> anyhow::Result<BTreeMap<String, HashMap<String, String>>> {
+    ) -> anyhow::Result<BTreeMap<String, Config>> {
         let borrowed: Vec<&WitInterface> = interfaces.iter().collect();
         let folded = self.fold_workload_entries(&borrowed, schema)?;
         if self.is_passthrough(schema) {
@@ -1102,7 +1088,7 @@ impl PluginBindingSet {
     pub fn apply_resolved(
         &self,
         interfaces: &HashSet<WitInterface>,
-        resolved: &BTreeMap<String, HashMap<String, String>>,
+        resolved: &BTreeMap<String, Config>,
     ) -> HashSet<WitInterface> {
         interfaces
             .iter()
@@ -1136,10 +1122,10 @@ impl PluginBindingSet {
     pub fn resolve(
         &self,
         binding: &str,
-        workload: &HashMap<String, String>,
+        workload: &Config,
         schema: &BindingSchema,
         narrows: NarrowsFn<'_>,
-    ) -> anyhow::Result<HashMap<String, String>> {
+    ) -> anyhow::Result<Config> {
         anyhow::ensure!(
             self.base_secrets.is_empty() && !self.binding_secrets.contains_key(binding),
             "binding {} of `host.plugins` entry `{}` reads a plugin secret that was not resolved",
@@ -1213,8 +1199,8 @@ impl PluginBindingSet {
     fn findings(
         &self,
         binding: &str,
-        workload: &HashMap<String, String>,
-        host_layer: &HashMap<String, String>,
+        workload: &Config,
+        host_layer: &Config,
         schema: &BindingSchema,
         narrows: NarrowsFn<'_>,
     ) -> Vec<String> {
@@ -1253,10 +1239,7 @@ impl PluginBindingSet {
             ));
         }
 
-        // Sorted: `workload` is a `HashMap`, and the same manifest has to be
-        // reported with the same key named every time.
-        let mut keys: Vec<&String> = workload.keys().collect();
-        keys.sort();
+        let keys: Vec<&String> = workload.keys().collect();
 
         let mut refused: Vec<String> = Vec::new();
         for key in &keys {
@@ -1278,7 +1261,7 @@ impl PluginBindingSet {
             if self.ownership_of(key, schema) != KeyOwnership::HostCeiling {
                 continue;
             }
-            let Some(workload_value) = workload.get(key) else {
+            let Some(workload_value) = workload.value(key) else {
                 continue;
             };
             match lookup(host_layer, key, schema) {
@@ -1289,7 +1272,13 @@ impl PluginBindingSet {
                     "it sets `{key}`, which this host declares no ceiling for; a grant the \
                      operator never declared cannot be narrowed into"
                 )),
-                Some(ceiling) if !narrows(&schema.canonical(key), ceiling, workload_value) => {
+                Some(ceiling)
+                    if !narrows(
+                        &schema.canonical(key),
+                        ceiling.expose(),
+                        workload_value.expose(),
+                    ) =>
+                {
                     findings.push(format!(
                         "`{key}: {workload_value}` is not within the grant this host declared \
                          (`{ceiling}`){}. A workload may narrow a grant, never widen one",
@@ -1299,7 +1288,7 @@ impl PluginBindingSet {
                         // does not fit.
                         match first_widening_element(
                             &schema.canonical(key),
-                            ceiling,
+                            ceiling.expose(),
                             workload_value,
                             narrows
                         ) {
@@ -1321,11 +1310,11 @@ impl PluginBindingSet {
     fn apply_default_bundles(
         &self,
         binding: &str,
-        resolved: &mut HashMap<String, String>,
+        resolved: &mut Config,
         schema: &BindingSchema,
         pending: &BTreeSet<String>,
     ) {
-        let is_set = |resolved: &HashMap<String, String>, key: &str| {
+        let is_set = |resolved: &Config, key: &str| {
             let canonical = schema.canonical(key);
             lookup(resolved, key, schema).is_some()
                 || pending.contains(&canonical)
@@ -1389,7 +1378,7 @@ impl PluginBindingSet {
     pub fn host_layers<'a>(
         &'a self,
         schema: &'a BindingSchema,
-    ) -> impl Iterator<Item = (&'a str, HashMap<String, String>, BTreeSet<String>)> {
+    ) -> impl Iterator<Item = (&'a str, Config, BTreeSet<String>)> {
         self.bindings.keys().map(move |name| {
             let pending = self.pending_secret_keys(name, schema);
             let mut layer = self.host_layer_with(name, schema);
@@ -1416,7 +1405,7 @@ impl PluginBindingSet {
             let key = schema.canonical(key);
             own_config
                 .into_iter()
-                .flat_map(HashMap::keys)
+                .flat_map(Config::keys)
                 .chain(own_secrets.into_iter().flat_map(HashMap::keys))
                 .any(|k| schema.canonical(k) == key)
         };
@@ -1486,8 +1475,9 @@ impl PluginBindingSet {
     /// written. `value` returning `None` drops an entry-level secret that no
     /// binding in use reads; one withheld from the workload is also marked with
     /// [`Self::withhold`]. Layers left out stay pending, and resolving a
-    /// binding that reads one fails. This is where a [`SecretValue`] becomes
-    /// the consuming plugin's config.
+    /// binding that reads one fails. Each value is written as a
+    /// [`ConfigValue::Secret`], and stays one until the plugin reading it
+    /// exposes it.
     ///
     /// # Errors
     ///
@@ -1506,8 +1496,7 @@ impl PluginBindingSet {
         let mut filled = false;
         for (key, r) in std::mem::take(&mut self.base_secrets) {
             if let Some(v) = value(None, &key, &r)? {
-                let text = config_text(v, &r)?;
-                self.base.insert(key, text);
+                self.base.insert(key, config_secret(v, &r)?);
                 filled = true;
             }
         }
@@ -1526,11 +1515,10 @@ impl PluginBindingSet {
             }
             for (key, r) in secrets {
                 if let Some(v) = value(Some(&name), &key, &r)? {
-                    let text = config_text(v, &r)?;
                     self.bindings
                         .entry(name.clone())
                         .or_default()
-                        .insert(key, text);
+                        .insert(key, config_secret(v, &r)?);
                     filled = true;
                 }
             }
@@ -1542,7 +1530,7 @@ impl PluginBindingSet {
     /// The base layer on its own, for a plugin checking a key that is only
     /// wrong host-wide (one inbox prefix shared by every workload, say).
     #[must_use]
-    pub fn base(&self) -> &HashMap<String, String> {
+    pub fn base(&self) -> &Config {
         &self.base
     }
 
@@ -1599,13 +1587,8 @@ impl PluginBindingSet {
         }
         // `hostOwnedKeys` too: a typo there locks nothing, which is the inert
         // `deny` this check exists to catch.
-        let claimed: HashMap<String, String> = self
-            .declared_host_owned
-            .iter()
-            .map(|key| (key.clone(), String::new()))
-            .collect();
-        schema.reject_unknown_keys(
-            &claimed,
+        schema.reject_unknown_key_names(
+            &self.declared_host_owned,
             &format!("`host.plugins` entry `{}` `hostOwnedKeys`", self.plugin_id),
         )
     }
@@ -1620,22 +1603,23 @@ impl PluginBindingSet {
     }
 }
 
-/// `value` as config text, or an error naming where it came from.
-fn config_text(value: SecretValue, secret: &PluginSecretRef) -> anyhow::Result<String> {
-    use anyhow::Context as _;
-    value.into_text().with_context(|| {
-        format!(
-            "secret `{}`: plugin `{}` answered `{}` with bytes that are not UTF-8, and plugin \
-             config holds text",
-            secret.source, secret.plugin, secret.key
-        )
-    })
+/// `value` as a config secret, or an error naming where it came from.
+fn config_secret(value: SecretValue, secret: &PluginSecretRef) -> anyhow::Result<ConfigValue> {
+    anyhow::ensure!(
+        value.expose().is_some(),
+        "secret `{}`: plugin `{}` answered `{}` with bytes that are not UTF-8, and plugin config \
+         holds text",
+        secret.source,
+        secret.plugin,
+        secret.key
+    );
+    Ok(ConfigValue::Secret(value))
 }
 
 /// Refuse a layer that sets a key both in its config and from a plugin secret,
 /// in any spelling the plugin reads it under.
 fn reject_secret_clashes(
-    config: &HashMap<String, String>,
+    config: &Config,
     secrets: &HashMap<String, PluginSecretRef>,
     schema: &BindingSchema,
     owner: &str,
@@ -1661,14 +1645,8 @@ fn reject_secret_clashes(
 
 /// Add one configuration layer in a stable order, collapsing every spelling
 /// the schema identifies before the next layer is applied.
-fn extend_layer(
-    layer: &mut HashMap<String, String>,
-    entries: &HashMap<String, String>,
-    schema: &BindingSchema,
-) {
-    let mut pairs: Vec<(&String, &String)> = entries.iter().collect();
-    pairs.sort_by_key(|(key, _)| *key);
-    for (key, value) in pairs {
+fn extend_layer(layer: &mut Config, entries: &Config, schema: &BindingSchema) {
+    for (key, value) in entries {
         layer_insert(layer, key, value, schema);
     }
 }
@@ -1676,15 +1654,12 @@ fn extend_layer(
 /// Refuse a single layer that gives two values to one key. Values are omitted
 /// from the error because they may be credentials.
 fn reject_conflicting_spellings(
-    config: &HashMap<String, String>,
+    config: &Config,
     schema: &BindingSchema,
     owner: &str,
 ) -> anyhow::Result<()> {
-    let mut pairs: Vec<(&String, &String)> = config.iter().collect();
-    pairs.sort_by_key(|(key, _)| *key);
-
-    let mut seen: BTreeMap<String, (&str, &str)> = BTreeMap::new();
-    for (key, value) in pairs {
+    let mut seen: BTreeMap<String, (&str, &ConfigValue)> = BTreeMap::new();
+    for (key, value) in config {
         if !schema.identifies(key) {
             continue;
         }
@@ -1711,30 +1686,21 @@ fn reject_conflicting_spellings(
 /// Canonical only for keys the schema classifies. Two spellings of
 /// `subject-allow` are one grant; two spellings of a key a guest chose are two
 /// settings — the same rule [`PluginBindingSet::fold_workload_entries`] applies.
-fn layer_insert(
-    layer: &mut HashMap<String, String>,
-    key: &str,
-    value: &str,
-    schema: &BindingSchema,
-) {
+fn layer_insert(layer: &mut Config, key: &str, value: &ConfigValue, schema: &BindingSchema) {
     if schema.identifies(key) {
         let canonical = schema.canonical(key);
         layer.retain(|existing, _| schema.canonical(existing) != canonical);
     }
-    layer.insert(key.to_string(), value.to_string());
+    layer.insert(key, value.clone());
 }
 
 /// Read `key` from `config` in any spelling the plugin reads it under.
-fn lookup<'a>(
-    config: &'a HashMap<String, String>,
-    key: &str,
-    schema: &BindingSchema,
-) -> Option<&'a str> {
+fn lookup<'a>(config: &'a Config, key: &str, schema: &BindingSchema) -> Option<ConfigStr<'a>> {
     let key = schema.canonical(key);
     config
         .iter()
         .find(|(k, _)| schema.canonical(k) == key)
-        .map(|(_, v)| v.as_str())
+        .and_then(|(_, v)| v.as_config_str())
 }
 
 /// The first comma-separated element of `workload` the predicate refuses.
@@ -1743,13 +1709,18 @@ fn lookup<'a>(
 /// the offending element rather than the whole list is what turns a policy
 /// error into an edit. `None` when the value is not a list, or when no single
 /// element is individually refused — the refusal then stands on its own.
+/// Never part of a secret.
 fn first_widening_element(
     key: &str,
     host: &str,
-    workload: &str,
+    workload: ConfigStr<'_>,
     narrows: NarrowsFn<'_>,
 ) -> Option<String> {
+    if workload.is_secret() {
+        return None;
+    }
     let elements: Vec<&str> = workload
+        .expose()
         .split(',')
         .map(str::trim)
         .filter(|e| !e.is_empty())
@@ -1941,7 +1912,7 @@ mod tests {
         let schema = BindingSchema::empty();
         let pending = bundled(
             PluginBindingSet::new("test")
-                .with_binding("tenant", HashMap::new())
+                .with_binding("tenant", Config::new())
                 .with_binding_secrets(
                     "tenant",
                     HashMap::from([(
@@ -1961,16 +1932,13 @@ mod tests {
         let mut withheld = bundled(PluginBindingSet::new("test"));
         withheld.withhold("token", &schema);
         let resolved = withheld
-            .resolve("", &HashMap::new(), &schema, never_narrows())
+            .resolve("", &Config::new(), &schema, never_narrows())
             .unwrap();
         assert!(!resolved.contains_key("tls-cert"));
     }
 
-    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect()
+    fn map(pairs: &[(&str, &str)]) -> Config {
+        pairs.iter().copied().collect()
     }
 
     fn iface(name: Option<&str>, config: &[(&str, &str)]) -> WitInterface {
@@ -2048,7 +2016,7 @@ mod tests {
         let resolved = quiet
             .resolve(
                 "sessions",
-                &HashMap::new(),
+                &crate::wit::Config::new(),
                 &BindingSchema::empty(),
                 never_narrows(),
             )
@@ -2060,7 +2028,7 @@ mod tests {
             spoken
                 .resolve(
                     "sessions",
-                    &HashMap::new(),
+                    &crate::wit::Config::new(),
                     &BindingSchema::empty(),
                     never_narrows()
                 )
@@ -2074,7 +2042,8 @@ mod tests {
         // is a typo or a stale doc, and silently ignoring it leaves a grant
         // configured as if nothing had been written.
         let schema = nats_schema();
-        let set = PluginBindingSet::new("wasmcloud-nats").with_binding("orders", HashMap::new());
+        let set =
+            PluginBindingSet::new("wasmcloud-nats").with_binding("orders", Default::default());
 
         let err = set
             .resolve(
@@ -2286,7 +2255,12 @@ mod tests {
             .with_workload_config(WorkloadConfigPolicy::Deny);
 
         let err = set
-            .resolve("shipping", &HashMap::new(), &nats_schema(), never_narrows())
+            .resolve(
+                "shipping",
+                &crate::wit::Config::new(),
+                &nats_schema(),
+                never_narrows(),
+            )
             .unwrap_err()
             .to_string();
         assert!(err.contains("`shipping`"), "got: {err}");
@@ -2299,7 +2273,12 @@ mod tests {
             .with_base(map(&[("servers", "nats://host:4222")]))
             .with_workload_config(WorkloadConfigPolicy::Deny);
         let resolved = set
-            .resolve("", &HashMap::new(), &nats_schema(), never_narrows())
+            .resolve(
+                "",
+                &crate::wit::Config::new(),
+                &nats_schema(),
+                never_narrows(),
+            )
             .unwrap();
         assert_eq!(resolved.get("servers").unwrap(), "nats://host:4222");
     }
@@ -2460,7 +2439,12 @@ mod tests {
         // A workload that sets nothing takes the whole ceiling: narrowing is
         // opt-in, so the default posture stays the maximum the operator gave.
         let untouched = set
-            .resolve("orders", &HashMap::new(), &nats_schema(), prefix_narrows())
+            .resolve(
+                "orders",
+                &crate::wit::Config::new(),
+                &nats_schema(),
+                prefix_narrows(),
+            )
             .unwrap();
         assert_eq!(untouched["subject-allow"], "orders.>");
 
@@ -2543,7 +2527,7 @@ mod tests {
         let inherited = set
             .resolve(
                 "",
-                &HashMap::new(),
+                &crate::wit::Config::new(),
                 &BindingSchema::empty(),
                 never_narrows(),
             )
@@ -2576,7 +2560,7 @@ mod tests {
         assert!(err.contains("unreachable"), "got: {err}");
 
         PluginBindingSet::new("wasmcloud-nats")
-            .with_binding("orders", HashMap::new())
+            .with_binding("orders", Default::default())
             .validate_declaration()
             .unwrap();
     }
@@ -2700,7 +2684,7 @@ mod tests {
             .with_binding("sessions", map(&[("url", "redis://other:6379")]));
 
         let schema = BindingSchema::empty();
-        let layers: BTreeMap<&str, HashMap<String, String>> = set
+        let layers: BTreeMap<&str, Config> = set
             .host_layers(&schema)
             .map(|(name, layer, _)| (name, layer))
             .collect();
@@ -2727,7 +2711,7 @@ mod tests {
             );
 
         let schema = BindingSchema::empty();
-        let layers: BTreeMap<&str, HashMap<String, String>> = set
+        let layers: BTreeMap<&str, Config> = set
             .host_layers(&schema)
             .map(|(name, layer, _)| (name, layer))
             .collect();
@@ -2748,7 +2732,7 @@ mod tests {
     #[test]
     fn a_pending_anchor_keeps_the_default_bundle_out() {
         let set = PluginBindingSet::new("nats")
-            .with_binding("orders", HashMap::new())
+            .with_binding("orders", Default::default())
             .with_binding_secrets(
                 "orders",
                 HashMap::from([(
@@ -3191,7 +3175,12 @@ mod tests {
         );
 
         let resolution = set
-            .resolve(UNNAMED_BINDING, &HashMap::new(), &schema, never_narrows())
+            .resolve(
+                UNNAMED_BINDING,
+                &crate::wit::Config::new(),
+                &schema,
+                never_narrows(),
+            )
             .expect_err("direct resolution must reject the same conflict");
         assert!(format!("{resolution:#}").contains("conflicting values"));
     }
@@ -3208,7 +3197,12 @@ mod tests {
 
         set.reject_unknown_keys(&schema).unwrap();
         let resolved = set
-            .resolve(UNNAMED_BINDING, &HashMap::new(), &schema, never_narrows())
+            .resolve(
+                UNNAMED_BINDING,
+                &crate::wit::Config::new(),
+                &schema,
+                never_narrows(),
+            )
             .unwrap();
         assert_eq!(resolved.len(), 1, "one broker key: {resolved:?}");
     }

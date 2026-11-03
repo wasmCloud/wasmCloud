@@ -284,17 +284,17 @@ fn check_egress(
 /// The one database an unnamed import's resolved config selects. A workload
 /// that leaves `database` unset under `deny` takes the operator's whole
 /// ceiling, which names one database only when the operator listed one.
-fn component_database(config: &HashMap<String, String>) -> anyhow::Result<String> {
-    let Some(database) = config.get("database") else {
+fn component_database(config: &crate::wit::Config) -> anyhow::Result<String> {
+    let Some(database) = config.value("database") else {
         bail!("wasmcloud:postgres requires a 'database' config parameter")
     };
-    if database.contains(',') {
+    if database.expose().contains(',') {
         bail!(
             "wasmcloud:postgres `database` resolves to several databases ({database}); set \
              `database` to one of them in the workload's config"
         );
     }
-    Ok(database.clone())
+    Ok(database.expose().to_string())
 }
 
 /// Determine whether TLS is required based on the sslmode URL parameter.
@@ -704,7 +704,7 @@ impl HostPlugin for WasmcloudPostgres {
                 let database = component_database(&i.config)?;
                 tracing::debug!(
                     component_id = %component_id,
-                    database = %database,
+                    database = ?i.config.value("database"),
                     "Binding postgres plugin to component (per-component database)"
                 );
                 self.component_databases.write().await.insert(
@@ -764,7 +764,7 @@ impl HostPlugin for WasmcloudPostgres {
                 let database = component_database(&i.config)?;
                 tracing::debug!(
                     component_id = %component_id,
-                    database = %database,
+                    database = ?i.config.value("database"),
                     "Binding async postgres plugin to component (per-component database)"
                 );
                 self.component_databases.write().await.insert(
@@ -861,10 +861,10 @@ mod tests {
         assert!(pg.narrows("database", "app, reports", "reports"));
         assert!(!pg.narrows("database", "app, reports", "tenant_b"));
         assert!(!pg.narrows("database", "app, reports", "app, reports"));
-        let config = |db: &str| HashMap::from([("database".to_string(), db.to_string())]);
+        let config = |db: &str| crate::wit::Config::from_iter([("database", db)]);
         assert_eq!(component_database(&config("app")).unwrap(), "app");
         assert!(component_database(&config("app,reports")).is_err());
-        assert!(component_database(&HashMap::new()).is_err());
+        assert!(component_database(&crate::wit::Config::new()).is_err());
     }
 
     /// `postgres` and `postgresql` name one protocol, on either side.

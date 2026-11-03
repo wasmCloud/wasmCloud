@@ -2,6 +2,7 @@
 # `wasmcloud:host` is defined and installed by the runtime itself, so its
 # interfaces resolve from the repo's own copy rather than a registry.
 "wasmcloud:host" = { path = "../../../../../wit/host/wit" }
+"wasmcloud:secrets" = { path = "../../../../../wit/secrets/wit" }
 "wasi:cli" = { path = "../p3-wit-deps/wasi-cli-0.3.0" }
 "wasi:clocks" = { path = "../p3-wit-deps/wasi-clocks-0.3.0" }
 "wasi:filesystem" = { path = "../p3-wit-deps/wasi-filesystem-0.3.0" }

@@ -74,8 +74,8 @@ pub fn engine() -> Engine {
 }
 
 pub fn http_host_interfaces(host: &str) -> Vec<WitInterface> {
-    let mut config = HashMap::new();
-    config.insert("host".to_string(), host.to_string());
+    let mut config = wash_runtime::wit::Config::new();
+    config.insert("host", host);
     vec![WitInterface {
         namespace: "wasi".to_string(),
         package: "http".to_string(),

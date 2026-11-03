@@ -218,9 +218,7 @@ async fn workload(
         Arc::default(),
     );
     let mut interface = WitInterface::from("wasi:http/handler@0.3.0");
-    interface
-        .config
-        .insert("host".into(), "service.test".into());
+    interface.config.insert("host", "service.test");
     let resolved = UnresolvedWorkload::new(
         "supervision",
         "supervision",

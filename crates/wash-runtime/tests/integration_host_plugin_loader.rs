@@ -7,19 +7,28 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use wash_runtime::component_source::ComponentSource;
 use wash_runtime::engine::Engine;
 use wash_runtime::oci::{OciConfig, OciPullPolicy};
 use wash_runtime::plugin::component_host::load_component_plugin;
-use wash_runtime::plugin::{ComponentPluginSpec, HostPlugin as _};
+use wash_runtime::plugin::wasmcloud_secrets::WasmcloudSecrets;
+use wash_runtime::plugin::{ComponentPluginSpec, HostPlugin};
 
 fn kv_plugin_path() -> PathBuf {
     PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/wasm/kv_plugin.wasm"
     ))
+}
+
+/// The natives kv-plugin links: it reads its bindings' secrets as
+/// `wasmcloud:secrets` handles.
+fn natives() -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+    let secrets: Arc<dyn HostPlugin> = Arc::new(WasmcloudSecrets::new());
+    HashMap::from([(secrets.id(), secrets)])
 }
 
 #[tokio::test]
@@ -30,15 +39,8 @@ async fn loads_component_plugin_from_file() -> Result<()> {
         ComponentSource::File(kv_plugin_path()),
     );
 
-    let plugin = load_component_plugin(
-        &spec,
-        &engine,
-        OciConfig::default(),
-        &HashMap::new(),
-        None,
-        None,
-    )
-    .await?;
+    let plugin =
+        load_component_plugin(&spec, &engine, OciConfig::default(), &natives(), None, None).await?;
 
     assert_eq!(plugin.id(), "acme-kv-plugin");
     let world = plugin.world();
@@ -84,8 +86,7 @@ async fn loads_component_plugin_from_oci() -> Result<()> {
         ..OciConfig::default()
     };
 
-    let plugin =
-        load_component_plugin(&spec, &engine, oci_config, &HashMap::new(), None, None).await?;
+    let plugin = load_component_plugin(&spec, &engine, oci_config, &natives(), None, None).await?;
 
     assert_eq!(plugin.id(), "acme-kv-plugin");
     assert!(

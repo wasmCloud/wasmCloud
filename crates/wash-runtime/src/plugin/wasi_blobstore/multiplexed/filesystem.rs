@@ -3,7 +3,6 @@
 //! Rooted at a directory: containers are subdirectories, objects are files
 //! (path-traversal guarded via [`lock_root`]).
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -259,10 +258,10 @@ impl BackendProvider<BlobId> for FilesystemProvider {
 
     async fn instantiate(
         &self,
-        config: &HashMap<String, String>,
+        config: &crate::wit::Config,
         _egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<BlobId> {
-        let root = config.get("root").ok_or_else(|| {
+        let root = config.expose("root").ok_or_else(|| {
             anyhow::anyhow!("filesystem blobstore backend requires a 'root' config")
         })?;
         Ok(Arc::new(FilesystemBackend::new(root)))
@@ -271,7 +270,7 @@ impl BackendProvider<BlobId> for FilesystemProvider {
     /// Does not connect out.
     fn check_egress(
         &self,
-        _config: &HashMap<String, String>,
+        _config: &crate::wit::Config,
         _policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         Ok(())

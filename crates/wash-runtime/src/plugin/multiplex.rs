@@ -38,7 +38,7 @@ use anyhow::Context as _;
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::plugin::PluginEgressPolicy;
-use crate::wit::WitInterface;
+use crate::wit::{Config, WitInterface};
 
 /// `config` key naming the backend type for a named host interface (e.g.
 /// `redis`, `nats`, `filesystem`). Shared by every multiplexed builtin.
@@ -106,16 +106,12 @@ pub trait BackendProvider<Id>: Send + Sync {
     /// further endpoints on the wire should stay on the checked ones under it.
     async fn instantiate(
         &self,
-        config: &HashMap<String, String>,
+        config: &Config,
         egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<Id>;
     /// Check every endpoint `config` would dial against the plugin's declared
     /// ceiling. A provider that does not connect out returns `Ok(())`.
-    fn check_egress(
-        &self,
-        config: &HashMap<String, String>,
-        policy: &PluginEgressPolicy,
-    ) -> anyhow::Result<()>;
+    fn check_egress(&self, config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()>;
     /// A pool key for connection reuse, or `None` to never pool.
     ///
     /// Providers backed by a shared external connection (redis, NATS) return
@@ -123,7 +119,7 @@ pub trait BackendProvider<Id>: Send + Sync {
     /// interfaces with the same configuration share one backend and thus one
     /// connection, instead of opening a fresh one per workload bind. Isolated
     /// providers (in-memory) return `None` and always produce a fresh backend.
-    fn pool_key(&self, _config: &HashMap<String, String>) -> Option<String> {
+    fn pool_key(&self, _config: &Config) -> Option<String> {
         None
     }
 }
@@ -276,14 +272,14 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
     /// post-process (e.g. wrap with a decorator) before inserting into a
     /// registry.
     pub async fn instantiate(&self, iface: &WitInterface) -> anyhow::Result<Id> {
-        let backend_type = iface
+        let backend = iface
             .config
-            .get(BACKEND_CONFIG_KEY)
-            .map(String::as_str)
-            .unwrap_or(self.default_backend_type);
+            .value(BACKEND_CONFIG_KEY)
+            .unwrap_or_else(|| self.default_backend_type.into());
+        let backend_type = backend.expose();
         let provider = self.providers.get(backend_type).ok_or_else(|| {
             anyhow::anyhow!(
-                "no {}:{} provider registered for backend '{backend_type}'",
+                "no {}:{} provider registered for backend '{backend}'",
                 self.namespace,
                 self.package
             )
@@ -297,7 +293,7 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
                 .check_egress(&iface.config, policy)
                 .with_context(|| {
                     format!(
-                        "{}:{} binding `{}` (backend '{backend_type}') is refused by the egress \
+                        "{}:{} binding `{}` (backend '{backend}') is refused by the egress \
                          policy declared for this plugin",
                         self.namespace,
                         self.package,
@@ -317,7 +313,11 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
         // `backend_type` is a fixed `&'static str` from a closed set with no
         // null byte, so the `\u{0}` separator makes cross-type collisions
         // impossible.
-        let key = format!("{backend_type}\u{0}{pool_key}");
+        let pool_key = zeroize::Zeroizing::new(pool_key);
+        let key = format!(
+            "{backend_type}\u{0}{}",
+            pool_fingerprint(&pool_key, &iface.config)
+        );
 
         self.ensure_reaper_running();
 
@@ -466,12 +466,27 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
     }
 }
 
+/// Pool keys retain neither credentials nor URLs. Secrecy affects diagnostics.
+fn pool_fingerprint(key: &str, config: &Config) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update((key.len() as u64).to_le_bytes());
+    hash.update(key.as_bytes());
+    for (name, value) in config {
+        if value.is_secret() {
+            hash.update((name.len() as u64).to_le_bytes());
+            hash.update(name.as_bytes());
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
+
 /// Connect the client behind a multiplexed NATS backend.
 ///
 /// A host setting or declared egress policy restricts the client to `url`.
 /// Advertised servers have not passed the egress check.
 pub(crate) async fn connect_nats(
-    url: &str,
+    url: crate::wit::ConfigStr<'_>,
     egress: Option<&PluginEgressPolicy>,
     ignore_discovered_servers: bool,
 ) -> anyhow::Result<async_nats::Client> {
@@ -479,17 +494,14 @@ pub(crate) async fn connect_nats(
     if ignore_discovered_servers || egress.is_some() {
         options = options.ignore_discovered_servers();
     }
-    Ok(options.connect(url).await?)
+    url.guard("url", options.connect(url.expose()).await)
 }
 
 /// Check a multiplexed NATS backend's `url`, when the config names one. A
 /// config without one is left to `instantiate`, which refuses it.
-pub(crate) fn check_nats_url(
-    config: &HashMap<String, String>,
-    policy: &PluginEgressPolicy,
-) -> anyhow::Result<()> {
-    match config.get("url") {
-        Some(url) => policy.check_nats_server(url),
+pub(crate) fn check_nats_url(config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
+    match config.value("url") {
+        Some(url) => url.guard("url", policy.check_nats_server(url.expose())),
         None => Ok(()),
     }
 }
@@ -552,7 +564,7 @@ mod tests {
             let egress = policy.then(|| PluginEgressPolicy::allowing(&[&url]));
             let (_socket, client) = tokio::try_join!(
                 accept_advertising(&given, advertised.local_addr()?),
-                connect_nats(&url, egress.as_deref(), ignore),
+                connect_nats(url.as_str().into(), egress.as_deref(), ignore),
             )?;
             let pool = client.server_pool().await?;
             let discover = !ignore && !policy;
@@ -567,6 +579,18 @@ mod tests {
 
     fn registry(entries: &[(&str, i32)]) -> HashMap<String, i32> {
         entries.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn pool_keys_hide_secrets_and_separate_diagnostic_policies() {
+        let url = "nats://user:password@private-host";
+        let plain = Config::from_iter([("url", url)]);
+        let mut secret = Config::new();
+        secret.insert("url", crate::plugin::SecretValue::new(url));
+        let key = pool_fingerprint(url, &secret);
+        assert!(!key.contains("password"));
+        assert_ne!(key, pool_fingerprint(url, &plain));
+        assert_ne!(key, pool_fingerprint("nats://different", &secret));
     }
 
     fn mux() -> Multiplexer<i32> {
@@ -680,7 +704,7 @@ mod tests {
         }
         async fn instantiate(
             &self,
-            _: &HashMap<String, String>,
+            _: &Config,
             _: Option<&PluginEgressPolicy>,
         ) -> anyhow::Result<Arc<usize>> {
             if !self.delay.is_zero() {
@@ -688,19 +712,17 @@ mod tests {
             }
             Ok(Arc::new(self.count.fetch_add(1, SeqCst)))
         }
-        fn check_egress(
-            &self,
-            config: &HashMap<String, String>,
-            policy: &PluginEgressPolicy,
-        ) -> anyhow::Result<()> {
+        fn check_egress(&self, config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
             policy.check_url(
-                &config["url"],
+                config.get("url").unwrap(),
                 crate::host::declared_port::Protocol::Tcp,
                 6379,
             )
         }
-        fn pool_key(&self, config: &HashMap<String, String>) -> Option<String> {
-            self.pooled.then(|| config.get("url").cloned()).flatten()
+        fn pool_key(&self, config: &Config) -> Option<String> {
+            self.pooled
+                .then(|| config.get("url").map(str::to_string))
+                .flatten()
         }
     }
 
@@ -710,7 +732,7 @@ mod tests {
             package: "keyvalue".to_string(),
             interfaces: ["store".to_string()].into_iter().collect(),
             version: None,
-            config: HashMap::from([
+            config: crate::wit::Config::from_iter([
                 ("backend".to_string(), backend.to_string()),
                 ("url".to_string(), url.to_string()),
             ]),
@@ -898,7 +920,7 @@ mod tests {
     #[test]
     fn an_invalid_nats_url_is_not_reported_as_denied() {
         let policy = PluginEgressPolicy::allowing(&["nats://nats.internal:4222"]);
-        let config = HashMap::from([("url".to_string(), "nats://host:42x2".to_string())]);
+        let config = Config::from_iter([("url", "nats://host:42x2")]);
         let err = format!("{:#}", check_nats_url(&config, &policy).unwrap_err());
         assert!(
             err.contains("is invalid") && !err.contains("is denied"),
@@ -910,10 +932,26 @@ mod tests {
     #[test]
     fn a_nats_url_is_checked_at_its_default_port() {
         let policy = PluginEgressPolicy::allowing(&["nats://nats.internal:4222"]);
-        let config = |url: &str| HashMap::from([("url".to_string(), url.to_string())]);
+        let config = |url: &str| Config::from_iter([("url", url)]);
         check_nats_url(&config("nats.internal"), &policy).unwrap();
         check_nats_url(&config("nats://nats.internal:4222"), &policy).unwrap();
         assert!(check_nats_url(&config("nats://nats.internal:6222"), &policy).is_err());
         assert!(check_nats_url(&config("nats://other.internal:4222"), &policy).is_err());
+    }
+
+    #[test]
+    fn a_malformed_url_is_quoted_unless_it_is_a_secret() {
+        let policy = PluginEgressPolicy::allowing(&["nats.internal:4222"]);
+        let malformed = "nats://[hunter2";
+
+        let text: Config = [("url", malformed)].into_iter().collect();
+        let err = format!("{:#}", check_nats_url(&text, &policy).unwrap_err());
+        assert!(err.contains("hunter2"), "{err}");
+
+        let mut secret = Config::new();
+        secret.insert("url", crate::plugin::SecretValue::new(malformed));
+        let err = format!("{:#}", check_nats_url(&secret, &policy).unwrap_err());
+        assert!(!err.contains("hunter2"), "{err}");
+        assert!(err.contains("`url`"), "{err}");
     }
 }

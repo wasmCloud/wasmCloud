@@ -39,12 +39,12 @@ use wasmtime::component::Val;
 use wasmtime::component::types::Type;
 
 use crate::engine::abandon::DispatchedCall;
-use crate::engine::ctx::{CallerIdentity, WorkloadCaller};
+use crate::engine::ctx::{BindGeneration, CallerIdentity, WorkloadCaller};
 use crate::engine::store::relocate::Relocated;
 use crate::engine::workload::UnresolvedWorkload;
 use crate::host::trigger_service::{CapabilityCall, CapabilityJob, LifecycleReplay};
-use crate::plugin::WitInterfaces;
-use crate::wit::WitInterface;
+use crate::plugin::{SecretValue, WitInterfaces};
+use crate::wit::{ConfigValue, WitInterface};
 
 use super::{CapabilitySender, ComponentHostPluginState, ExportedFunc, ExportedInterface};
 
@@ -76,6 +76,9 @@ pub(super) struct LifecycleFuncs {
     pub(super) interface: Arc<str>,
     pub(super) bind: ExportedFunc,
     pub(super) unbind: ExportedFunc,
+    /// Whether the plugin imports `wasmcloud:host/binding-secrets`, the only
+    /// way it can read a binding's secrets.
+    pub(super) takes_secrets: bool,
 }
 
 /// Forget `workload_id` and deliver `on-workload-unbind` for it. The removal
@@ -92,7 +95,11 @@ pub(super) async fn remove_and_unbind(
             .bound
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let was_bound = bound.remove(workload_id.as_ref()).is_some();
+        let removed = bound.remove(workload_id.as_ref());
+        if let Some(info) = &removed {
+            info.generation.revoke();
+        }
+        let was_bound = removed.is_some();
         (was_bound, state.sender())
     };
     // Only a workload whose bind we actually delivered gets an unbind:
@@ -108,7 +115,7 @@ pub(super) async fn remove_and_unbind(
         state,
         lifecycle,
         &lifecycle.unbind,
-        Val::String(workload_id.to_string()),
+        Relocated::Val(Val::String(workload_id.to_string())),
         workload_id,
     )
     .await
@@ -125,6 +132,7 @@ pub(super) async fn remove_and_unbind(
 pub(super) fn lifecycle_funcs(
     id: &str,
     mut export: ExportedInterface,
+    takes_secrets: bool,
 ) -> anyhow::Result<LifecycleFuncs> {
     let mut bind = None;
     let mut unbind = None;
@@ -169,6 +177,7 @@ pub(super) fn lifecycle_funcs(
         interface: export.name,
         bind,
         unbind,
+        takes_secrets,
     })
 }
 
@@ -179,7 +188,7 @@ pub(super) fn lifecycle_funcs(
 /// the swap, its own send targeting the previous, now-dead channel) or
 /// delivered through the new channel — never both, so no double delivery.
 pub(super) fn replay_snapshot(
-    bound: &BTreeMap<Arc<str>, Val>,
+    bound: &BTreeMap<Arc<str>, BindInfo>,
     lifecycle: Option<&LifecycleFuncs>,
 ) -> Vec<LifecycleReplay> {
     let Some(lifecycle) = lifecycle else {
@@ -187,6 +196,7 @@ pub(super) fn replay_snapshot(
     };
     bound
         .iter()
+        .filter(|(_, info)| info.generation.is_active())
         .map(|(workload_id, info)| LifecycleReplay {
             interface: Arc::clone(&lifecycle.interface),
             func: Arc::clone(&lifecycle.bind.name),
@@ -194,11 +204,13 @@ pub(super) fn replay_snapshot(
             // nor any one of its bindings, which are listed on the
             // `workload-info` the hook is handed.
             caller: WorkloadCaller {
+                bind_generation: Some(info.generation.clone()),
                 workload_id: Arc::clone(workload_id),
                 component_id: None,
                 binding: None,
             },
-            args: vec![Relocated::Val(info.clone())],
+            redact_errors: info.has_secrets(),
+            args: vec![info.relocate()],
             result_tys: Arc::clone(&lifecycle.bind.result_tys),
         })
         .collect()
@@ -296,25 +308,12 @@ pub(super) async fn send_lifecycle_job(
     state: &ComponentHostPluginState,
     lifecycle: &LifecycleFuncs,
     func: &ExportedFunc,
-    arg: Val,
+    arg: Relocated,
     workload_id: &Arc<str>,
+    generation: Option<BindGeneration>,
 ) -> anyhow::Result<(LifecycleReplyRx, DispatchedCall)> {
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    let call = DispatchedCall::new("workload-lifecycle (plugin)", state.lifecycle_timeout());
-    let job = CapabilityJob::Call(CapabilityCall {
-        interface: Arc::clone(&lifecycle.interface),
-        func: Arc::clone(&func.name),
-        caller: CallerIdentity::Workload(WorkloadCaller {
-            workload_id: Arc::clone(workload_id),
-            component_id: None,
-            binding: None,
-        }),
-        args: vec![Relocated::Val(arg)],
-        result_tys: Arc::clone(&func.result_tys),
-        reply: reply_tx,
-        abandoned: call.flag(),
-    });
-    tokio::time::timeout(state.lifecycle_timeout(), sender.send(job))
+    // Channel backpressure must not consume the bind's secret-access budget.
+    let permit = tokio::time::timeout(state.lifecycle_timeout(), sender.reserve())
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -323,6 +322,24 @@ pub(super) async fn send_lifecycle_job(
             )
         })?
         .map_err(|_| anyhow::anyhow!("host component plugin '{}' channel closed", state.id))?;
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let call = DispatchedCall::new("workload-lifecycle (plugin)", state.lifecycle_timeout());
+    let job = CapabilityJob::Call(CapabilityCall {
+        interface: Arc::clone(&lifecycle.interface),
+        func: Arc::clone(&func.name),
+        caller: CallerIdentity::Workload(WorkloadCaller {
+            bind_generation: generation
+                .map(|generation| generation.for_call(state.lifecycle_timeout())),
+            workload_id: Arc::clone(workload_id),
+            component_id: None,
+            binding: None,
+        }),
+        args: vec![arg],
+        result_tys: Arc::clone(&func.result_tys),
+        reply: reply_tx,
+        abandoned: call.flag(),
+    });
+    permit.send(job);
     Ok((reply_rx, call))
 }
 
@@ -350,13 +367,17 @@ pub(super) async fn await_bind_reply(
     mut reply_rx: LifecycleReplyRx,
     call: DispatchedCall,
     state: &ComponentHostPluginState,
+    generation: &BindGeneration,
 ) -> BindReply {
     match call.await_head(&mut reply_rx).await {
         Some((reply, watch)) => {
             watch.disarm();
             BindReply::Completed(interpret_reply(reply, state))
         }
-        None => BindReply::TimedOut(reply_rx),
+        None => {
+            generation.revoke();
+            BindReply::TimedOut(reply_rx)
+        }
     }
 }
 
@@ -369,11 +390,11 @@ async fn call_lifecycle(
     state: &ComponentHostPluginState,
     lifecycle: &LifecycleFuncs,
     func: &ExportedFunc,
-    arg: Val,
+    arg: Relocated,
     workload_id: &Arc<str>,
 ) -> anyhow::Result<Vec<Relocated>> {
     let (reply_rx, call) =
-        send_lifecycle_job(sender, state, lifecycle, func, arg, workload_id).await?;
+        send_lifecycle_job(sender, state, lifecycle, func, arg, workload_id, None).await?;
     match call.await_reply(reply_rx).await {
         Some(reply) => interpret_reply(reply, state),
         None => Err(anyhow::anyhow!(
@@ -383,57 +404,183 @@ async fn call_lifecycle(
     }
 }
 
-/// Reclaim whatever a timed-out `on-workload-bind` provisions, once it actually
-/// returns. The deploy has already failed and the workload is out of the bound
-/// map; this waits for the runaway hook's reply (guaranteeing bind-then-unbind
-/// order), then delivers the unbind only if the incarnation the bind ran on is
-/// still live — pointer-comparing the captured sender against the current one.
-/// If a restart intervened, the hook's state died with that store, so there is
-/// nothing to reclaim and no unbind is sent.
+pub(super) struct BindLease {
+    state: Arc<ComponentHostPluginState>,
+    workload_id: Arc<str>,
+}
+
+impl BindLease {
+    pub(super) fn acquire(
+        state: &Arc<ComponentHostPluginState>,
+        workload_id: &Arc<str>,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            state
+                .binding
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(Arc::clone(workload_id)),
+            "workload `{workload_id}` still has a bind or cleanup in progress"
+        );
+        Ok(Self {
+            state: Arc::clone(state),
+            workload_id: Arc::clone(workload_id),
+        })
+    }
+}
+
+impl Drop for BindLease {
+    fn drop(&mut self) {
+        self.state
+            .binding
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.workload_id);
+    }
+}
+
+/// Wait for the old bind, then clean up the current incarnation. The lease
+/// prevents a rebind until cleanup returns, including across store restarts.
 pub(super) fn spawn_deferred_unbind(
-    incarnation: Arc<CapabilitySender>,
     reply_rx: LifecycleReplyRx,
     workload_id: Arc<str>,
     lifecycle: Arc<LifecycleFuncs>,
     state: Arc<ComponentHostPluginState>,
-) {
+    lease: BindLease,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let _lease = lease;
         // Wait for the runaway hook to finish (or its reply to be dropped by a
         // store teardown).
         let _ = reply_rx.await;
         match state.sender_arc() {
-            Some(current) if Arc::ptr_eq(&current, &incarnation) => {
-                if let Err(e) = call_lifecycle(
-                    &incarnation,
+            Some(current) => {
+                let cleanup = send_lifecycle_job(
+                    &current,
                     &state,
                     &lifecycle,
                     &lifecycle.unbind,
-                    Val::String(workload_id.to_string()),
+                    Relocated::Val(Val::String(workload_id.to_string())),
                     &workload_id,
+                    None,
                 )
-                .await
-                {
-                    warn!(id = state.id, %workload_id, err = %e, "deferred unbind not delivered");
+                .await;
+                match cleanup {
+                    Ok((reply, call)) => {
+                        let _timer = call.arm_on_timer();
+                        let _ = reply.await;
+                    }
+                    Err(e) => {
+                        warn!(id = state.id, %workload_id, err = %e, "deferred unbind not delivered")
+                    }
                 }
             }
-            _ => {
+            None => {
                 debug!(
                     id = state.id,
                     %workload_id,
-                    "skipping deferred unbind; the bind's incarnation is gone"
+                    "skipping deferred unbind; the plugin is not running"
                 );
             }
         }
-    });
+    })
 }
 
-/// Build the `workload-info` record delivered to `on-workload-bind`: the
-/// workload's identity plus every interface instance it matched on this plugin,
-/// each with its manifest config — ordered deterministically.
-pub(super) fn workload_info_val(
+/// A `workload-info` for `on-workload-bind`, kept to deliver again on every
+/// replay, and the secrets `wasmcloud:host/binding-secrets` hands out while
+/// it runs.
+#[derive(Clone)]
+pub(super) struct BindInfo {
+    pub(super) generation: BindGeneration,
+    info: Val,
+    secrets: Vec<BindingSecrets>,
+}
+
+/// The secrets of one `interface-binding`, which its `config` leaves out;
+/// empty for a binding that holds none.
+#[derive(Clone)]
+struct BindingSecrets {
+    namespace: String,
+    package: String,
+    version: Option<semver::Version>,
+    name: Option<String>,
+    secrets: Vec<(String, SecretValue)>,
+}
+
+impl BindInfo {
+    pub(super) fn has_secrets(&self) -> bool {
+        self.secrets
+            .iter()
+            .any(|binding| !binding.secrets.is_empty())
+    }
+
+    /// A guest's rejection text, withheld whole when the bind carried
+    /// secrets: the guest may quote one in a form `scrub` cannot match.
+    pub(super) fn rejection_message(&self, message: String) -> String {
+        if self.has_secrets() {
+            "reason withheld because the bind carried secrets".to_string()
+        } else {
+            message
+        }
+    }
+
+    /// `e` with each secret this bind can hand out replaced by `<redacted>`,
+    /// for a failure the host reports itself, such as a trap.
+    pub(super) fn scrub(&self, e: anyhow::Error) -> anyhow::Error {
+        let mut values: Vec<&str> = self
+            .secrets
+            .iter()
+            .flat_map(|binding| &binding.secrets)
+            .filter_map(|(_, secret)| secret.expose())
+            .flat_map(|v| [v, v.trim()])
+            .filter(|v| !v.is_empty())
+            .collect();
+        let msg = format!("{e:#}");
+        if !values.iter().any(|v| msg.contains(v)) {
+            return e;
+        }
+        // Longest first, so a value containing another is replaced whole.
+        values.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        anyhow::anyhow!(
+            values
+                .into_iter()
+                .fold(msg, |msg, v| msg.replace(v, "<redacted>"))
+        )
+    }
+
+    pub(super) fn relocate(&self) -> Relocated {
+        Relocated::Val(self.info.clone())
+    }
+
+    /// The secrets of the binding of `namespace:package` labeled `name`, or
+    /// `None` when the workload has no such binding.
+    pub(super) fn secrets(
+        &self,
+        namespace: &str,
+        package: &str,
+        name: Option<&str>,
+    ) -> Option<&[(String, SecretValue)]> {
+        self.secrets
+            .iter()
+            .find(|b| b.namespace == namespace && b.package == package && b.name.as_deref() == name)
+            .map(|b| b.secrets.as_slice())
+    }
+}
+
+/// Build the `workload-info` delivered to `on-workload-bind`: the workload's
+/// identity plus every interface instance it matched on this plugin, each with
+/// its manifest config, ordered deterministically.
+///
+/// # Errors
+///
+/// A binding holds a secret and the plugin does not import
+/// `wasmcloud:host/binding-secrets` to read it.
+pub(super) fn bind_info(
+    id: &str,
     workload: &UnresolvedWorkload,
     interfaces: &WitInterfaces<'_>,
-) -> Val {
+    takes_secrets: bool,
+) -> anyhow::Result<BindInfo> {
     let service = Val::Option(
         workload
             .service_id()
@@ -448,8 +595,26 @@ pub(super) fn workload_info_val(
     );
     let mut matched: Vec<&WitInterface> = interfaces.iter().collect();
     matched.sort_by_key(|i| i.instance());
-    let interfaces = Val::List(matched.into_iter().map(interface_binding_val).collect());
-    Val::Record(vec![
+    let mut bindings = Vec::with_capacity(matched.len());
+    let mut secrets = Vec::new();
+    for iface in matched {
+        let (binding, held) = binding_info(id, iface, takes_secrets)?;
+        anyhow::ensure!(
+            !secrets.iter().any(|previous: &BindingSecrets| {
+                previous.namespace == held.namespace
+                    && previous.package == held.package
+                    && previous.name == held.name
+                    && previous.version != held.version
+                    && (!previous.secrets.is_empty() || !held.secrets.is_empty())
+            }),
+            "host component plugin '{id}' has ambiguous secret bindings for {}:{}; use distinct binding names across versions",
+            held.namespace,
+            held.package
+        );
+        bindings.push(binding);
+        secrets.push(held);
+    }
+    let info = Val::Record(vec![
         ("id".to_string(), Val::String(workload.id().to_string())),
         ("name".to_string(), Val::String(workload.name().to_string())),
         (
@@ -458,17 +623,42 @@ pub(super) fn workload_info_val(
         ),
         ("service".to_string(), service),
         ("components".to_string(), components),
-        ("interfaces".to_string(), interfaces),
-    ])
+        ("interfaces".to_string(), Val::List(bindings)),
+    ]);
+    Ok(BindInfo {
+        generation: BindGeneration::default(),
+        info,
+        secrets,
+    })
 }
 
-/// One matched [`WitInterface`] as a lifecycle `interface-binding` record.
-fn interface_binding_val(iface: &WitInterface) -> Val {
+/// One matched [`WitInterface`] as a lifecycle `interface-binding`, and its
+/// secrets.
+fn binding_info(
+    id: &str,
+    iface: &WitInterface,
+    takes_secrets: bool,
+) -> anyhow::Result<(Val, BindingSecrets)> {
     let mut names: Vec<&String> = iface.interfaces.iter().collect();
     names.sort();
-    let mut config: Vec<(&String, &String)> = iface.config.iter().collect();
-    config.sort();
-    Val::Record(vec![
+    let mut config = Vec::new();
+    let mut secrets = Vec::new();
+    for (key, value) in &iface.config {
+        match value {
+            ConfigValue::Text(text) => config.push(Val::Tuple(vec![
+                Val::String(key.clone()),
+                Val::String(text.clone()),
+            ])),
+            ConfigValue::Secret(secret) => secrets.push((key.clone(), secret.clone())),
+        }
+    }
+    if !takes_secrets && let Some((key, _)) = secrets.first() {
+        anyhow::bail!(
+            "host component plugin '{id}' does not import wasmcloud:host/binding-secrets, so it \
+             cannot read the secret in `{key}`"
+        );
+    }
+    let binding = Val::Record(vec![
         (
             "namespace".to_string(),
             Val::String(iface.namespace.clone()),
@@ -497,16 +687,16 @@ fn interface_binding_val(iface: &WitInterface) -> Val {
         // exists now so that merge does not change the record shape again —
         // adding a field to a WIT record is breaking for compiled plugins.
         ("external-id".to_string(), Val::Option(None)),
-        (
-            "config".to_string(),
-            Val::List(
-                config
-                    .into_iter()
-                    .map(|(k, v)| Val::Tuple(vec![Val::String(k.clone()), Val::String(v.clone())]))
-                    .collect(),
-            ),
-        ),
-    ])
+        ("config".to_string(), Val::List(config)),
+    ]);
+    let secrets = BindingSecrets {
+        namespace: iface.namespace.clone(),
+        package: iface.package.clone(),
+        version: iface.version.clone(),
+        name: iface.name.clone(),
+        secrets,
+    };
+    Ok((binding, secrets))
 }
 
 /// A [`semver::Version`] as a lifecycle `version` record.
@@ -520,4 +710,85 @@ fn version_val(v: &semver::Version) -> Val {
         ("pre".to_string(), Val::Option(pre)),
         ("build".to_string(), Val::Option(build)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_binding_versions_require_distinct_names() {
+        let workload = UnresolvedWorkload::new(
+            "test",
+            "test",
+            "test",
+            None,
+            std::iter::empty::<crate::engine::workload::WorkloadComponent>(),
+            Vec::new(),
+        );
+        let first = iface();
+        let mut second = iface();
+        second.version = Some(semver::Version::new(0, 2, 0));
+        let interfaces = std::collections::HashSet::from([first.clone(), second.clone()]);
+        assert!(bind_info("kv", &workload, &WitInterfaces::new(&interfaces), true).is_err());
+        second.name = Some("second".to_string());
+        let interfaces = std::collections::HashSet::from([first, second]);
+        assert!(bind_info("kv", &workload, &WitInterfaces::new(&interfaces), true).is_ok());
+    }
+
+    fn iface() -> WitInterface {
+        let mut iface = WitInterface::from("acme:kv/store@0.1.0");
+        iface.config.insert("url", "redis://cache");
+        iface
+            .config
+            .insert("password", crate::plugin::SecretValue::new("hunter2"));
+        iface
+    }
+
+    /// A secret is kept apart for `binding-secrets`; text stays in `config`.
+    #[test]
+    fn a_secret_is_kept_apart_from_text_config() {
+        let (binding, secrets) = binding_info("kv", &iface(), true).unwrap();
+        let Val::Record(fields) = binding else {
+            panic!("an interface-binding is a record");
+        };
+        let config = fields
+            .iter()
+            .find(|(name, _)| name == "config")
+            .map(|(_, v)| v.clone());
+        assert_eq!(
+            config,
+            Some(Val::List(vec![Val::Tuple(vec![
+                Val::String("url".to_string()),
+                Val::String("redis://cache".to_string()),
+            ])]))
+        );
+        let info = BindInfo {
+            generation: BindGeneration::default(),
+            info: Val::Bool(true),
+            secrets: vec![secrets],
+        };
+        let held = info.secrets("acme", "kv", None).unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].0, "password");
+        assert_eq!(held[0].1.expose(), Some("hunter2"));
+        assert!(info.secrets("acme", "kv", Some("cache")).is_none());
+    }
+
+    /// A plugin that cannot read a secret is refused one, never handed it as
+    /// text.
+    #[test]
+    fn a_plugin_without_binding_secrets_is_refused_one() {
+        let err = binding_info("kv", &iface(), false)
+            .err()
+            .expect("a secret needs binding-secrets")
+            .to_string();
+        assert!(err.contains("`password`"), "{err}");
+        assert!(!err.contains("hunter2"), "{err}");
+
+        let mut text_only = iface();
+        text_only.config.remove("password");
+        let (_, held) = binding_info("kv", &text_only, false).unwrap();
+        assert!(held.secrets.is_empty());
+    }
 }

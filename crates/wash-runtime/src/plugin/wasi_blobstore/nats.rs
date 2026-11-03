@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
@@ -7,7 +7,7 @@ use crate::plugin::WorkloadTracker;
 use crate::plugin::wasmcloud_nats::config::{BindingIdentity, NatsConfig, binding_identity};
 use crate::plugin::wasmcloud_nats::{conn as nats_conn, keys as nats_keys};
 use crate::plugin::{HostPlugin, PluginEgressPolicy, WitInterfaces};
-use crate::wit::{WitInterface, WitWorld};
+use crate::wit::{Config, WitInterface, WitWorld};
 use async_nats::jetstream::object_store::{self, List, Object, ObjectStore};
 use bytes::Bytes;
 use futures::StreamExt;
@@ -145,16 +145,20 @@ impl NatsBlobstore {
     /// Bindings without either use the host connection.
     async fn connect_binding(
         &self,
-        config: &HashMap<String, String>,
+        values: &Config,
     ) -> anyhow::Result<Option<Arc<async_nats::jetstream::Context>>> {
-        if binding_identity(config)? == BindingIdentity::Absent {
+        if binding_identity(values)? == BindingIdentity::Absent {
             return Ok(None);
         }
-        let config = NatsConfig::from_map(config)?;
+        let config = NatsConfig::from_map(values)?;
         let policy = self.egress_policy.load_full();
         if let Some(policy) = &policy {
             for server in &config.servers {
-                policy.check_nats_server(server)?;
+                let checked = policy.check_nats_server(server);
+                match nats_keys::get(values, "servers") {
+                    Some(servers) => servers.guard("servers", checked)?,
+                    None => checked?,
+                }
             }
         }
         let jetstream = nats_conn::connect(
@@ -163,7 +167,8 @@ impl NatsBlobstore {
             tokio::sync::broadcast::channel(1).0,
             policy.is_some(),
         )
-        .await?;
+        .await;
+        let jetstream = nats_keys::guard_connection(values, jetstream)?;
         Ok(Some(Arc::new(jetstream)))
     }
 
@@ -913,14 +918,14 @@ impl HostPlugin for NatsBlobstore {
             return Ok(());
         };
 
-        let buckets = match interface.config.get("buckets") {
+        let buckets = match interface.config.expose("buckets") {
             Some(buckets) => buckets.split(',').map(|s| s.to_string()).collect(),
             None => vec![],
         };
 
         let read_only = interface
             .config
-            .get("read_only")
+            .expose("read_only")
             .is_some_and(|v| v == "true");
 
         let jetstream = self.connect_binding(&interface.config).await.map_err(|e| {

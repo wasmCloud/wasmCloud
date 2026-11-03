@@ -16,6 +16,12 @@ use super::HostPlugin;
 use super::bindings::{BindingSchema, KeyOwnership, PluginBindingSet, PluginSecretRef};
 use crate::wit::WitInterface;
 
+mod grant;
+mod selector;
+
+pub use grant::WorkloadGrant;
+pub use selector::WorkloadSelector;
+
 /// A string-backed name, typed so one kind of name can't be passed as another.
 macro_rules! name_type {
     ($(#[$doc:meta])* $name:ident) => {
@@ -77,136 +83,6 @@ name_type!(
     /// `keys`.
     SecretKey
 );
-
-/// The workloads a plugin-backed `secrets:` entry is granted to. Every entry
-/// states one, so none reaches a workload the operator did not name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum WorkloadGrant {
-    /// Every workload on the host: `workloads: all`.
-    All,
-    /// Workloads matching one of these, never empty.
-    Only(Vec<WorkloadSelector>),
-}
-
-/// Workloads in `namespace`, or only the one called `name` there: the name a
-/// workload keeps across replicas, that of the WorkloadDeployment,
-/// WorkloadDaemonSet or WorkloadReplicaSet owning it under the operator, else
-/// its own. Both come
-/// from the start request, so a grant is as strong as whoever may send one.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
-)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WorkloadSelector {
-    pub namespace: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
-impl WorkloadSelector {
-    /// Every workload in `namespace`.
-    pub fn namespace(namespace: impl Into<String>) -> Self {
-        Self {
-            namespace: namespace.into(),
-            name: None,
-        }
-    }
-
-    /// The workload called `name` in `namespace`.
-    pub fn workload(namespace: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            namespace: namespace.into(),
-            name: Some(name.into()),
-        }
-    }
-
-    fn admits(&self, workload: &RequestingWorkload) -> bool {
-        self.namespace == workload.namespace
-            && self.name.as_ref().is_none_or(|name| *name == workload.name)
-    }
-}
-
-impl WorkloadGrant {
-    /// Whether `workload` may bind a binding that reads the entry.
-    pub fn admits(&self, workload: &RequestingWorkload) -> bool {
-        match self {
-            Self::All => true,
-            Self::Only(selectors) => selectors.iter().any(|s| s.admits(workload)),
-        }
-    }
-}
-
-impl std::fmt::Display for WorkloadGrant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::All => f.write_str("every workload"),
-            Self::Only(selectors) => {
-                let names: Vec<String> = selectors
-                    .iter()
-                    .map(|s| match &s.name {
-                        Some(name) => format!("`{}/{name}`", s.namespace),
-                        None => format!("namespace `{}`", s.namespace),
-                    })
-                    .collect();
-                f.write_str(&names.join(", "))
-            }
-        }
-    }
-}
-
-/// Spelled as the keyword `all`, or a list of selectors. An empty list is
-/// refused here as it is when parsed, so a saved grant always loads again.
-impl serde::Serialize for WorkloadGrant {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::All => s.serialize_str("all"),
-            Self::Only(selectors) if selectors.is_empty() => Err(serde::ser::Error::custom(
-                "`workloads` grants no workload; name at least one namespace, or write `all`",
-            )),
-            Self::Only(selectors) => selectors.serialize(s),
-        }
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for WorkloadGrant {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct Grant;
-
-        impl<'de> serde::de::Visitor<'de> for Grant {
-            type Value = WorkloadGrant;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("`all`, or a list of `namespace` (and optional `name`) selectors")
-            }
-
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<WorkloadGrant, E> {
-                match v {
-                    "all" => Ok(WorkloadGrant::All),
-                    other => Err(E::invalid_value(serde::de::Unexpected::Str(other), &self)),
-                }
-            }
-
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<WorkloadGrant, A::Error> {
-                let mut selectors = Vec::new();
-                while let Some(selector) = seq.next_element()? {
-                    selectors.push(selector);
-                }
-                if selectors.is_empty() {
-                    return Err(serde::de::Error::custom(
-                        "`workloads` grants no workload; name at least one namespace, or write \
-                         `all`",
-                    ));
-                }
-                Ok(WorkloadGrant::Only(selectors))
-            }
-        }
-
-        d.deserialize_any(Grant)
-    }
-}
 
 /// What the host asks a [`HostSecretSource`] for, and on whose behalf.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,18 +146,15 @@ impl SecretValue {
         }
     }
 
-    /// The value as text, for handing to a consumer whose config takes text,
-    /// or `None` for bytes that are not UTF-8. Never log it.
-    pub fn into_text(mut self) -> Option<String> {
-        match std::mem::replace(&mut self.0, SecretBytes::Text(String::new())) {
-            SecretBytes::Text(text) => Some(text),
-            SecretBytes::Bytes(bytes) => match String::from_utf8(bytes) {
-                Ok(text) => Some(text),
-                Err(e) => {
-                    zeroize::Zeroize::zeroize(&mut e.into_bytes());
-                    None
-                }
-            },
+    /// The value as text, or as bytes when it is not UTF-8. Never log it.
+    #[cfg_attr(
+        not(all(feature = "host-component-plugins", feature = "oci")),
+        allow(dead_code)
+    )]
+    pub(crate) fn expose_bytes(&self) -> Result<&str, &[u8]> {
+        match &self.0 {
+            SecretBytes::Text(text) => Ok(text),
+            SecretBytes::Bytes(bytes) => std::str::from_utf8(bytes).map_err(|_| bytes.as_slice()),
         }
     }
 }
@@ -370,6 +243,14 @@ pub(crate) fn validate_plugin_secrets(
     schema: &BindingSchema,
     plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
 ) -> anyhow::Result<()> {
+    if declared.plugin_secrets().next().is_some() {
+        anyhow::ensure!(
+            plugins
+                .get(plugin_id)
+                .is_none_or(|plugin| plugin.takes_plugin_secrets()),
+            "`host.plugins` entry `{plugin_id}` cannot consume plugin secrets; component plugins must export workload-lifecycle and import binding-secrets"
+        );
+    }
     let entry_reads_a_secret = declared
         .plugin_secrets()
         .any(|(binding, _, _)| binding.is_none());
@@ -430,12 +311,12 @@ pub(crate) struct FilledSecrets {
     pub errors: BindErrors,
 }
 
-/// What a bind's errors need from its plugin secrets: the values filled in,
-/// kept only to keep them out, and the keys withheld from the workload, so a
-/// failure their absence causes says so.
+/// The keys a bind withheld from the workload, so a failure their absence
+/// causes says so. A filled value needs nothing here: it reaches the plugin as
+/// a [`ConfigValue::Secret`](crate::wit::ConfigValue::Secret), which never
+/// formats as its text.
 #[derive(Debug, Default)]
 pub(crate) struct BindErrors {
-    filled: Vec<SecretValue>,
     withheld: Vec<WithheldKey>,
 }
 
@@ -450,10 +331,9 @@ struct WithheldKey {
 }
 
 impl BindErrors {
-    /// `e` redacted, and naming each withheld key it quotes. The entry and
-    /// grant that withheld the key go to the host's log, not into `e`.
+    /// `e` naming each withheld key it quotes. The entry and grant that
+    /// withheld the key go to the host's log, not into `e`.
     pub fn explain(&self, e: anyhow::Error) -> anyhow::Error {
-        let e = self.redact(e);
         let msg = format!("{e:#}");
         let mut keys = BTreeSet::new();
         for w in &self.withheld {
@@ -475,28 +355,6 @@ impl BindErrors {
             "withheld from this workload, outside its secret's grant: {}",
             keys.join(", ")
         ))
-    }
-
-    /// `e` with every value filled in replaced by `<redacted>`, since a
-    /// plugin's parser may quote the value it refuses.
-    fn redact(&self, e: anyhow::Error) -> anyhow::Error {
-        let mut secrets: Vec<&str> = self
-            .filled
-            .iter()
-            .filter_map(SecretValue::expose)
-            .flat_map(|v| [v, v.trim()])
-            .filter(|v| !v.is_empty())
-            .collect();
-        let msg = format!("{e:#}");
-        if !secrets.iter().any(|v| msg.contains(v)) {
-            return e;
-        }
-        // Longest first, so a value containing another is replaced whole.
-        secrets.sort_by_key(|v| std::cmp::Reverse(v.len()));
-        let msg = secrets
-            .into_iter()
-            .fold(msg, |msg, v| msg.replace(v, "<redacted>"));
-        anyhow::anyhow!(msg)
     }
 }
 
@@ -651,7 +509,6 @@ pub(crate) async fn resolve_plugin_secrets(
             .collect();
 
     let wanted: BTreeSet<String> = in_use.iter().map(|b| b.to_string()).collect();
-    let mut used = Vec::new();
     let (mut set, refilled) = declared.fill_plugin_secrets(&wanted, |binding, key, secret| {
         if !needed(binding, key, secret) {
             return Ok(None);
@@ -663,7 +520,6 @@ pub(crate) async fn resolve_plugin_secrets(
             .and_then(|resolved| resolved.get(&secret.key))
             .cloned()
             .context("a requested plugin secret has no answer")?;
-        used.push(value.clone());
         Ok(Some(value))
     })?;
     for key in withheld.iter().flat_map(|w| &w.spellings) {
@@ -672,10 +528,7 @@ pub(crate) async fn resolve_plugin_secrets(
     Ok(FilledSecrets {
         set,
         refilled,
-        errors: BindErrors {
-            filled: used,
-            withheld,
-        },
+        errors: BindErrors { withheld },
     })
 }
 
@@ -767,6 +620,9 @@ mod tests {
         fn world(&self) -> WitWorld {
             self.2.clone()
         }
+        fn takes_plugin_secrets(&self) -> bool {
+            self.0 != "unsupported"
+        }
         fn secret_source(&self) -> Option<Arc<dyn HostSecretSource>> {
             self.1.clone().map(|r| r as Arc<dyn HostSecretSource>)
         }
@@ -824,12 +680,12 @@ mod tests {
     /// them.
     fn declared() -> PluginBindingSet {
         PluginBindingSet::new("wasmcloud-postgres")
-            .with_binding("app-db", HashMap::new())
+            .with_binding("app-db", Default::default())
             .with_binding_secrets(
                 "app-db",
                 HashMap::from([("url".to_string(), secret("app", "pg-url-app"))]),
             )
-            .with_binding("reports-db", HashMap::new())
+            .with_binding("reports-db", Default::default())
             .with_binding_secrets(
                 "reports-db",
                 HashMap::from([("url".to_string(), secret("reports", "pg-url-reports"))]),
@@ -885,11 +741,18 @@ mod tests {
         let schema = BindingSchema::empty();
         assert!(
             filled
-                .resolve("app-db", &HashMap::new(), &schema, &|_, _, _| false)
+                .resolve("app-db", &crate::wit::Config::new(), &schema, &|_, _, _| {
+                    false
+                })
                 .is_ok()
         );
         let err = filled
-            .resolve("reports-db", &HashMap::new(), &schema, &|_, _, _| false)
+            .resolve(
+                "reports-db",
+                &crate::wit::Config::new(),
+                &schema,
+                &|_, _, _| false,
+            )
             .unwrap_err();
         assert!(format!("{err}").contains("not resolved"), "{err}");
     }
@@ -903,7 +766,7 @@ mod tests {
             let mut r = secret("app", "pg-url-app");
             r.grant = WorkloadGrant::Only(vec![selector]);
             PluginBindingSet::new("wasmcloud-postgres")
-                .with_binding("app-db", HashMap::new())
+                .with_binding("app-db", Default::default())
                 .with_binding_secrets("app-db", HashMap::from([("url".to_string(), r)]))
         };
         for (selector, admitted) in [
@@ -941,7 +804,7 @@ mod tests {
     #[tokio::test]
     async fn a_missing_key_names_the_source_and_key() {
         let set = PluginBindingSet::new("wasmcloud-postgres")
-            .with_binding("app-db", HashMap::new())
+            .with_binding("app-db", Default::default())
             .with_binding_secrets(
                 "app-db",
                 HashMap::from([("url".to_string(), secret("app", "nope"))]),
@@ -964,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn an_answer_must_name_exactly_the_requested_keys() {
         let set = PluginBindingSet::new("wasmcloud-postgres")
-            .with_binding("app-db", HashMap::new())
+            .with_binding("app-db", Default::default())
             .with_binding_secrets(
                 "app-db",
                 HashMap::from([("url".to_string(), secret("app", "silent"))]),
@@ -1040,7 +903,7 @@ mod tests {
         let mut reports = secret("reports", "pg-url-reports");
         reports.grant = WorkloadGrant::Only(vec![WorkloadSelector::namespace("reports")]);
         let set = PluginBindingSet::new("wasmcloud-postgres")
-            .with_binding("app-db", HashMap::new())
+            .with_binding("app-db", Default::default())
             .with_base_secrets(HashMap::from([
                 ("url".to_string(), secret("app", "pg-url-app")),
                 ("reports-url".to_string(), reports),
@@ -1079,7 +942,7 @@ mod tests {
         let mut servers = secret("orders-nats", "pg-url-app");
         servers.grant = WorkloadGrant::Only(vec![WorkloadSelector::namespace("orders")]);
         let set = PluginBindingSet::new("wasmcloud-postgres")
-            .with_binding("app-db", HashMap::new())
+            .with_binding("app-db", Default::default())
             .with_base_secrets(HashMap::from([("servers".to_string(), servers)]))
             .with_default_bundle(
                 "servers",
@@ -1096,7 +959,9 @@ mod tests {
         .await
         .unwrap();
         let resolved = set
-            .resolve("app-db", &HashMap::new(), &schema, &|_, _, _| true)
+            .resolve("app-db", &crate::wit::Config::new(), &schema, &|_, _, _| {
+                true
+            })
             .unwrap();
         assert!(resolved.is_empty(), "{resolved:?}");
         let (_, layer, _) = set.host_layers(&schema).next().unwrap();
@@ -1115,11 +980,11 @@ mod tests {
         let mut seed = secret("orders-nats", "pg-url-app");
         seed.grant = WorkloadGrant::Only(vec![WorkloadSelector::namespace("orders")]);
         let set = PluginBindingSet::new(PLUGIN_NATS_ID)
-            .with_base(HashMap::from([(
+            .with_base(crate::wit::Config::from_iter([(
                 "servers".to_string(),
                 "nats://orders:4222".to_string(),
             )]))
-            .with_binding("events", HashMap::new())
+            .with_binding("events", Default::default())
             .with_base_secrets(HashMap::from([("nkey-seed".to_string(), seed)]));
         let mut events = WitInterface::from("wasmcloud:nats/publisher@0.1.0");
         events.name = Some("events".to_string());
@@ -1143,6 +1008,31 @@ mod tests {
     }
 
     #[test]
+    fn host_start_refuses_secrets_for_an_unsupported_consumer() {
+        let mut plugins = plugins(fixed());
+        plugins.insert(
+            "unsupported",
+            Arc::new(Stub("unsupported", None, WitWorld::default())),
+        );
+        let set = PluginBindingSet::new("unsupported")
+            .with_binding("db", Default::default())
+            .with_binding_secrets(
+                "db",
+                HashMap::from([("password".to_string(), secret("s", "k"))]),
+            );
+        let error = validate_plugin_secrets("unsupported", &set, &BindingSchema::empty(), &plugins)
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot consume plugin secrets"));
+        validate_plugin_secrets(
+            "unsupported",
+            &PluginBindingSet::new("unsupported"),
+            &BindingSchema::empty(),
+            &plugins,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn host_start_refuses_a_secret_that_could_never_resolve() {
         let plugins = plugins(fixed());
         let schema = BindingSchema::empty().and_host_ceiling_keys(["database"]);
@@ -1150,7 +1040,7 @@ mod tests {
             let mut r = secret("s", "k");
             r.plugin = plugin.into();
             let set = PluginBindingSet::new(id)
-                .with_binding("app-db", HashMap::new())
+                .with_binding("app-db", Default::default())
                 .with_binding_secrets("app-db", HashMap::from([(key.to_string(), r)]));
             validate_plugin_secrets(id, &set, &schema, &plugins).map_err(|e| e.to_string())
         };
@@ -1232,7 +1122,7 @@ mod tests {
         );
 
         let on_binding = PluginBindingSet::new("wasmcloud-secrets")
-            .with_binding("db-password", HashMap::new())
+            .with_binding("db-password", crate::wit::Config::new())
             .with_binding_secrets(
                 "db-password",
                 HashMap::from([("db-password".to_string(), secret("tenant", "db-password"))]),
@@ -1250,7 +1140,7 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_stays_typed() {
         let set = PluginBindingSet::new("wasmcloud-postgres")
-            .with_binding("app-db", HashMap::new())
+            .with_binding("app-db", Default::default())
             .with_binding_secrets(
                 "app-db",
                 HashMap::from([("url".to_string(), secret("app", "denied"))]),
@@ -1289,8 +1179,10 @@ mod tests {
         assert!(!layer.contains_key("url"));
         assert_eq!(*pending, BTreeSet::from(["url".to_string()]));
         assert!(
-            set.resolve("app-db", &HashMap::new(), &schema, &|_, _, _| false)
-                .is_err()
+            set.resolve("app-db", &crate::wit::Config::new(), &schema, &|_, _, _| {
+                false
+            })
+            .is_err()
         );
     }
 
@@ -1336,7 +1228,10 @@ mod tests {
                 )]))
                 .with_binding(
                     "app-db",
-                    HashMap::from([("url".to_string(), "postgres://own".to_string())]),
+                    crate::wit::Config::from_iter([(
+                        "url".to_string(),
+                        "postgres://own".to_string(),
+                    )]),
                 )
         };
         let schema = BindingSchema::empty();
@@ -1366,37 +1261,45 @@ mod tests {
         assert!(err.downcast_ref::<SecretSourceError>().is_some(), "{err:#}");
     }
 
-    /// A plugin parser quoting a filled value has it scrubbed.
+    /// A plugin's parser quoting a filled value it refuses prints
+    /// `<redacted>`: the value reaches it as a secret, and nothing scrubs the
+    /// error afterwards.
+    #[cfg(feature = "wasmcloud-nats")]
     #[tokio::test]
-    async fn an_error_quoting_a_filled_value_is_redacted() {
+    async fn an_error_quoting_a_filled_value_cannot_leak_it() {
+        use crate::plugin::wasmcloud_nats::{PLUGIN_NATS_ID, WasmcloudNats, binding_schema};
+
+        let set = PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_binding(
+                "events",
+                crate::wit::Config::from_iter([("servers", "nats://orders:4222")]),
+            )
+            .with_binding_secrets(
+                "events",
+                HashMap::from([("max-ack-pending".to_string(), secret("app", "pg-url-app"))]),
+            );
+        let mut events = WitInterface::from("wasmcloud:nats/publisher@0.1.0");
+        events.name = Some("events".to_string());
         let filled = resolve_plugin_secrets(
             &plugins(fixed()),
             &requesting(),
-            declared(),
-            &HashSet::from([postgres("app-db")]),
-            &BindingSchema::empty(),
+            set,
+            &HashSet::from([events]),
+            &binding_schema(),
         )
         .await
         .unwrap();
-        let err = filled
-            .errors
-            .explain(anyhow::anyhow!("bad url `postgres://app:pw@db/app`"));
-        assert_eq!(format!("{err:#}"), "bad url `<redacted>`");
-    }
-
-    /// A grant writes back the way it parses, and an empty one is refused on
-    /// the way out too.
-    #[test]
-    fn a_grant_round_trips() {
-        for grant in [
-            WorkloadGrant::All,
-            WorkloadGrant::Only(vec![WorkloadSelector::workload("billing", "billing-api")]),
-        ] {
-            let json = serde_json::to_string(&grant).unwrap();
-            assert_eq!(serde_json::from_str::<WorkloadGrant>(&json).unwrap(), grant);
-        }
-        let err = serde_json::to_string(&WorkloadGrant::Only(Vec::new())).unwrap_err();
-        assert!(err.to_string().contains("grants no workload"), "{err}");
+        let refilled = filled.refilled.clone().unwrap();
+        let err = WasmcloudNats::new()
+            .validate_bindings(&filled.set.only_bindings(&refilled))
+            .unwrap_err();
+        let err = format!("{:#}", filled.errors.explain(err));
+        assert!(
+            err.contains("`max-ack-pending` must be a non-negative integer, got `<redacted>`"),
+            "{err}"
+        );
+        assert!(!err.contains("pw@db"), "{err}");
+        assert!(!format!("{filled:?}").contains("pw@db"));
     }
 
     #[test]

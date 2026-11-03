@@ -669,10 +669,11 @@ mod named {
             .collect(),
             version: Some(semver::Version::new(0, 2, 0)),
             name: Some(name.into()),
-            config: HashMap::from([(
-                "url".into(),
+            config: [(
+                "url",
                 format!("postgres://test:test@127.0.0.1/test-{size}?sslmode=disable"),
-            )]),
+            )]
+            .into(),
         });
         let registry = WasmcloudPostgres::multiplexer()
             .build_registry(&interfaces)

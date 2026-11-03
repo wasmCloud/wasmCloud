@@ -10,7 +10,7 @@
 //! Requires Docker (redis + NATS); marked `#[ignore]`, so it runs only under
 //! `cargo test --include-ignored` (CI's Linux leg) and not a plain `cargo test`
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -35,7 +35,7 @@ fn kv_iface(name: &str, backend: &str, url: &str) -> WitInterface {
         .into_iter()
         .collect(),
         version: None,
-        config: HashMap::from([
+        config: wash_runtime::wit::Config::from_iter([
             ("backend".to_string(), backend.to_string()),
             ("url".to_string(), url.to_string()),
         ]),

@@ -28,11 +28,8 @@ const CALLEE_WASM: &[u8] = include_bytes!("wasm/config_callee.wasm");
 /// workload-scoped entry.
 const EXPECTED: &str = "caller[shared=yes;who=caller] callee[shared=yes;who=callee]";
 
-fn config(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-    pairs
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect()
+fn config(pairs: &[(&str, &str)]) -> wash_runtime::wit::Config {
+    pairs.iter().copied().collect()
 }
 
 /// A component carrying its own `LocalResources.config`. `warm` parks its
@@ -44,7 +41,10 @@ fn component(name: &str, bytes: &'static [u8], own: &[(&str, &str)], warm: bool)
         digest: None,
         bytes: bytes::Bytes::from_static(bytes),
         local_resources: LocalResources {
-            config: config(own),
+            config: own
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
             ..Default::default()
         },
         pool_size,

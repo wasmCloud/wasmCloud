@@ -266,7 +266,7 @@ impl BackendProvider<KvId> for InMemoryProvider {
 
     async fn instantiate(
         &self,
-        _config: &HashMap<String, String>,
+        _config: &crate::wit::Config,
         _egress: Option<&PluginEgressPolicy>,
     ) -> anyhow::Result<KvId> {
         Ok(Arc::new(InMemoryBackend::new()))
@@ -275,7 +275,7 @@ impl BackendProvider<KvId> for InMemoryProvider {
     /// Does not connect out.
     fn check_egress(
         &self,
-        _config: &HashMap<String, String>,
+        _config: &crate::wit::Config,
         _policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         Ok(())

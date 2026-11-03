@@ -31,8 +31,6 @@
 ))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
-
 use anyhow::Result;
 
 use wash_runtime::host::HostApi;
@@ -56,8 +54,8 @@ const PLUGIN_ID: &str = "acme-kv-plugin";
 fn declared_bindings() -> PluginBindings {
     PluginBindings::new().with_plugin(
         PluginBindingSet::new(PLUGIN_ID)
-            .with_binding("tenant-a", HashMap::new())
-            .with_binding("tenant-b", HashMap::new()),
+            .with_binding("tenant-a", Default::default())
+            .with_binding("tenant-b", Default::default()),
     )
 }
 
@@ -157,7 +155,7 @@ async fn labeled_imports_share_the_plugins_one_store() -> Result<()> {
 async fn an_undeclared_label_is_refused() -> Result<()> {
     let host = "kv-implements-undeclared";
     let only_a = PluginBindings::new()
-        .with_plugin(PluginBindingSet::new(PLUGIN_ID).with_binding("tenant-a", HashMap::new()));
+        .with_plugin(PluginBindingSet::new(PLUGIN_ID).with_binding("tenant-a", Default::default()));
     let (_addr, h) =
         start_host_with_component_plugin_bindings("127.0.0.1:0", PLUGIN_ID, KV_PLUGIN_WASM, only_a)
             .await?;

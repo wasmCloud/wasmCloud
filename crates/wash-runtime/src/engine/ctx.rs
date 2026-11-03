@@ -151,6 +151,48 @@ impl CallerIdentity {
     }
 }
 
+/// Revocable authority for one workload bind, shared with its replays.
+#[derive(Clone, Debug)]
+pub struct BindGeneration {
+    id: ulid::Ulid,
+    revoked: tokio_util::sync::CancellationToken,
+    deadline: Option<tokio::time::Instant>,
+}
+
+impl Default for BindGeneration {
+    fn default() -> Self {
+        Self {
+            id: ulid::Ulid::new(),
+            revoked: tokio_util::sync::CancellationToken::new(),
+            deadline: None,
+        }
+    }
+}
+
+impl BindGeneration {
+    pub fn revoke(&self) {
+        self.revoked.cancel();
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.revoked.is_cancelled()
+            && self
+                .deadline
+                .is_none_or(|deadline| tokio::time::Instant::now() < deadline)
+    }
+
+    pub fn for_call(&self, timeout: std::time::Duration) -> Self {
+        Self {
+            deadline: Some(tokio::time::Instant::now() + timeout),
+            ..self.clone()
+        }
+    }
+
+    pub fn authorizes(&self, current: &Self) -> bool {
+        self.is_active() && current.is_active() && self.id == current.id
+    }
+}
+
 /// The workload a call into a host component plugin is on behalf of.
 ///
 /// `component_id` is `None` when there is no component behind the call: a
@@ -160,6 +202,8 @@ impl CallerIdentity {
 /// does not exist, and would collide with a genuinely unresolvable caller.
 #[derive(Clone, Debug)]
 pub struct WorkloadCaller {
+    /// Present only for an on-workload-bind call or its replay.
+    pub bind_generation: Option<BindGeneration>,
     pub workload_id: Arc<str>,
     pub component_id: Option<Arc<str>>,
     /// The binding the call arrived on: the `(implements ..)` label the caller
