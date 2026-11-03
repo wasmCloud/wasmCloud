@@ -486,6 +486,8 @@ func buildBaseHelmSets() []string {
 		sets = append(sets,
 			fmt.Sprintf("runtime.image.tag=%s", runtimeImageTag),
 			"runtime.image.pull_policy=IfNotPresent",
+			// Published images may not support the discovery flag.
+			"runtime.natsIgnoreDiscoveredServers=false",
 			"gateway.image.tag=canary",
 		)
 	}
