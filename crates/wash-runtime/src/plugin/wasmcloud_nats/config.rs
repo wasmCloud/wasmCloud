@@ -344,6 +344,33 @@ impl Layer<'_> {
         self.get(key).is_some() || self.is_pending(key)
     }
 
+    /// Refuses identity keys whose only values are blank, which [`Self::get`]
+    /// reads as unset: a secret resolving empty must not change who a binding
+    /// connects as.
+    fn refuse_blank_identity(&self) -> anyhow::Result<()> {
+        let mut blank: Vec<&str> = self
+            .cfg
+            .iter()
+            .filter(|(_, value)| value.trim().is_empty())
+            .filter(|(key, _)| {
+                super::keys::find(key).is_some_and(|row| {
+                    row.identity != super::keys::Identity::None
+                        && self.get(row.canonical).is_none()
+                        && !self.is_pending(row.canonical)
+                })
+            })
+            .map(|(key, _)| key.as_str())
+            .collect();
+        if blank.is_empty() {
+            return Ok(());
+        }
+        blank.sort_unstable();
+        bail!(
+            "NATS identity keys have empty values: `{}`",
+            blank.join("`, `")
+        )
+    }
+
     /// Splits a comma-separated list, dropping empties.
     fn list(&self, key: &str) -> Vec<String> {
         self.get(key)
@@ -490,31 +517,15 @@ pub(crate) enum BindingIdentity {
     Explicit,
 }
 
-/// Classifies a binding's identity after all its secrets have resolved.
-///
-/// An identity key that is present but blank is an error rather than absent,
-/// so a secret resolving empty cannot move the binding onto another account.
+/// Classifies a binding's identity after all its secrets have resolved. A blank
+/// identity key is an error rather than absent.
 #[cfg_attr(not(feature = "wasi-blobstore"), allow(dead_code))]
 pub(crate) fn binding_identity(cfg: &HashMap<String, String>) -> anyhow::Result<BindingIdentity> {
-    let mut blank: Vec<&str> = cfg
-        .iter()
-        .filter(|(key, value)| {
-            let key = super::keys::canonical(key);
-            value.trim().is_empty() && super::keys::identity_keys().any(|k| k == key)
-        })
-        .map(|(key, _)| key.as_str())
-        .collect();
-    if !blank.is_empty() {
-        blank.sort_unstable();
-        bail!(
-            "NATS identity keys have empty values: `{}`",
-            blank.join("`, `")
-        );
-    }
     let layer = Layer {
         cfg,
         pending: &BTreeSet::new(),
     };
+    layer.refuse_blank_identity()?;
     let auth = parse_layer_auth(&layer)?.context("NATS credentials have no value")?;
     Ok(
         if matches!(auth, NatsAuth::Anonymous)
@@ -535,6 +546,7 @@ fn read<A>(
     r: &Layer<'_>,
     auth: impl FnOnce(Option<NatsAuth>) -> anyhow::Result<A>,
 ) -> anyhow::Result<NatsConfig<A>> {
+    r.refuse_blank_identity()?;
     let servers = r.list("servers");
     if servers.is_empty() && !r.is_pending("servers") {
         bail!("wasmcloud:nats requires a `servers` config value");
@@ -1065,6 +1077,19 @@ mod tests {
             binding_identity(&map(&[("name", ""), ("tls-ca", "")])).unwrap(),
             BindingIdentity::Absent
         );
+        assert_eq!(
+            binding_identity(&map(&[("creds", "/tenant.creds"), ("creds-file", "")])).unwrap(),
+            BindingIdentity::Explicit
+        );
+    }
+
+    #[test]
+    fn nats_bindings_refuse_blank_identity_keys() {
+        let cfg = map(&[("servers", "nats://data:4222"), ("token", " ")]);
+        let error = NatsConfig::from_map(&cfg).err().unwrap().to_string();
+        assert!(error.contains("empty values: `token`"), "{error}");
+        assert!(NatsConfig::check_layer(&cfg, &BTreeSet::new()).is_err());
+        NatsConfig::check_layer(&cfg, &pending(&["token"])).unwrap();
     }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {

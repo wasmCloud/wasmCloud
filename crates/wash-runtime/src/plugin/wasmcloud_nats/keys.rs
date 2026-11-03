@@ -28,8 +28,19 @@ pub struct Key {
     pub aliases: &'static [&'static str],
     /// Who may write it.
     pub ownership: KeyOwnership,
-    /// Whether this key selects NATS protocol authentication.
-    pub auth: bool,
+    /// Whether it names who a connection is.
+    pub identity: Identity,
+}
+
+/// What a key says about who a connection is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Identity {
+    /// Nothing.
+    None,
+    /// A NATS protocol credential.
+    Credential,
+    /// Half of a TLS client certificate.
+    ClientCert,
 }
 
 impl Key {
@@ -44,16 +55,25 @@ const fn host(canonical: &'static str) -> Key {
         canonical,
         aliases: &[],
         ownership: KeyOwnership::Host,
-        auth: false,
+        identity: Identity::None,
     }
 }
 
-const fn auth(canonical: &'static str, aliases: &'static [&'static str]) -> Key {
+const fn credential(canonical: &'static str, aliases: &'static [&'static str]) -> Key {
     Key {
         canonical,
         aliases,
         ownership: KeyOwnership::Host,
-        auth: true,
+        identity: Identity::Credential,
+    }
+}
+
+const fn client_cert(canonical: &'static str) -> Key {
+    Key {
+        canonical,
+        aliases: &[],
+        ownership: KeyOwnership::Host,
+        identity: Identity::ClientCert,
     }
 }
 
@@ -63,7 +83,7 @@ const fn ceiling(canonical: &'static str) -> Key {
         canonical,
         aliases: &[],
         ownership: KeyOwnership::HostCeiling,
-        auth: false,
+        identity: Identity::None,
     }
 }
 
@@ -72,7 +92,7 @@ const fn workload(canonical: &'static str) -> Key {
         canonical,
         aliases: &[],
         ownership: KeyOwnership::Workload,
-        auth: false,
+        identity: Identity::None,
     }
 }
 
@@ -90,19 +110,19 @@ pub const KEYS: &[Key] = &[
     host("name"),
     host("jetstream-domain"),
     host("inbox-prefix"),
-    auth("creds", &["creds-file"]),
-    auth("jwt", &[]),
-    auth("nkey-seed", &["nkey"]),
-    auth("nkey-seed-file", &["nkey-file"]),
-    auth("username", &["user"]),
-    auth("password", &[]),
-    auth("password-file", &[]),
-    auth("token", &[]),
-    auth("token-file", &[]),
+    credential("creds", &["creds-file"]),
+    credential("jwt", &[]),
+    credential("nkey-seed", &["nkey"]),
+    credential("nkey-seed-file", &["nkey-file"]),
+    credential("username", &["user"]),
+    credential("password", &[]),
+    credential("password-file", &[]),
+    credential("token", &[]),
+    credential("token-file", &[]),
     host("jwt-as-token"),
     host("tls-ca"),
-    host("tls-cert"),
-    host("tls-key"),
+    client_cert("tls-cert"),
+    client_cert("tls-key"),
     host("tls-first"),
     // Grants — what it may reach.
     ceiling("subject-allow"),
@@ -142,9 +162,8 @@ pub fn canonical(key: &str) -> String {
 
 /// The row `key` belongs to, matched on the canonical spelling or any alias.
 ///
-/// Alias-aware because the reader asks for aliases directly — `parse_auth`
-/// reaches for `creds-file` by name — and an alias is the same key, not an
-/// unknown one.
+/// Alias-aware because a config map may use any spelling, and an alias is
+/// the same key, not an unknown one.
 pub fn find(key: &str) -> Option<&'static Key> {
     let key = canonical(key);
     KEYS.iter().find(|row| row.spellings().any(|s| s == key))
@@ -194,15 +213,11 @@ pub fn host_owned() -> impl Iterator<Item = &'static str> {
         .flat_map(Key::spellings)
 }
 
-/// NATS protocol authentication keys, including aliases.
-pub fn auth_keys() -> impl Iterator<Item = &'static str> {
-    KEYS.iter().filter(|key| key.auth).flat_map(Key::spellings)
-}
-
-/// The keys naming who a connection is: protocol credentials and the TLS
-/// client certificate, every spelling.
-pub fn identity_keys() -> impl Iterator<Item = &'static str> {
-    auth_keys().chain(["tls-cert", "tls-key"])
+/// The NATS protocol credential keys, every spelling.
+pub fn credential_keys() -> impl Iterator<Item = &'static str> {
+    KEYS.iter()
+        .filter(|key| key.identity == Identity::Credential)
+        .flat_map(Key::spellings)
 }
 
 /// The grant keys a workload may narrow, every spelling.
