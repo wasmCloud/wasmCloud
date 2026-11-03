@@ -480,14 +480,52 @@ fn parse_layer_auth(r: &Layer<'_>) -> anyhow::Result<Option<NatsAuth>> {
     Ok(Some(NatsAuth::Anonymous))
 }
 
-/// Parses credentials after all binding secrets have resolved.
+/// Whether a binding names who it connects as.
 #[cfg_attr(not(feature = "wasi-blobstore"), allow(dead_code))]
-pub(crate) fn parse_auth(cfg: &HashMap<String, String>) -> anyhow::Result<NatsAuth> {
-    parse_layer_auth(&Layer {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BindingIdentity {
+    /// No NATS credentials and no TLS client certificate.
+    Absent,
+    /// NATS credentials, a TLS client certificate, or both.
+    Explicit,
+}
+
+/// Classifies a binding's identity after all its secrets have resolved.
+///
+/// An identity key that is present but blank is an error rather than absent,
+/// so a secret resolving empty cannot move the binding onto another account.
+#[cfg_attr(not(feature = "wasi-blobstore"), allow(dead_code))]
+pub(crate) fn binding_identity(cfg: &HashMap<String, String>) -> anyhow::Result<BindingIdentity> {
+    let mut blank: Vec<&str> = cfg
+        .iter()
+        .filter(|(key, value)| {
+            let key = super::keys::canonical(key);
+            value.trim().is_empty() && super::keys::identity_keys().any(|k| k == key)
+        })
+        .map(|(key, _)| key.as_str())
+        .collect();
+    if !blank.is_empty() {
+        blank.sort_unstable();
+        bail!(
+            "NATS identity keys have empty values: `{}`",
+            blank.join("`, `")
+        );
+    }
+    let layer = Layer {
         cfg,
         pending: &BTreeSet::new(),
-    })?
-    .context("NATS credentials have no value")
+    };
+    let auth = parse_layer_auth(&layer)?.context("NATS credentials have no value")?;
+    Ok(
+        if matches!(auth, NatsAuth::Anonymous)
+            && !layer.is_set("tls-cert")
+            && !layer.is_set("tls-key")
+        {
+            BindingIdentity::Absent
+        } else {
+            BindingIdentity::Explicit
+        },
+    )
 }
 
 /// Parses and validates a config layer, leaving its pending keys unread.
@@ -965,15 +1003,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolved_auth_does_not_require_servers() -> anyhow::Result<()> {
-        assert!(matches!(parse_auth(&map(&[]))?, NatsAuth::Anonymous));
-        assert!(matches!(
-            parse_auth(&map(&[("user", "tenant"), ("password", "secret")]))?,
-            NatsAuth::UserPassword { .. }
-        ));
-        assert!(parse_auth(&map(&[("username", "tenant")])).is_err());
+    fn binding_identity_classifies_resolved_config() -> anyhow::Result<()> {
+        for absent in [
+            map(&[]),
+            map(&[("servers", "nats://data:4222"), ("tls-ca", "/ca.crt")]),
+            map(&[("jwt-as-token", "false")]),
+        ] {
+            assert_eq!(binding_identity(&absent)?, BindingIdentity::Absent);
+        }
+        for explicit in [
+            map(&[("user", "tenant"), ("password", "secret")]),
+            map(&[("TLS_CERT", "/tenant.crt"), ("TLS_KEY", "/tenant.key")]),
+            map(&[("token", "tenant"), ("tls-cert", "/c"), ("tls-key", "/k")]),
+        ] {
+            assert_eq!(binding_identity(&explicit)?, BindingIdentity::Explicit);
+        }
+        assert!(binding_identity(&map(&[("username", "tenant")])).is_err());
         assert!(
-            parse_auth(&map(&[
+            binding_identity(&map(&[
                 ("username", "tenant"),
                 ("password", "secret"),
                 ("token", "other")
@@ -981,6 +1028,24 @@ mod tests {
             .is_err()
         );
         Ok(())
+    }
+
+    #[test]
+    fn blank_identity_keys_are_refused() {
+        for blank in [
+            map(&[("token", "")]),
+            map(&[("TOKEN_FILE", " \t")]),
+            map(&[("creds-file", "")]),
+            map(&[("tls-cert", ""), ("tls-key", "")]),
+            map(&[("username", "tenant"), ("password", "")]),
+        ] {
+            let error = binding_identity(&blank).unwrap_err().to_string();
+            assert!(error.contains("empty values"), "{error}");
+        }
+        assert_eq!(
+            binding_identity(&map(&[("name", ""), ("tls-ca", "")])).unwrap(),
+            BindingIdentity::Absent
+        );
     }
 
     fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {

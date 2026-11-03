@@ -213,7 +213,12 @@ async fn build_options(
         opts = opts.tls_first();
     }
     if let (Some(cert), Some(key)) = (&config.tls.cert, &config.tls.key) {
-        opts = opts.add_client_certificate(cert.clone(), key.clone());
+        // Without TLS the certificate is never presented, and a plaintext
+        // server would admit the connection under whatever it gives anonymous
+        // clients.
+        opts = opts
+            .add_client_certificate(cert.clone(), key.clone())
+            .require_tls(true);
     }
     if ignore_discovered_servers {
         // Only operator-declared servers are checked against an egress policy.

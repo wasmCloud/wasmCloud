@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::engine::ctx::{ActiveCtx, SharedCtx, extract_active_ctx};
 use crate::engine::workload::WorkloadItem;
 use crate::plugin::WorkloadTracker;
-use crate::plugin::wasmcloud_nats::config::{NatsAuth, NatsConfig, parse_auth};
+use crate::plugin::wasmcloud_nats::config::{BindingIdentity, NatsConfig, binding_identity};
 use crate::plugin::wasmcloud_nats::{conn as nats_conn, keys as nats_keys};
 use crate::plugin::{HostPlugin, PluginEgressPolicy, WitInterfaces};
 use crate::wit::{WitInterface, WitWorld};
@@ -147,9 +147,7 @@ impl NatsBlobstore {
         &self,
         config: &HashMap<String, String>,
     ) -> anyhow::Result<Option<Arc<async_nats::jetstream::Context>>> {
-        let client_identity = nats_keys::get(config, "tls-cert").is_some()
-            || nats_keys::get(config, "tls-key").is_some();
-        if matches!(parse_auth(config)?, NatsAuth::Anonymous) && !client_identity {
+        if binding_identity(config)? == BindingIdentity::Absent {
             return Ok(None);
         }
         let config = NatsConfig::from_map(config)?;
