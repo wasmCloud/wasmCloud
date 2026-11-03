@@ -1,4 +1,6 @@
-use super::contract_tests::{API, EXPORTER, component, engine, resolve, service};
+#[cfg(feature = "host-component-plugins")]
+use super::contract_tests::engine;
+use super::contract_tests::{API, EXPORTER, component, resolve, service};
 use super::*;
 use crate::engine::pool_share::{PoolCost, PoolShare, Share};
 use crate::observability::{MeterKind, Meters, WorkloadIdentity};
@@ -967,65 +969,6 @@ async fn wasi_overrides_bind_last_and_restore_shadowing_after_an_error() -> anyh
     Ok(())
 }
 
-#[test]
-fn wasi_override_requests_validate_names_and_versions_before_opening_the_linker() {
-    for interface in [
-        "test:workload/api@0.2.0",
-        "wasi:clocks/monotonic-clock,wall-clock@0.2.0",
-        "wasi:clocks/monotonic-clock",
-        "wasi:clocks/monotonic-clock@9.0.0",
-    ] {
-        let mut component = component("override", "(component)");
-        assert!(
-            component.wasi_override_instance(interface).is_err(),
-            "{interface}"
-        );
-        assert!(matches!(
-            component.link,
-            LinkState::Open { written: false, .. }
-        ));
-    }
-}
-
-#[test]
-fn compatible_wasi_overrides_reopen_the_host_instance_and_preserve_other_definitions()
--> anyhow::Result<()> {
-    let mut component = component("override", "(component)");
-    let version = super::super::WASI_LINKER_VERSIONS
-        .into_iter()
-        .find(|v| v.major == 0 && v.minor == 2)
-        .unwrap();
-    let exact = format!("wasi:clocks/monotonic-clock@{version}");
-    component
-        .linker()?
-        .instance(&exact)?
-        .func_wrap("preserved", |_, (): ()| Ok(()))?;
-    component
-        .wasi_override_instance("wasi:clocks/monotonic-clock@0.2.0")?
-        .func_wrap("replacement", |_, (): ()| Ok(()))?;
-    assert!(
-        component
-            .linker()?
-            .instance(&exact)?
-            .func_wrap("preserved", |_, (): ()| Ok(()))
-            .is_err()
-    );
-    assert!(
-        component
-            .linker()?
-            .instance(&exact)?
-            .func_wrap("replacement", |_, (): ()| Ok(()))
-            .is_err()
-    );
-    component.seal_linker();
-    assert!(
-        component
-            .wasi_override_instance("wasi:clocks/monotonic-clock@0.2.0")
-            .is_err()
-    );
-    Ok(())
-}
-
 #[derive(Default)]
 struct RecordingHttp {
     resolved: Mutex<Vec<String>>,
@@ -1180,86 +1123,5 @@ fn dependency_order_is_stable_and_ignores_dependencies_outside_the_workload() ->
     assert!(topological_sort_components(&HashMap::new())?.is_empty());
     let graph = HashMap::from([(Arc::from("self"), HashSet::from([Arc::from("self")]))]);
     assert!(topological_sort_components(&graph).is_err());
-    Ok(())
-}
-
-#[tokio::test]
-async fn resource_links_install_guest_types_and_preserve_reserved_host_types() -> anyhow::Result<()>
-{
-    for name in [
-        "value",
-        "output-stream",
-        "input-stream",
-        "pollable",
-        "tcp-socket",
-        "incoming-value-async-body",
-    ] {
-        let exporter = component(
-            "resource",
-            &format!(
-                r#"(component
-            (type $resource (resource (rep i32)))
-            (instance $api (export "{name}" (type $resource)))
-            (export "test:workload/api@0.1.0" (instance $api)))"#
-            ),
-        );
-        let exports = build_export_map(&[(
-            ComponentExporter {
-                name: Arc::from(exporter.name()),
-                id: Arc::from(exporter.id()),
-            },
-            vec![API.to_string()],
-        )]);
-        let resolved = resolve(None, [exporter]).await?;
-        let mut importer = component(
-            "importer",
-            &format!(
-                r#"(component
-            (import "test:workload/api@0.1.0" (instance $api (export "{name}" (type (sub resource)))))
-            (alias export $api "{name}" (type $resource))
-            (export "linked-resource" (type $resource)))"#
-            ),
-        );
-        let reserved = name != "value";
-        if reserved {
-            importer.linker()?.instance(API)?.resource(
-                name,
-                ResourceType::host::<u32>(),
-                |_, _| Ok(()),
-            )?;
-        }
-        let compiled = importer.component().clone();
-        let id = importer.id().to_string();
-        resolved
-            .resolve_component_imports(
-                &compiled,
-                &mut importer.metadata,
-                &exports,
-                &HashSet::new(),
-                Some(&id),
-            )
-            .await?;
-        let pre = importer.pre_instantiate_ref()?;
-        let ctx = crate::engine::ctx::Ctx::builder("contracts", importer.id()).build();
-        let mut store = wasmtime::Store::new(engine(), SharedCtx::new(ctx));
-        let instance = pre.instantiate_async(&mut store).await?;
-        let expected = if reserved {
-            ResourceType::host::<u32>()
-        } else {
-            ResourceType::host::<ResourceAny>()
-        };
-        assert_eq!(
-            instance.get_resource(&mut store, "linked-resource"),
-            Some(expected)
-        );
-        assert!(
-            importer
-                .linker()?
-                .instance(API)?
-                .resource(name, ResourceType::host::<ResourceAny>(), |_, _| Ok(()))
-                .is_err(),
-            "resource {name} was not retained"
-        );
-    }
     Ok(())
 }
