@@ -31,6 +31,9 @@ pub struct Args {
     repeats: u32,
     #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..))]
     timeout: u64,
+    /// Timeout for each Docker control command, in seconds.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+    docker_timeout: u64,
     #[arg(long, default_value = "wash-pressure-target")]
     target_volume: String,
     #[arg(long, default_value = "wash-pressure-registry")]
@@ -40,29 +43,66 @@ pub struct Args {
     target_dir: PathBuf,
 }
 
-fn output(command: &mut Command) -> Result<String> {
-    Ok(String::from_utf8(output_bytes(command)?)?.trim().to_owned())
+struct Commands<'a> {
+    directory: PathBuf,
+    interrupted: &'a Receiver<()>,
+    timeout: Duration,
 }
 
-fn output_bytes(command: &mut Command) -> Result<Vec<u8>> {
-    let result = command.output()?;
-    ensure!(
-        result.status.success(),
-        "command failed: {}",
-        String::from_utf8_lossy(&result.stderr)
-    );
-    Ok(result.stdout)
-}
+impl<'a> Commands<'a> {
+    fn new(directory: &Path, interrupted: &'a Receiver<()>, timeout: Duration) -> Result<Self> {
+        let directory = directory.join("commands");
+        fs::create_dir(&directory)?;
+        Ok(Self {
+            directory,
+            interrupted,
+            timeout,
+        })
+    }
 
-fn docker(args: &[&str]) -> Result<String> {
-    output(Command::new("docker").args(args))
+    fn output(&self, name: &str, command: &mut Command) -> Result<String> {
+        Ok(String::from_utf8(self.bytes(name, command)?)?
+            .trim()
+            .to_owned())
+    }
+
+    fn bytes(&self, name: &str, command: &mut Command) -> Result<Vec<u8>> {
+        ensure!(
+            self.interrupted.try_recv().is_err(),
+            "pressure run interrupted"
+        );
+        let stdout = self.directory.join(format!("{name}.stdout.log"));
+        let stderr = self.directory.join(format!("{name}.stderr.log"));
+        let mut process = Process(
+            command
+                .stdin(Stdio::null())
+                .stdout(File::create(&stdout)?)
+                .stderr(File::create(&stderr)?)
+                .spawn()?,
+        );
+        let Completion::Exited(status) =
+            process.wait(Some(self.interrupted), Some(self.timeout))?
+        else {
+            anyhow::bail!("{name} timed out");
+        };
+        ensure!(
+            status.success(),
+            "{name} failed: {}",
+            String::from_utf8_lossy(&fs::read(stderr)?)
+        );
+        Ok(fs::read(stdout)?)
+    }
+
+    fn docker(&self, name: &str, args: &[&str]) -> Result<String> {
+        self.output(name, Command::new("docker").args(args))
+    }
 }
 
 fn build(
     args: &Args,
     root: &Path,
     artifacts: &Path,
-    interrupted: &Receiver<()>,
+    commands: &Commands<'_>,
 ) -> Result<(String, String)> {
     let toolchain = fs::read_to_string(root.join("rust-toolchain.toml"))?;
     let version = toolchain
@@ -72,12 +112,23 @@ fn build(
     let image = format!("rust:{version}-bookworm");
     eprintln!("building memory_pressure in {image}; the first build can take several minutes");
     let cid = artifacts.join("build.cid");
-    let _container = CidFile(cid.clone());
+    let container = Container::new(
+        format!(
+            "wash-pressure-build-{}-{}",
+            std::process::id(),
+            artifacts
+                .file_name()
+                .context("missing artifact name")?
+                .to_string_lossy()
+        ),
+        commands.timeout,
+    );
     let mut process = Process(
         Command::new("docker")
             .args([
                 "run",
-                "--rm",
+                "--name",
+                &container.name,
                 &format!("--cidfile={}", cid.display()),
                 "--label=wasmcloud.bench=memory_pressure",
                 "--memory=8g",
@@ -110,7 +161,7 @@ fn build(
             .stdout(File::create(artifacts.join("build.jsonl"))?)
             .spawn()?,
     );
-    let Completion::Exited(status) = process.wait(interrupted, None)? else {
+    let Completion::Exited(status) = process.wait(Some(commands.interrupted), None)? else {
         anyhow::bail!("build timed out");
     };
     ensure!(status.success(), "pressure benchmark build failed");
@@ -129,32 +180,51 @@ fn build(
         "executable is outside target volume"
     );
     Ok((
-        docker(&["image", "inspect", &image, "--format={{.Id}}"])?,
+        commands.docker(
+            "image-inspect",
+            &["image", "inspect", &image, "--format={{.Id}}"],
+        )?,
         binary,
     ))
 }
 
-struct Container(String);
+struct Container {
+    name: String,
+    timeout: Duration,
+}
 
-impl Drop for Container {
-    fn drop(&mut self) {
-        let _ = Command::new("docker")
-            .args(["rm", "--force", &self.0])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+impl Container {
+    fn new(name: String, timeout: Duration) -> Self {
+        Self {
+            name,
+            timeout: timeout.min(Duration::from_secs(5)),
+        }
     }
 }
 
-struct CidFile(PathBuf);
-
-impl Drop for CidFile {
+impl Drop for Container {
     fn drop(&mut self) {
-        if let Ok(id) = fs::read_to_string(&self.0) {
-            let id = id.trim();
-            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                drop(Container(id.to_owned()));
-            }
+        // Cleanup ignores cancellation but has its own deadline.
+        let result = (|| -> Result<()> {
+            let mut process = Process(
+                Command::new("docker")
+                    .args(["rm", "--force", &self.name])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()?,
+            );
+            let Completion::Exited(status) = process.wait(None, Some(self.timeout))? else {
+                anyhow::bail!("cleanup timed out");
+            };
+            ensure!(status.success(), "docker rm failed with {status}");
+            Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!(
+                "warning: could not remove pressure container {}: {error}",
+                self.name
+            );
         }
     }
 }
@@ -169,12 +239,15 @@ struct Process(Child);
 impl Process {
     fn wait(
         &mut self,
-        interrupted: &Receiver<()>,
+        interrupted: Option<&Receiver<()>>,
         timeout: Option<Duration>,
     ) -> Result<Completion> {
         let started = Instant::now();
         loop {
-            ensure!(interrupted.try_recv().is_err(), "pressure run interrupted");
+            ensure!(
+                interrupted.is_none_or(|receiver| receiver.try_recv().is_err()),
+                "pressure run interrupted"
+            );
             if let Some(status) = self.0.try_wait()? {
                 return Ok(Completion::Exited(status));
             }
@@ -204,7 +277,20 @@ fn run_case(
     let label = case.label();
     let directory = artifacts.join(&label);
     fs::create_dir(&directory)?;
-    let name = format!("wash-pressure-{}-{label}", std::process::id());
+    let commands = Commands::new(
+        &directory,
+        interrupted,
+        Duration::from_secs(args.docker_timeout),
+    )?;
+    let name = format!(
+        "wash-pressure-{}-{}-{label}",
+        std::process::id(),
+        artifacts
+            .file_name()
+            .context("missing artifact name")?
+            .to_string_lossy()
+    );
+    let container = Container::new(name.clone(), commands.timeout);
     let mut create = Command::new("docker");
     create.args([
         "create",
@@ -237,23 +323,30 @@ fn run_case(
         create.arg(format!("--env=WASH_PRESSURE_GUEST_CAP={cap}MiB"));
     }
     create.args([image, binary, "--bench"]);
-    let container = Container(output(&mut create)?);
+    commands.output("create", &mut create)?;
     let mut attached = Process(
         Command::new("docker")
-            .args(["start", "--attach", &container.0])
+            .args(["start", "--attach", &container.name])
             .stdout(File::create(directory.join("stdout.log"))?)
             .stderr(File::create(directory.join("stderr.log"))?)
             .spawn()?,
     );
     let timed_out = matches!(
-        attached.wait(interrupted, Some(Duration::from_secs(args.timeout)))?,
+        attached.wait(Some(interrupted), Some(Duration::from_secs(args.timeout)))?,
         Completion::TimedOut
     );
     if timed_out {
-        docker(&["kill", &container.0])?;
-        attached.0.wait()?;
+        commands.docker("kill", &["kill", &container.name])?;
+        ensure!(
+            matches!(
+                attached.wait(Some(interrupted), Some(commands.timeout))?,
+                Completion::Exited(_)
+            ),
+            "Docker attachment did not exit after kill"
+        );
     }
-    let inspected: Value = serde_json::from_str(&docker(&["inspect", &container.0])?)?;
+    let inspected: Value =
+        serde_json::from_str(&commands.docker("inspect", &["inspect", &container.name])?)?;
     let state = inspected
         .pointer("/0/State")
         .context("missing Docker state")?;
@@ -346,10 +439,16 @@ pub fn run(args: Args) -> Result<()> {
     let artifacts = density.join(format!("memory_pressure-{stamp}"));
     fs::create_dir(&artifacts)?;
     eprintln!("pressure artifacts: {}", artifacts.display());
-    let (image, binary) = build(&args, &root, &artifacts, &interrupted)?;
+    let commands = Commands::new(
+        &artifacts,
+        &interrupted,
+        Duration::from_secs(args.docker_timeout),
+    )?;
+    let (image, binary) = build(&args, &root, &artifacts, &commands)?;
     fs::write(
         artifacts.join("source.patch"),
-        output_bytes(
+        commands.bytes(
+            "git-diff",
             Command::new("git")
                 .args(["diff", "--binary", "HEAD"])
                 .current_dir(&root),
@@ -358,8 +457,8 @@ pub fn run(args: Args) -> Result<()> {
     fs::write(
         artifacts.join("manifest.json"),
         serde_json::to_vec_pretty(&json!({
-            "revision": output(Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&root))?,
-            "dirty": !output(Command::new("git").args(["status", "--porcelain"]).current_dir(&root))?.is_empty(),
+            "revision": commands.output("git-revision", Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&root))?,
+            "dirty": !commands.output("git-status", Command::new("git").args(["status", "--porcelain"]).current_dir(&root))?.is_empty(),
             "image": image, "binary": binary,
             "build": {"cpus": 4, "memory_mib": 8192}, "measured": {"cpus": 2, "swap_mib": 0},
         }))?,
@@ -392,6 +491,7 @@ pub fn run(args: Args) -> Result<()> {
             }
         }
     }
+    ensure!(interrupted.try_recv().is_err(), "pressure run interrupted");
     eprintln!(
         "{}/{} pressure cases passed",
         reports.len() - failed,

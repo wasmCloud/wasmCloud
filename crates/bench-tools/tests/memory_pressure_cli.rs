@@ -14,34 +14,53 @@ use serde_json::json;
 
 const DOCKER: &str = r#"#!/bin/sh
 set -eu
+stall() {
+  case " ${HANG_COMMANDS:-} " in
+    *" $1 "*)
+      printf '%s\n' "$$" >> "$PRESSURE_FIXTURE/hung-pids"
+      printf '%s\n' "$$" > "$PRESSURE_FIXTURE/$1-started"
+      exec sleep 300
+      ;;
+  esac
+}
 printf '%s\n' "$*" >> "$PRESSURE_FIXTURE/calls"
 case "$1" in
   run)
+    previous=
     for arg in "$@"; do
-      case "$arg" in --cidfile=*) printf '%064d\n' 1 > "${arg#--cidfile=}";; esac
+      case "$arg" in --cidfile=*) if [ "${OMIT_BUILD_CID:-0}" != 1 ]; then printf '%064d\n' 1 > "${arg#--cidfile=}"; fi;; esac
+      if [ "$previous" = --name ]; then printf '%s\n' "$arg" > "$PRESSURE_FIXTURE/build-name"; fi
+      previous=$arg
     done
-    printf '%s\n' "$$" > "$PRESSURE_FIXTURE/build-started"
-    if [ "${HANG_BUILD:-0}" = 1 ]; then exec sleep 300; fi
+    stall build
     if [ "${FAIL_BUILD:-0}" = 1 ]; then exit 23; fi
     printf '%s\n' '{"target":{"name":"memory_pressure"},"executable":"/target/release/deps/memory_pressure-fixture"}'
     ;;
-  image) printf '%s\n' sha256:fixture;;
+  image) stall image; printf '%s\n' sha256:fixture;;
   create)
     printf '%s\n' "$@" > "$PRESSURE_FIXTURE/create-args"
+    previous=
     for arg in "$@"; do
       case "$arg" in type=bind,src=*,dst=/results) path=${arg#type=bind,src=}; printf '%s' "${path%,dst=/results}" > "$PRESSURE_FIXTURE/report-dir";; esac
+      if [ "$previous" = --name ]; then printf '%s\n' "$arg" > "$PRESSURE_FIXTURE/case-name"; fi
+      previous=$arg
     done
+    stall create
     printf '%064d\n' 2
     ;;
   start)
     cp "$PRESSURE_FIXTURE/input.json" "$(cat "$PRESSURE_FIXTURE/report-dir")/report.json"
-    printf '%s\n' "$$" > "$PRESSURE_FIXTURE/started"
-    if [ "${HANG_CASE:-0}" = 1 ]; then exec sleep 300; fi
+    stall start
     ;;
-  inspect) cat "$PRESSURE_FIXTURE/exit.json";;
+  inspect) stall inspect; cat "$PRESSURE_FIXTURE/exit.json";;
   kill|rm)
     printf '%s\n' "$*" >> "$PRESSURE_FIXTURE/cleanup"
-    if [ -f "$PRESSURE_FIXTURE/started" ]; then kill "$(cat "$PRESSURE_FIXTURE/started")" 2>/dev/null || :; fi
+    case "$1:${3:-}" in
+      rm:wash-pressure-build-*) stall build-remove;;
+      rm:*) stall remove;;
+      *) stall kill;;
+    esac
+    if [ -f "$PRESSURE_FIXTURE/start-started" ]; then kill "$(cat "$PRESSURE_FIXTURE/start-started")" 2>/dev/null || :; fi
     ;;
   *) exit 24;;
 esac
@@ -185,6 +204,10 @@ impl Fixture {
     }
 
     fn signal(&self, child: &mut ChildGuard, event: &str) -> Result<()> {
+        self.signal_kind(child, event, "-TERM")
+    }
+
+    fn signal_kind(&self, child: &mut ChildGuard, event: &str, signal: &str) -> Result<()> {
         wait_until(
             || {
                 Ok(fs::read_to_string(self.path().join(event))
@@ -196,21 +219,64 @@ impl Fixture {
         .with_context(|| fs::read_to_string(self.path().join("driver.log")).unwrap_or_default())?;
         ensure!(
             Command::new("kill")
-                .args(["-TERM", &child.0.id().to_string()])
+                .args([signal, &child.0.id().to_string()])
                 .status()?
                 .success(),
             "signal failed"
         );
-        wait_until(
-            || Ok(child.0.try_wait()?.is_some()),
-            "driver ignored SIGTERM",
-        )
+        self.finished(child)
     }
 
-    fn removed(&self, id: u64) -> Result<bool> {
+    fn removed(&self, kind: &str) -> Result<bool> {
+        let name = fs::read_to_string(self.path().join(format!("{kind}-name")))?;
         Ok(fs::read_to_string(self.path().join("cleanup"))?
             .lines()
-            .any(|line| line == format!("rm --force {id:064x}")))
+            .any(|line| line == format!("rm --force {}", name.trim())))
+    }
+
+    fn spawn(&self, command: &mut Command) -> Result<ChildGuard> {
+        Ok(ChildGuard(
+            command
+                .stdout(Stdio::null())
+                .stderr(fs::File::create(self.path().join("driver.log"))?)
+                .spawn()?,
+        ))
+    }
+
+    fn finished(&self, child: &mut ChildGuard) -> Result<()> {
+        wait_until(
+            || Ok(child.0.try_wait()?.is_some()),
+            "driver did not exit before the test deadline",
+        )
+        .with_context(|| fs::read_to_string(self.path().join("driver.log")).unwrap_or_default())
+    }
+
+    fn no_stalled_processes(&self) -> Result<()> {
+        for pid in fs::read_to_string(self.path().join("hung-pids"))?.lines() {
+            ensure!(
+                !Command::new("kill")
+                    .args(["-0", pid])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()?
+                    .success(),
+                "stalled Docker process {pid} survived"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if let Ok(pids) = fs::read_to_string(self.path().join("hung-pids")) {
+            for pid in pids.lines() {
+                let _ = Command::new("kill")
+                    .args(["-KILL", pid])
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
     }
 }
 
@@ -264,7 +330,7 @@ fn completed_case_applies_limits_cleans_up_and_feeds_shared_reports() -> Result<
             "missing {setting}"
         );
     }
-    assert!(fixture.removed(2)?);
+    assert!(fixture.removed("case")?);
     for subcommand in ["jsonl", "summary"] {
         let output = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
             .args([subcommand, "--bench", "memory_pressure", "--target-dir"])
@@ -291,7 +357,7 @@ fn verified_oom_passes_and_unverified_exit_137_fails() -> Result<()> {
                 Outcome::Failed
             })
         );
-        assert!(fixture.removed(2)?);
+        assert!(fixture.removed("case")?);
     }
     Ok(())
 }
@@ -302,7 +368,7 @@ fn malformed_checkpoint_still_removes_the_container() -> Result<()> {
     fs::write(fixture.path().join("input.json"), "{broken")?;
     let output = fixture.command(Shape::Sparse, "growth")?.output()?;
     assert!(!output.status.success());
-    assert!(fixture.removed(2)?);
+    assert!(fixture.removed("case")?);
     Ok(())
 }
 
@@ -313,13 +379,13 @@ fn timeout_fails_even_with_an_oom_flag_and_complete_checkpoint() -> Result<()> {
     let output = fixture
         .command(Shape::Sparse, "growth")?
         .args(["--timeout", "1"])
-        .env("HANG_CASE", "1")
+        .env("HANG_COMMANDS", "start")
         .output()?;
     assert!(!output.status.success());
     assert!(fixture.report()?.stop.contains("timed out"));
     let cleanup = fs::read_to_string(fixture.path().join("cleanup"))?;
     assert!(cleanup.lines().any(|line| line.starts_with("kill ")));
-    assert!(fixture.removed(2)?);
+    assert!(fixture.removed("case")?);
     Ok(())
 }
 
@@ -329,36 +395,125 @@ fn sigterm_during_measurement_removes_the_container() -> Result<()> {
     let mut child = ChildGuard(
         fixture
             .command(Shape::Sparse, "growth")?
-            .env("HANG_CASE", "1")
+            .env("HANG_COMMANDS", "start")
             .stdout(Stdio::null())
             .stderr(fs::File::create(fixture.path().join("driver.log"))?)
             .spawn()?,
     );
-    fixture.signal(&mut child, "started")?;
-    assert!(fixture.removed(2)?);
+    fixture.signal(&mut child, "start-started")?;
+    assert!(fixture.removed("case")?);
     Ok(())
 }
 
 #[test]
 fn sigterm_during_build_stops_the_build_and_cleans_up() -> Result<()> {
+    for omit_cid in ["0", "1"] {
+        let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
+        let mut child = fixture.spawn(
+            fixture
+                .command(Shape::Sparse, "growth")?
+                .env("HANG_COMMANDS", "build")
+                .env("OMIT_BUILD_CID", omit_cid),
+        )?;
+        fixture.signal(&mut child, "build-started")?;
+        assert!(fixture.removed("build")?);
+        fixture.no_stalled_processes()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn sigint_during_creation_cleans_up_without_a_container_id() -> Result<()> {
     let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
-    let mut child = ChildGuard(
+    let mut child = fixture.spawn(
         fixture
             .command(Shape::Sparse, "growth")?
-            .env("HANG_BUILD", "1")
-            .stdout(Stdio::null())
-            .stderr(fs::File::create(fixture.path().join("driver.log"))?)
-            .spawn()?,
-    );
-    let result = fixture.signal(&mut child, "build-started");
-    // A failed regression check must not leave its fake build process running.
-    if result.is_err()
-        && let Ok(pid) = fs::read_to_string(fixture.path().join("build-started"))
-    {
-        let _ = Command::new("kill").args(["-KILL", pid.trim()]).status();
+            .env("HANG_COMMANDS", "create"),
+    )?;
+    fixture.signal_kind(&mut child, "create-started", "-INT")?;
+    assert!(!child.0.wait()?.success());
+    assert!(fixture.removed("case")?);
+    fixture.no_stalled_processes()?;
+    Ok(())
+}
+
+#[test]
+fn sigterm_during_docker_control_commands_cleans_up() -> Result<()> {
+    for event in ["image", "create", "inspect", "kill"] {
+        let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
+        let mut command = fixture.command(Shape::Sparse, "growth")?;
+        command.env(
+            "HANG_COMMANDS",
+            if event == "kill" { "start kill" } else { event },
+        );
+        if event == "kill" {
+            command.args(["--timeout", "1"]);
+        }
+        let mut child = fixture.spawn(&mut command)?;
+        fixture.signal(&mut child, &format!("{event}-started"))?;
+        assert!(!child.0.wait()?.success(), "{event} ignored cancellation");
+        assert!(
+            fs::read_to_string(fixture.path().join("driver.log"))?
+                .contains("pressure run interrupted")
+        );
+        assert!(fixture.removed(if event == "image" { "build" } else { "case" })?);
+        fixture.no_stalled_processes()?;
     }
-    result?;
-    assert!(fixture.removed(1)?);
+    Ok(())
+}
+
+#[test]
+fn stalled_docker_control_commands_time_out_and_clean_up() -> Result<()> {
+    for event in ["image", "create", "inspect", "kill"] {
+        let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
+        let mut command = fixture.command(Shape::Sparse, "growth")?;
+        command.args(["--docker-timeout", "1"]).env(
+            "HANG_COMMANDS",
+            if event == "kill" { "start kill" } else { event },
+        );
+        if event == "kill" {
+            command.args(["--timeout", "1"]);
+        }
+        let mut child = fixture.spawn(&mut command)?;
+        fixture.finished(&mut child)?;
+        assert!(!child.0.wait()?.success(), "{event} ignored its deadline");
+        let name = if event == "image" {
+            "image-inspect"
+        } else {
+            event
+        };
+        assert!(
+            fs::read_to_string(fixture.path().join("driver.log"))?
+                .contains(&format!("{name} timed out"))
+        );
+        assert!(fixture.removed(if event == "image" { "build" } else { "case" })?);
+        fixture.no_stalled_processes()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn sigterm_during_stalled_removal_is_bounded() -> Result<()> {
+    for event in ["build-remove", "remove"] {
+        let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
+        let mut command = fixture.command(Shape::Sparse, "growth")?;
+        command.env("HANG_COMMANDS", event);
+        if event == "build-remove" {
+            command.args(["--docker-timeout", "1"]);
+        }
+        let mut child = fixture.spawn(&mut command)?;
+        fixture.signal(&mut child, &format!("{event}-started"))?;
+        assert!(!child.0.wait()?.success());
+        let log = fs::read_to_string(fixture.path().join("driver.log"))?;
+        assert!(log.contains("cleanup timed out"));
+        assert!(log.contains("pressure run interrupted"));
+        assert!(fixture.removed(if event == "build-remove" {
+            "build"
+        } else {
+            "case"
+        })?);
+        fixture.no_stalled_processes()?;
+    }
     Ok(())
 }
 
