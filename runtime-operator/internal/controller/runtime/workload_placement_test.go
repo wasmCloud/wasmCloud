@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -149,49 +147,9 @@ func TestServiceDNSAliasesOnlyAffectIncomingHTTP(t *testing.T) {
 // A ConfigMap, Secret or registry credential placement cannot read fails it
 // before any start is sent, naming what it was reading for.
 func TestPlacementDependencyFailuresDoNotStart(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		missing     client.Object
-		setup       func(*runtimev1alpha1.Workload)
-		wantContext string
-	}{
-		{name: "host interface config", missing: layerConfigMap(httpLayer),
-			wantContext: "materializing host interface config for wasi/http:"},
-		{name: "host interface secret", missing: layerSecret(httpLayer),
-			wantContext: "materializing host interface config for wasi/http:"},
-		{name: "component config", missing: layerConfigMap(componentLayer),
-			wantContext: `materializing local resources config for component "` + fixtureComponent + `":`},
-		{name: "component secret", missing: layerSecret(componentLayer),
-			wantContext: `materializing local resources config for component "` + fixtureComponent + `":`},
-		{name: "service config", missing: layerConfigMap(serviceLayer),
-			wantContext: "materializing local resources config for service:"},
-		{name: "service secret", missing: layerSecret(serviceLayer),
-			wantContext: "materializing local resources config for service:"},
-		{name: "component credentials", missing: fixturePullSecretObject(),
-			wantContext: `materializing image pull secret for component "` + fixtureComponent + `":`},
-		{name: "service credentials", missing: fixturePullSecretObject(),
-			setup:       func(w *runtimev1alpha1.Workload) { w.Spec.Components[0].ImagePullSecret = nil },
-			wantContext: "materializing image pull secret for service:"},
-	} {
+	for _, tc := range missingDependencies() {
 		t.Run(tc.name, func(t *testing.T) {
-			r, workload, bus := placementFixture(t)
-			if tc.setup != nil {
-				tc.setup(workload)
-			}
-			if err := r.Delete(t.Context(), tc.missing); err != nil {
-				t.Fatal(err)
-			}
-			before := workload.DeepCopy()
-			err := r.reconcilePlacement(t.Context(), workload)
-			if !apierrors.IsNotFound(err) || !strings.HasPrefix(err.Error(), tc.wantContext) {
-				t.Fatalf("placement error = %v, want NotFound starting %q", err, tc.wantContext)
-			}
-			if len(bus.requests) != 0 {
-				t.Fatalf("sent %d requests with invalid dependencies", len(bus.requests))
-			}
-			if !reflect.DeepEqual(workload, before) {
-				t.Fatal("failed placement changed the workload")
-			}
+			checkMissingDependency(t, tc, placementFixture, (*WorkloadReconciler).reconcilePlacement)
 		})
 	}
 }
