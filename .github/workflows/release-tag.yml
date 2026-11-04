@@ -83,6 +83,9 @@ jobs:
       needs.gate.outputs.run == 'true' &&
       (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     uses: $/.github/workflows/fuzz.yml
+    permissions:
+      contents: read
+      id-token: write
     with:
       sha: ${{ needs.gate.outputs.sha }}
 

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "release_seconds": 300,
+  "weekly_seconds": 1800,
+  "go": [
+    { "package": "./api/runtime/v1alpha1", "target": "FuzzEnsureHostInterface" },
+    { "package": "./api/runtime/v1alpha1", "target": "FuzzWorkloadSpecJSON" },
+    { "package": "./api/condition", "target": "FuzzSetConditions" },
+    { "package": "./api/condition", "target": "FuzzAllTrue" },
+    { "package": "./api/condition", "target": "FuzzAnyUnknown" },
+    { "package": "./api/condition", "target": "FuzzConditionedStatusEqual" },
+    { "package": "./pkg/crdtools", "target": "FuzzMergeLabels" },
+    { "package": "./pkg/crdtools", "target": "FuzzMergeEnvVar" },
+    { "package": "./internal/controller/runtime", "target": "FuzzMergeMaps" },
+    { "package": "./internal/controller/runtime", "target": "FuzzTranslatePullPolicy" },
+    { "package": "./internal/controller/runtime", "target": "FuzzGetAuthConfigKey" }
+  ],
+  "rust": [
+    "workload_spec",
+    "protobuf",
+    "allowed_hosts",
+    "address_policy",
+    "oci_reference",
+    "http_route",
+    "host_interfaces"
+  ]
+}

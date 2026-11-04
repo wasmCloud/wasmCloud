@@ -1,12 +1,21 @@
 # Runtime parser fuzzing
 
-`fuzz.yml` runs all 11 Go targets and the seven Rust targets below for five
-minutes each before release promotion. The release gate resolves the commit
-once; fuzzing and promotion both check out that SHA. A failed or skipped fuzz
-job blocks promotion. Sunday runs spend 30 minutes on each target. Manual runs
-use the five-minute budget.
+The release gate requests a run in the private
+[`wasmCloud/security-fuzz`](https://github.com/wasmCloud/security-fuzz) repository.
+It runs all 11 Go targets and the seven Rust targets below for five minutes each
+before promotion. The gate and promotion use the same full source SHA. Sunday
+runs in the private repository spend 30 minutes on each target. Manual runs use
+the five-minute budget.
 
-The workflow checks out harnesses at its own immutable revision and stages them
+The public workflow runs no discovery fuzzing and publishes no crash details.
+It verifies the private repository's ID and visibility, pins its workflow
+revision, and dispatches a unique request. Promotion requires a successful run
+and matching evidence: source SHA, harness SHA, request and run IDs, complete
+target policy, and duration. Failed, skipped, cancelled, stale, or missing
+results block promotion. Workflow reruns require a new release-gate request.
+The gate never downloads private job logs or crash artifacts.
+
+The private workflow checks out harnesses at an immutable revision and stages them
 into a separate checkout of the selected release source. Recovery SHAs do not
 need to contain the fuzz crate, Go fuzz tests, seeds, or the HTTP matcher shim.
 The shim accesses the selected source's private router; it supplies no parser
@@ -25,11 +34,19 @@ lockfile to synchronize.
 the source checkout. The audit workflow stages this workspace and checks its
 dependency licenses with the root `deny.toml` policy.
 
-Each target has its own corpus cache, refreshed after every run, including
-failures. Rust seeds are committed under `seeds/`; Go seeds live in the existing
-`*_fuzz_test.go` files. Failing inputs are uploaded as workflow artifacts. Copy
-reproducers into the seed directories (Rust) or `testdata/fuzz/<target>/` (Go)
-when fixing a finding.
+Each target has its own private corpus cache, refreshed after every run,
+including failures. Rust seeds are committed under `seeds/`; Go seeds live in
+the existing `*_fuzz_test.go` files. Failing inputs are retained as private
+artifacts for 30 days; successful release evidence is retained for 90 days.
+Triage crashes under [the security policy](../SECURITY.md). Publish reproducers
+as regression seeds after any required coordinated disclosure.
+
+## Private automation
+
+[`private/`](private/) contains the reviewed control files deployed to the private
+repository. See its [setup instructions](private/README.md) for authentication,
+access controls, harness revisions, and updating the deployment. Public CI tests
+the staging code and release protocol without running discovery fuzzing.
 
 | Rust target | Surface |
 | --- | --- |
@@ -92,6 +109,7 @@ cd "$FUZZ_SOURCE/runtime-operator"
 go test ./api/runtime/v1alpha1 -run='^$' -fuzz='^FuzzWorkloadSpecJSON$' -fuzztime=5m
 ```
 
-Add new targets to the workflow matrix as well as the relevant manifest or test
-file. Keep release fuzzing mandatory; use longer scheduled runs to expand the
-cached corpus.
+Add new targets to `private/policy.json` as well as the relevant manifest or test
+file, and deploy the updated policy to the private repository. Both sides must
+agree on the full policy. Keep release fuzzing mandatory; use longer scheduled
+runs to expand the private corpus.
