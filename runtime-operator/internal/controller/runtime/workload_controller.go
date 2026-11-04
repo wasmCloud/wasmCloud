@@ -13,7 +13,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,7 +48,6 @@ const (
 // WorkloadReconciler reconciles a Workload object
 type WorkloadReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
 	Bus      wasmbus.Bus
 	Recorder events.EventRecorder
 	// OperatorNamespace is the namespace every Host CRD lives in. The
@@ -823,6 +821,20 @@ func (r *WorkloadReconciler) stopOnHost(ctx context.Context, workload *runtimev1
 	return false, nil
 }
 
+// newReconciler builds the finalizer and condition pipeline Reconcile runs on
+// r.Client. Each condition gates the ones after it, so the order is part of
+// the behavior.
+func (r *WorkloadReconciler) newReconciler() *condition.ConditionedReconciler[*runtimev1alpha1.Workload] {
+	reconciler := condition.NewConditionedReconciler(r.Client, r.Scheme(), &runtimev1alpha1.Workload{}, workloadReconcileInterval)
+	reconciler.SetFinalizer(workloadFinalizerName, r.finalize)
+	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionConfig, r.reconcileConfig)
+	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionHostSelection, r.reconcileHostSelection)
+	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionPlacement, r.reconcilePlacement)
+	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionSync, r.reconcileSync)
+	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
+	return reconciler
+}
+
 // SetupWithManager sets up the controller with the Manager.
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloads,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloads/status,verbs=get;update;patch
@@ -832,20 +844,7 @@ func (r *WorkloadReconciler) stopOnHost(ctx context.Context, workload *runtimev1
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;get;list;patch;update;watch
 
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	reconciler := condition.NewConditionedReconciler(
-		r.Client,
-		r.Scheme,
-		&runtimev1alpha1.Workload{},
-		workloadReconcileInterval)
-	reconciler.SetFinalizer(workloadFinalizerName, r.finalize)
-
-	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionConfig, r.reconcileConfig)
-	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionHostSelection, r.reconcileHostSelection)
-	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionPlacement, r.reconcilePlacement)
-	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionSync, r.reconcileSync)
-	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
-
-	r.reconciler = reconciler
+	r.reconciler = r.newReconciler()
 
 	// Index Hosts by HostID for lookupHostByID. WorkloadRouteReconciler reads
 	// it too.

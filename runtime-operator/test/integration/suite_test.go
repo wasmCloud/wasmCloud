@@ -63,7 +63,6 @@ var _ = BeforeSuite(func() {
 	// test see what the controller sees.
 	Expect((&runtimectrl.WorkloadReconciler{
 		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
 		Bus:    testHost,
 		// Isolation on, the strictest mode: placement and eviction both check
 		// Environments, which is why fakeHost is registered below.
