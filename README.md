@@ -264,6 +264,8 @@ Releases ship every two weeks: each Tuesday at 16:00 UTC on the train's cycle, t
 
 ## Project documentation
 
+- [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the parts of wasmCloud, its actors, and what happens when a workload runs
+- [`API.md`](./API.md) — the external interfaces and where each is defined
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to contribute, code style, and PR conventions
 - [`CONTRIBUTION_LADDER.md`](./CONTRIBUTION_LADDER.md) — contributor → maintainer progression
 - [`GOVERNANCE.md`](./GOVERNANCE.md) — project governance and decision-making

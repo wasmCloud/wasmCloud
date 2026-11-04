@@ -126,6 +126,10 @@ repository. Each disclosure will contain:
 Disclosures are published on the same day as the fixing release, after the release is published.
 Release notes will contain a link to the advisory.
 
+wasmCloud 2.x has no published advisories yet. The most recent one is
+[GHSA-2cmx-rr54-88g5](https://github.com/wasmCloud/wasmcloud-otp/security/advisories/GHSA-2cmx-rr54-88g5)
+(CVE-2022-21707), for the archived 0.x host.
+
 Non-exploitable component advisories are documented in
 [`vex/wasmcloud.openvex.json`](vex/wasmcloud.openvex.json), supplementing the upstream reports
 with product identifiers and non-exploitability details. Every GitHub Release includes this
@@ -236,6 +240,19 @@ When a service offers none of these, the credential is stored as a GitHub Action
   [Granting Access](CONTRIBUTION_LADDER.md#granting-access).
 - Org maintainers keep a private record of each secret: what it is for, who owns it, and when it
   was last rotated. A secret no workflow uses is deleted.
+
+### Privileged workflows
+
+[`release-tag.yml`](.github/workflows/release-tag.yml) is the only workflow that holds write
+permissions and release credentials. It never runs pull request code:
+
+- It starts from `workflow_run` after `release-train` succeeds on `main`, or from a maintainer's
+  `workflow_dispatch`. The job with write permissions runs only when the ref is `refs/heads/main`.
+- It checks out `main`, or a release commit on `main` a maintainer names.
+- The binaries it releases come from the successful `wash.yml` run on that commit. It scans them
+  for SBOMs and attests them, but doesn't execute them.
+- It runs on GitHub-hosted runners, restores no Actions cache, and gets its release-tag token from
+  octo-sts.
 
 ### Rotation
 
