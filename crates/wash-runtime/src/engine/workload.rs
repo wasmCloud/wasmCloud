@@ -1063,6 +1063,87 @@ fn build_trigger_ingresses(
     (ingresses, http_tx, messaging_tx)
 }
 
+/// What a restart needs to register its service's ingresses again.
+struct ServiceIngressRegistration {
+    http_handler: Arc<dyn crate::host::http::HostHandler>,
+    workload_id: Arc<str>,
+    workload_name: Arc<str>,
+    workload_namespace: Arc<str>,
+    ingress_routes: Vec<crate::host::http::IngressRoute>,
+    /// The workload's teardown flag (see [`ResolvedWorkload::begin_teardown`]).
+    released: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Register a restarted service's ingresses, then undo that if the workload
+/// began teardown meanwhile. Returns whether the service may run again.
+///
+/// Teardown sets `released` before it unbinds the workload. So if this reads
+/// it unset after registering, teardown's unbind comes later and removes this
+/// registration. If it reads it set, teardown's unbind may already be done,
+/// so this unbinds the workload itself rather than leaving a stopped workload
+/// routed. An unbind is idempotent, so doing both is harmless.
+///
+/// Must run to completion, as a task of its own: abort the service between
+/// registering and checking `released`, and a registration that landed after
+/// teardown's unbind would stay.
+async fn reregister_service_ingresses(
+    registration: ServiceIngressRegistration,
+    http_tx: Option<tokio::sync::mpsc::Sender<crate::host::http::ServiceHttpJob>>,
+    messaging_tx: Option<tokio::sync::mpsc::Sender<crate::host::trigger_service::MessagingJob>>,
+) -> bool {
+    let ServiceIngressRegistration {
+        http_handler,
+        workload_id,
+        workload_name,
+        workload_namespace,
+        ingress_routes,
+        released,
+    } = registration;
+    if let Some(http_tx) = http_tx
+        && let Err(e) = http_handler
+            .on_service_http_resolved(&workload_id, &ingress_routes, http_tx)
+            .await
+    {
+        error!(
+            workload.id = %workload_id,
+            workload.namespace = %workload_namespace,
+            workload.name = %workload_name,
+            err = %e,
+            "failed to re-register service HTTP handler on restart"
+        );
+    }
+    if let Some(messaging_tx) = messaging_tx
+        && let Err(e) = http_handler
+            .on_trigger_service_messaging_resolved(&workload_id, messaging_tx)
+            .await
+    {
+        error!(
+            workload.id = %workload_id,
+            workload.namespace = %workload_namespace,
+            workload.name = %workload_name,
+            err = %e,
+            "failed to re-register trigger service messaging handler on restart"
+        );
+    }
+    if !released.load(std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+    debug!(
+        workload.id = %workload_id,
+        "workload began teardown during a service restart; unbinding its ingresses again"
+    );
+    if let Err(e) = http_handler.on_workload_unbind(&workload_id).await {
+        warn!(
+            workload.id = %workload_id,
+            workload.namespace = %workload_namespace,
+            workload.name = %workload_name,
+            err = %e,
+            "failed to unbind a service re-registered during teardown"
+        );
+    }
+    false
+}
+
 impl ResolvedWorkload {
     /// Executes the service, if present, and returns whether it was run.
     #[instrument(name="execute_service", skip_all, fields(workload.id = self.id.as_ref(), workload.name = self.name.as_ref(), workload.namespace = self.namespace.as_ref()))]
@@ -1287,6 +1368,9 @@ impl ResolvedWorkload {
         // (the first below and each restart re-registration in the supervisor)
         // so a hostname-keyed router can resolve requests to this service.
         let ingress_routes = crate::host::http::http_ingress_routes(self.host_interfaces())?;
+        // Set by teardown before it aborts the service and unbinds it, so a
+        // restart that re-registers just as the workload stops can tell.
+        let released = Arc::clone(&self.released);
 
         // Build the first incarnation's host-invoked ingresses. Each paired sender
         // is registered with its host-side ingress (the HTTP server, the messaging
@@ -1352,38 +1436,25 @@ impl ResolvedWorkload {
                                 );
                                 break;
                             };
-                            if let Some(http_tx) = http_tx
-                                && let Err(e) = http_handler
-                                    .on_service_http_resolved(
-                                        &workload_id,
-                                        &ingress_routes,
-                                        http_tx,
-                                    )
-                                    .await
-                            {
-                                error!(
-                                    workload.id = %workload_id,
-                                    workload.namespace = %workload_namespace,
-                                    workload.name = %workload_name,
-                                    err = %e,
-                                    "failed to re-register service HTTP handler on restart"
-                                );
-                            }
-                            if let Some(messaging_tx) = messaging_tx
-                                && let Err(e) = http_handler
-                                    .on_trigger_service_messaging_resolved(
-                                        &workload_id,
-                                        messaging_tx,
-                                    )
-                                    .await
-                            {
-                                error!(
-                                    workload.id = %workload_id,
-                                    workload.namespace = %workload_namespace,
-                                    workload.name = %workload_name,
-                                    err = %e,
-                                    "failed to re-register trigger service messaging handler on restart"
-                                );
+                            // On a task of its own, so aborting this service
+                            // cannot stop a re-registration half way, after
+                            // its routes are in but before it has checked
+                            // whether teardown has already unbound them.
+                            let reregistered = tokio::spawn(reregister_service_ingresses(
+                                ServiceIngressRegistration {
+                                    http_handler,
+                                    workload_id: Arc::clone(&workload_id),
+                                    workload_name: Arc::clone(&workload_name),
+                                    workload_namespace: Arc::clone(&workload_namespace),
+                                    ingress_routes: ingress_routes.clone(),
+                                    released: Arc::clone(&released),
+                                },
+                                http_tx,
+                                messaging_tx,
+                            ))
+                            .await;
+                            if !matches!(reregistered, Ok(true)) {
+                                break;
                             }
                         }
                         crate::host::trigger_service::run_trigger_driver(
