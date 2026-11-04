@@ -302,6 +302,15 @@ impl From<&HostWorkload> for WorkloadState {
     }
 }
 
+/// The message a panic was raised with, as a `JoinError` would report it.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("Box<dyn Any>")
+}
+
 type WorkloadMap = HashMap<String, HostWorkload>;
 
 /// Read the workload map. Poison is ignored: every write is a single step.
@@ -1015,26 +1024,36 @@ impl Host {
 
         // Initialize the workload using the engine, receiving the unresolved workload.
         //
-        // Cranelift compiles every component here, guarded by the moka cache.
-        // This occupies whichever thread runs it for as long as compilation takes.
-        // On a runtime thread, that may stall async-nats connection task alongside it
-        // and a host that stops draining its socket is disconnected as a slow consumer.
+        // A workload whose every component is already compiled, with no
+        // volumes or service, initializes here: nothing blocks, and that is
+        // cheaper than the blocking pool's two thread handoffs. The engine
+        // refuses anything that would block on this path.
+        //
+        // Anything else may compile with Cranelift, open volumes or build a
+        // service, and goes to the blocking pool. On a runtime thread that
+        // could stall the async-nats connection task alongside it, and a host
+        // that stops draining its socket is disconnected as a slow consumer.
         let engine = self.engine.clone();
         let init_id = request.workload_id;
-        let workload = request.workload;
-        let unresolved_workload = match engine.pin_compiled_components(&workload) {
-            // Nothing to compile and no files to open: cheaper here than the
-            // blocking pool's two thread handoffs.
-            // A panic fails this start, as it did on the blocking pool.
-            Some(_pinned) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                engine.initialize_workload(&init_id, workload)
-            }))
-            .map_err(|_| anyhow::anyhow!("workload initialization panicked"))
-            .context("workload initialization task failed")??,
-            None => {
+        // A panic fails this start, as it does on the blocking pool.
+        let inline = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.initialize_workload_inline(&init_id, request.workload)
+        }))
+        .map_err(|panic| {
+            anyhow::anyhow!(
+                "workload initialization panicked: {}",
+                panic_message(panic.as_ref())
+            )
+        })?;
+        let unresolved_workload = match inline {
+            crate::engine::InlineInit::Initialized(initialized) => initialized?,
+            crate::engine::InlineInit::WouldBlock { workload, pinned } => {
                 let span = tracing::Span::current();
                 tokio::task::spawn_blocking(move || {
                     let _entered = span.enter();
+                    // Held so the compiles already found are reused, not
+                    // looked up or compiled again.
+                    let _pinned = pinned;
                     // The blocking executor can queue this after the check above.
                     if let Some(guard) = engine.process_memory() {
                         guard.admit_start().map_err(anyhow::Error::msg)?;

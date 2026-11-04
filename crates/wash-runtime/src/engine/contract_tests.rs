@@ -261,6 +261,7 @@ fn a_component_mounts_known_volumes_and_skips_unknown_ones() {
             },
             &volumes,
             Arc::default(),
+            super::Blocking::Allowed,
         )
         .unwrap();
     assert_eq!(component.local_resources().volume_mounts.len(), 2);
