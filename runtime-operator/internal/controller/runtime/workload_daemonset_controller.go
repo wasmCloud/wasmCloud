@@ -228,10 +228,11 @@ func (r *WorkloadDaemonSetReconciler) syncHosts(
 		if len(host.outdated) > 0 {
 			switch {
 			case recreate:
-				if err := r.deleteAll(ctx, host.outdated); err != nil {
+				deleted, err := r.deleteAll(ctx, host.outdated)
+				host.outdated = host.outdated[deleted:]
+				if err != nil {
 					return err
 				}
-				host.outdated = nil
 			case len(host.current) == 0:
 				// The host keeps its old instances until its turn to update.
 				if updating >= maxConcurrentHosts {
@@ -288,28 +289,31 @@ func (r *WorkloadDaemonSetReconciler) syncHost(
 				return -1
 			}
 		})
-		if err := r.deleteAll(ctx, host.current[:excess]); err != nil {
+		deleted, err := r.deleteAll(ctx, host.current[:excess])
+		host.current = host.current[deleted:]
+		if err != nil {
 			return err
 		}
-		host.current = host.current[excess:]
 	}
 
 	// Old instances stop only once the new ones on the same host are up.
 	if len(host.outdated) > 0 && len(host.current) >= int(perHost) && host.readyCurrent() >= perHost {
-		if err := r.deleteAll(ctx, host.outdated); err != nil {
+		deleted, err := r.deleteAll(ctx, host.outdated)
+		host.outdated = host.outdated[deleted:]
+		if err != nil {
 			return err
 		}
-		host.outdated = nil
 	}
 
 	// A failed instance is replaced on its own host on the next pass.
 	running := host.current[:0]
-	for _, workload := range host.current {
+	for i, workload := range host.current {
 		if !isFailedPastGracePeriod(workload, host.readySince) {
 			running = append(running, workload)
 			continue
 		}
 		if err := r.Delete(ctx, workload); client.IgnoreNotFound(err) != nil {
+			host.current = append(running, host.current[i:]...)
 			return err
 		}
 	}
@@ -577,13 +581,14 @@ func (r *WorkloadDaemonSetReconciler) confirmNotDeleted(
 	return nil
 }
 
-func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads []*runtimev1alpha1.Workload) error {
-	for _, workload := range workloads {
+// deleteAll reports accepted deletions, including workloads already absent.
+func (r *WorkloadDaemonSetReconciler) deleteAll(ctx context.Context, workloads []*runtimev1alpha1.Workload) (int, error) {
+	for i, workload := range workloads {
 		if err := r.Delete(ctx, workload); client.IgnoreNotFound(err) != nil {
-			return err
+			return i, err
 		}
 	}
-	return nil
+	return len(workloads), nil
 }
 
 func (r *WorkloadDaemonSetReconciler) reconcileReady(_ context.Context, daemonSet *runtimev1alpha1.WorkloadDaemonSet) error {
