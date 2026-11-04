@@ -38,7 +38,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -64,8 +63,18 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// invalidLoggingError is returned before a logger exists to report it.
+type invalidLoggingError struct{ error }
+
 func main() {
-	if err := run(ctrl.SetupSignalHandler(), flag.CommandLine, os.Args[1:], ctrl.GetConfig); err != nil {
+	err := run(ctrl.SetupSignalHandler(), flag.CommandLine, os.Args[1:], ctrl.GetConfig)
+	var invalidLogging invalidLoggingError
+	switch {
+	case err == nil:
+	case errors.As(err, &invalidLogging):
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	default:
 		setupLog.Error(err, "operator exited")
 		os.Exit(1)
 	}
@@ -86,7 +95,6 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 		probeAddr                   string
 		secureMetrics               bool
 		enableHTTP2                 bool
-		jsonLog                     bool
 		cpuBackpressureThreshold    float64
 		memoryBackpressureThreshold float64
 		disableArtifactController   bool
@@ -111,7 +119,6 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	fs.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	fs.BoolVar(&jsonLog, "json-log", false, "Output logs in JSON format")
 	fs.Float64Var(&cpuBackpressureThreshold, "cpu-backpressure-threshold", 80.0, "CPU backpressure threshold (%)")
 	fs.Float64Var(
 		&memoryBackpressureThreshold,
@@ -153,23 +160,16 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 			"environment is rejected.",
 	)
 
-	opts := zap.Options{
-		Development: true,
-	}
-	opts.BindFlags(fs)
+	logging := loggingOptions{development: true}
+	logging.bindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
-	zapOpts := []zap.Opts{
-		zap.UseFlagOptions(&opts),
+	logger, err := logging.logger(os.Stderr)
+	if err != nil {
+		return invalidLoggingError{err}
 	}
-	if jsonLog {
-		zapOpts = append(zapOpts, zap.JSONEncoder())
-	}
-	ctrl.SetLogger(zap.New(
-		zapOpts...,
-	))
+	configureLogging(logger)
 
 	// OPERATOR_NAMESPACE is required: every Host CRD is created here, and
 	// the namespaced Role for Host CRUD binds to this namespace.
