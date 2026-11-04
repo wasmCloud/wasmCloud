@@ -1188,9 +1188,8 @@ pub type SendFuture = Box<dyn std::future::Future<Output = SendResult> + Send>;
 /// identifier of the workload instance making the request — never empty, never
 /// derived from guest-controllable data, and never shared between workloads.
 /// Implementations (the default one included) key per-workload state on it:
-/// connection pools, TLS session-resumption stores, and connection quotas. Two
-/// callers presenting the same `workload_id` collapse into one identity and
-/// inherit each other's keep-alive connections and TLS session tickets.
+/// connection pools and connection quotas. Callers sharing a `workload_id`
+/// inherit each other's keep-alive connections.
 pub trait OutgoingHandler: Send + Sync + 'static {
     /// Send an outgoing HTTP request for the given `workload_id`, from a
     /// `wasi:http` 0.2 or 0.3 guest.
@@ -2420,9 +2419,10 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     }
 }
 
-/// Derive the h2 (ALPN) variant of a client TLS configuration for gRPC egress.
+/// Derive the h2 (ALPN) variant of a client TLS configuration for gRPC egress,
+/// without session resumption so new connections consult the current identity.
 fn h2_client_config(base: &rustls::ClientConfig) -> Arc<rustls::ClientConfig> {
-    let mut config = base.clone();
+    let mut config = crate::host::http_client::without_resumption(base);
     config.alpn_protocols = vec![b"h2".to_vec()];
     Arc::new(config)
 }
@@ -2947,9 +2947,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         drop(removed);
         self.service_handlers.write().await.remove(workload_id);
         self.messaging_handlers.write().await.remove(workload_id);
-        // Drop the stopped workload's egress state (pooled connections, TLS
-        // session store, pinned connection permits) instead of letting it
-        // linger until idle expiry.
+        // Release pooled connections and their permits when the workload stops.
         self.outgoing_handler.on_workload_unbind(workload_id);
 
         routed
@@ -4540,7 +4538,7 @@ impl IntoBodyError for wasmtime_wasi_http::Error {
 }
 
 /// Send a gRPC request over its own HTTP/2 connection. `tls` must already carry
-/// the h2 ALPN (see [`h2_client_config`]).
+/// the h2 ALPN and have session resumption disabled (see [`h2_client_config`]).
 async fn send_grpc_request(
     mut request: hyper::Request<WasiBody>,
     options: Option<RequestOptions>,
@@ -4568,11 +4566,7 @@ async fn send_grpc_request(
     let tcp_stream = connect_http_tcp(&authority, connect_timeout).await?;
 
     let (mut sender, conn_worker) = if use_tls {
-        // The cached gRPC TLS configuration is shared across workloads; give
-        // this connection its own session store so TLS session tickets never
-        // resume across workloads.
-        let config = crate::host::http_client::isolated_resumption(&tls);
-        let stream = connect_http_tls(Arc::new(config), &authority, tcp_stream).await?;
+        let stream = connect_http_tls(tls, &authority, tcp_stream).await?;
         let (sender, conn) = timeout(
             connect_timeout,
             http2::handshake(TokioExecutor::new(), TokioIo::new(stream)),

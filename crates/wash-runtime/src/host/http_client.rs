@@ -10,10 +10,9 @@
 //!
 //! Pools are keyed per workload ([`WorkloadClients`]): components never reuse
 //! each other's TCP connections, so connection-scoped server state (auth,
-//! rate-limit attribution) cannot leak between them — and each client keeps
-//! its own TLS session-resumption store, so session tickets never resume
-//! across workloads either. Port exhaustion is still prevented because it is
-//! caused by a single busy workload, which keeps reusing its own pool.
+//! rate-limit attribution) cannot leak between them. TLS session resumption
+//! is disabled so new connections consult the current client identity. A busy
+//! workload reuses its pool, which prevents port exhaustion.
 //!
 //! Live connections are bounded by the workload's
 //! [`GuestConnectionQuota`](crate::host::quota::GuestConnectionQuota): its
@@ -134,13 +133,8 @@ fn idle_per_authority(call_concurrency: usize, max_http: usize) -> usize {
 /// a client whose connections have all idled out anyway is just memory, so
 /// there is nothing worth keeping past that window.
 ///
-/// This TTI also backstops an isolation property: eviction plus lazy
-/// re-creation gives a *fresh* TLS session-resumption store, so a workload ID
-/// reused after the idle window cannot resume the previous holder's TLS
-/// sessions. Raising the TTI widens the window in which a reused ID inherits
-/// the prior client (workload stop already invalidates eagerly via
-/// [`WorkloadClients::invalidate`], so this only matters for callers that
-/// never signal unbind).
+/// Eviction also prevents a reused workload ID from inheriting idle connections.
+/// Workload stop invalidates eagerly via [`WorkloadClients::invalidate`].
 const WORKLOAD_CLIENT_IDLE: Duration = Duration::from_secs(60);
 
 /// Shortest gap between two [`warn_permits_exhausted`] lines for one workload.
@@ -479,17 +473,14 @@ pub(crate) async fn connect_http_tcp(
         })
 }
 
-/// Clone a TLS client configuration with a fresh, private session-resumption
-/// store.
+/// Clone a TLS configuration without resumable session state.
 ///
-/// `ClientConfig::clone` shares the resumption store behind an `Arc`, and
-/// rustls resumes sessions across clones — so every client (or connection)
-/// built from a shared base configuration would otherwise share one TLS
-/// session-ticket cache, letting an upstream server correlate two workloads
-/// via a resumed session, against this module's isolation promise.
-pub(crate) fn isolated_resumption(tls: &rustls::ClientConfig) -> rustls::ClientConfig {
+/// Resumed sessions retain the original client identity and skip its resolver.
+/// A resolver can gain, rotate, or lose a credential after this clone, so even
+/// `has_certs() == false` cannot safely enable resumption.
+pub(crate) fn without_resumption(tls: &rustls::ClientConfig) -> rustls::ClientConfig {
     let mut config = tls.clone();
-    config.resumption = rustls::client::Resumption::in_memory_sessions(256);
+    config.resumption = rustls::client::Resumption::disabled();
     config
 }
 
@@ -717,9 +708,8 @@ impl PooledClient {
         idle_per_authority: usize,
     ) -> Self {
         crate::init_crypto();
-        // One session store, and one exhaustion-warning throttle, shared by
-        // both protocols: they belong to the workload, not to a pool.
-        let tls_config = isolated_resumption(&tls);
+        // Both protocols use the current identity on every new connection.
+        let tls_config = without_resumption(&tls);
         let last_permit_warning = Arc::new(std::sync::Mutex::new(None));
         let connector = |alpn: Alpn| BoundedConnector {
             inner: https_connector(&tls_config, alpn),
@@ -1034,9 +1024,7 @@ impl WorkloadClients {
     /// `workload_id` is a trust boundary: it must be the host-assigned,
     /// unique identifier of the workload instance — never empty, never
     /// derived from guest-controllable data. Two callers presenting the same
-    /// ID collapse into one pool and inherit each other's keep-alive
-    /// connections and TLS session tickets (see
-    /// [`crate::host::http::OutgoingHandler`]).
+    /// ID share keep-alive connections (see [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
         // Looked up on every call, not just on a client-cache miss, so the
         // quota's idle window is refreshed alongside the client's and a
@@ -1073,7 +1061,7 @@ impl WorkloadClients {
     /// of the client and complete unaffected; their connections close, and
     /// release their permits, when those requests finish). A subsequent
     /// [`Self::client`] call for the same ID builds a fresh client with a
-    /// fresh TLS session-resumption store.
+    /// fresh connection pool.
     ///
     /// The workload's quota deliberately survives, so that the
     /// draining connections stay charged to it; it ages out on its own idle
@@ -2218,8 +2206,7 @@ mod tests {
     }
 
     /// Stopping a workload must drop its pooled client: the next client for
-    /// the same ID gets a fresh pool (and a fresh TLS session-resumption
-    /// store) instead of inheriting the previous holder's connections.
+    /// the same ID gets a fresh pool without the previous holder's connections.
     #[tokio::test]
     async fn invalidate_drops_pooled_connections() {
         let (addr, conns) = spawn_counting_server().await;
@@ -2883,6 +2870,132 @@ mod tests {
             }
         });
         (port, ca_pem)
+    }
+
+    #[derive(Debug, Default)]
+    struct SwappableIdentity(std::sync::RwLock<Option<Arc<rustls::sign::CertifiedKey>>>);
+
+    impl rustls::client::ResolvesClientCert for SwappableIdentity {
+        fn resolve(
+            &self,
+            _roots: &[&[u8]],
+            _schemes: &[rustls::SignatureScheme],
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            self.0.read().unwrap().clone()
+        }
+
+        fn has_certs(&self) -> bool {
+            self.0.read().unwrap().is_some()
+        }
+    }
+
+    /// Every new pooled connection must run a full handshake and present the
+    /// identity the resolver holds now, across TLS 1.2 and 1.3 and whether or
+    /// not a certificate exists when the pool is built.
+    #[tokio::test]
+    async fn pooled_tls_connections_refresh_client_identity() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        crate::init_crypto();
+        let dir = tempfile::tempdir().unwrap();
+        let load = |stem| {
+            let (certs, key) = write_identity(dir.path(), stem).load().unwrap();
+            Arc::new(
+                rustls::sign::CertifiedKey::from_der(
+                    certs,
+                    key,
+                    rustls::crypto::CryptoProvider::get_default().unwrap(),
+                )
+                .unwrap(),
+            )
+        };
+        let first = load("first");
+        let second = load("second");
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(first.cert[0].clone()).unwrap();
+        roots.add(second.cert[0].clone()).unwrap();
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+            .allow_unauthenticated()
+            .build()
+            .unwrap();
+        let server = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let ca_path = dir.path().join("server.pem");
+        std::fs::write(&ca_path, server.cert.pem()).unwrap();
+
+        for version in [&rustls::version::TLS12, &rustls::version::TLS13] {
+            for initially_available in [false, true] {
+                let key =
+                    rustls::pki_types::PrivateKeyDer::try_from(server.signing_key.serialize_der())
+                        .unwrap();
+                let mut config = rustls::ServerConfig::builder_with_protocol_versions(&[version])
+                    .with_client_cert_verifier(Arc::clone(&verifier))
+                    .with_single_cert(vec![server.cert.der().clone()], key)
+                    .unwrap();
+                config.ticketer = rustls::crypto::aws_lc_rs::Ticketer::new().unwrap();
+                let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let (observed, mut observations) = tokio::sync::mpsc::channel(4);
+                let worker = tokio::spawn(async move {
+                    for _ in 0..4 {
+                        let (tcp, _) = listener.accept().await.unwrap();
+                        let mut tls = acceptor.accept(tcp).await.unwrap();
+                        let kind = tls.get_ref().1.handshake_kind();
+                        let peer = tls
+                            .get_ref()
+                            .1
+                            .peer_certificates()
+                            .and_then(|certs| certs.first())
+                            .cloned();
+                        let mut request = Vec::new();
+                        while !request.ends_with(b"\r\n\r\n") {
+                            request.push(tls.read_u8().await.unwrap());
+                        }
+                        tls.write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok",
+                        )
+                        .await
+                        .unwrap();
+                        tls.shutdown().await.unwrap();
+                        observed.send((kind, peer)).await.unwrap();
+                    }
+                });
+                let resolver = Arc::new(SwappableIdentity::default());
+                if initially_available {
+                    *resolver.0.write().unwrap() = Some(Arc::clone(&first));
+                }
+                let tls = ClientTlsOptions {
+                    roots: TrustRoots::ExtraOnly,
+                    extra_ca_paths: vec![ca_path.clone()],
+                    ..Default::default()
+                }
+                .build_with_resolver(Arc::clone(&resolver) as _)
+                .unwrap();
+                let client = PooledClient::new(tls);
+                let initial = initially_available.then(|| Arc::clone(&first));
+                for identity in [
+                    initial,
+                    Some(Arc::clone(&first)),
+                    Some(Arc::clone(&second)),
+                    None,
+                ] {
+                    *resolver.0.write().unwrap() = identity.clone();
+                    timeout(Duration::from_secs(5), async {
+                        let (response, _io) = client
+                            .send_request(request(&format!("https://{addr}/")), test_options())
+                            .await
+                            .unwrap();
+                        response.into_body().collect().await.unwrap();
+                        let (kind, peer) = observations.recv().await.unwrap();
+                        assert_eq!(kind, Some(rustls::HandshakeKind::Full));
+                        assert_eq!(peer, identity.map(|key| key.cert[0].clone()));
+                    })
+                    .await
+                    .expect("TLS identity request timed out");
+                }
+                worker.await.unwrap();
+            }
+        }
     }
 
     /// HTTPS to a server behind a private CA must work once that CA is added
