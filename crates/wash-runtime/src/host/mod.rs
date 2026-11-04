@@ -311,23 +311,8 @@ fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("Box<dyn Any>")
 }
 
+/// Poison is ignored: every write is a single step.
 type WorkloadMap = HashMap<String, HostWorkload>;
-
-/// Read the workload map. Poison is ignored: every write is a single step.
-fn read_workloads(
-    map: &std::sync::RwLock<WorkloadMap>,
-) -> std::sync::RwLockReadGuard<'_, WorkloadMap> {
-    map.read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Write the workload map. Poison is ignored: every write is a single step.
-fn write_workloads(
-    map: &std::sync::RwLock<WorkloadMap>,
-) -> std::sync::RwLockWriteGuard<'_, WorkloadMap> {
-    map.write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
 
 /// A wasmcloud host that manages WebAssembly workloads and plugins.
 ///
@@ -340,6 +325,8 @@ pub struct Host {
     engine: Engine,
     /// Workloads mapped from ID to the workload and its current state. A sync
     /// lock: no critical section awaits, so an async lock's handoff was pure cost.
+    // NOTE: a std lock, formerly a tokio one. Never hold its guard across an
+    // `.await`: drop it first, or the worker thread blocks under contention.
     workloads: Arc<std::sync::RwLock<WorkloadMap>>,
     /// Interrupted workload operations retained until cleanup succeeds, allowing
     /// workload stops to retry failed teardown without reusing their IDs.
@@ -683,7 +670,10 @@ impl Host {
     /// it is not this teardown's to write, and removing it would leave that
     /// workload running with nothing tracking it.
     fn finish_teardown(&self, workload_id: &str, reservation: Reservation, reason: Option<String>) {
-        let mut workloads = write_workloads(&self.workloads);
+        let mut workloads = self
+            .workloads
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let failure = match workloads.get(workload_id) {
             Some(HostWorkload::Stopping(held)) if *held == reservation => None,
             Some(HostWorkload::Failing(held, failure)) if *held == reservation => {
@@ -715,7 +705,10 @@ impl Host {
         // below lands only if it is still there.
         let reservation = self.reserve();
         let resolved = {
-            let mut workloads = write_workloads(&self.workloads);
+            let mut workloads = self
+                .workloads
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match workloads.get_mut(workload_id) {
                 Some(slot @ HostWorkload::Running(_)) => {
                     match std::mem::replace(slot, HostWorkload::Stopping(reservation)) {
@@ -769,7 +762,10 @@ impl Host {
         // Before anything else stops, and under the lock `workload_reserve`
         // takes, so no start can be admitted from here on.
         {
-            let _workloads = write_workloads(&self.workloads);
+            let _workloads = self
+                .workloads
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.stopped
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
@@ -1133,7 +1129,10 @@ impl HostApi for Host {
         // host with 100k workloads does not stall starts and stops behind a
         // per-workload lock every heartbeat.
         let (workload_count, component_count) = {
-            let workloads = read_workloads(&self.workloads);
+            let workloads = self
+                .workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let workload_count: u64 = workloads.len() as u64;
             let component_count: u64 = workloads
                 .values()
@@ -1201,7 +1200,12 @@ impl HostApi for Host {
         &self,
         request: WorkloadStatusRequest,
     ) -> anyhow::Result<WorkloadStatusResponse> {
-        if let Some(workload) = read_workloads(&self.workloads).get(&request.workload_id) {
+        if let Some(workload) = self
+            .workloads
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&request.workload_id)
+        {
             let workload_state = workload.into();
             // A failed workload reports the reason it failed, verbatim and
             // unprefixed. This is the only field that crosses to the operator,
@@ -1277,7 +1281,10 @@ impl HostApi for Host {
                 }
             };
             {
-                let mut workloads = write_workloads(&self.workloads);
+                let mut workloads = self
+                    .workloads
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if matches!(
                     workloads.get(&request.workload_id),
                     Some(HostWorkload::Error(_))
@@ -1293,7 +1300,11 @@ impl HostApi for Host {
                 },
             });
         }
-        let has_workload = read_workloads(&self.workloads).contains_key(&request.workload_id);
+        let has_workload = self
+            .workloads
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&request.workload_id);
 
         let (workload_state, message) = if has_workload {
             // What a stop can do depends on what it finds, because a workload's
@@ -1317,7 +1328,10 @@ impl HostApi for Host {
             //   recording the error), so the slot can just go.
             let reservation = self.reserve();
             let resolved_workload = {
-                let mut workloads = write_workloads(&self.workloads);
+                let mut workloads = self
+                    .workloads
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 trace!(
                     workload_id = request.workload_id,
                     "updating workload state to stopping"
@@ -1438,7 +1452,26 @@ impl WorkloadReservation for Host {
         // `workload_start_reserved` tell this start's slot from one a later
         // start claimed.
         let reservation = self.reserve();
-        let mut workloads = write_workloads(&self.workloads);
+        // Before the write lock: admitting a start can read the process's
+        // footprint from the OS, and every start and stop waits on that lock,
+        // parking its worker thread. A replayed start is not asked, so it
+        // still reads as the workload already running rather than as a
+        // refusal; the guard logs its own refusals, rate-limited, as a host
+        // past its limit can be asked for thousands of starts a second.
+        let admitted = if self
+            .workloads
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(workload_id)
+        {
+            Ok(())
+        } else {
+            self.check_start_memory()
+        };
+        let mut workloads = self
+            .workloads
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
             let message = format!("Host [{}] is stopped and accepts no new workloads", self.id);
             tracing::warn!(workload_id, reason = message, "refused to start workload");
@@ -1472,20 +1505,19 @@ impl WorkloadReservation for Host {
             debug!(workload_id, reason = message, "refused to start workload");
             return Err(message);
         }
-        // After the duplicate check, so a replayed start still reads as the
-        // workload already running rather than as a refusal. The guard logs
-        // its own refusals, rate-limited: a host past its limit can be asked
-        // for thousands of starts a second.
-        if let Some(guard) = self.engine.process_memory() {
-            guard.admit_start()?;
-        }
+        // After the duplicate check, so a start whose id was claimed since the
+        // read above still reads as a duplicate.
+        admitted?;
         workloads.insert(workload_id.to_string(), HostWorkload::Starting(reservation));
         Ok(reservation)
     }
 
     #[instrument(skip_all, fields(workload.id = workload_id))]
     async fn workload_release(&self, workload_id: &str, reservation: Reservation) {
-        let mut workloads = write_workloads(&self.workloads);
+        let mut workloads = self
+            .workloads
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Every state this reservation can still be in holds nothing bound: a
         // start that never began, or one a stop or failure handed the teardown
         // back to before it had built anything. Anything else belongs to
@@ -1528,7 +1560,10 @@ impl WorkloadReservation for Host {
         // no entry does — would leave its plugins bound and its service running
         // detached.
         let (workload_state, message, release_start_resources) = {
-            let mut workloads = write_workloads(&self.workloads);
+            let mut workloads = self
+                .workloads
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let slot = workloads.get(&workload_id);
             let mine = matches!(slot, Some(HostWorkload::Starting(held)) if *held == reservation);
             // A plugin failure leaves the start's reservation intact until cleanup.
@@ -2439,7 +2474,10 @@ mod tests {
             duplicate.workload_status.message
         );
 
-        let workloads = read_workloads(&host.workloads);
+        let workloads = host
+            .workloads
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(workloads.len(), 1);
         assert!(matches!(
             workloads.get("duplicate"),
@@ -2481,7 +2519,13 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(read_workloads(&host.workloads).len(), 1);
+        assert_eq!(
+            host.workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -3796,7 +3840,10 @@ mod tests {
             "the errored workload was already released; stop must not unbind again"
         );
         assert!(
-            read_workloads(&host.workloads).is_empty(),
+            host.workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
             "stopping should drop the id"
         );
     }
@@ -3829,7 +3876,11 @@ mod tests {
             refused.workload_status.message
         );
         assert!(
-            !read_workloads(&host.workloads).contains_key("after-stop"),
+            !host
+                .workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key("after-stop"),
             "a refused start must leave no reservation behind"
         );
     }
@@ -3866,7 +3917,11 @@ mod tests {
             plugin.unbound()
         );
         assert!(
-            !read_workloads(&host.workloads).contains_key(plugin_id),
+            !host
+                .workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(plugin_id),
             "a refused start must leave no reservation behind"
         );
         let status = host
@@ -3946,7 +4001,12 @@ mod tests {
                 refused.workload_status.message
             );
         }
-        assert!(read_workloads(&host.workloads).is_empty());
+        assert!(
+            host.workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
+        );
         Ok(())
     }
 
@@ -3997,7 +4057,10 @@ mod tests {
             "the start must release what it bound once it finds its slot stopped"
         );
         assert!(
-            read_workloads(&host.workloads).is_empty(),
+            host.workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
             "the id is dropped only once the start has released the workload"
         );
     }
@@ -4037,7 +4100,10 @@ mod tests {
         .await
         .expect("a second stop should report rather than error");
         assert!(
-            read_workloads(&host.workloads).contains_key("held"),
+            host.workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key("held"),
             "the id stays reserved while the first stop is still tearing down"
         );
 
@@ -4062,7 +4128,10 @@ mod tests {
             "the workload is unbound exactly once, by the stop that owned it"
         );
         assert!(
-            read_workloads(&host.workloads).is_empty(),
+            host.workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
             "the id is dropped once its teardown finishes"
         );
     }
@@ -4101,7 +4170,7 @@ mod tests {
         );
         assert!(
             matches!(
-                read_workloads(&host.workloads).get("evicted"),
+                host.workloads.read().unwrap_or_else(std::sync::PoisonError::into_inner).get("evicted"),
                 Some(HostWorkload::Error(reason)) if reason == "crash-looping"
             ),
             "the failure is published once the teardown is done"
@@ -4155,7 +4224,10 @@ mod tests {
             "the start releases what it bound, once"
         );
         assert!(
-            read_workloads(&host.workloads).is_empty(),
+            host.workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
             "the stop takes effect once the teardown is done"
         );
     }
