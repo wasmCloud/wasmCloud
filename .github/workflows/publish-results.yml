@@ -1,0 +1,72 @@
+name: publish-results
+
+# Publishes this repo's OSPS Baseline Maturity Level 2 evaluation to
+# grc.store as a signed log: https://grc.store/targets/wasmcloud/wasmcloud
+# The `wasmcloud` namespace trusts wasmCloud/wasmCloud on refs/heads/main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Run the scan but publish nothing (bundles land in the pvtr-bundles artifact)"
+        type: boolean
+        default: false
+  schedule:
+    # Weekly Monday at 06:17 UTC.
+    - cron: "17 6 * * 1"
+  # No push trigger: the hub accepts one log per target every ten minutes
+  # and fails the run on the rest. Publish after a merge with
+  # `gh workflow run publish-results.yml`.
+
+permissions: {}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # Read the latest release tag.
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Latest release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || echo v0.0.0)
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+  results:
+    needs: version
+    permissions:
+      contents: read # The scanner reads this repo through the job token.
+      id-token: write # Trusted publishing to the hub and the Sigstore signing identity.
+      # The called workflow's report job declares it, and GitHub checks every
+      # called job at startup, even one that is skipped.
+      security-events: write
+    # By tag, not SHA: the hub compares the signing certificate's workflow
+    # ref to this exact tag. .github/zizmor.yml allows it.
+    uses: revanite-io/pvtr-publish-results/.github/workflows/publish.yml@v1
+    with:
+      target: wasmcloud/wasmcloud@${{ needs.version.outputs.version }}
+      license: CC0-1.0
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets:
+      # Inline because the plugin reads its token only from config vars. The
+      # job token can't read some settings (branch rulesets, org MFA); those
+      # controls report Needs Review.
+      config: |
+        targets:
+          wasmcloud:
+            plugin: openssf/github-repo
+            policy:
+              catalogs:
+                - osps-baseline
+              applicability:
+                - maturity-2
+            vars:
+              owner: wasmCloud
+              repo: wasmCloud
+              token: ${{ secrets.GITHUB_TOKEN }}
