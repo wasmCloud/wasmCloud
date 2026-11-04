@@ -431,20 +431,22 @@ func hasPodFinalizer(t *testing.T, k8s client.Client, key client.ObjectKey) bool
 	return false
 }
 
-// expectHeartbeatRegisters heartbeats as the host name until its Host appears
-// in the operator's namespace. Each attempt republishes, since a heartbeat
-// sent before the operator (re)subscribed is not delivered.
+// expectHeartbeatRegisters heartbeats as the host name, on its ID's subject,
+// until its Host appears in the operator's namespace. Each attempt
+// republishes, since a heartbeat sent before the operator (re)subscribed is
+// not delivered.
 func expectHeartbeatRegisters(
 	t *testing.T, k8s client.Client, nc *nats.Conn, done <-chan error, name, hostname string,
 ) {
 	t.Helper()
-	data, err := protojson.Marshal(&runtimev2.HostHeartbeat{Id: name + "-id", FriendlyName: name, Hostname: hostname})
+	id := name + "-id"
+	data, err := protojson.Marshal(&runtimev2.HostHeartbeat{Id: id, FriendlyName: name, Hostname: hostname})
 	if err != nil {
 		t.Fatalf("marshal heartbeat: %v", err)
 	}
 	key := types.NamespacedName{Namespace: operatorNamespace, Name: name}
 	eventually(t, done, "Host "+name, func() bool {
-		if err := nc.Publish("runtime.operator.heartbeat."+name, data); err != nil {
+		if err := nc.Publish("runtime.operator.heartbeat."+id, data); err != nil {
 			t.Fatalf("publish heartbeat: %v", err)
 		}
 		err := k8s.Get(context.Background(), key, &runtimev1alpha1.Host{})

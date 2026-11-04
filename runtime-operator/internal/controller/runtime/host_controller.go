@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -301,21 +302,25 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 	log := ctrl.LoggerFrom(ctx).WithName("host-status-updater")
 
 	subscription.Handle(func(msg *wasmbus.Message) {
-		h.handleHeartbeat(ctx, log, msg.Data)
+		h.handleHeartbeat(ctx, log, msg.Subject, msg.Data)
 	})
 
 	<-ctx.Done()
 	return subscription.Drain()
 }
 
-// handleHeartbeat decodes a single heartbeat payload and reconciles the
-// corresponding Host: it applies spec/metadata via Server-Side Apply only when
-// the heartbeat differs from the stored object, then always refreshes the
-// status subresource so LastSeen advances even when the spec is unchanged.
-func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger, data []byte) {
+// handleHeartbeat accepts only the subject's host ID and refuses name takeovers.
+// Existing Host writes require the resource version checked by the handler.
+func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger, subject string, data []byte) {
 	var req runtimev2.HostHeartbeat
 	if err := protojson.Unmarshal(data, &req); err != nil {
 		log.Error(err, "failed to decode heartbeat message")
+		return
+	}
+
+	hostID, ok := strings.CutPrefix(subject, "runtime.operator.heartbeat.")
+	if !ok || hostID == "" || strings.ContainsAny(hostID, ".*> \t\r\n") || req.Id != hostID {
+		log.Error(fmt.Errorf("heartbeat ID does not match its subject"), "rejecting heartbeat", "subject", subject, "hostID", req.Id)
 		return
 	}
 
@@ -334,9 +339,6 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 	// attribution is recorded on the Host's Environment field,
 	// populated verbatim from req.Environment — the heartbeat is the
 	// source of truth and is not validated against cluster state.
-	//
-	// Upsert spec and metadata with Server-Side Apply in case the object was
-	// updated by another process, and the cache is stale.
 	host := &runtimev1alpha1.Host{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: runtimev1alpha1.GroupVersion.String(),
@@ -362,6 +364,11 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 		return
 	}
 
+	if getErr == nil && existing.HostID != hostID {
+		log.Error(fmt.Errorf("host name belongs to another host ID"), "rejecting heartbeat", "host", req.FriendlyName, "hostID", hostID)
+		return
+	}
+
 	// A host keeps heartbeating while its Pod drains, after the Pod's Host was
 	// deleted. Recreating the Host would offer the draining host new Workloads.
 	if apierrors.IsNotFound(getErr) {
@@ -374,20 +381,35 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 		}
 	}
 
-	if apierrors.IsNotFound(getErr) || hostSpecChanged(existing, host) {
-		// adding a nolint check to allow for client.apply, as the Host CRD
-		// would need to have an ApplyConfiguration generated for it, and thus a
-		// new CRD version would be required.
-		if err := h.client.Patch(ctx, host, client.Apply, //nolint:staticcheck
-			client.FieldOwner("host-status-updater"), client.ForceOwnership); err != nil {
-			log.Error(err, "failed to apply Host resource", "host", req.FriendlyName, "hostID", req.Id)
+	switch {
+	case apierrors.IsNotFound(getErr):
+		// Create must fail if another host claimed this name after the read.
+		if err := h.client.Create(ctx, host, client.FieldOwner("host-status-updater")); err != nil {
+			log.Error(err, "failed to create Host resource", "host", req.FriendlyName, "hostID", hostID)
 			return
 		}
+	case hostSpecChanged(existing, host):
+		// A merge patch from the read object clears dropped labels and fields,
+		// and its resource version fails the patch if the Host changed since.
+		next := existing.DeepCopy()
+		next.Labels = host.Labels
+		next.Hostname = host.Hostname
+		next.HTTPPort = host.HTTPPort
+		next.Environment = host.Environment
+		if err := h.client.Patch(ctx, next,
+			client.MergeFromWithOptions(existing, client.MergeFromWithOptimisticLock{}),
+			client.FieldOwner("host-status-updater")); err != nil {
+			log.Error(err, "failed to patch Host resource", "host", req.FriendlyName, "hostID", hostID)
+			return
+		}
+		host = next
+	default:
+		host = existing
 	}
 
 	// Patch only LastSeen on the status subresource. The measured system/OS
 	// fields are written by reconcileReporting and must not be touched here.
-	statusPatch, err := hostStatusPatch()
+	statusPatch, err := hostStatusPatch(host.ResourceVersion)
 	if err != nil {
 		log.Error(err, "failed to build Host status patch", "host", req.FriendlyName, "hostID", req.Id)
 		return
@@ -409,7 +431,10 @@ func hostSpecChanged(existing, next *runtimev1alpha1.Host) bool {
 
 // hostStatusPatch builds a JSON merge patch for the Host status subresource
 // that always refreshes LastSeen.
-func hostStatusPatch() ([]byte, error) {
-	s := map[string]any{"lastSeen": metav1.Now()}
-	return json.Marshal(map[string]any{"status": s})
+func hostStatusPatch(resourceVersion string) ([]byte, error) {
+	patch := map[string]any{"status": map[string]any{"lastSeen": metav1.Now()}}
+	if resourceVersion != "" {
+		patch["metadata"] = map[string]any{"resourceVersion": resourceVersion}
+	}
+	return json.Marshal(patch)
 }
