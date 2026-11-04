@@ -407,12 +407,7 @@ pub fn print_comparison(reports: &[Report]) {
     let Some(first) = reports.first() else {
         return;
     };
-    eprintln!(
-        "\n== {}: {}, limit {} ==",
-        first.bench,
-        first.subject,
-        render_bytes(first.memory_limit_bytes)
-    );
+    eprintln!("\n== {}: {} ==", first.bench, first.subject);
     let row = |label: &str, cell: &dyn Fn(&Report) -> String| {
         let cells: Vec<String> = reports.iter().map(cell).collect();
         if cells.iter().any(|c| c != "-") {
@@ -424,6 +419,14 @@ pub fn print_comparison(reports: &[Report]) {
         reports.iter().flat_map(|r| r.limits.keys()).collect();
     row("", &|r| r.label.clone());
     row("cores", &|r| r.cores.to_string());
+    row(
+        if first.bench == "scale_density" {
+            "max-process-memory"
+        } else {
+            "memory limit"
+        },
+        &|r| render_bytes(r.memory_limit_bytes),
+    );
     row("guest memory mode", &|r| {
         r.guest_memory_mode.clone().unwrap_or_else(|| "-".into())
     });
