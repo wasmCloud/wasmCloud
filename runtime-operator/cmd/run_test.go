@@ -72,10 +72,16 @@ func TestRunRejectsConfigurationBeforeStarting(t *testing.T) {
 		cluster bool
 		want    string
 		wantIs  []error
+		// invalidLogging errors reach main before any logger exists.
+		invalidLogging bool
 	}{
 		{
 			name: "unknown flag", namespace: operatorNamespace,
 			args: []string{"--no-such-flag"}, want: "flag provided but not defined",
+		},
+		{
+			name: "invalid log time encoding", namespace: operatorNamespace,
+			args: []string{"--log-time-encoding=bad"}, want: "invalid log time encoding", invalidLogging: true,
 		},
 		{
 			name: "operator namespace unset",
@@ -132,6 +138,10 @@ func TestRunRejectsConfigurationBeforeStarting(t *testing.T) {
 				if !errors.Is(err, target) {
 					t.Errorf("run() = %v, want it to wrap %v", err, target)
 				}
+			}
+			var invalidLogging invalidLoggingError
+			if errors.As(err, &invalidLogging) != tt.invalidLogging {
+				t.Errorf("run() = %v, want invalidLoggingError %t", err, tt.invalidLogging)
 			}
 		})
 	}

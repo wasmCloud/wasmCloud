@@ -134,6 +134,31 @@ credential per host group, use `*` for `<id>`: those hosts can then read
 each other's commands and publish each other's heartbeats, though only the
 operator can send commands.
 
+## Logging
+
+The operator uses Go's `log/slog` with controller-runtime's logr bridge. Logs go
+to stderr. Development mode defaults to text output, debug logging (controller
+verbosity 1), RFC3339 timestamps, and stack traces at warn and above. Use
+`--dev-mode=false` for JSON output, info logging, and stack traces at error and
+above. Text output uses slog's key=value format; JSON keeps `ts`, `level`, `msg`,
+`logger`, `error`, and `stacktrace` fields. Production logs include Kubernetes object identity without object contents.
+Production logging is unsampled.
+
+| Flag | Values |
+| --- | --- |
+| `--log-format` | `text`, `json` |
+| `--log-level` | `debug`, `info`, `warn`, `error`, `panic`, or verbosity `1`–`127` |
+| `--log-stacktrace-level` | `info`, `warn`, `error`, `panic` |
+| `--log-time-encoding` | `epoch`, `millis`, `nanos`, `iso8601`, `rfc3339`, `rfc3339nano` |
+
+Explicit logging flags override mode defaults regardless of argument order.
+`--json-log` overrides format and timestamp flags with JSON and numeric epoch
+seconds. The existing `--zap-devel`, `--zap-encoder`, `--zap-log-level`,
+`--zap-stacktrace-level`, and `--zap-time-encoding` flags remain aliases;
+`--zap-encoder=console` selects text output. If an alias and its new flag both
+appear, the last one wins. `panic` sets a threshold above error; logging does
+not itself panic. Standard library HTTP server diagnostics are logged at error.
+
 ## Development
 
 You will need a local Kind cluster, NATS, and a Wash host.
