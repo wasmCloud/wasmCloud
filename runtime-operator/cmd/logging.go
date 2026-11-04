@@ -149,7 +149,8 @@ func logAttributes(encoding string, verbose bool) func([]string, slog.Attr) slog
 	return func(groups []string, attr slog.Attr) slog.Attr {
 		if marshaler, ok := attr.Value.Any().(logr.Marshaler); ok {
 			attr.Value = slog.AnyValue(marshalerValue{marshaler}).Resolve()
-		} else if !verbose {
+		}
+		if !verbose {
 			if object, ok := attr.Value.Any().(kubernetesLogObject); ok {
 				attr.Value = slog.AnyValue(objectLogValue{object}).Resolve()
 			}
