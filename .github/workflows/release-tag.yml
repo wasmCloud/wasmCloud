@@ -634,6 +634,30 @@ jobs:
             -f event_type=wasmcloud-release \
             -f "client_payload[version]=${VERSION}"
 
+      - name: Get a TypeScript release dispatch token from octo-sts
+        id: octo-sts-typescript
+        if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: wasmCloud/typescript
+          identity: wasmcloud-release-dispatch
+
+      - name: Dispatch TypeScript release
+        # Starts release.yml in wasmCloud/typescript, which tags and
+        # releases its main branch with this version. Skipped for
+        # pre-releases.
+        if: ${{ !contains(steps.ver.outputs.tag, '-') }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.octo-sts-typescript.outputs.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          echo "STAGE=typescript-release" >> "${GITHUB_ENV}"
+          gh api repos/wasmCloud/typescript/dispatches \
+            -f event_type=wasmcloud-release \
+            -f "client_payload[version]=${VERSION}"
+
       - name: Set stage — winget
         if: ${{ !contains(steps.ver.outputs.tag, '-') }}
         run: echo "STAGE=winget" >> "${GITHUB_ENV}"
