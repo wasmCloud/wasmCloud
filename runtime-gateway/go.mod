@@ -7,6 +7,7 @@ toolchain go1.27.2
 tool github.com/air-verse/air
 
 require (
+	github.com/go-logr/logr v1.4.4
 	go.wasmcloud.dev/runtime-operator/v2 v2.11.0
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
@@ -30,8 +31,6 @@ require (
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
-	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
 	github.com/go-openapi/swag v0.27.1 // indirect
@@ -70,8 +69,6 @@ require (
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tdewolff/parse/v2 v2.8.12 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/net v0.62.0 // indirect

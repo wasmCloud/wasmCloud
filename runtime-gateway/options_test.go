@@ -2,17 +2,14 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"flag"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 const (
@@ -24,23 +21,18 @@ const (
 
 func TestGatewayFlagsAndLogging(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		args        []string
-		development bool
-		json        bool
-		verbosity   int
-		timeLayout  string
+		name  string
+		args  []string
+		level slog.Level
 	}{
-		{"defaults", nil, false, true, 0, ""},
-		{"development alias", []string{"--dev-mode"}, true, true, 1, ""},
-		{"zap development", []string{"--zap-devel"}, true, true, 1, ""},
-		{"development override", []string{"--dev-mode", "--zap-devel=false"}, false, true, 0, ""},
-		{"alias override", []string{"--zap-devel", "--dev-mode=false"}, false, true, 0, ""},
-		{"explicit logging", []string{"--zap-log-level=2", "--zap-encoder=console", "--zap-time-encoding=rfc3339"},
-			false, false, 2, ""},
-		{"timestamp override", []string{"--zap-time-encoding=rfc3339"}, false, true, 0, time.RFC3339},
-		{"development timestamp override", []string{"--dev-mode", "--zap-time-encoding=rfc3339nano"},
-			true, true, 1, time.RFC3339Nano},
+		{"defaults", nil, slog.LevelInfo},
+		{"development", []string{"--dev-mode"}, slog.LevelDebug},
+		{"disabled development", []string{"--dev-mode=false"}, slog.LevelInfo},
+		{"explicit debug", []string{"--log-level=debug"}, slog.LevelDebug},
+		{"explicit warning", []string{"--log-level=warn"}, slog.LevelWarn},
+		{"explicit error", []string{"--log-level=error"}, slog.LevelError},
+		{"level before development", []string{"--log-level=info", "--dev-mode"}, slog.LevelInfo},
+		{"level after development", []string{"--dev-mode", "--log-level=error"}, slog.LevelError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"--bind-addr=" + testGatewayBind, "--fallback-endpoint=" + testFallbackOrigin,
@@ -50,50 +42,27 @@ func TestGatewayFlagsAndLogging(t *testing.T) {
 				t.Fatal(err)
 			}
 			if options.bindAddr != testGatewayBind || options.fallbackEndpoint != testFallbackOrigin ||
-				options.kubeconfig != "/test/kubeconfig" || options.logging.Development != tc.development {
+				options.kubeconfig != "/test/kubeconfig" || options.logging.level != tc.level {
 				t.Fatalf("parsed options = %+v", options)
 			}
-			var output bytes.Buffer
-			options.logging.DestWriter = &output
-			logger := zap.New(zap.UseFlagOptions(&options.logging))
-			for level := 0; level <= 3; level++ {
-				if logger.V(level).Enabled() != (level <= tc.verbosity) {
-					t.Fatalf("verbosity %d enabled = %v", level, logger.V(level).Enabled())
-				}
-			}
-			logger.Info(testGatewayMessage)
-			if !strings.Contains(output.String(), testGatewayMessage) || json.Valid(output.Bytes()) != tc.json {
-				t.Fatalf("log output = %q, want JSON=%v", output.String(), tc.json)
-			}
-			if tc.json {
-				var record map[string]any
-				if err := json.Unmarshal(output.Bytes(), &record); err != nil {
-					t.Fatal(err)
-				}
-				if tc.timeLayout == "" {
-					if timestamp, ok := record["ts"].(float64); !ok || timestamp <= 0 {
-						t.Fatalf("default timestamp = %v, want numeric epoch seconds", record["ts"])
-					}
-				} else {
-					timestamp, ok := record["ts"].(string)
-					if !ok {
-						t.Fatalf("timestamp = %v, want a string", record["ts"])
-					}
-					if _, err := time.Parse(tc.timeLayout, timestamp); err != nil {
-						t.Fatalf("timestamp = %q, want layout %q: %v", timestamp, tc.timeLayout, err)
-					}
+			logger := newGatewayLogger(options.logging, io.Discard)
+			for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+				if logger.Enabled(t.Context(), level) != (level >= tc.level) {
+					t.Fatalf("level %s enabled = %v", level, logger.Enabled(t.Context(), level))
 				}
 			}
 		})
 	}
 	options, err := parseGatewayOptions(nil, io.Discard)
-	if err != nil || options.bindAddr != ":8000" || options.fallbackEndpoint != "" || options.kubeconfig != "" {
+	if err != nil || options.bindAddr != ":8000" || options.fallbackEndpoint != "" || options.kubeconfig != "" ||
+		options.logging.format != "json" || options.logging.timeEncoding != "epoch" {
 		t.Fatalf("default options = %+v, %v", options, err)
 	}
 }
 
 func TestGatewayFlagErrorsAndHelp(t *testing.T) {
-	for _, arg := range []string{"--unknown", "--dev-mode=invalid", "--zap-encoder=invalid", "--zap-log-level=invalid"} {
+	for _, arg := range []string{"--unknown", "--dev-mode=invalid", "--log-format=invalid", "--log-level=invalid",
+		"--log-time-encoding=invalid", "--log-level=error+1", "--zap-devel"} {
 		var output bytes.Buffer
 		if _, err := parseGatewayOptions([]string{arg}, &output); err == nil || output.Len() == 0 {
 			t.Fatalf("parse %q = %v, output=%q", arg, err, output.String())
@@ -103,7 +72,7 @@ func TestGatewayFlagErrorsAndHelp(t *testing.T) {
 	if _, err := parseGatewayOptions([]string{"--help"}, &output); !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("help = %v", err)
 	}
-	for _, name := range []string{"bind-addr", "fallback-endpoint", "kubeconfig", "dev-mode", "zap-log-level"} {
+	for _, name := range []string{"bind-addr", "fallback-endpoint", "kubeconfig", "dev-mode", "log-level", "log-format", "log-time-encoding"} {
 		if !strings.Contains(output.String(), name) {
 			t.Errorf("help omitted %s", name)
 		}

@@ -4,20 +4,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"strings"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
 type gatewayOptions struct {
 	bindAddr         string
 	fallbackEndpoint string
 	kubeconfig       string
-	logging          zap.Options
+	logging          gatewayLoggingOptions
 }
 
 func parseGatewayOptions(args []string, output io.Writer) (gatewayOptions, error) {
@@ -27,13 +27,33 @@ func parseGatewayOptions(args []string, output io.Writer) (gatewayOptions, error
 	flags.StringVar(&options.bindAddr, "bind-addr", ":8000", "Address to bind the HTTP gateway to")
 	flags.StringVar(&options.fallbackEndpoint, "fallback-endpoint", "", "Fallback origin URL, such as https://notfound.example:8443")
 	flags.StringVar(&options.kubeconfig, "kubeconfig", "", "Path to a kubeconfig; otherwise use KUBECONFIG or in-cluster configuration")
-	flags.BoolVar(&options.logging.Development, "dev-mode", false, "Enable development mode logging")
-	options.logging.BindFlags(flags)
-	// Default to JSON with epoch timestamps in both logging modes.
-	_ = flags.Set("zap-encoder", "json")
-	_ = flags.Set("zap-time-encoding", "epoch")
-	err := flags.Parse(args)
-	return options, err
+	var development, explicitLevel bool
+	flags.BoolVar(&development, "dev-mode", false, "Enable debug logging")
+	flags.Func("log-level", "Log level: debug, info (default), warn, or error; overrides dev-mode", func(value string) error {
+		if err := options.logging.level.UnmarshalText([]byte(value)); err != nil {
+			return err
+		}
+		switch options.logging.level {
+		case slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError:
+		default:
+			return fmt.Errorf("invalid log level %q: use debug, info, warn, or error", value)
+		}
+		explicitLevel = true
+		return nil
+	})
+	flags.StringVar(&options.logging.format, "log-format", "json", "Log format: json or text")
+	flags.StringVar(&options.logging.timeEncoding, "log-time-encoding", "epoch", "Timestamp encoding: epoch, rfc3339, or rfc3339nano")
+	if err := flags.Parse(args); err != nil {
+		return options, err
+	}
+	if development && !explicitLevel {
+		options.logging.level = slog.LevelDebug
+	}
+	if err := options.logging.validate(); err != nil {
+		_, _ = fmt.Fprintln(output, err)
+		return options, err
+	}
+	return options, nil
 }
 
 func loadGatewayConfig(path string) (*rest.Config, error) {

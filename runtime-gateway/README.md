@@ -21,4 +21,11 @@ Without `--fallback-endpoint`, requests without a matching workload receive a bu
 
 Use `--kubeconfig` to select a Kubernetes configuration file. Otherwise, the gateway uses controller-runtime's configuration discovery, including `KUBECONFIG` and in-cluster credentials.
 
-Logs use JSON with numeric epoch timestamps by default. `--dev-mode` and `--zap-devel` both enable development logging. The standard Zap flags, including `--zap-log-level`, `--zap-encoder`, and `--zap-time-encoding`, control logging output.
+Logs use Go's `log/slog`, including controller-runtime logs through its logr bridge. JSON output preserves the `ts`, `level`, `msg`, `logger`, and `error` field names, with numeric epoch timestamps by default.
+
+- `--dev-mode` enables debug logging.
+- `--log-level=debug|info|warn|error` overrides the level, including when `--dev-mode` is set. The default is `info`.
+- `--log-format=json|text` selects the output format. The default is `json`.
+- `--log-time-encoding=epoch|rfc3339|rfc3339nano` selects timestamp encoding. The default is `epoch`.
+
+Zap-specific flags are not supported.
