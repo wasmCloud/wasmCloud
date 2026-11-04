@@ -5,12 +5,22 @@ import (
 	"io"
 	"log/slog"
 	"time"
+
+	"github.com/go-logr/logr"
 )
 
 type gatewayLoggingOptions struct {
 	level        slog.Level
 	format       string
 	timeEncoding string
+}
+
+type logrMarshalerValue struct {
+	logr.Marshaler
+}
+
+func (value logrMarshalerValue) LogValue() slog.Value {
+	return slog.AnyValue(value.MarshalLog())
 }
 
 func (options gatewayLoggingOptions) validate() error {
@@ -34,6 +44,9 @@ func newGatewayLogger(options gatewayLoggingOptions, output io.Writer) *slog.Log
 }
 
 func (options gatewayLoggingOptions) replaceAttr(groups []string, attr slog.Attr) slog.Attr {
+	if marshaler, ok := attr.Value.Any().(logr.Marshaler); ok {
+		attr.Value = slog.AnyValue(logrMarshalerValue{marshaler}).Resolve()
+	}
 	if len(groups) != 0 {
 		return attr
 	}
