@@ -108,39 +108,60 @@ func TestOperatorLogMarshalerSafetyAndGroups(t *testing.T) {
 	}
 }
 
+type objectLogMarshaler struct{ object any }
+
+func (value objectLogMarshaler) MarshalLog() any { return value.object }
+
 func TestProductionObjectLogging(t *testing.T) {
 	secret := &corev1.Secret{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
 		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: testTenant},
 		StringData: map[string]string{"password": "private-test-value"},
 	}
-	for _, tc := range []struct {
-		name string
-		emit func(*slog.Logger)
+	for _, value := range []struct {
+		name   string
+		object any
 	}{
-		{"inline", func(logger *slog.Logger) { logger.Info(testLogMessage, "object", secret) }},
-		{"bound", func(logger *slog.Logger) { logger.With("object", secret).Info(testLogMessage) }},
-		{"grouped", func(logger *slog.Logger) { logger.WithGroup(testPayload).Info(testLogMessage, "object", secret) }},
+		{"direct", secret},
+		{"marshaled", objectLogMarshaler{secret}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var output bytes.Buffer
-			logger, err := parseLogging(t, testLegacyProductionFlag).logger(&output)
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.emit(logger)
-			if strings.Contains(output.String(), "private-test-value") || strings.Contains(output.String(), "stringData") {
-				t.Fatalf("object contents logged: %s", output.String())
-			}
-			record := decodeLog(t, output.Bytes())
-			if tc.name == "grouped" {
-				record = record[testPayload].(map[string]any)
-			}
-			object, ok := record["object"].(map[string]any)
-			if !ok || len(object) != 4 || object["name"] != secret.Name || object["namespace"] != secret.Namespace ||
-				object["kind"] != "Secret" || object["apiVersion"] != "v1" {
-				t.Fatalf("object identity = %v", object)
-			}
-		})
+		for _, tc := range []struct {
+			name string
+			emit func(*slog.Logger)
+		}{
+			{"inline", func(logger *slog.Logger) { logger.Info(testLogMessage, "object", value.object) }},
+			{"bound", func(logger *slog.Logger) { logger.With("object", value.object).Info(testLogMessage) }},
+			{"grouped", func(logger *slog.Logger) {
+				logger.WithGroup(testPayload).Info(testLogMessage, "object", value.object)
+			}},
+			{"controller inline", func(logger *slog.Logger) {
+				logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).Info(testLogMessage, "object", value.object)
+			}},
+			{"controller bound", func(logger *slog.Logger) {
+				logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).
+					WithValues("object", value.object).Info(testLogMessage)
+			}},
+		} {
+			t.Run(value.name+"/"+tc.name, func(t *testing.T) {
+				var output bytes.Buffer
+				logger, err := parseLogging(t, testLegacyProductionFlag).logger(&output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tc.emit(logger)
+				if strings.Contains(output.String(), "private-test-value") || strings.Contains(output.String(), "stringData") {
+					t.Fatalf("object contents logged: %s", output.String())
+				}
+				record := decodeLog(t, output.Bytes())
+				if tc.name == "grouped" {
+					record = record[testPayload].(map[string]any)
+				}
+				object, ok := record["object"].(map[string]any)
+				if !ok || len(object) != 4 || object["name"] != secret.Name || object["namespace"] != secret.Namespace ||
+					object["kind"] != "Secret" || object["apiVersion"] != "v1" {
+					t.Fatalf("object identity = %v", object)
+				}
+			})
+		}
 	}
 }
