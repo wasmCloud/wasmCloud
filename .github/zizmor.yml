@@ -12,3 +12,9 @@ rules:
       # deliberate (idempotent re-runs, glob fail-on-empty, prerelease
       # detection); see the comment above the `uses:` line.
       - release-tag.yml
+  unpinned-uses:
+    ignore:
+      # The grc.store hub only accepts logs signed by
+      # pvtr-publish-results/publish.yml@refs/tags/v1, so the call can't be
+      # SHA-pinned.
+      - publish-results.yml

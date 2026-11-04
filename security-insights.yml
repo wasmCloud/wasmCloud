@@ -269,3 +269,20 @@ repository:
             name: OSPS Baseline evaluation
             predicate-uri: https://github.com/revanite-io/osps-baseline-action
             location: https://github.com/wasmCloud/wasmCloud/actions/workflows/osps-baseline.yml
+      - name: OSPS Baseline Scanner (grc.store)
+        type: other
+        comment: >-
+          OSPS Baseline Maturity Level 2 assessment weekly and on demand,
+          published to grc.store as a signed log by the publish-results
+          workflow.
+        rulesets:
+          - osps-baseline
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+        results:
+          ci:
+            name: OSPS Baseline evaluation
+            predicate-uri: https://github.com/revanite-io/pvtr-publish-results
+            location: https://grc.store/targets/wasmcloud/wasmcloud
