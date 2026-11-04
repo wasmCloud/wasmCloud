@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -44,6 +45,7 @@ func (h *HTTPGateway) Start(ctx context.Context) error {
 		},
 		Addr:              h.BindAddr,
 		Handler:           h.Proxy,
+		ErrorLog:          slog.NewLogLogger(slog.Default().With("logger", "http-gateway").Handler(), slog.LevelError),
 		IdleTimeout:       0,
 		ReadTimeout:       0,
 		WriteTimeout:      0,

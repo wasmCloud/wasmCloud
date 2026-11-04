@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 
@@ -82,7 +83,8 @@ func (fs *FallbackServer) Start(ctx context.Context) error {
 	log.Info("starting", "endpoint", fs.listener.Addr().String())
 
 	internalServer := &http.Server{
-		Handler: internalMux,
+		Handler:  internalMux,
+		ErrorLog: slog.NewLogLogger(slog.Default().With("logger", "fallback").Handler(), slog.LevelError),
 		BaseContext: func(_ net.Listener) context.Context {
 			return ctx
 		},
