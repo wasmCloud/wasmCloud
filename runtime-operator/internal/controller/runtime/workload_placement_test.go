@@ -101,26 +101,36 @@ func TestPlacementStartRequestUsesWorkloadNamespace(t *testing.T) {
 	}
 }
 
+// The Service DNS names join the aliases a wasi:http incoming handler already
+// lists, and every other interface is left alone.
 func TestServiceDNSAliasesOnlyAffectIncomingHTTP(t *testing.T) {
 	serviceAliases := "api." + testTenant + ",api." + testTenant + ".svc"
+	incoming := []string{incomingHandler}
 	for _, tc := range []struct {
-		name, namespace, pkg, iface string
-		config                      map[string]string
+		name, namespace, pkg string
+		ifaces               []string
+		config               map[string]string
 		// want is the config after injection; nil means the interface is left alone.
 		want map[string]string
 	}{
-		{name: "new config", namespace: wasiNamespace, pkg: httpLayer, iface: incomingHandler,
+		{name: "new config", namespace: wasiNamespace, pkg: httpLayer, ifaces: incoming,
 			want: map[string]string{hostAliasesKey: serviceAliases}},
-		{name: "existing config", namespace: wasiNamespace, pkg: httpLayer, iface: incomingHandler,
-			config: map[string]string{"keep": "value", hostAliasesKey: "old"},
-			want:   map[string]string{"keep": "value", hostAliasesKey: serviceAliases}},
-		{name: "foreign namespace", namespace: "custom", pkg: httpLayer, iface: incomingHandler},
-		{name: "other package", namespace: wasiNamespace, pkg: "unrelated-package", iface: incomingHandler},
-		{name: "outgoing interface", namespace: wasiNamespace, pkg: httpLayer, iface: "outgoing-handler",
+		{name: "existing aliases", namespace: wasiNamespace, pkg: httpLayer, ifaces: incoming,
+			config: map[string]string{"keep": "value", hostAliasesKey: "gateway.example.com"},
+			want:   map[string]string{"keep": "value", hostAliasesKey: "gateway.example.com," + serviceAliases}},
+		{name: "aliases already listed", namespace: wasiNamespace, pkg: httpLayer, ifaces: incoming,
+			config: map[string]string{hostAliasesKey: " api." + testTenant + ".svc, ,gateway.example.com,gateway.example.com"},
+			want:   map[string]string{hostAliasesKey: "api." + testTenant + ".svc,gateway.example.com,api." + testTenant}},
+		{name: "incoming among other interfaces", namespace: wasiNamespace, pkg: httpLayer,
+			ifaces: []string{"outgoing-handler", incomingHandler},
+			want:   map[string]string{hostAliasesKey: serviceAliases}},
+		{name: "foreign namespace", namespace: "custom", pkg: httpLayer, ifaces: incoming},
+		{name: "other package", namespace: wasiNamespace, pkg: "unrelated-package", ifaces: incoming},
+		{name: "outgoing interface", namespace: wasiNamespace, pkg: httpLayer, ifaces: []string{"outgoing-handler"},
 			config: map[string]string{hostAliasesKey: "outbound"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			interfaces := []*runtimev2.WitInterface{{Namespace: tc.namespace, Package: tc.pkg, Interfaces: []string{tc.iface}, Config: tc.config}}
+			interfaces := []*runtimev2.WitInterface{{Namespace: tc.namespace, Package: tc.pkg, Interfaces: tc.ifaces, Config: tc.config}}
 			before := proto.Clone(interfaces[0]).(*runtimev2.WitInterface)
 			injectServiceDNSAliases(interfaces, "api", testTenant)
 			if tc.want == nil {
