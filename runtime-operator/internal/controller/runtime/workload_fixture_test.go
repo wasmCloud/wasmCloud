@@ -1,0 +1,199 @@
+package runtime
+
+import (
+	"fmt"
+	"testing"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
+	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
+	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
+)
+
+// Names in the Workload placementFixture builds. Each config layer is named
+// after the part of the Workload that carries it.
+const (
+	fixtureRuntimeID   = "runtime-workload-id"
+	fixtureComponent   = "placement-app"
+	fixturePullSecret  = "registry-credentials"
+	fixtureOverrideKey = "OVERRIDE"
+	fixtureCache       = "cache"
+	fixtureData        = "data"
+	componentLayer     = "component"
+	serviceLayer       = "service"
+	httpLayer          = "http"
+	startSubject       = "runtime.host." + testHeartbeatHostID + ".workload.start"
+	statusSubject      = "runtime.host." + testHeartbeatHostID + ".workload.status"
+	wasiNamespace      = "wasi"
+	incomingHandler    = "incoming-handler"
+	hostAliasesKey     = "host-aliases"
+)
+
+func layerConfigName(layer string) string { return layer + "-config" }
+
+func layerSecretName(layer string) string { return layer + "-secret" }
+
+// layerConfigMap and layerSecret name the objects layer reads in testTenant,
+// for a test to delete.
+func layerConfigMap(layer string) client.Object {
+	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: testTenant, Name: layerConfigName(layer)}}
+}
+
+func layerSecret(layer string) client.Object {
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testTenant, Name: layerSecretName(layer)}}
+}
+
+func fixturePullSecretObject() client.Object {
+	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: testTenant, Name: fixturePullSecret}}
+}
+
+// placementLayer sets fixtureOverrideKey inline; the layer's ConfigMap and
+// then its Secret override it.
+func placementLayer(layer string) *runtimev1alpha1.ConfigLayer {
+	return &runtimev1alpha1.ConfigLayer{
+		Config:     map[string]string{"INLINE": layer, fixtureOverrideKey: "from-inline"},
+		ConfigFrom: []corev1.LocalObjectReference{{Name: layerConfigName(layer)}},
+		SecretFrom: []corev1.LocalObjectReference{{Name: layerSecretName(layer)}},
+	}
+}
+
+// placementEnvironment is what placementLayer(layer) resolves to in namespace.
+func placementEnvironment(layer, namespace string) map[string]string {
+	return map[string]string{
+		"INLINE":           layer,
+		"CONFIG":           layer + "-" + namespace,
+		"TOKEN":            layer + "-token-" + namespace,
+		fixtureOverrideKey: "from-secret",
+	}
+}
+
+// placementObjects are the ConfigMaps, Secrets and registry credentials the
+// fixture Workload reads, with values that name namespace.
+func placementObjects(namespace string) []client.Object {
+	var objects []client.Object
+	for _, layer := range []string{componentLayer, serviceLayer, httpLayer} {
+		objects = append(objects,
+			&corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: layerConfigName(layer)},
+				Data:       map[string]string{"CONFIG": layer + "-" + namespace, fixtureOverrideKey: "from-config"},
+			},
+			&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: layerSecretName(layer)},
+				Data: map[string][]byte{
+					"TOKEN":            []byte(layer + "-token-" + namespace),
+					fixtureOverrideKey: []byte("from-secret"),
+				},
+			},
+		)
+	}
+	credentials := fmt.Sprintf(`{"auths":{`+
+		`"registry.example":{"username":"component-%[1]s","password":"component-password"},`+
+		`"sidecar.example":{"username":"service-%[1]s","password":"service-password"}}}`, namespace)
+	return append(objects, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: fixturePullSecret},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte(credentials)},
+	})
+}
+
+func rpcReply(t *testing.T, response proto.Message) *wasmbus.Message {
+	t.Helper()
+	data, err := protojson.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &wasmbus.Message{Data: data}
+}
+
+// startedReply is the host's answer to a start it accepted.
+func startedReply(t *testing.T) *wasmbus.Message {
+	return rpcReply(t, &runtimev2.WorkloadStartResponse{WorkloadStatus: &runtimev2.WorkloadStatus{
+		WorkloadId:    fixtureRuntimeID,
+		WorkloadState: runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING,
+	}})
+}
+
+// placementFixture is a Workload in testTenant whose components, service and
+// host interface each read a config layer, with its host selected and those
+// objects present in both testTenant and otherTenant. The bus accepts starts.
+func placementFixture(t *testing.T) (*WorkloadReconciler, *runtimev1alpha1.Workload, *mockBus) {
+	t.Helper()
+	host := &runtimev1alpha1.Host{
+		ObjectMeta:  metav1.ObjectMeta{Name: testHeartbeatHostID, Namespace: testNamespace},
+		HostID:      testHeartbeatHostID,
+		Environment: testTenant,
+	}
+	objects := append(placementObjects(testTenant), placementObjects(otherTenant)...)
+	c := newWorkloadClient(t, append(objects, host)...)
+	bus := &mockBus{reply: startedReply(t)}
+	pullSecret := &corev1.LocalObjectReference{Name: fixturePullSecret}
+	workload := &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "placement", Namespace: testTenant, UID: testWorkloadUID,
+			Annotations: map[string]string{"team": "placement-team"},
+		},
+		Spec: runtimev1alpha1.WorkloadSpec{
+			Components: []runtimev1alpha1.WorkloadComponent{
+				{
+					Name: fixtureComponent, Image: "registry.example/app:v1",
+					ImagePullSecret: pullSecret, ImagePullPolicy: corev1.PullNever,
+					LocalResources: &runtimev1alpha1.LocalResources{
+						Environment: placementLayer(componentLayer),
+						Config:      map[string]string{"component-setting": "on"},
+						VolumeMounts: []runtimev1alpha1.VolumeMount{
+							{Name: fixtureCache, MountPath: "/cache"},
+							{Name: fixtureData, MountPath: "/placement-data", ReadOnly: true},
+						},
+						AllowedHosts:             []string{"https://api.placement.example"},
+						AllowedIPNameLookups:     []string{"api.placement.example"},
+						AllowedHostLoopbackPorts: []string{"15432/tcp"},
+					},
+				},
+				{Name: "helper", Image: "registry.example/helper:v1", ImagePullPolicy: corev1.PullIfNotPresent},
+			},
+			Service: &runtimev1alpha1.WorkloadService{
+				Image: "sidecar.example/server:v2", ImagePullSecret: pullSecret,
+				ImagePullPolicy: corev1.PullAlways, MaxRestarts: 7,
+				LocalResources: &runtimev1alpha1.LocalResources{
+					Environment:  placementLayer(serviceLayer),
+					Config:       map[string]string{"service-setting": "on"},
+					VolumeMounts: []runtimev1alpha1.VolumeMount{{Name: fixtureData, MountPath: "/srv"}},
+				},
+			},
+			Volumes: []runtimev1alpha1.Volume{
+				{Name: fixtureCache, EphemeralVolume: &runtimev1alpha1.EphemeralVolume{}},
+				{Name: fixtureData, HostPathVolume: &runtimev1alpha1.HostPathVolume{Path: "/var/data"}},
+			},
+			HostInterfaces: []runtimev1alpha1.HostInterface{{
+				Name: "inbound", Namespace: wasiNamespace, Package: httpLayer, Version: "0.2.6",
+				Interfaces: []string{incomingHandler}, ConfigLayer: *placementLayer(httpLayer),
+			}},
+			Kubernetes: &runtimev1alpha1.KubernetesSpec{Service: &runtimev1alpha1.KubernetesServiceRef{Name: "api"}},
+		},
+		Status: runtimev1alpha1.WorkloadStatus{HostID: testHeartbeatHostID, Environment: testTenant},
+	}
+	return &WorkloadReconciler{Client: c, Bus: bus, OperatorNamespace: testNamespace}, workload, bus
+}
+
+// unplacedFixture is placementFixture before host selection.
+func unplacedFixture(t *testing.T) (*WorkloadReconciler, *runtimev1alpha1.Workload, *mockBus) {
+	t.Helper()
+	r, workload, bus := placementFixture(t)
+	workload.Status = runtimev1alpha1.WorkloadStatus{}
+	return r, workload, bus
+}
+
+// placedFixture is placementFixture after a start the host accepted.
+func placedFixture(t *testing.T) (*WorkloadReconciler, *runtimev1alpha1.Workload, *mockBus) {
+	t.Helper()
+	r, workload, bus := placementFixture(t)
+	workload.Status.WorkloadID = fixtureRuntimeID
+	workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionPlacement))
+	return r, workload, bus
+}

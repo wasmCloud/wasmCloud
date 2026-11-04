@@ -147,16 +147,14 @@ func TestFinalizeSkipsWorkloadWithoutHost(t *testing.T) {
 }
 
 // newWorkloadClient builds a fake client wired with the HostID index the
-// Workload reconciler uses to look up the Host it is placed on.
-func newWorkloadClient(t *testing.T, objs ...client.Object) client.Client {
+// Workload reconciler uses to look up the Host it is placed on. Workload status
+// is a subresource, as on a cluster, so Reconcile can patch it.
+func newWorkloadClient(t *testing.T, objs ...client.Object) client.WithWatch {
 	t.Helper()
-	s := runtime.NewScheme()
-	if err := runtimev1alpha1.AddToScheme(s); err != nil {
-		t.Fatalf("add runtime v1alpha1: %v", err)
-	}
 	return fake.NewClientBuilder().
-		WithScheme(s).
+		WithScheme(newScaleTestScheme(t)).
 		WithObjects(objs...).
+		WithStatusSubresource(&runtimev1alpha1.Workload{}).
 		WithIndex(&runtimev1alpha1.Host{}, hostIDIndex,
 			func(obj client.Object) []string {
 				host, ok := obj.(*runtimev1alpha1.Host)
