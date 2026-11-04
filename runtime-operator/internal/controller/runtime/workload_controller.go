@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -497,27 +498,33 @@ func materializeLocalResources(ctx context.Context, c client.Client, namespace s
 
 // injectServiceDNSAliases adds host-aliases to wasi:http/incoming-handler
 // HostInterfaces so the wash-runtime DynamicRouter accepts requests arriving
-// via Kubernetes Service DNS.
+// via Kubernetes Service DNS. Aliases the workload already lists come first.
 func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, namespace string) {
-	aliases := strings.Join([]string{
+	serviceAliases := []string{
 		fmt.Sprintf("%s.%s", svcName, namespace),
 		fmt.Sprintf("%s.%s.svc", svcName, namespace),
-	}, ",")
+	}
 
-	for i, hi := range hostInterfaces {
-		if hi.Namespace != "wasi" || hi.Package != "http" {
+	for _, hi := range hostInterfaces {
+		if hi.Namespace != "wasi" || hi.Package != "http" || !slices.Contains(hi.Interfaces, "incoming-handler") {
 			continue
 		}
-
-		for _, iface := range hi.Interfaces {
-			if iface == "incoming-handler" {
-				if hi.Config == nil {
-					hi.Config = make(map[string]string)
-				}
-				hi.Config["host-aliases"] = aliases
-				hostInterfaces[i] = hi
+		if hi.Config == nil {
+			hi.Config = make(map[string]string)
+		}
+		// Split as the host reads the list: comma-separated, trimmed, no blanks.
+		var aliases []string
+		for _, alias := range strings.Split(hi.Config["host-aliases"], ",") {
+			if alias = strings.TrimSpace(alias); alias != "" && !slices.Contains(aliases, alias) {
+				aliases = append(aliases, alias)
 			}
 		}
+		for _, alias := range serviceAliases {
+			if !slices.Contains(aliases, alias) {
+				aliases = append(aliases, alias)
+			}
+		}
+		hi.Config["host-aliases"] = strings.Join(aliases, ",")
 	}
 }
 
