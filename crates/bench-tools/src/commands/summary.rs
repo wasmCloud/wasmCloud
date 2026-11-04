@@ -166,6 +166,22 @@ fn render_density<W: Write>(
         meta.short_sha, meta.ref_name, meta.host, meta.cpus_online,
     )?;
     writeln!(out)?;
+    let memory_limit_name = if bench == "scale_density" {
+        "max-process-memory"
+    } else {
+        "memory limit"
+    };
+    writeln!(out, "| flavour | {memory_limit_name} |")?;
+    writeln!(out, "|---|---:|")?;
+    for report in reports {
+        let limit = if report.memory_limit_bytes == 0 {
+            "-".into()
+        } else {
+            bench_tools::density::render_bytes(report.memory_limit_bytes)
+        };
+        writeln!(out, "| {} | {limit} |", report.label)?;
+    }
+    writeln!(out)?;
     writeln!(
         out,
         "| flavour | metric | value | unit | better | stopped by |"

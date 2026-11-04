@@ -475,9 +475,14 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
   preset. Variants can run manually or in the release subset; their results
   remain in the workflow summary and artifact and are never published to the
   public benchmark history.
-  - `max_scale`: `scale_density` with each guest memory's reservation and
-    guard shrunk (`WASH_SCALE_MEMORY_RESERVATION=256MiB`,
-    `WASH_SCALE_MEMORY_GUARD=64KiB`).
+  - `max_scale`: `scale_density` with `WASH_SCALE_MEMORY_RESERVATION=default,256MiB`
+    and `WASH_SCALE_MEMORY_GUARD=64KiB`. The default layout runs warm and
+    scale-to-zero workloads in both guest memory modes (`enforce,growth`);
+    the reduced layout adds a warm run in the first mode. Scale-to-zero
+    retains no guest memories between requests, so it needs no reduced-layout
+    repeat. The default layout keeps Wasmtime's default guard.
+    The terminal readout and workflow summary show `max-process-memory`
+    for each run.
 - The single `[self-hosted, bench, hetzner]` runner serializes measurements.
   Each entry measures the commit resolved before queuing and publishes as soon
   as its own measurement completes.
