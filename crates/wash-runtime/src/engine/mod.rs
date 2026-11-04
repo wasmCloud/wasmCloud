@@ -514,6 +514,43 @@ impl Drop for LiveCompile {
     }
 }
 
+/// Whether initializing a workload may block the thread it runs on: compile,
+/// open files, or build a service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Blocking {
+    /// On the blocking pool, or a caller that may block.
+    Allowed,
+    /// On an async worker, where blocking stalls every task that worker runs.
+    Forbidden,
+}
+
+impl Blocking {
+    /// Refuse `step` when blocking is forbidden. Reaching this means
+    /// [`Engine::initialize_workload_inline`] let through a workload whose
+    /// initialization blocks: the start fails rather than stall the worker.
+    fn ensure_allowed(self, step: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self == Blocking::Allowed,
+            "initializing this workload inline would {step} on an async worker"
+        );
+        Ok(())
+    }
+}
+
+/// What [`Engine::initialize_workload_inline`] did with a workload.
+// Returned once per start and matched at once: boxing would only allocate.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum InlineInit {
+    /// Initialized on the calling thread, blocking nothing.
+    Initialized(anyhow::Result<UnresolvedWorkload>),
+    /// Not initialized: doing so could block. `pinned` holds the compiles
+    /// already found, so initializing on the blocking pool reuses them.
+    WouldBlock {
+        workload: Workload,
+        pinned: Vec<Arc<LiveCompile>>,
+    },
+}
+
 /// A cached compile failure, shared by every caller that raced for the same key.
 ///
 /// `moka` hands a failed `try_get_with` back as `Arc<anyhow::Error>`, and an
@@ -745,6 +782,53 @@ impl Engine {
         id: impl AsRef<str>,
         workload: Workload,
     ) -> anyhow::Result<UnresolvedWorkload> {
+        self.initialize_workload_with(id, workload, Blocking::Allowed)
+    }
+
+    /// Initialize `workload` on the calling thread if doing so compiles
+    /// nothing, opens no files and builds no service, or hand it back with
+    /// whatever compiles it already holds.
+    ///
+    /// Initialization runs in [`Blocking::Forbidden`], so a step that would
+    /// block fails the start rather than stall an async worker:
+    /// anything added to initialization that can block must check that mode,
+    /// and add the matching check here.
+    pub(crate) fn initialize_workload_inline(
+        &self,
+        id: impl AsRef<str>,
+        workload: Workload,
+    ) -> InlineInit {
+        if !workload.volumes.is_empty() || workload.service.is_some() {
+            return InlineInit::WouldBlock {
+                workload,
+                pinned: Vec::new(),
+            };
+        }
+        let mut pinned = Vec::with_capacity(workload.components.len());
+        for component in &workload.components {
+            match component
+                .digest
+                .as_deref()
+                .and_then(|digest| self.pin_compile(digest))
+            {
+                Some(live) => pinned.push(live),
+                // Stop at the first miss: the blocking pool loads the rest.
+                None => return InlineInit::WouldBlock { workload, pinned },
+            }
+        }
+        // `pinned` keeps every compile live, so none can be evicted and
+        // recompiled while this initializes.
+        let initialized = self.initialize_workload_with(id, workload, Blocking::Forbidden);
+        drop(pinned);
+        InlineInit::Initialized(initialized)
+    }
+
+    fn initialize_workload_with(
+        &self,
+        id: impl AsRef<str>,
+        workload: Workload,
+        blocking: Blocking,
+    ) -> anyhow::Result<UnresolvedWorkload> {
         let Workload {
             namespace,
             name,
@@ -766,6 +850,7 @@ impl Engine {
         let mut validated_volumes = std::collections::HashMap::new();
 
         for v in volumes {
+            blocking.ensure_allowed("open a volume")?;
             let host_path = match v.volume_type {
                 VolumeType::HostPath(HostPathVolume { local_path }) => {
                     let path = PathBuf::from(&local_path);
@@ -807,6 +892,7 @@ impl Engine {
 
         // Iniitalize service
         let service = if let Some(svc) = service {
+            blocking.ensure_allowed("initialize a service")?;
             match self.initialize_service(
                 id.as_ref(),
                 &name,
@@ -842,6 +928,7 @@ impl Engine {
                 component,
                 &validated_volumes,
                 Arc::clone(&loopback),
+                blocking,
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized workload component");
@@ -894,7 +981,7 @@ impl Engine {
             },
             compiled,
         ) = self
-            .load_live_component(service.bytes, service.digest)
+            .load_live_component(service.bytes, service.digest, Blocking::Allowed)
             .context("failed to create component from bytes")?;
 
         // Create a linker for this component
@@ -1003,52 +1090,26 @@ impl Engine {
     /// [`LiveCompile`] while it runs: a digest some running workload was
     /// loaded from is served from that workload's compile, whether or not the
     /// cache still has it.
+    ///
+    /// Under [`Blocking::Forbidden`] only a live compile is served; nothing is
+    /// compiled.
     fn load_live_component(
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
+        blocking: Blocking,
     ) -> anyhow::Result<(CacheValue, Option<Arc<LiveCompile>>)> {
         let Some(digest) = digest else {
+            blocking.ensure_allowed("compile a component")?;
             return Ok((self.load_component_bytes(bytes, None::<&str>)?, None));
         };
         let digest = digest.as_ref();
         if let Some(live) = self.live_compile(digest) {
             return Ok((live.compiled.clone(), Some(live)));
         }
-        let compiled = self.load_component_bytes(&bytes, Some(digest))?;
-        let mut live = self
-            .live_compiles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Another start may have recorded this digest since the check above;
-        // share its compile rather than keep a second.
-        if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
-            return Ok((existing.compiled.clone(), Some(existing)));
-        }
-        let entry = Arc::new(LiveCompile {
-            digest: digest.to_string(),
-            compiled: compiled.clone(),
-            live: Arc::downgrade(&self.live_compiles),
-        });
-        live.insert(digest.to_string(), Arc::downgrade(&entry));
-        Ok((compiled, Some(entry)))
-    }
-
-    /// The compiles `workload` loads, held so initializing it compiles nothing,
-    /// or `None` if initializing it could compile, open files or build a
-    /// service's linker.
-    pub(crate) fn pin_compiled_components(
-        &self,
-        workload: &Workload,
-    ) -> Option<Vec<Arc<LiveCompile>>> {
-        if !workload.volumes.is_empty() || workload.service.is_some() {
-            return None;
-        }
-        workload
-            .components
-            .iter()
-            .map(|c| self.pin_compile(c.digest.as_deref()?))
-            .collect()
+        blocking.ensure_allowed("compile a component")?;
+        let live = self.record_live(digest, self.load_component_bytes(&bytes, Some(digest))?);
+        Ok((live.compiled.clone(), Some(live)))
     }
 
     /// `digest`'s live compile, recording a cached one as live; never compiles.
@@ -1056,22 +1117,30 @@ impl Engine {
         if let Some(live) = self.live_compile(digest) {
             return Some(live);
         }
-        // Outside the live map's lock: a cache read can run cache housekeeping.
-        let CacheValue(component) = self.cache.get(&CacheKey(digest.to_string()))?;
+        let compiled = self.cache.get(&CacheKey(digest.to_string()))?;
+        Some(self.record_live(digest, compiled))
+    }
+
+    /// Record `compiled` as `digest`'s live compile, or share the one another
+    /// start recorded since the caller last looked rather than keep a second.
+    ///
+    /// Called once the compile or cache read is done, outside this lock:
+    /// a compile is slow, and a cache read can run cache housekeeping.
+    fn record_live(&self, digest: &str, compiled: CacheValue) -> Arc<LiveCompile> {
         let mut live = self
             .live_compiles
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = live.get(digest).and_then(std::sync::Weak::upgrade) {
-            return Some(existing);
+            return existing;
         }
         let entry = Arc::new(LiveCompile {
             digest: digest.to_string(),
-            component,
+            compiled,
             live: Arc::downgrade(&self.live_compiles),
         });
         live.insert(digest.to_string(), Arc::downgrade(&entry));
-        Some(entry)
+        entry
     }
 
     fn live_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
@@ -1115,6 +1184,7 @@ impl Engine {
 
     /// Initialize a component that is a part of a workload, add wasi@0.2 interfaces (and
     /// wasi:http if the `http` feature is enabled) to the linker.
+    #[allow(clippy::too_many_arguments)]
     #[instrument(name = "initialize_workload_component", skip_all, fields(component.name = %component.name))]
     fn initialize_workload_component(
         &self,
@@ -1124,13 +1194,14 @@ impl Engine {
         component: crate::types::Component,
         validated_volumes: &std::collections::HashMap<String, volumes::OpenedVolume>,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
+        blocking: Blocking,
     ) -> anyhow::Result<WorkloadComponent> {
         // Read before the component's fields are moved out below.
         let instances = InstancePolicy::from_component(&component);
 
         // Create a wasmtime component from the bytes
         let (cached, compiled) = self
-            .load_live_component(&component.bytes, component.digest)
+            .load_live_component(&component.bytes, component.digest, blocking)
             .context("failed to create component from bytes")?;
         let may_use_gc = self.compiled_may_use_gc(&cached, &component.bytes);
         let wasmtime_component = cached.component;
@@ -3195,7 +3266,8 @@ mod tests {
         ];
         for (compiles, (digest, wat, uses_gc)) in (1..).zip(cases) {
             let bytes = wat::parse_str(wat)?;
-            let (first, live) = engine.load_live_component(&bytes, Some(digest))?;
+            let (first, live) =
+                engine.load_live_component(&bytes, Some(digest), Blocking::Allowed)?;
             assert_eq!(
                 first.may_use_gc.get(),
                 None,
@@ -3209,7 +3281,8 @@ mod tests {
             drop((first, live));
             assert!(engine.live_compiles.lock().unwrap().is_empty());
 
-            let (cached, _) = engine.load_live_component(&bytes, Some(digest))?;
+            let (cached, _) =
+                engine.load_live_component(&bytes, Some(digest), Blocking::Allowed)?;
             assert_eq!(engine.compiles.load(Ordering::SeqCst), compiles);
             assert_eq!(cached.may_use_gc.get(), Some(&uses_gc), "{digest}");
         }
@@ -3299,12 +3372,12 @@ mod tests {
         let engine = Engine::builder().build().expect("engine should build");
 
         let (_, first) = engine
-            .load_live_component(&bytes, Some(DIGEST))
+            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
             .expect("first load");
         engine.cache.invalidate_all();
         engine.cache.run_pending_tasks();
         let (_, second) = engine
-            .load_live_component(&bytes, Some(DIGEST))
+            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
             .expect("second load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(
@@ -3317,13 +3390,13 @@ mod tests {
         engine.cache.invalidate_all();
         engine.cache.run_pending_tasks();
         let (_, third) = engine
-            .load_live_component(&bytes, Some(DIGEST))
+            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
             .expect("third load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
         assert!(third.is_some());
 
         let (_, untracked) = engine
-            .load_live_component(&bytes, None::<&str>)
+            .load_live_component(&bytes, None::<&str>, Blocking::Allowed)
             .expect("load without a digest");
         assert!(untracked.is_none(), "nothing to share without a digest");
     }
@@ -3341,42 +3414,51 @@ mod tests {
         }
     }
 
-    /// A workload is pinned only once its digest is compiled, and the pin keeps
-    /// that compile: initializing after a cache eviction compiles nothing.
+    /// A workload whose digest is compiled initializes inline, compiling
+    /// nothing, and holds its compile: a later inline start of the same digest
+    /// is served from it after a cache eviction.
     #[test]
-    fn a_pinned_workload_initializes_without_compiling() {
+    fn a_compiled_workload_initializes_inline_without_compiling() {
         use std::sync::atomic::Ordering;
         const DIGEST: &str = "sha256:pinned-image";
 
         let engine = Engine::builder().build().expect("engine should build");
         let workload = component_workload(Some(DIGEST), vec![]);
-        assert!(engine.pin_compiled_components(&workload).is_none());
+        assert!(matches!(
+            engine.initialize_workload_inline("w", workload.clone()),
+            InlineInit::WouldBlock { pinned, .. } if pinned.is_empty()
+        ));
 
         let bytes = wat::parse_str("(component)").expect("component should assemble");
         engine
             .load_component_bytes(&bytes, Some(DIGEST))
             .expect("compile");
-        let pins = engine
-            .pin_compiled_components(&workload)
-            .expect("a compiled digest is pinned");
+        let InlineInit::Initialized(first) =
+            engine.initialize_workload_inline("w", workload.clone())
+        else {
+            panic!("a compiled digest initializes inline");
+        };
+        let first = first.expect("initialize");
         engine.cache.invalidate_all();
         engine.cache.run_pending_tasks();
 
-        let initialized = engine
-            .initialize_workload("w", workload)
-            .expect("initialize");
+        let InlineInit::Initialized(second) = engine.initialize_workload_inline("w2", workload)
+        else {
+            panic!("a live compile initializes inline after an eviction");
+        };
+        let second = second.expect("initialize");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
-        drop((pins, initialized));
+        drop((first, second));
         assert!(
             engine.live_compiles.lock().unwrap().is_empty(),
             "a pin outlived its holders"
         );
     }
 
-    /// A workload that could compile, open files or build a service's linker
-    /// is never pinned, and a failed pin leaves nothing behind.
+    /// A workload that could compile, open files or build a service is handed
+    /// back, holding only compiles that exist, and those go with it.
     #[test]
-    fn a_workload_that_could_block_is_not_pinned() {
+    fn a_workload_that_could_block_is_not_initialized_inline() {
         const DIGEST: &str = "sha256:compiled-image";
 
         let engine = Engine::builder().build().expect("engine should build");
@@ -3384,19 +3466,19 @@ mod tests {
         engine
             .load_component_bytes(&bytes, Some(DIGEST))
             .expect("compile");
+        let would_block = |workload| {
+            matches!(
+                engine.initialize_workload_inline("w", workload),
+                InlineInit::WouldBlock { .. }
+            )
+        };
 
-        assert!(
-            engine
-                .pin_compiled_components(&component_workload(None, vec![]))
-                .is_none()
-        );
-        assert!(
-            engine
-                .pin_compiled_components(&component_workload(Some(DIGEST), vec![empty_dir("a")]))
-                .is_none()
-        );
-
-        let with_service = Workload {
+        assert!(would_block(component_workload(None, vec![])));
+        assert!(would_block(component_workload(
+            Some(DIGEST),
+            vec![empty_dir("a")]
+        )));
+        assert!(would_block(Workload {
             service: Some(crate::types::Service {
                 bytes: bytes.clone().into(),
                 digest: Some(DIGEST.into()),
@@ -3404,8 +3486,7 @@ mod tests {
                 max_restarts: 0,
             }),
             ..component_workload(Some(DIGEST), vec![])
-        };
-        assert!(engine.pin_compiled_components(&with_service).is_none());
+        }));
 
         let mixed = Workload {
             components: [Some(DIGEST), Some("sha256:not-compiled")]
@@ -3418,17 +3499,44 @@ mod tests {
                 .into(),
             ..volume_only_workload(vec![])
         };
-        assert!(engine.pin_compiled_components(&mixed).is_none());
+        let InlineInit::WouldBlock { pinned, .. } = engine.initialize_workload_inline("w", mixed)
+        else {
+            panic!("an uncompiled component is not initialized inline");
+        };
+        assert_eq!(pinned.len(), 1, "the compiled component is handed on");
+        drop(pinned);
         assert!(
             engine.live_compiles.lock().unwrap().is_empty(),
-            "a failed pin left a live entry"
+            "a handed-back pin outlived its holder"
         );
+    }
 
-        assert!(
-            engine
-                .pin_compiled_components(&component_workload(Some(DIGEST), vec![]))
-                .is_some()
-        );
+    /// Initialization with blocking forbidden refuses every step that blocks,
+    /// so a workload let through inline by mistake fails its start rather
+    /// than stall an async worker.
+    #[test]
+    fn forbidden_blocking_refuses_each_blocking_step() {
+        use std::sync::atomic::Ordering;
+
+        let engine = Engine::builder().build().expect("engine should build");
+        for (workload, step) in [
+            (component_workload(None, vec![]), "compile a component"),
+            (
+                component_workload(Some("sha256:not-compiled"), vec![]),
+                "compile a component",
+            ),
+            (volume_only_workload(vec![empty_dir("a")]), "open a volume"),
+        ] {
+            let err = engine
+                .initialize_workload_with("w", workload, Blocking::Forbidden)
+                .err()
+                .expect("a blocking step is refused");
+            assert!(
+                format!("{err:#}").contains(step),
+                "expected a refusal to {step}, got: {err:#}"
+            );
+        }
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 0);
     }
 
     // A scheduler placing N replicas of one image sends N starts carrying one
