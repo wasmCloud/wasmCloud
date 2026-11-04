@@ -52,7 +52,7 @@ func TestDaemonSetDeleteFailuresPreserveWorkloadsAndRetry(t *testing.T) {
 	)
 	for _, phase := range []string{scaleDown, retireOld, recreate} {
 		t.Run(phase, func(t *testing.T) {
-			replicas := int32(1)
+			replicas := int32(2)
 			if phase == scaleDown {
 				replicas = 3
 			}
@@ -64,27 +64,26 @@ func TestDaemonSetDeleteFailuresPreserveWorkloadsAndRetry(t *testing.T) {
 			remove := func(workload runtimev1alpha1.Workload) daemonSetWrite {
 				return daemonSetWrite{daemonSetDeleteOperation, client.ObjectKeyFromObject(&workload)}
 			}
-			target := remove(old[dsHostA][0])
-			wantFailed := []daemonSetWrite{target}
-			wantRetried := []daemonSetWrite{target, target}
-			absent := []client.ObjectKey{target.key}
+			first := remove(old[dsHostA][0])
+			target := remove(old[dsHostA][1])
+			wantFailed := []daemonSetWrite{first, target}
+			wantRetried := []daemonSetWrite{first, target, target}
+			absent := []client.ObjectKey{first.key, target.key}
 			protected := make(map[string][]runtimev1alpha1.Workload)
-			deletedBeforeError := client.ObjectKey{}
+			var failedState map[string]daemonSetRolloutState
 			switch phase {
 			case scaleDown:
 				ds.Spec.ReplicasPerHost = new(int32(1))
-				target = remove(old[dsHostA][1])
-				first := remove(old[dsHostA][0])
-				wantFailed = []daemonSetWrite{first, target}
 				wantRetried = []daemonSetWrite{first, target, target, remove(old[dsHostB][0]), remove(old[dsHostB][1])}
 				absent = []client.ObjectKey{first.key, target.key, wantRetried[3].key, wantRetried[4].key}
-				deletedBeforeError = first.key
 				protected[dsHostA] = old[dsHostA][2:]
 				protected[dsHostB] = old[dsHostB][2:]
+				failedState = map[string]daemonSetRolloutState{dsHostA: {2, 0, 2}, dsHostB: {3, 0, 3}}
 			case retireOld:
 				ds.Spec.MaxConcurrentHosts = new(int32(2))
 				ds.Spec.Template.Spec.Components[0].Image = daemonSetUpdatedImage
 				schedule(t, r, ds)
+				protected[dsHostA] = make([]runtimev1alpha1.Workload, 0, replicas)
 				for _, workload := range workloadsByHost(t, r)[dsHostA] {
 					if workload.Annotations[workloadDaemonSetGenerationAnnotation] != ds.Spec.Template.Hash() {
 						continue
@@ -96,19 +95,26 @@ func TestDaemonSetDeleteFailuresPreserveWorkloadsAndRetry(t *testing.T) {
 					if err := r.Get(t.Context(), client.ObjectKeyFromObject(&workload), &workload); err != nil {
 						t.Fatal(err)
 					}
-					protected[dsHostA] = []runtimev1alpha1.Workload{workload}
+					protected[dsHostA] = append(protected[dsHostA], workload)
 				}
 				protected[dsHostB] = workloadsByHost(t, r)[dsHostB]
+				failedState = map[string]daemonSetRolloutState{dsHostA: {2, 1, 2}, dsHostB: {2, 2, 0}}
 			case recreate:
 				ds.Spec.DeployPolicy = runtimev1alpha1.WorkloadDeployPolicyRecreate
 				ds.Spec.Template.Spec.Components[0].Image = daemonSetUpdatedImage
-				create := func(hostID string) daemonSetWrite {
+				create := func(hostID string, slot int) daemonSetWrite {
 					return daemonSetWrite{daemonSetCreateOperation, client.ObjectKey{
-						Namespace: ds.Namespace, Name: daemonSetWorkloadName(ds.Name, hostID, ds.Spec.Template.Hash(), 0),
+						Namespace: ds.Namespace, Name: daemonSetWorkloadName(ds.Name, hostID, ds.Spec.Template.Hash(), slot),
 					}}
 				}
-				wantRetried = []daemonSetWrite{target, target, create(dsHostA), remove(old[dsHostB][0]), create(dsHostB)}
-				absent = []client.ObjectKey{target.key, client.ObjectKeyFromObject(&old[dsHostB][0])}
+				wantRetried = []daemonSetWrite{
+					first, target, target, create(dsHostA, 0), create(dsHostA, 1),
+					remove(old[dsHostB][0]), remove(old[dsHostB][1]), create(dsHostB, 0), create(dsHostB, 1),
+				}
+				absent = []client.ObjectKey{
+					first.key, target.key, client.ObjectKeyFromObject(&old[dsHostB][0]), client.ObjectKeyFromObject(&old[dsHostB][1]),
+				}
+				failedState = map[string]daemonSetRolloutState{dsHostA: {0, 1, 0}, dsHostB: {0, 2, 0}}
 			}
 			before := workloadsByHost(t, r)
 			want := errors.New("delete refused")
@@ -117,9 +123,10 @@ func TestDaemonSetDeleteFailuresPreserveWorkloadsAndRetry(t *testing.T) {
 				t.Fatalf("reconcileSchedule = %v, want delete error", err)
 			}
 			assertDaemonSetWrites(t, *writes, wantFailed...)
+			assertDaemonSetRollout(t, r, ds, failedState)
 			for _, workloads := range before {
 				for _, workload := range workloads {
-					if key := client.ObjectKeyFromObject(&workload); key == deletedBeforeError {
+					if key := client.ObjectKeyFromObject(&workload); key == first.key {
 						assertDaemonSetWorkloadAbsent(t, r, key)
 					} else {
 						assertDaemonSetWorkloadsUnchanged(t, r, []runtimev1alpha1.Workload{workload})
@@ -127,9 +134,9 @@ func TestDaemonSetDeleteFailuresPreserveWorkloadsAndRetry(t *testing.T) {
 				}
 			}
 			schedule(t, r, ds)
-			wantCounts := map[string]int{dsHostA: 1, dsHostB: 1}
+			wantCounts := map[string]int{dsHostA: int(*ds.Spec.ReplicasPerHost), dsHostB: int(*ds.Spec.ReplicasPerHost)}
 			if phase == retireOld {
-				wantCounts[dsHostB] = 2
+				wantCounts[dsHostB] *= 2
 			}
 			assertPerHost(t, workloadsByHost(t, r), wantCounts)
 			assertDaemonSetWrites(t, *writes, wantRetried...)
