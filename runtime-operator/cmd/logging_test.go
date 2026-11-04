@@ -13,6 +13,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +32,8 @@ const (
 	testJSONFlag             = "--json-log"
 	testJSONFormatFlag       = "--log-format=json"
 	testWarn                 = "warn"
+	testGrouped              = "grouped"
+	testPasswordKey          = "password"
 )
 
 func parseLogging(t *testing.T, args ...string) loggingOptions {
@@ -206,10 +211,18 @@ func TestOperatorLoggingSubprocess(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			commandArgs := append([]string{"-test.run=^TestOperatorLoggingSubprocess$", "--"}, args...)
+			config := filepath.Join(t.TempDir(), "invalid-kubeconfig")
+			if err := os.WriteFile(config, []byte("apiVersion: [invalid"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			commandArgs := append([]string{"-test.run=^TestOperatorLoggingSubprocess$", "--",
+				"--nats-url=nats://127.0.0.1:1"}, args...)
 			command := exec.CommandContext(ctx, os.Args[0], commandArgs...)
-			command.Env = append(os.Environ(), "OPERATOR_LOGGING_HELPER=1", "OPERATOR_NAMESPACE=")
+			command.Env = append(os.Environ(), "OPERATOR_LOGGING_HELPER=1", "OPERATOR_NAMESPACE=", "KUBECONFIG="+config)
 			output, err := command.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("startup did not reject missing namespace before timeout: %v: %s", ctx.Err(), output)
+			}
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) {
 				t.Fatalf("process = %v: %s", err, output)
@@ -283,9 +296,118 @@ func TestStandardHTTPDiagnostics(t *testing.T) {
 				t.Fatal("panic request succeeded")
 			}
 			record := decodeLog(t, output.bytes())
+			if record["stacktrace"] != nil {
+				t.Fatalf("standard HTTP diagnostic gained a logging stack: %v", record)
+			}
 			if record["level"] != logError || !strings.Contains(record["msg"].(string), "test HTTP panic") {
 				t.Fatalf("HTTP diagnostic = %v", record)
 			}
 		})
+	}
+}
+
+func TestTextNumericTimestampsUsePlainDecimals(t *testing.T) {
+	for _, tc := range []struct{ encoding, want string }{
+		{"epoch", "ts=1234567890.25"}, {"millis", "ts=1234567890250"},
+	} {
+		var output bytes.Buffer
+		logger, err := parseLogging(t, "--log-format=text", "--log-time-encoding="+tc.encoding).logger(&output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := slog.NewRecord(time.Unix(1234567890, 250000000).UTC(), slog.LevelInfo, testLogMessage, 0)
+		if err := logger.Handler().Handle(t.Context(), record); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(strings.Fields(output.String()), tc.want) {
+			t.Fatalf("timestamp = %s", output.String())
+		}
+	}
+}
+
+func TestTimestampDoesNotRenameUserTimeFields(t *testing.T) {
+	timestamp := time.Unix(1234567890, 250000000).UTC()
+	userTime := timestamp.Add(time.Hour)
+	for _, tc := range []struct {
+		name    string
+		handler func(slog.Handler) slog.Handler
+		inline  bool
+		group   bool
+	}{
+		{name: "inline", handler: func(h slog.Handler) slog.Handler { return h }, inline: true},
+		{name: "bound", handler: func(h slog.Handler) slog.Handler {
+			return h.WithAttrs([]slog.Attr{slog.Time("time", userTime)})
+		}},
+		{name: testGrouped, handler: func(h slog.Handler) slog.Handler {
+			return h.WithGroup(testPayload).WithAttrs([]slog.Attr{slog.Time("time", userTime)})
+		}, group: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			logger, err := parseLogging(t, testJSONFlag).logger(&output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := slog.NewRecord(timestamp, slog.LevelInfo, testLogMessage, 0)
+			if tc.inline {
+				record.AddAttrs(slog.Time("time", userTime))
+			}
+			if err := tc.handler(logger.Handler()).Handle(t.Context(), record); err != nil {
+				t.Fatal(err)
+			}
+			got := decodeLog(t, output.Bytes())
+			if got["ts"] != json.Number("1234567890.25") || bytes.Count(output.Bytes(), []byte(`"ts":`)) != 1 {
+				t.Fatalf("built-in timestamp = %s", output.String())
+			}
+			if tc.group {
+				got = got[testPayload].(map[string]any)
+			}
+			if got["time"] != userTime.Format(time.RFC3339Nano) {
+				t.Fatalf("user time field = %v", got)
+			}
+		})
+	}
+}
+
+func emitOperatorError(logger *slog.Logger, controller bool) {
+	if controller {
+		logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).Error(errors.New("stack test"), testLogMessage)
+	} else {
+		logger.Error(testLogMessage)
+	}
+}
+
+func TestApplicationStackStartsAtLogCall(t *testing.T) {
+	for _, controller := range []bool{false, true} {
+		var output bytes.Buffer
+		logger, err := parseLogging(t, testJSONFlag).logger(&output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		emitOperatorError(logger, controller)
+		record := decodeLog(t, output.Bytes())
+		stack, ok := record["stacktrace"].(string)
+		if !ok || !strings.Contains(strings.Split(stack, "\n")[0], ".emitOperatorError") {
+			t.Fatalf("stack does not start at log call: %v", record)
+		}
+		for _, internal := range []string{"stacktraceHandler", "log/slog.", "slogSink"} {
+			if strings.Contains(stack, internal) {
+				t.Fatalf("stack contains logging frame %s: %s", internal, stack)
+			}
+		}
+	}
+}
+
+func TestControllerLogsRetainVerbosity(t *testing.T) {
+	for verbosity := 0; verbosity <= 3; verbosity++ {
+		var output bytes.Buffer
+		logger, err := parseLogging(t, testJSONFlag, "--log-level=3").logger(&output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).V(verbosity).Info(testLogMessage)
+		if got := decodeLog(t, output.Bytes())["v"]; got != json.Number(strconv.Itoa(verbosity)) {
+			t.Fatalf("verbosity %d logged as %v", verbosity, got)
+		}
 	}
 }

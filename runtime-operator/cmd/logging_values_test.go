@@ -116,52 +116,109 @@ func TestProductionObjectLogging(t *testing.T) {
 	secret := &corev1.Secret{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
 		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: testTenant},
-		StringData: map[string]string{"password": "private-test-value"},
+		StringData: map[string]string{testPasswordKey: "private-test-value"},
 	}
-	for _, value := range []struct {
-		name   string
-		object any
+	for _, mode := range []struct {
+		name string
+		args []string
 	}{
-		{"direct", secret},
-		{"marshaled", objectLogMarshaler{secret}},
+		{"default", []string{testJSONFormatFlag}},
+		{"default text", nil},
+		{"production", []string{testLegacyProductionFlag}},
 	} {
-		for _, tc := range []struct {
-			name string
-			emit func(*slog.Logger)
+		for _, value := range []struct {
+			name   string
+			object any
 		}{
-			{"inline", func(logger *slog.Logger) { logger.Info(testLogMessage, "object", value.object) }},
-			{"bound", func(logger *slog.Logger) { logger.With("object", value.object).Info(testLogMessage) }},
-			{"grouped", func(logger *slog.Logger) {
-				logger.WithGroup(testPayload).Info(testLogMessage, "object", value.object)
-			}},
-			{"controller inline", func(logger *slog.Logger) {
-				logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).Info(testLogMessage, "object", value.object)
-			}},
-			{"controller bound", func(logger *slog.Logger) {
-				logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).
-					WithValues("object", value.object).Info(testLogMessage)
-			}},
+			{"direct", secret},
+			{"marshaled", objectLogMarshaler{secret}},
 		} {
-			t.Run(value.name+"/"+tc.name, func(t *testing.T) {
-				var output bytes.Buffer
-				logger, err := parseLogging(t, testLegacyProductionFlag).logger(&output)
-				if err != nil {
-					t.Fatal(err)
-				}
-				tc.emit(logger)
-				if strings.Contains(output.String(), "private-test-value") || strings.Contains(output.String(), "stringData") {
-					t.Fatalf("object contents logged: %s", output.String())
-				}
-				record := decodeLog(t, output.Bytes())
-				if tc.name == "grouped" {
-					record = record[testPayload].(map[string]any)
-				}
-				object, ok := record["object"].(map[string]any)
-				if !ok || len(object) != 4 || object["name"] != secret.Name || object["namespace"] != secret.Namespace ||
-					object["kind"] != "Secret" || object["apiVersion"] != "v1" {
-					t.Fatalf("object identity = %v", object)
-				}
-			})
+			for _, tc := range []struct {
+				name string
+				emit func(*slog.Logger)
+			}{
+				{"inline", func(logger *slog.Logger) { logger.Info(testLogMessage, "object", value.object) }},
+				{"bound", func(logger *slog.Logger) { logger.With("object", value.object).Info(testLogMessage) }},
+				{testGrouped, func(logger *slog.Logger) {
+					logger.WithGroup(testPayload).Info(testLogMessage, "object", value.object)
+				}},
+				{"controller inline", func(logger *slog.Logger) {
+					logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).Info(testLogMessage, "object", value.object)
+				}},
+				{"controller bound", func(logger *slog.Logger) {
+					logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).
+						WithValues("object", value.object).Info(testLogMessage)
+				}},
+			} {
+				t.Run(mode.name+"/"+value.name+"/"+tc.name, func(t *testing.T) {
+					var output bytes.Buffer
+					logger, err := parseLogging(t, mode.args...).logger(&output)
+					if err != nil {
+						t.Fatal(err)
+					}
+					tc.emit(logger)
+					if strings.Contains(output.String(), "private-test-value") || strings.Contains(output.String(), "stringData") {
+						t.Fatalf("object contents logged: %s", output.String())
+					}
+					if mode.name == "default text" {
+						if !strings.Contains(output.String(), "object.name=credentials") ||
+							!strings.Contains(output.String(), "object.namespace="+testTenant) {
+							t.Fatalf("text object identity = %s", output.String())
+						}
+						return
+					}
+					record := decodeLog(t, output.Bytes())
+					if tc.name == testGrouped {
+						record = record[testPayload].(map[string]any)
+					}
+					object, ok := record["object"].(map[string]any)
+					if !ok || len(object) != 4 || object["name"] != secret.Name || object["namespace"] != secret.Namespace ||
+						object["kind"] != "Secret" || object["apiVersion"] != "v1" {
+						t.Fatalf("object identity = %v", object)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestFullObjectLoggingRequiresOptIn(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "credentials"},
+		StringData: map[string]string{testPasswordKey: "opt-in-secret"},
+	}
+	for _, mode := range [][]string{{testJSONFormatFlag}, {testLegacyProductionFlag}} {
+		for _, value := range []any{secret, objectLogMarshaler{secret}} {
+			var output bytes.Buffer
+			args := append(append([]string(nil), mode...), "--log-full-objects")
+			logger, err := parseLogging(t, args...).logger(&output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logger.Info(testLogMessage, "object", value)
+			if !strings.Contains(output.String(), "opt-in-secret") {
+				t.Fatalf("full objects were not explicitly enabled: %s", output.String())
+			}
+		}
+	}
+}
+
+func TestObjectListLoggingOmitsContents(t *testing.T) {
+	list := &corev1.SecretList{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "SecretList"},
+		Items:    []corev1.Secret{{StringData: map[string]string{testPasswordKey: "list-secret"}}},
+	}
+	for _, value := range []any{list, objectLogMarshaler{list}} {
+		var output bytes.Buffer
+		logger, err := parseLogging(t, testJSONFormatFlag).logger(&output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logger.Info(testLogMessage, "object", value)
+		record := decodeLog(t, output.Bytes())
+		object, ok := record["object"].(map[string]any)
+		if !ok || len(object) != 2 || object["kind"] != "SecretList" || strings.Contains(output.String(), "list-secret") {
+			t.Fatalf("object list log = %v", record)
 		}
 	}
 }

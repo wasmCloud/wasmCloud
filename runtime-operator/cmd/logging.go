@@ -5,14 +5,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
-	"runtime/debug"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -27,6 +28,7 @@ const (
 )
 
 type loggingOptions struct {
+	fullObjects bool
 	development bool
 	jsonLog     bool
 	format      string
@@ -36,6 +38,8 @@ type loggingOptions struct {
 }
 
 func (options *loggingOptions) bindFlags(flags *flag.FlagSet) {
+	flags.BoolVar(&options.fullObjects, "log-full-objects", false,
+		"Include full Kubernetes objects, including Secret contents")
 	flags.BoolVar(&options.development, "dev-mode", options.development, "Enable development logging defaults")
 	flags.BoolVar(&options.jsonLog, "json-log", false, "Output JSON logs with epoch timestamps")
 	flags.StringVar(&options.format, "log-format", "", "Log format: text or json")
@@ -114,30 +118,30 @@ func (options loggingOptions) logger(output io.Writer) (*slog.Logger, error) {
 	if options.jsonLog {
 		format, encoding = logJSON, logEpoch
 	}
-	handlerOptions := &slog.HandlerOptions{Level: level, ReplaceAttr: logAttributes(encoding, options.development)}
+	handlerOptions := &slog.HandlerOptions{Level: level, ReplaceAttr: logAttributes(options.fullObjects)}
 	var handler slog.Handler = slog.NewJSONHandler(output, handlerOptions)
 	if format == logText {
 		handler = slog.NewTextHandler(output, handlerOptions)
 	}
-	return slog.New(stacktraceHandler{Handler: handler, level: stackLevel}), nil
+	return slog.New(stacktraceHandler{
+		Handler: handler, level: stackLevel, timeEncoder: encoding, text: format == logText,
+	}), nil
 }
 
 type marshalerValue struct{ logr.Marshaler }
 
 func (value marshalerValue) LogValue() slog.Value { return slog.AnyValue(value.MarshalLog()) }
 
-type kubernetesLogObject interface {
-	metav1.Object
-	runtime.Object
-}
-
-type objectLogValue struct{ kubernetesLogObject }
+type objectLogValue struct{ runtime.Object }
 
 func (value objectLogValue) LogValue() slog.Value {
-	// Production logs contain object identity, not object contents.
-	attrs := []slog.Attr{slog.String("name", value.GetName())}
-	if namespace := value.GetNamespace(); namespace != "" {
-		attrs = append(attrs, slog.String("namespace", namespace))
+	// Object logs contain identity unless full contents are explicitly enabled.
+	var attrs []slog.Attr
+	if metadata, err := meta.Accessor(value.Object); err == nil {
+		attrs = append(attrs, slog.String("name", metadata.GetName()))
+		if namespace := metadata.GetNamespace(); namespace != "" {
+			attrs = append(attrs, slog.String("namespace", namespace))
+		}
 	}
 	if gvk := value.GetObjectKind().GroupVersionKind(); gvk.Version != "" {
 		attrs = append(attrs, slog.String("apiVersion", gvk.GroupVersion().String()), slog.String("kind", gvk.Kind))
@@ -145,13 +149,13 @@ func (value objectLogValue) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
-func logAttributes(encoding string, verbose bool) func([]string, slog.Attr) slog.Attr {
+func logAttributes(fullObjects bool) func([]string, slog.Attr) slog.Attr {
 	return func(groups []string, attr slog.Attr) slog.Attr {
 		if marshaler, ok := attr.Value.Any().(logr.Marshaler); ok {
 			attr.Value = slog.AnyValue(marshalerValue{marshaler}).Resolve()
 		}
-		if !verbose {
-			if object, ok := attr.Value.Any().(kubernetesLogObject); ok {
+		if !fullObjects {
+			if object, ok := attr.Value.Any().(runtime.Object); ok {
 				attr.Value = slog.AnyValue(objectLogValue{object}).Resolve()
 			}
 		}
@@ -159,10 +163,6 @@ func logAttributes(encoding string, verbose bool) func([]string, slog.Attr) slog
 			return attr
 		}
 		switch attr.Key {
-		case slog.TimeKey:
-			if attr.Value.Kind() == slog.KindTime {
-				return timestampAttribute(encoding, attr.Value.Time())
-			}
 		case slog.LevelKey:
 			if level, ok := attr.Value.Any().(slog.Level); ok {
 				label := "debug"
@@ -200,26 +200,85 @@ func timestampAttribute(encoding string, timestamp time.Time) slog.Attr {
 	}
 }
 
+type logScope struct {
+	group string
+	attrs []slog.Attr
+}
+
 type stacktraceHandler struct {
 	slog.Handler
-	level slog.Level
+	level       slog.Level
+	timeEncoder string
+	text        bool
+	skipStack   bool
+	scopes      []logScope
 }
 
 func (handler stacktraceHandler) Handle(ctx context.Context, record slog.Record) error {
-	if record.Level >= handler.level {
-		record = record.Clone()
-		record.AddAttrs(slog.String("stacktrace", string(debug.Stack())))
+	record = record.Clone()
+	output := handler.Handler
+	// Built-in timestamps stay outside groups and do not rewrite user fields.
+	if !record.Time.IsZero() {
+		timestamp := timestampAttribute(handler.timeEncoder, record.Time)
+		if handler.text && timestamp.Value.Kind() == slog.KindFloat64 {
+			timestamp = slog.String(timestamp.Key, strconv.FormatFloat(timestamp.Value.Float64(), 'f', -1, 64))
+		}
+		output = output.WithAttrs([]slog.Attr{timestamp})
+		record.Time = time.Time{}
 	}
-	return handler.Handler.Handle(ctx, record)
+	for _, scope := range handler.scopes {
+		if scope.group != "" {
+			output = output.WithGroup(scope.group)
+		} else {
+			output = output.WithAttrs(scope.attrs)
+		}
+	}
+	if !handler.skipStack && record.Level >= handler.level {
+		if stack := logStack(record.PC); stack != "" {
+			record.AddAttrs(slog.String("stacktrace", stack))
+		}
+	}
+	return output.Handle(ctx, record)
+}
+
+func logStack(pc uintptr) string {
+	if pc == 0 {
+		return ""
+	}
+	origin, _ := goruntime.CallersFrames([]uintptr{pc}).Next()
+	var pcs [64]uintptr
+	count := goruntime.Callers(2, pcs[:])
+	frames := goruntime.CallersFrames(pcs[:count])
+	var output strings.Builder
+	found := false
+	for {
+		frame, more := frames.Next()
+		if frame.Function == origin.Function && frame.File == origin.File && frame.Line == origin.Line {
+			found = true
+		}
+		if found {
+			fmt.Fprintf(&output, "%s\n\t%s:%d\n", frame.Function, frame.File, frame.Line)
+		}
+		if !more {
+			break
+		}
+	}
+	if !found {
+		fmt.Fprintf(&output, "%s\n\t%s:%d\n", origin.Function, origin.File, origin.Line)
+	}
+	return strings.TrimSuffix(output.String(), "\n")
 }
 
 func (handler stacktraceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	handler.Handler = handler.Handler.WithAttrs(attrs)
+	scope := logScope{attrs: append([]slog.Attr(nil), attrs...)}
+	handler.scopes = append(append([]logScope(nil), handler.scopes...), scope)
 	return handler
 }
 
 func (handler stacktraceHandler) WithGroup(name string) slog.Handler {
-	handler.Handler = handler.Handler.WithGroup(name)
+	if name != "" {
+		handler.scopes = append(append([]logScope(nil), handler.scopes...), logScope{group: name})
+	}
 	return handler
 }
 
@@ -238,6 +297,10 @@ func (handler controllerLogHandler) Enabled(ctx context.Context, level slog.Leve
 }
 
 func (handler controllerLogHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Level <= 0 {
+		record = record.Clone()
+		record.AddAttrs(slog.Int("v", -int(record.Level)))
+	}
 	record.Level = controllerLogLevel(record.Level)
 	// logr.Error calls Handle without checking Enabled.
 	if !handler.Handler.Enabled(ctx, record.Level) {
@@ -256,7 +319,12 @@ func (handler controllerLogHandler) WithGroup(name string) slog.Handler {
 
 func configureLogging(logger *slog.Logger) {
 	slog.SetDefault(logger)
-	// Controller-runtime's HTTP servers use the standard logger for errors.
-	slog.SetLogLoggerLevel(slog.LevelError)
+	// HTTP diagnostics stay visible at error thresholds without application stack traces.
+	handler := logger.Handler()
+	if stack, ok := handler.(stacktraceHandler); ok {
+		stack.skipStack = true
+		handler = stack
+	}
+	log.SetOutput(slog.NewLogLogger(handler, slog.LevelError).Writer())
 	ctrl.SetLogger(logr.FromSlogHandler(controllerLogHandler{logger.Handler()}))
 }
