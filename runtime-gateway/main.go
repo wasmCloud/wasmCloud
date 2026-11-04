@@ -3,14 +3,15 @@ package main
 import (
 	"errors"
 	"flag"
+	"log/slog"
 	"os"
 
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
@@ -34,7 +35,9 @@ func main() {
 	if err != nil {
 		os.Exit(2)
 	}
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&options.logging)))
+	logger := newGatewayLogger(options.logging, os.Stderr)
+	slog.SetDefault(logger)
+	ctrl.SetLogger(logr.FromSlogHandler(logger.Handler()))
 	if err := runGateway(ctrl.SetupSignalHandler(), options, defaultGatewayDependencies()); err != nil {
 		setupLog.Error(err, "gateway stopped")
 		os.Exit(1)
