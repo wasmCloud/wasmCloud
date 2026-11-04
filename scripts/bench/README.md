@@ -465,14 +465,19 @@ GitHub-hosted publisher
 **Workflows:** [`bench.yml`](../../.github/workflows/bench.yml) dispatches
 each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.yml).
 
-- Trigger: `workflow_dispatch` and published releases. Inputs: `bench` (choice of
-  `http_invoke` / `wasmtime_baseline` / `wasmtime_serve`) and `ref`
-  (any branch/tag/sha; defaults to the workflow's ref).
+- Trigger: `workflow_dispatch` and published releases. Inputs: `bench` (a bench
+  or named variant from the workflow's choices) and `ref`
+  (any branch/tag/sha or `#PR`; defaults to the workflow's ref).
+- Published releases run `http_invoke`, `service_http`, `gungraun`, and
+  `max_scale`. These run after publication, not as a pre-release gate.
 - Variants: a `bench` choice may name an entry in `BENCH_VARIANTS` (in
   `bench.yml`) instead of a bench. It runs that entry's `bench` with its `env`
-  preset, and is never published or part of the release subset.
+  preset. Variants can run manually or in the release subset; their results
+  remain in the workflow summary and artifact and are never published to the
+  public benchmark history.
   - `max_scale`: `scale_density` with each guest memory's reservation and
-    guard shrunk (`WASH_SCALE_MEMORY_RESERVATION`, `WASH_SCALE_MEMORY_GUARD`).
+    guard shrunk (`WASH_SCALE_MEMORY_RESERVATION=256MiB`,
+    `WASH_SCALE_MEMORY_GUARD=64KiB`).
 - The single `[self-hosted, bench, hetzner]` runner serializes measurements.
   Each entry measures the commit resolved before queuing and publishes as soon
   as its own measurement completes.

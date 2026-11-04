@@ -65,12 +65,12 @@ jobs:
       # published`. wasmtime_* are reference baselines for wasmtime itself
       # and don't shift with our changes — run them on demand via
       # workflow_dispatch when wasmtime is upgraded.
-      RELEASE_BENCHES: '["http_invoke","service_http","gungraun"]'
+      RELEASE_BENCHES: '["http_invoke","service_http","gungraun","max_scale"]'
       # Named runs of an existing bench with environment variables preset,
       # for settings a bench reads from its environment:
       #
       # - `bench` is the bench that runs, `env` what it runs with.
-      # - Dispatch-only: never in the release subset.
+      # - Available to both dispatch and the release subset.
       # - Never published. On a ref whose bench ignores the variables, the
       #   rows would be indistinguishable from the bench's own series.
       #
@@ -93,18 +93,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = "release" ]; then
-            runs="$(jq -cn --argjson benches "$RELEASE_BENCHES" \
-              '[$benches[] | {name: ., bench: ., env: {}, publish: true}]')"
+            benches="$RELEASE_BENCHES"
             ref="${RELEASE_TAG}"
             checkout_ref="${RELEASE_TAG}"
           else
-            runs="$(jq -cn --arg name "$INPUT_BENCH" --argjson variants "$BENCH_VARIANTS" '
-              if $variants[$name] then
-                [{name: $name, bench: $variants[$name].bench,
-                  env: $variants[$name].env, publish: false}]
-              else
-                [{name: $name, bench: $name, env: {}, publish: true}]
-              end')"
+            benches="$(jq -cn --arg name "$INPUT_BENCH" '[$name]')"
             ref="${INPUT_REF:-${DEFAULT_REF}}"
             # Normalize to the short name (main, v2.5.2) so it matches
             # GITHUB_REF_NAME's style and, when it's a tag, passes the
@@ -131,6 +124,14 @@ jobs:
                 ;;
             esac
           fi
+          runs="$(jq -cn --argjson benches "$benches" --argjson variants "$BENCH_VARIANTS" '
+            [$benches[] as $name |
+              if $variants[$name] then
+                {name: $name, bench: $variants[$name].bench,
+                 env: $variants[$name].env, publish: false}
+              else
+                {name: $name, bench: $name, env: {}, publish: true}
+              end]')"
           {
             echo "runs=${runs}"
             echo "ref=${ref}"
