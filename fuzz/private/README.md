@@ -40,6 +40,11 @@ The source checkout's lockfiles and parser implementations are used. Staging
 adds only harnesses, seeds, and the router shim. Incompatible APIs or dependency
 drift fail the run.
 
+Maintainers may manually dispatch a private branch to validate control changes.
+The public release gate accepts only a run from the pinned private `main`
+revision. Rust fuzzing explicitly targets GNU libc on Linux so the installed
+`cargo-fuzz` binary's own build target cannot select static musl for ASan.
+
 ## Release protocol
 
 The public gate sends the full candidate SHA and a unique request ID. The

@@ -82,6 +82,7 @@ for (const [name, mutate, message] of [
   ['disabled workflow', (s) => { s.workflow.state = 'disabled_manually'; }, /unavailable/],
   ['different workflow revision', (s) => { s.run.head_sha = 'd'.repeat(40); }, /dispatched workflow/],
   ['different workflow', (s) => { s.run.workflow_id++; }, /dispatched workflow/],
+  ['private validation branch', (s) => { s.run.head_branch = 'codex/fix-asan-target'; }, /dispatched workflow/],
   ['workflow rerun', (s) => { s.run.run_attempt = 2; }, /dispatched workflow/],
   ['duplicate dispatches', (s) => { s.extraRuns = [{ ...s.run, id: 790 }]; }, /ambiguous runs/],
   ['failed run', (s) => { s.run.conclusion = 'failure'; }, /did not pass/],
