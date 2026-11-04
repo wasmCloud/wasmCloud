@@ -16,7 +16,7 @@
 ## Component plugin secret migration
 
 Host plugins that consume plugin-backed binding secrets must rebuild against
-`wasmcloud:host@0.1.6`, export `workload-lifecycle`, and import `binding-secrets`.
+`wasmcloud:host@0.1.6` or later, export `workload-lifecycle`, and import `binding-secrets`.
 During `on-workload-bind`, call `binding-secrets.get` for the binding, read the
 returned handles through `wasmcloud:secrets/reveal@2.1.0`, and drop them when done.
 Secret keys are omitted from `interface-binding.config`; plain text remains there.
@@ -176,3 +176,15 @@ Re-run it after editing a fixture under [`tests/fixtures/`](./tests/fixtures/)
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.
+
+Plugins read a workload's logical owner through `WorkloadMetadata::owner()`
+(native) or `wasmcloud:host/workload-metadata.owner` (component). The key is
+`(namespace, kind, name)`, shared across replicas and revisions. Standalone
+workloads own themselves. Component access is limited to bound workloads;
+it starts during bind and ends when unbinding starts or binding fails.
+
+The host resolves legacy orchestrator annotations once at initialization:
+deployment, daemon set, replica set, then the workload itself. Blank values
+are absent; invalid selected object names fail initialization.
+`app.kubernetes.io/name` is ignored. The owner reflects orchestrator input,
+so it does not authenticate ownership within a namespace.

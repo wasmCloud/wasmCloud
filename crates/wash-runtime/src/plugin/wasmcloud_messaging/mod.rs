@@ -1145,18 +1145,31 @@ const UNMATCHED_SUBSCRIPTION: &str = "<unmatched>";
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AdmissionIdentity {
     namespace: Arc<str>,
+    owner_kind: crate::engine::workload::OwnerKind,
     workload: Arc<str>,
     component: Arc<str>,
 }
 
 impl AdmissionIdentity {
-    /// Build the identity from a bound item's manifest names. `WorkloadItem`
-    /// derefs to the workload metadata, so both backends have all three in hand
-    /// at bind time.
+    /// Select an explicit admission group within a namespace and component.
     pub(crate) fn new(namespace: &str, workload: &str, component: &str) -> Self {
         Self {
             namespace: Arc::from(namespace),
+            owner_kind: crate::engine::workload::OwnerKind::Workload,
             workload: Arc::from(workload),
+            component: Arc::from(component),
+        }
+    }
+
+    /// Preserve owner kind when selecting a shared replica gate.
+    pub(crate) fn for_owner(
+        owner: &crate::engine::workload::WorkloadOwner,
+        component: &str,
+    ) -> Self {
+        Self {
+            namespace: Arc::clone(&owner.namespace),
+            owner_kind: owner.kind,
+            workload: Arc::clone(&owner.name),
             component: Arc::from(component),
         }
     }
@@ -1682,8 +1695,8 @@ pub(crate) const MAX_IN_FLIGHT_CONFIG: &str = "max_in_flight";
 /// Config key naming the admission group to collapse replicas onto for
 /// admission concurrency gates (`max_in_flight`).
 ///
-/// Defaults to the stable workload name (or deployment name from orchestrator annotations),
-/// but can be set explicitly to group multiple components or override the gate key.
+/// Defaults to the host-resolved owner identity. An explicit name selects
+/// a shared group within the namespace and component.
 pub(crate) const ADMISSION_GROUP_CONFIG: &str = "admission_group";
 
 /// Config key naming how long this component's subscriber loop waits for an
@@ -1827,7 +1840,7 @@ pub(crate) fn parse_subscriptions(raw: Option<&str>) -> Vec<String> {
 /// Parses an [`ADMISSION_GROUP_CONFIG`] value into a trimmed, non-empty workload admission group name.
 ///
 /// Returns `None` if the value is absent, empty, or whitespace-only, allowing callers to fall
-/// back to the component's stable workload name.
+/// back to the component's host-resolved owner.
 pub(crate) fn parse_admission_group(raw: Option<&str>) -> Option<&str> {
     raw.map(str::trim).filter(|s| !s.is_empty())
 }
@@ -2857,5 +2870,26 @@ mod tests {
             vec![0, 1, 2],
             "tokio's Semaphore is FIFO-fair, so a hot component cannot starve the rest"
         );
+    }
+    #[test]
+    fn deployment_and_standalone_workload_do_not_share_a_gate() {
+        use crate::engine::workload::{OwnerKind, WorkloadOwner};
+        let deployment = WorkloadOwner::new("team", OwnerKind::Deployment, "worker");
+        let standalone = WorkloadOwner::new("team", OwnerKind::Workload, "worker");
+        let limits = super::MessagingLimits::default();
+        let a = limits.admission(
+            &super::AdmissionIdentity::for_owner(&deployment, "handler"),
+            Some(1),
+        );
+        let b = limits.admission(
+            &super::AdmissionIdentity::for_owner(&standalone, "handler"),
+            Some(1),
+        );
+        assert!(!std::sync::Arc::ptr_eq(&a.component, &b.component));
+        let replica = limits.admission(
+            &super::AdmissionIdentity::for_owner(&deployment, "handler"),
+            Some(1),
+        );
+        assert!(std::sync::Arc::ptr_eq(&a.component, &replica.component));
     }
 }

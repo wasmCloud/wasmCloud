@@ -45,7 +45,9 @@
 //! workload-matchable capabilities. The whole hook path — signature check,
 //! delivery, post-restart replay, and quarantine — lives in the `lifecycle`
 //! submodule; this module drives it from `ComponentHostPlugin`'s `HostPlugin`
-//! impl.
+//! impl. Plugins importing `wasmcloud:host/workload-metadata` can read the
+//! logical owner of workloads they serve, including during bind. Unbinding,
+//! failed binds, and eviction revoke access.
 //!
 //! Calls also run the other way. A plugin that imports
 //! `wasmcloud:host/workload-call` may *import* an interface no host built-in
@@ -108,6 +110,7 @@ use crate::wit::{WitInterface, WitWorld, versions_compatible};
 mod lifecycle;
 mod secret_source;
 mod workload_call;
+mod workload_metadata;
 
 use lifecycle::{
     BindInfo, BindLease, BindReply, HOST_LIFECYCLE_EXPORT, LifecycleFuncs, POISON_EVICT_STRIKES,
@@ -120,6 +123,7 @@ pub(crate) use secret_source::{
     SecretSourceRequest, SecretSourceResolve, SourceError, secret_source_resolve, secret_value,
 };
 use workload_call::{WorkloadCalls, add_workload_calls_to_linker, install_host_workload};
+use workload_metadata::install_host_workload_metadata;
 
 /// Capacity of a plugin incarnation's capability-call channel. Bounds queued
 /// (not-yet-served) calls; in-flight (being-served) calls are separately capped
@@ -194,10 +198,8 @@ struct ComponentHostPluginState {
     /// linker at construction — read it from here so they reach the live store's
     /// registry. Lock-free reads for the same reason as `tx`.
     registry: ArcSwapOption<JobRegistry>,
-    /// Workloads currently bound to this plugin, as workload id → the
-    /// `workload-info` delivered to `on-workload-bind`. The supervisor
-    /// snapshots it on each (re)start to replay binds into the fresh
-    /// incarnation. Empty unless the plugin exports the lifecycle interface.
+    /// Bound workload owners and lifecycle replay entries. Metadata access
+    /// ends when an entry is removed or its generation is revoked.
     bound: Mutex<BTreeMap<Arc<str>, BindInfo>>,
     /// Workload IDs reserved until their bind and rollback finish.
     binding: Mutex<std::collections::BTreeSet<Arc<str>>>,
@@ -881,6 +883,14 @@ impl HostPlugin for ComponentHostPlugin {
                     self.id
                 );
             }
+            let info = bind_info(self.id, workload, &interfaces, false)?;
+            let workload_id = Arc::from(workload.id());
+            let _lease = BindLease::acquire(&self.state, &workload_id)?;
+            self.state
+                .bound
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(workload_id, info);
             return Ok(());
         };
         let info = bind_info(self.id, workload, &interfaces, lifecycle.takes_secrets)?;
@@ -1023,6 +1033,7 @@ impl HostPlugin for ComponentHostPlugin {
                 "item-bind rollback unbind not delivered"
             );
         }
+        self.state.forget_workload(&workload_id);
         Err(e)
     }
 
@@ -1051,6 +1062,7 @@ impl HostPlugin for ComponentHostPlugin {
         self.state.workload_calls.unregister(workload_id);
 
         let Some(lifecycle) = &self.lifecycle else {
+            self.state.forget_workload(workload_id);
             return Ok(());
         };
         // Best-effort by design: the workload is going away regardless, and if
@@ -1423,6 +1435,8 @@ async fn build_plugin_linker(
         .with_context(|| format!("failed to install host cancel on plugin '{id}'"))?;
     install_host_workload(&mut linker, state)
         .with_context(|| format!("failed to install host workload targeting on plugin '{id}'"))?;
+    install_host_workload_metadata(&mut linker, state)
+        .with_context(|| format!("failed to install workload metadata on plugin '{id}'"))?;
     install_host_binding_secrets(&mut linker, state)
         .with_context(|| format!("failed to install host binding secrets on plugin '{id}'"))?;
 

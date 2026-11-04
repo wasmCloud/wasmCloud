@@ -755,7 +755,7 @@ impl Engine {
             annotations,
             ..
         } = workload;
-        let annotations_arc = Arc::new(annotations);
+        let owner = workload::resolve_owner(&namespace, &name, &annotations)?;
 
         // Created on the first `emptyDir`, and removed when the workload is
         // released or, for a start that fails before then, when this drops.
@@ -817,11 +817,7 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized service component");
-                    Some(
-                        handle
-                            .with_annotations(Arc::clone(&annotations_arc))
-                            .with_trap_hints(&trap_hints),
-                    )
+                    Some(handle.with_trap_hints(&trap_hints))
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize service component");
@@ -845,11 +841,7 @@ impl Engine {
             ) {
                 Ok(handle) => {
                     tracing::debug!("successfully initialized workload component");
-                    workload_components.push(
-                        handle
-                            .with_annotations(Arc::clone(&annotations_arc))
-                            .with_trap_hints(&trap_hints),
-                    );
+                    workload_components.push(handle.with_trap_hints(&trap_hints));
                 }
                 Err(e) => {
                     tracing::error!(err = ?e, "failed to initialize component");
@@ -867,7 +859,7 @@ impl Engine {
             host_interfaces,
         )
         .with_scratch(workload_scratch)
-        .with_annotations(&annotations_arc)
+        .with_owner(owner.kind, owner.name)
         .with_stream_payloads(Arc::clone(&self.stream_payloads));
 
         #[cfg(feature = "wasi-tls")]

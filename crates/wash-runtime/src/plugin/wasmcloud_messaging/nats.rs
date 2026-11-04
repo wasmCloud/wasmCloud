@@ -126,14 +126,12 @@ impl ConsumerGroup {
     }
 }
 
-fn admission_workload_name<'a>(
+fn admission_group<'a>(
     local: Option<&'a str>,
     interface: Option<&'a ConfigValue>,
-    fallback: &'a str,
-) -> &'a str {
+) -> Option<&'a str> {
     super::parse_admission_group(local)
         .or_else(|| super::parse_admission_group(interface.and_then(ConfigValue::as_text)))
-        .unwrap_or(fallback)
 }
 
 #[derive(Clone)]
@@ -477,21 +475,19 @@ impl HostPlugin for NatsMessaging {
                 &local_admission_wait,
                 &interface_admission_wait,
             ));
-            // The same namespace/workload/component triple the consumer group
-            // is built from above. It both attributes a shed message to
-            // something a manifest author recognizes and selects the gate, so
-            // replicas of this deployment on this host share one ceiling
-            // rather than getting one apiece.
-            let workload_name = admission_workload_name(
+            let identity = match admission_group(
                 local_admission_group.as_deref(),
                 interface_admission_group.as_ref(),
-                component_handle.stable_workload_name(),
-            );
-            let identity = super::AdmissionIdentity::new(
-                component_handle.workload_namespace(),
-                workload_name,
-                &component_name,
-            );
+            ) {
+                Some(group) => super::AdmissionIdentity::new(
+                    component_handle.workload_namespace(),
+                    group,
+                    &component_name,
+                ),
+                None => {
+                    super::AdmissionIdentity::for_owner(component_handle.owner(), &component_name)
+                }
+            };
             let admission = self
                 .limits
                 .admission(&identity, max_in_flight)
@@ -1195,18 +1191,9 @@ mod tests {
     fn secret_admission_groups_never_become_telemetry_identities() {
         let secret = ConfigValue::from(crate::plugin::SecretValue::new("private-group"));
         let plain = ConfigValue::from("public-group");
-        assert_eq!(
-            admission_workload_name(None, Some(&secret), "workload"),
-            "workload"
-        );
-        assert_eq!(
-            admission_workload_name(None, Some(&plain), "workload"),
-            "public-group"
-        );
-        assert_eq!(
-            admission_workload_name(Some("local"), Some(&secret), "workload"),
-            "local"
-        );
+        assert_eq!(admission_group(None, Some(&secret)), None);
+        assert_eq!(admission_group(None, Some(&plain)), Some("public-group"));
+        assert_eq!(admission_group(Some("local"), Some(&secret)), Some("local"));
     }
 
     #[test]

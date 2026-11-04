@@ -492,6 +492,7 @@ pub(super) fn spawn_deferred_unbind(
 #[derive(Clone)]
 pub(super) struct BindInfo {
     pub(super) generation: BindGeneration,
+    pub(super) owner: Arc<crate::engine::workload::WorkloadOwner>,
     info: Val,
     secrets: Vec<BindingSecrets>,
 }
@@ -627,6 +628,7 @@ pub(super) fn bind_info(
     ]);
     Ok(BindInfo {
         generation: BindGeneration::default(),
+        owner: Arc::clone(&workload.owner),
         info,
         secrets,
     })
@@ -765,6 +767,11 @@ mod tests {
         );
         let info = BindInfo {
             generation: BindGeneration::default(),
+            owner: Arc::new(crate::engine::workload::WorkloadOwner::new(
+                "test",
+                crate::engine::workload::OwnerKind::Workload,
+                "workload",
+            )),
             info: Val::Bool(true),
             secrets: vec![secrets],
         };

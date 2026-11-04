@@ -132,6 +132,11 @@ fn should_link_component_import(
     !plugin_bound_instances.contains(import_name)
 }
 
+mod owner;
+
+pub(super) use owner::resolve_owner;
+pub use owner::{OwnerKind, WorkloadOwner};
+
 /// Metadata associated with components and services within a workload.
 #[derive(Clone)]
 pub struct WorkloadMetadata {
@@ -179,8 +184,8 @@ pub struct WorkloadMetadata {
     pub(crate) trap_hints: Arc<crate::engine::trap_remediation::TrapHints>,
     /// Linked component ids
     linked_components: HashSet<Arc<str>>,
-    /// Workload annotations
-    pub(crate) annotations: Arc<HashMap<String, String>>,
+    /// Logical owner shared by every item of this workload.
+    pub(crate) owner: Arc<WorkloadOwner>,
     /// Top-level imports already supplied by host plugins.
     plugin_bound_instances: HashSet<String>,
     /// Keeps the engine reusing this compile for any workload that loads the
@@ -215,42 +220,6 @@ enum LinkState {
     Unlinked(Arc<str>),
 }
 
-/// Kubernetes annotation set by the runtime-operator for the parent WorkloadDeployment.
-pub const WORKLOAD_DEPLOYMENT_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-deployment";
-/// Kubernetes annotation set by the runtime-operator for the parent WorkloadDaemonSet.
-pub const WORKLOAD_DAEMONSET_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-daemonset";
-/// Kubernetes annotation set by the runtime-operator for the parent WorkloadReplicaSet.
-pub const WORKLOAD_REPLICASET_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-replicaset-name";
-/// Alternate WorkloadReplicaSet annotation key.
-pub const WORKLOAD_REPLICASET_LEGACY_ANNOTATION: &str = "runtime.wasmcloud.dev/workload-replicaset";
-/// Standard Kubernetes application name annotation.
-pub const K8S_APP_NAME_ANNOTATION: &str = "app.kubernetes.io/name";
-
-fn annotation<'a>(annotations: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
-    annotations
-        .get(key)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-}
-
-/// The name the orchestrator gave the workload's replicas: its deployment's,
-/// else its daemonset's, else its replicaset's, if the annotations name one.
-fn replica_group(annotations: &HashMap<String, String>) -> Option<&str> {
-    annotation(annotations, WORKLOAD_DEPLOYMENT_ANNOTATION)
-        .or_else(|| annotation(annotations, WORKLOAD_DAEMONSET_ANNOTATION))
-        .or_else(|| annotation(annotations, WORKLOAD_REPLICASET_ANNOTATION))
-        .or_else(|| annotation(annotations, WORKLOAD_REPLICASET_LEGACY_ANNOTATION))
-}
-
-/// The workload's name across replicas: [`replica_group`], else its
-/// application name annotation, else `name`.
-pub(crate) fn stable_name<'a>(annotations: &'a HashMap<String, String>, name: &'a str) -> &'a str {
-    replica_group(annotations)
-        .or_else(|| annotation(annotations, K8S_APP_NAME_ANNOTATION))
-        .unwrap_or(name)
-}
-
 impl WorkloadMetadata {
     async fn resolve_volume_mounts(&mut self) -> anyhow::Result<()> {
         let mut resolved = Vec::with_capacity(self.volume_mounts.len());
@@ -276,16 +245,9 @@ impl WorkloadMetadata {
         &self.workload_name
     }
 
-    /// Returns the stable workload name across replicas, if a deployment,
-    /// daemonset or replicaset annotation was supplied by the orchestrator.
-    /// Falls back to `workload_name`.
-    pub fn stable_workload_name(&self) -> &str {
-        stable_name(&self.annotations, &self.workload_name)
-    }
-
-    /// Returns the workload's annotations.
-    pub fn annotations(&self) -> &HashMap<String, String> {
-        &self.annotations
+    /// The logical owner shared by this workload's replicas and revisions.
+    pub fn owner(&self) -> &WorkloadOwner {
+        &self.owner
     }
 
     /// Returns the namespace of the workload this component belongs to.
@@ -600,12 +562,19 @@ impl WorkloadService {
         max_restarts: u64,
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
     ) -> Self {
+        let workload_name = workload_name.into();
+        let workload_namespace = workload_namespace.into();
+        let owner = Arc::new(WorkloadOwner::new(
+            Arc::clone(&workload_namespace),
+            OwnerKind::Workload,
+            Arc::clone(&workload_name),
+        ));
         Self {
             metadata: WorkloadMetadata {
                 id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
-                workload_name: workload_name.into(),
-                workload_namespace: workload_namespace.into(),
+                workload_name,
+                workload_namespace,
                 component,
                 may_use_gc: true,
                 link: LinkState::Open {
@@ -623,7 +592,7 @@ impl WorkloadService {
                 store_settings: Default::default(),
                 trap_hints: Arc::default(),
                 linked_components: Default::default(),
-                annotations: Arc::default(),
+                owner,
                 plugin_bound_instances: Default::default(),
                 compiled: None,
             },
@@ -632,12 +601,13 @@ impl WorkloadService {
         }
     }
 
-    /// Attach workload annotations.
-    pub fn with_annotations(
-        mut self,
-        annotations: impl Into<Arc<HashMap<String, String>>>,
-    ) -> Self {
-        self.metadata.annotations = annotations.into();
+    /// Attach an explicit logical owner within this workload's namespace.
+    pub fn with_owner(mut self, kind: OwnerKind, name: impl Into<Arc<str>>) -> Self {
+        self.metadata.owner = Arc::new(WorkloadOwner::new(
+            Arc::clone(&self.metadata.workload_namespace),
+            kind,
+            name,
+        ));
         self
     }
 
@@ -727,12 +697,19 @@ impl WorkloadComponent {
         loopback: Arc<std::sync::Mutex<loopback::Network>>,
         instances: InstancePolicy,
     ) -> Self {
+        let workload_name = workload_name.into();
+        let workload_namespace = workload_namespace.into();
+        let owner = Arc::new(WorkloadOwner::new(
+            Arc::clone(&workload_namespace),
+            OwnerKind::Workload,
+            Arc::clone(&workload_name),
+        ));
         Self {
             metadata: WorkloadMetadata {
                 id: uuid::Uuid::now_v7().to_string().into(),
                 workload_id: workload_id.into(),
-                workload_name: workload_name.into(),
-                workload_namespace: workload_namespace.into(),
+                workload_name,
+                workload_namespace,
                 component,
                 may_use_gc: true,
                 link: LinkState::Open {
@@ -750,7 +727,7 @@ impl WorkloadComponent {
                 store_settings: Default::default(),
                 trap_hints: Arc::default(),
                 linked_components: Default::default(),
-                annotations: Arc::default(),
+                owner,
                 plugin_bound_instances: Default::default(),
                 compiled: None,
             },
@@ -759,12 +736,13 @@ impl WorkloadComponent {
         }
     }
 
-    /// Attach workload annotations.
-    pub fn with_annotations(
-        mut self,
-        annotations: impl Into<Arc<HashMap<String, String>>>,
-    ) -> Self {
-        self.metadata.annotations = annotations.into();
+    /// Attach an explicit logical owner within this workload's namespace.
+    pub fn with_owner(mut self, kind: OwnerKind, name: impl Into<Arc<str>>) -> Self {
+        self.metadata.owner = Arc::new(WorkloadOwner::new(
+            Arc::clone(&self.metadata.workload_namespace),
+            kind,
+            name,
+        ));
         self
     }
 
@@ -2985,9 +2963,8 @@ pub struct UnresolvedWorkload {
     tls_provider: Option<SharedTlsProvider>,
     /// Where this workload's `emptyDir` volumes live, if it has any.
     scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
-    /// The name the orchestrator gave its replicas, if any. See
-    /// [`replica_group`].
-    replica_group: Option<Arc<str>>,
+    /// Logical owner shared by every item of this workload.
+    pub(crate) owner: Arc<WorkloadOwner>,
 }
 
 type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
@@ -3170,16 +3147,29 @@ impl UnresolvedWorkload {
         components: impl IntoIterator<Item = WorkloadComponent>,
         host_interfaces: Vec<WitInterface>,
     ) -> Self {
+        let name = name.into();
+        let namespace = namespace.into();
+        let owner = Arc::new(WorkloadOwner::new(
+            Arc::clone(&namespace),
+            OwnerKind::Workload,
+            Arc::clone(&name),
+        ));
+        let mut service = service;
+        if let Some(service) = &mut service {
+            service.metadata.owner = Arc::clone(&owner);
+        }
         let mut component_order = Vec::new();
         Self {
             stream_payloads: Arc::default(),
+            owner: Arc::clone(&owner),
             id: id.into(),
-            name: name.into(),
-            namespace: namespace.into(),
+            name,
+            namespace,
             service,
             components: components
                 .into_iter()
-                .map(|c| {
+                .map(|mut c| {
+                    c.metadata.owner = Arc::clone(&owner);
                     let id: Arc<str> = Arc::from(c.id());
                     component_order.push(id.clone());
                     (id, c)
@@ -3190,8 +3180,24 @@ impl UnresolvedWorkload {
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
             scratch: None,
-            replica_group: None,
         }
+    }
+
+    /// Attach the same logical owner to the workload and all its items.
+    pub fn with_owner(mut self, kind: OwnerKind, name: impl Into<Arc<str>>) -> Self {
+        self.owner = Arc::new(WorkloadOwner::new(Arc::clone(&self.namespace), kind, name));
+        if let Some(service) = &mut self.service {
+            service.metadata.owner = Arc::clone(&self.owner);
+        }
+        for component in self.components.values_mut() {
+            component.metadata.owner = Arc::clone(&self.owner);
+        }
+        self
+    }
+
+    /// The logical owner shared by this workload's replicas and revisions.
+    pub fn owner(&self) -> &WorkloadOwner {
+        &self.owner
     }
 
     /// Use the engine's stream/future payload adapters for linking and store construction.
@@ -3215,17 +3221,9 @@ impl UnresolvedWorkload {
         self
     }
 
-    /// Take the name the orchestrator gave its replicas from `annotations`.
-    /// See [`replica_group`].
-    pub(crate) fn with_annotations(mut self, annotations: &HashMap<String, String>) -> Self {
-        self.replica_group = replica_group(annotations).map(Arc::from);
-        self
-    }
-
-    /// The name it keeps across replicas, what a plugin secret's grant
-    /// matches: the orchestrator's for its replicas, else its own.
+    /// The owner name a plugin secret's grant matches.
     pub fn grant_name(&self) -> &str {
-        self.replica_group.as_deref().unwrap_or(&self.name)
+        &self.owner.name
     }
 
     /// Iterates the workload's components in manifest order.
@@ -8455,130 +8453,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stable_workload_name_filtering_and_fallback() {
-        // 1. Valid deployment annotation with surrounding whitespace gets trimmed
-        let mut annotations = HashMap::new();
-        annotations.insert(
-            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
-            "  my-deployment  ".to_string(),
-        );
-        let comp = create_test_component("c").with_annotations(annotations);
-        assert_eq!(comp.stable_workload_name(), "my-deployment");
-
-        // 2. Blank deployment annotation falls back to daemonset
-        let mut annotations = HashMap::new();
-        annotations.insert(
-            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
-            "   ".to_string(),
-        );
-        annotations.insert(
-            WORKLOAD_DAEMONSET_ANNOTATION.to_string(),
-            "my-daemonset".to_string(),
-        );
-        annotations.insert(
-            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
-            "my-replicaset".to_string(),
-        );
-        let comp = create_test_component("c").with_annotations(annotations);
-        assert_eq!(comp.stable_workload_name(), "my-daemonset");
-
-        // Without a daemonset, a blank deployment annotation falls back to replicaset
-        let mut annotations = HashMap::new();
-        annotations.insert(
-            WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(),
-            "   ".to_string(),
-        );
-        annotations.insert(
-            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
-            "my-replicaset".to_string(),
-        );
-        let comp = create_test_component("c").with_annotations(annotations);
-        assert_eq!(comp.stable_workload_name(), "my-replicaset");
-
-        // 3. Blank deployment and blank replicaset falls back to legacy replicaset
-        let mut annotations = HashMap::new();
-        annotations.insert(WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(), "".to_string());
-        annotations.insert(
-            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
-            "   ".to_string(),
-        );
-        annotations.insert(
-            WORKLOAD_REPLICASET_LEGACY_ANNOTATION.to_string(),
-            "my-legacy-rs".to_string(),
-        );
-        let comp = create_test_component("c").with_annotations(annotations);
-        assert_eq!(comp.stable_workload_name(), "my-legacy-rs");
-
-        // 4. Blank replicasets fall back to k8s app name
-        let mut annotations = HashMap::new();
-        annotations.insert(WORKLOAD_REPLICASET_ANNOTATION.to_string(), "".to_string());
-        annotations.insert(
-            WORKLOAD_REPLICASET_LEGACY_ANNOTATION.to_string(),
-            "".to_string(),
-        );
-        annotations.insert(K8S_APP_NAME_ANNOTATION.to_string(), "my-app".to_string());
-        let comp = create_test_component("c").with_annotations(annotations);
-        assert_eq!(comp.stable_workload_name(), "my-app");
-
-        // 5. All blank annotations fall back to raw workload_name
-        let mut annotations = HashMap::new();
-        annotations.insert(WORKLOAD_DEPLOYMENT_ANNOTATION.to_string(), "".to_string());
-        annotations.insert(
-            WORKLOAD_REPLICASET_ANNOTATION.to_string(),
-            "   ".to_string(),
-        );
-        annotations.insert(
-            WORKLOAD_REPLICASET_LEGACY_ANNOTATION.to_string(),
-            "".to_string(),
-        );
-        annotations.insert(K8S_APP_NAME_ANNOTATION.to_string(), "   ".to_string());
-        let comp = create_test_component("c").with_annotations(annotations);
-        assert_eq!(comp.stable_workload_name(), "test-workload-c");
-    }
-
-    /// A grant matches the orchestrator's replica group, never the
-    /// application name annotation, which anything may carry.
-    #[test]
-    fn a_grant_name_is_the_replica_group_or_the_workload_name() {
-        let workload = |annotations: &[(&str, &str)]| {
-            let annotations = annotations
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
-            UnresolvedWorkload::new(
-                "id".to_string(),
-                "billing-api".to_string(),
-                "billing".to_string(),
-                None,
-                vec![],
-                vec![],
-            )
-            .with_annotations(&annotations)
-        };
-        for (annotations, expected) in [
-            (&[][..], "billing-api"),
-            (&[(K8S_APP_NAME_ANNOTATION, "billing")][..], "billing-api"),
-            (
-                &[(WORKLOAD_REPLICASET_ANNOTATION, "billing-rs")][..],
-                "billing-rs",
-            ),
-            (
-                &[
-                    (WORKLOAD_REPLICASET_ANNOTATION, "billing-rs"),
-                    (WORKLOAD_DEPLOYMENT_ANNOTATION, "billing"),
-                ][..],
-                "billing",
-            ),
-        ] {
-            assert_eq!(
-                workload(annotations).grant_name(),
-                expected,
-                "{annotations:?}"
-            );
-        }
-    }
-
     /// Like [`component_from_wat`], but on an engine that parses
     /// `(implements ..)`. The default engine does not.
     fn implements_component_from_wat(id: &str, wat: &str) -> WorkloadComponent {
@@ -9015,6 +8889,31 @@ mod tests {
             "the error should name the service, got: {err:#}"
         );
         Ok(())
+    }
+    #[test]
+    fn workload_owner_is_shared_with_components_and_service() {
+        let workload = UnresolvedWorkload::new(
+            "workload",
+            "replica",
+            "test",
+            Some(WorkloadService {
+                metadata: component_from_wat("service", "(component)").metadata,
+                handle: None,
+                max_restarts: 0,
+            }),
+            [component_from_wat("component", "(component)")],
+            Vec::new(),
+        )
+        .with_owner(OwnerKind::Deployment, "deployment");
+        let owner = &workload.owner;
+        assert!(Arc::ptr_eq(
+            &workload.service.as_ref().unwrap().metadata.owner,
+            owner
+        ));
+        for component in workload.components.values() {
+            assert!(Arc::ptr_eq(&component.metadata.owner, owner));
+            assert_eq!(component.metadata.owner(), owner.as_ref());
+        }
     }
 }
 
