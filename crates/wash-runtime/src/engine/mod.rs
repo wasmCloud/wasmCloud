@@ -687,6 +687,12 @@ impl Engine {
         self.pool_totals
     }
 
+    /// The host's `hostPath` policy, also used for volumes the host config declares.
+    #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+    pub(crate) fn host_paths(&self) -> &volumes::HostPathPolicy {
+        &self.host_paths
+    }
+
     /// Every pooling allocator total against what is in use now, so an
     /// embedder can report a host whose pool is full: its workloads still say
     /// running while every instantiation is refused. `None` when pooling is
