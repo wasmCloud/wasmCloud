@@ -130,7 +130,6 @@ func NewEmbeddedOperator(
 
 	if err = (&runtime_controllers.WorkloadReconciler{
 		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
 		Bus:               bus,
 		Recorder:          mgr.GetEventRecorder("workload-controller"),
 		OperatorNamespace: cfg.Namespace,
