@@ -11,12 +11,13 @@ macro_rules! fuzz_target {
     (|$data:ident: &[u8]| $body:block) => {
         /// # Safety
         /// `data` must point to `size` readable bytes when `size` is nonzero.
+        // SAFETY: each fuzz binary exports one libFuzzer callback.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn LLVMFuzzerTestOneInput(data: *const u8, size: usize) -> i32 {
-            // libFuzzer owns this input for the duration of the callback.
             let $data: &[u8] = if size == 0 {
                 &[]
             } else {
+                // SAFETY: libFuzzer keeps the input readable until the callback returns.
                 unsafe { std::slice::from_raw_parts(data, size) }
             };
             let _: () = (|$data: &[u8]| $body)($data);
@@ -40,7 +41,7 @@ mod tests {
     fn dispatches_empty_and_utf8_inputs_and_skips_invalid_utf8() {
         let seed = b"seed";
         let invalid = [0xff];
-        // Each nonempty input remains alive until its callback returns.
+        // SAFETY: each nonempty input stays alive until its callback returns.
         unsafe {
             assert_eq!(LLVMFuzzerTestOneInput(std::ptr::null(), 0), 0);
             assert_eq!(LLVMFuzzerTestOneInput(seed.as_ptr(), seed.len()), 0);
