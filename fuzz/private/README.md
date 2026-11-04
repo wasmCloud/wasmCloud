@@ -33,6 +33,8 @@ trusted commit SHA from `wasmCloud/wasmCloud`. Set it to a reviewed harness
 revision when bootstrapping before this PR merges. Otherwise the workflow
 resolves public `main` once. Source commits must be reachable from public
 `main`; harness commits may be explicitly pinned to a reviewed branch commit.
+After the public integration merges, delete the bootstrap variable or advance
+it whenever reviewed harnesses change.
 
 The source checkout's lockfiles and parser implementations are used. Staging
 adds only harnesses, seeds, and the router shim. Incompatible APIs or dependency
@@ -44,7 +46,7 @@ The public gate sends the full candidate SHA and a unique request ID. The
 private workflow resolves the source, loads the matrices from `policy.json`,
 and runs every target for `release_seconds`. The result job requires both
 matrices to succeed before uploading `fuzz-result-1` with `result.json`.
-Pushes validate the control files without running discovery fuzzing.
+Pushes and pull requests validate the control files without discovery fuzzing.
 
 The public gate pins private `main` before dispatch. It requires that exact
 workflow revision, the unique request, the first run attempt, a successful

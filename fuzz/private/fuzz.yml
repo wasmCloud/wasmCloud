@@ -4,6 +4,8 @@ run-name: ${{ github.event_name == 'schedule' && 'weekly-fuzz' || format('releas
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       sha:
@@ -24,7 +26,7 @@ defaults:
 
 jobs:
   validate-control:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -37,7 +39,7 @@ jobs:
           node -e "JSON.parse(require('node:fs').readFileSync('policy.json', 'utf8'))"
 
   resolve:
-    if: github.event_name != 'push' && github.repository == 'wasmCloud/security-fuzz' && github.event.repository.private == true && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.repository == 'wasmCloud/security-fuzz' && github.event.repository.private == true && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
