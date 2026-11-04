@@ -29,8 +29,9 @@ func parseGatewayOptions(args []string, output io.Writer) (gatewayOptions, error
 	flags.StringVar(&options.kubeconfig, "kubeconfig", "", "Path to a kubeconfig; otherwise use KUBECONFIG or in-cluster configuration")
 	flags.BoolVar(&options.logging.Development, "dev-mode", false, "Enable development mode logging")
 	options.logging.BindFlags(flags)
-	// Keep JSON as the default in development mode too.
+	// Default to JSON with epoch timestamps in both logging modes.
 	_ = flags.Set("zap-encoder", "json")
+	_ = flags.Set("zap-time-encoding", "epoch")
 	err := flags.Parse(args)
 	return options, err
 }

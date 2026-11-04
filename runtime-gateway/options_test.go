@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -28,13 +29,18 @@ func TestGatewayFlagsAndLogging(t *testing.T) {
 		development bool
 		json        bool
 		verbosity   int
+		timeLayout  string
 	}{
-		{"defaults", nil, false, true, 0},
-		{"development alias", []string{"--dev-mode"}, true, true, 1},
-		{"zap development", []string{"--zap-devel"}, true, true, 1},
-		{"development override", []string{"--dev-mode", "--zap-devel=false"}, false, true, 0},
-		{"alias override", []string{"--zap-devel", "--dev-mode=false"}, false, true, 0},
-		{"explicit logging", []string{"--zap-log-level=2", "--zap-encoder=console", "--zap-time-encoding=rfc3339"}, false, false, 2},
+		{"defaults", nil, false, true, 0, ""},
+		{"development alias", []string{"--dev-mode"}, true, true, 1, ""},
+		{"zap development", []string{"--zap-devel"}, true, true, 1, ""},
+		{"development override", []string{"--dev-mode", "--zap-devel=false"}, false, true, 0, ""},
+		{"alias override", []string{"--zap-devel", "--dev-mode=false"}, false, true, 0, ""},
+		{"explicit logging", []string{"--zap-log-level=2", "--zap-encoder=console", "--zap-time-encoding=rfc3339"},
+			false, false, 2, ""},
+		{"timestamp override", []string{"--zap-time-encoding=rfc3339"}, false, true, 0, time.RFC3339},
+		{"development timestamp override", []string{"--dev-mode", "--zap-time-encoding=rfc3339nano"},
+			true, true, 1, time.RFC3339Nano},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"--bind-addr=" + testGatewayBind, "--fallback-endpoint=" + testFallbackOrigin,
@@ -58,6 +64,25 @@ func TestGatewayFlagsAndLogging(t *testing.T) {
 			logger.Info(testGatewayMessage)
 			if !strings.Contains(output.String(), testGatewayMessage) || json.Valid(output.Bytes()) != tc.json {
 				t.Fatalf("log output = %q, want JSON=%v", output.String(), tc.json)
+			}
+			if tc.json {
+				var record map[string]any
+				if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+					t.Fatal(err)
+				}
+				if tc.timeLayout == "" {
+					if timestamp, ok := record["ts"].(float64); !ok || timestamp <= 0 {
+						t.Fatalf("default timestamp = %v, want numeric epoch seconds", record["ts"])
+					}
+				} else {
+					timestamp, ok := record["ts"].(string)
+					if !ok {
+						t.Fatalf("timestamp = %v, want a string", record["ts"])
+					}
+					if _, err := time.Parse(tc.timeLayout, timestamp); err != nil {
+						t.Fatalf("timestamp = %q, want layout %q: %v", timestamp, tc.timeLayout, err)
+					}
+				}
 			}
 		})
 	}
