@@ -16,6 +16,7 @@ organization.
 - [Disclosures](#disclosures)
 - [Supported Versions](#supported-versions)
 - [Dependency and Code Scanning](#dependency-and-code-scanning)
+- [Vulnerability Exploitability Exchange (VEX)](#vulnerability-exploitability-exchange-vex)
 - [Secrets and Credentials](#secrets-and-credentials)
 
 ## Report A Vulnerability
@@ -125,6 +126,11 @@ repository. Each disclosure will contain:
 Disclosures are published on the same day as the fixing release, after the release is published.
 Release notes will contain a link to the advisory.
 
+Non-exploitable component advisories are documented in
+[`vex/wasmcloud.openvex.json`](vex/wasmcloud.openvex.json), supplementing the upstream reports
+with product identifiers and non-exploitability details. Every GitHub Release includes this
+OpenVEX file and its Sigstore attestation bundle alongside the SBOMs.
+
 ## Supported Versions
 
 Security fixes ship only in the latest minor release. When a new minor release ships, the previous
@@ -156,8 +162,9 @@ A vulnerability that affects released code is fixed on this timeline, by its adv
 | Medium   | A release within 90 days |
 | Low      | Best effort |
 
-An advisory that doesn't affect wasmCloud is suppressed in [`.cargo/audit.toml`](.cargo/audit.toml)
-with a comment saying why it doesn't apply.
+An advisory that doesn't affect wasmCloud requires a public [VEX assessment](#vulnerability-exploitability-exchange-vex)
+before it can be suppressed in [`.cargo/audit.toml`](.cargo/audit.toml) or another scanner.
+The suppression must link to that assessment.
 
 ### Licenses
 
@@ -177,6 +184,28 @@ reason, such as code that only runs in tests.
 
 A release PR can't merge while `cargo audit` or `cargo deny check licenses` fails, or while a
 known critical or high advisory that affects released code is open.
+Maintainers must review VEX coverage for the release as described in the [VEX guide](vex/README.md).
+
+## Vulnerability Exploitability Exchange (VEX)
+
+All known component vulnerabilities assessed as not affecting wasmCloud MUST be recorded in
+the public [VEX documents](vex/), with non-exploitability details, to meet OSPS-VM-04.02.
+These OpenVEX documents supplement the upstream vulnerability reports and scanner findings;
+a scanner suppression or dismissal alone is not an assessment.
+
+The security team and the relevant component maintainers review assessments through a pull
+request. Each statement identifies the advisory, release binaries and images using package URLs,
+`not_affected` status, an OpenVEX justification, and an impact statement explaining why it is
+not exploitable. All advisories ignored in `.cargo/audit.toml` require a matching statement;
+the audit workflow enforces coverage. The `osv-scanner.toml` ignores cover only examples,
+templates, and test fixtures, which are outside released code and do not need statements.
+
+Reassess statements when dependencies, build features, code paths, mitigations, or upstream
+advisories change, and before every release. An unconfirmed finding stays under investigation
+and must not be suppressed as non-exploitable. If an assessment no longer holds, update its VEX
+status, remove the suppression, and follow the remediation and disclosure process above.
+Increment the document version and update timestamp when revising it. Release tags and assets
+retain past assessments. See the [VEX guide](vex/README.md) for validation and verification.
 
 ## Secrets and Credentials
 

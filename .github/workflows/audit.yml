@@ -67,6 +67,9 @@ jobs:
               - 'deny.toml'
               - '.github/workflows/audit.yml'
               - '.github/scripts/check-dependency-licenses.mjs'
+              - 'vex/**'
+              - '.github/scripts/check-vex.mjs'
+              - '.github/scripts/check-vex.test.mjs'
             audit_config:
               - '.cargo/audit.toml'
             dependencies:
@@ -104,6 +107,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           tool: cargo-audit
+      - name: Check VEX assessments and suppression coverage
+        run: |
+          node --test .github/scripts/check-vex.test.mjs
+          node .github/scripts/check-vex.mjs
       - name: Run cargo audit
         run: cargo audit
 
