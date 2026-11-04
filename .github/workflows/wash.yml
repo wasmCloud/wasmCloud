@@ -130,6 +130,9 @@ jobs:
         run: cargo xtask build-fixtures
       - name: Build
         run: cargo build
+      - name: Check parser feature build
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo check --locked -p wash-runtime --no-default-features --features washlet
       # One pass with the optional features on. A default-feature pass would
       # recompile the tree to re-run the ~58 targets neither feature gates, so
       # nothing here runs in the configuration the released image ships.
