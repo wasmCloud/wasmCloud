@@ -1548,22 +1548,11 @@ fn watch_body(
 }
 
 /// A map from workload id to the component serving its HTTP requests. A sync
-/// lock: no critical section awaits, and every request takes it.
-pub type WorkloadHandles = Arc<std::sync::RwLock<HandleMap>>;
-
-type HandleMap = HashMap<String, Arc<ComponentHandle>>;
-
-/// Read the handle map. Poison is ignored: every write is a single step.
-fn read_handles(map: &std::sync::RwLock<HandleMap>) -> std::sync::RwLockReadGuard<'_, HandleMap> {
-    map.read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Write the handle map. Poison is ignored: every write is a single step.
-fn write_handles(map: &std::sync::RwLock<HandleMap>) -> std::sync::RwLockWriteGuard<'_, HandleMap> {
-    map.write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+/// lock: no critical section awaits, and every request takes it. Poison is
+/// ignored: every write is a single step.
+// NOTE: a std lock, formerly a tokio one. Never hold its guard across an
+// `.await`: drop it first, or the worker thread blocks under contention.
+pub(crate) type WorkloadHandles = Arc<std::sync::RwLock<HashMap<String, Arc<ComponentHandle>>>>;
 
 /// What serving a request on a workload's HTTP component needs, settled when
 /// the component is bound so a request only reads it: the pre-linked
@@ -1977,7 +1966,11 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
                 );
             }
             // Dropped after the lock is released.
-            let cleared = std::mem::take(&mut *write_handles(&workload_handles));
+            let cleared = std::mem::take(
+                &mut *workload_handles
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             drop(cleared);
             service_handlers.write().await.clear();
             messaging_handlers.write().await.clear();
@@ -1993,7 +1986,11 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// [`HostHandler::on_service_http_resolved`] and never appears among the
     /// component handles.
     pub async fn routed_workloads(&self) -> usize {
-        let handles = read_handles(&self.workload_handles).len();
+        let handles = self
+            .workload_handles
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
         handles
             + self.service_handlers.read().await.len()
             + self.messaging_handlers.read().await.len()
@@ -2093,9 +2090,10 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// existed; a handle still present under a withdrawn route is simply never
     /// reached from here.
     ///
-    /// `try_read` for the async `service_handlers`: this runs on the sync egress
-    /// path, and contention costs one request the short-circuit, never
-    /// correctness. The handle map is a sync lock, so it is simply read.
+    /// `try_read`, not `read`: this runs on the sync egress path, where waiting
+    /// out a burst of binds would park the calling thread. The maps are written
+    /// only on workload start/stop, so contention is rare; treating it as "not
+    /// resolvable" costs one request the short-circuit and never correctness.
     fn resolve_local_target(&self, target: &str) -> Option<LocalTarget> {
         if let Ok(handlers) = self.service_handlers.try_read()
             && let Some(sender) = handlers.get(target)
@@ -2104,10 +2102,12 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
             // and then fail the send; skip it while the body can still egress.
             return (!sender.is_closed()).then(|| LocalTarget::Service(sender.clone()));
         }
-        read_handles(&self.workload_handles)
-            .get(target)
-            .cloned()
-            .map(LocalTarget::Component)
+        let handles = match self.workload_handles.try_read() {
+            Ok(handles) => handles,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        handles.get(target).cloned().map(LocalTarget::Component)
     }
 
     /// The co-located workload to serve `uri` in-memory and where to dispatch
@@ -2705,7 +2705,11 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             };
             let (key, handle) = (resolved_handle.id().to_string(), Arc::new(handle));
             // Bound, so a replaced handle drops after the lock is released.
-            let replaced = write_handles(&self.workload_handles).insert(key, handle);
+            let replaced = self
+                .workload_handles
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(key, handle);
             drop(replaced);
         }
 
@@ -2718,7 +2722,11 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         let routed = self.router.on_workload_unbind(workload_id).await;
 
         // Bound, so the handle drops after the lock is released.
-        let removed = write_handles(&self.workload_handles).remove(workload_id);
+        let removed = self
+            .workload_handles
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(workload_id);
         drop(removed);
         self.service_handlers.write().await.remove(workload_id);
         self.messaging_handlers.write().await.remove(workload_id);
@@ -3487,7 +3495,11 @@ async fn handle_http_request<T: Router>(
 
     // Look up workload handle for this host, with wildcard fallback
     debug!(host = %workload_id, "looking up workload handle for host header");
-    let workload_handle = read_handles(&workload_handles).get(&workload_id).cloned();
+    let workload_handle = workload_handles
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&workload_id)
+        .cloned();
 
     let response = match workload_handle {
         Some(handle) => {

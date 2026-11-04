@@ -10,6 +10,9 @@ use tokio_util::task::TaskTracker;
 use super::{Host, HostWorkload, Reservation};
 use crate::engine::workload::WorkloadResources;
 
+// NOTE: a std lock, formerly a tokio one (the host's workload map). Never hold
+// its guard across an `.await`: drop it first, or the worker thread blocks
+// under contention.
 type Workloads = Arc<std::sync::RwLock<super::WorkloadMap>>;
 pub(super) type WorkloadRecoveries = Arc<Mutex<HashMap<String, Arc<WorkloadRecovery>>>>;
 
@@ -74,7 +77,9 @@ impl WorkloadRecovery {
             return Ok(());
         }
         {
-            let mut workloads = super::write_workloads(workloads);
+            let mut workloads = workloads
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match workloads.get(workload_id) {
                 // Left as it is: the reason is published as the workload's
                 // `Error` below, the same as when the start's own cleanup
@@ -109,7 +114,9 @@ impl WorkloadRecovery {
         )
         .await
         .context("interrupted workload cleanup timed out")??;
-        let mut workloads = super::write_workloads(workloads);
+        let mut workloads = workloads
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let failure = match workloads.get(workload_id) {
             Some(HostWorkload::Stopping(held)) if *held == self.reservation => None,
             Some(HostWorkload::Failing(held, reason)) if *held == self.reservation => {
