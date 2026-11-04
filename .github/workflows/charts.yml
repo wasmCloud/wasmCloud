@@ -126,6 +126,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Installs Trivy from its GitHub release, not the action's installer,
+      # which downloads from get.trivy.dev. Bump both values together from the
+      # release's checksums.txt.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: 0.70.0
+          TRIVY_SHA256: 8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9
+        run: |
+          archive="${RUNNER_TEMP}/trivy.tar.gz"
+          curl -fsSL --retry 3 -o "${archive}" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "${RUNNER_TEMP}/trivy-bin"
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}/trivy-bin" trivy
+          echo "${RUNNER_TEMP}/trivy-bin" >> "${GITHUB_PATH}"
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
@@ -133,6 +148,7 @@ jobs:
           severity: HIGH,CRITICAL
           trivyignores: charts/runtime-operator/.trivyignore
           exit-code: '1'
+          skip-setup-trivy: true
 
   checkov:
     needs:
