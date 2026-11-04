@@ -135,8 +135,8 @@ case "$bench" in
     # Each mode publishes its own series: enforce keeps the default name,
     # growth runs as `<flavour>-growth`.
     export WASH_SCALE_GUEST_MEMORY_MODE="${WASH_SCALE_GUEST_MEMORY_MODE:-enforce,growth}"
-    # Warm runs at reduced memory reservations publish their own series too,
-    # `warm-layout<reservation>+<guard>`: how far each moves the warm limit.
+    # Both flavours at reduced memory reservations publish their own series,
+    # `<flavour>-layout<reservation>+<guard>`, using the first mode.
     export WASH_SCALE_MEMORY_RESERVATION="${WASH_SCALE_MEMORY_RESERVATION:-default,1GiB,256MiB,64MiB}"
     ;;
   gungraun_plugin)

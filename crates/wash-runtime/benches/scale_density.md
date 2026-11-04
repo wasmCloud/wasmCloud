@@ -27,8 +27,13 @@ runs `enforce,growth`, so CI publishes both series.
 `default,1GiB,256MiB,64MiB`:
 
 - `default` runs every flavour and mode at wasmtime's layout.
-- Each reduced reservation runs warm only, in the first mode, as
-  `warm-layout<reservation>+<guard>`: scale-to-zero holds no memories.
+- Each reduced reservation runs both flavours in the first mode, as
+  `warm-layout<reservation>+<guard>` and
+  `scale-to-zero-layout<reservation>+<guard>`. An explicit flavour filter
+  still selects only that flavour.
+- The `max_scale` workflow variant selects only `256MiB` with a `64KiB`
+  guard and `growth` mode, producing `warm-growth-layout256MiB+64KiB`
+  and `scale-to-zero-growth-layout256MiB+64KiB`.
 - A reduced reservation moves an isolation boundary; see `THREAT_MODEL.md`.
 
 - Count mode measures guest bytes,

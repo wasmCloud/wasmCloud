@@ -371,6 +371,46 @@ fn density_exports_publish_clean_measurements_and_preserve_sparse_reports() -> R
     Ok(())
 }
 
+#[test]
+fn density_summary_heading_shows_reported_memory_limits_in_gib() -> Result<()> {
+    let repo = Repository::new()?;
+    for (limits, expected) in [
+        (vec![2_u64 << 30, 2 << 30], "2.00 GiB"),
+        (vec![4 << 30, 4 << 30], "4.00 GiB"),
+        (vec![512 << 20, 512 << 20], "0.50 GiB"),
+        (vec![2 << 30, 4 << 30], "2.00 GiB, 4.00 GiB"),
+        (vec![0, 0], "-"),
+    ] {
+        let reports: Vec<_> = [
+            "warm-layout256MiB+64KiB",
+            "scale-to-zero-layout256MiB+64KiB",
+        ]
+        .into_iter()
+        .zip(limits)
+        .map(|(label, limit)| {
+            json!({
+                "bench": "scale_density", "label": label,
+                "memory_limit_bytes": limit,
+            })
+        })
+        .collect();
+        write(
+            &repo.target().join("density/scale_density.json"),
+            serde_json::to_vec(&reports)?,
+        )?;
+        let summary = success(repo.command("summary").args(["--bench", "scale_density"]))?;
+        let heading = summary
+            .lines()
+            .find(|line| line.starts_with("_commit_"))
+            .unwrap();
+        assert!(
+            heading.contains(&format!("&middot; _max-process-memory_ {expected}")),
+            "{heading}"
+        );
+    }
+    Ok(())
+}
+
 fn delta(repo: &Repository, bench: &str, compare: &Path) -> Result<String> {
     success(
         repo.command("delta")
