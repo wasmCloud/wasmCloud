@@ -27,9 +27,38 @@ func (m *recordingManager) Add(r manager.Runnable) error {
 	return m.err
 }
 
+func awaitGatewayShutdown(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway startup did not return")
+		return nil
+	}
+}
+
+func assertGatewayListenerClosed(t *testing.T, addr string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listener %s was not released: %v", addr, err)
+	}
+	_ = listener.Close()
+}
+
 func TestFallbackServerUnavailableAndShutdown(t *testing.T) {
-	addr := freePort(t)
-	fallback := &FallbackServer{BindAddr: addr}
+	fallback, err := newFallbackServer("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fallback.Close() })
+	addr := fallback.listener.Addr().String()
+	for _, lookup := range []func(string) (string, string){fallback.InvalidHostname, fallback.NoWorkloads} {
+		if scheme, endpoint := lookup("missing.example"); scheme != "http" || endpoint != addr {
+			t.Fatalf("fallback route before Start = %s://%s, want http://%s", scheme, endpoint, addr)
+		}
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
@@ -51,8 +80,8 @@ func TestFallbackServerUnavailableAndShutdown(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("Start() = %v, want ErrServerClosed", err)
+		if err != nil {
+			t.Fatalf("Start() = %v, want a clean shutdown", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("fallback did not stop")
@@ -64,6 +93,67 @@ func TestFallbackServerUnavailableAndShutdown(t *testing.T) {
 	}
 }
 
+func TestFallbackEndpointConcurrentWithStart(t *testing.T) {
+	fallback, err := newFallbackServer("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fallback.Close() })
+	want := fallback.listener.Addr().String()
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for range 1000 {
+			for _, lookup := range []func(string) (string, string){fallback.InvalidHostname, fallback.NoWorkloads} {
+				if scheme, endpoint := lookup("missing.example"); scheme != "http" || endpoint != want {
+					t.Errorf("concurrent fallback route = %s://%s, want http://%s", scheme, endpoint, want)
+				}
+			}
+		}
+	}()
+	done := make(chan error, 1)
+	go func() { done <- fallback.Start(ctx) }()
+	<-readerDone
+	cancel()
+	if err := awaitGatewayShutdown(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type failingFallbackListener struct {
+	net.Listener
+	err error
+}
+
+func (l failingFallbackListener) Accept() (net.Conn, error) { return nil, l.err }
+
+func TestFallbackServeErrors(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "accept failure", true: "closed listener"}[closed], func(t *testing.T) {
+			fallback, err := newFallbackServer("127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = fallback.Close() })
+			var want error
+			if closed {
+				_ = fallback.Close()
+			} else {
+				want = errors.New("accept refused")
+				fallback.listener = failingFallbackListener{Listener: fallback.listener, err: want}
+			}
+			done := make(chan error, 1)
+			go func() { done <- fallback.Start(t.Context()) }()
+			if err := awaitGatewayShutdown(t, done); !errors.Is(err, want) {
+				t.Fatalf("Start = %v, want %v", err, want)
+			}
+			assertGatewayListenerClosed(t, fallback.listener.Addr().String())
+		})
+	}
+}
+
 func TestServersRejectOccupiedAddress(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -71,15 +161,13 @@ func TestServersRejectOccupiedAddress(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	addr := listener.Addr().String()
-	for name, server := range map[string]manager.Runnable{
-		"fallback": &FallbackServer{BindAddr: addr},
-		"gateway":  &HTTPGateway{BindAddr: addr, Proxy: &httputil.ReverseProxy{}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := server.Start(t.Context()); err == nil {
-				t.Fatal("Start() accepted an occupied address")
-			}
-		})
+	if fallback, err := newFallbackServer(addr); err == nil {
+		_ = fallback.Close()
+		t.Fatal("fallback accepted an occupied address")
+	}
+	gateway := &HTTPGateway{BindAddr: addr, Proxy: &httputil.ReverseProxy{}}
+	if err := gateway.Start(t.Context()); err == nil {
+		t.Fatal("gateway accepted an occupied address")
 	}
 }
 

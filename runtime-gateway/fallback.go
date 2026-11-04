@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 
@@ -37,18 +38,27 @@ var _ Fallback = (*FallbackServer)(nil)
 // FallbackServer provides a simple HTTP server that responds with a 503 Service Unavailable
 // when no workloads are registered to handle incoming requests.
 type FallbackServer struct {
-	// Address to bind the HTTP gateway to. Prefer local addresses, for ex: "127.0.0.1:0"
-	BindAddr string
-	// internal fallback endpoint, for when no workloads are registered
-	fallbackEndpoint string
+	listener net.Listener
+}
+
+func newFallbackServer(bindAddr string) (*FallbackServer, error) {
+	listener, err := net.Listen("tcp", bindAddr)
+	if err != nil {
+		return nil, err
+	}
+	return &FallbackServer{listener: listener}, nil
+}
+
+func (fs *FallbackServer) Close() error {
+	return fs.listener.Close()
 }
 
 func (fs *FallbackServer) InvalidHostname(hostname string) (string, string) {
-	return "http", fs.fallbackEndpoint
+	return "http", fs.listener.Addr().String()
 }
 
 func (fs *FallbackServer) NoWorkloads(hostname string) (string, string) {
-	return "http", fs.fallbackEndpoint
+	return fs.InvalidHostname(hostname)
 }
 
 func (fs *FallbackServer) SetupWithManager(ctx context.Context, manager ctrl.Manager) error {
@@ -56,6 +66,8 @@ func (fs *FallbackServer) SetupWithManager(ctx context.Context, manager ctrl.Man
 }
 
 func (fs *FallbackServer) Start(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	internalMux := http.NewServeMux()
 
 	internalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -66,14 +78,8 @@ func (fs *FallbackServer) Start(ctx context.Context) error {
 		http.Error(w, "No backend available", http.StatusServiceUnavailable)
 	})
 
-	listener, err := net.Listen("tcp", fs.BindAddr)
-	if err != nil {
-		return err
-	}
-
-	fs.fallbackEndpoint = listener.Addr().String()
 	log := ctrl.LoggerFrom(ctx).WithName("fallback")
-	log.Info("starting", "endpoint", fs.fallbackEndpoint)
+	log.Info("starting", "endpoint", fs.listener.Addr().String())
 
 	internalServer := &http.Server{
 		Handler: internalMux,
@@ -81,10 +87,18 @@ func (fs *FallbackServer) Start(ctx context.Context) error {
 			return ctx
 		},
 	}
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		<-ctx.Done()
 		_ = internalServer.Close()
 	}()
 
-	return internalServer.Serve(listener)
+	err := internalServer.Serve(fs.listener)
+	cancel()
+	<-stopped
+	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
