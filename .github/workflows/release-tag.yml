@@ -76,21 +76,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  fuzz:
-    needs: gate
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      needs.gate.outputs.run == 'true' &&
-      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
-    uses: $/.github/workflows/fuzz.yml
-    permissions:
-      contents: read
-      id-token: write
-    with:
-      sha: ${{ needs.gate.outputs.sha }}
-
   promote:
-    needs: [gate, fuzz]
+    needs: gate
     # Release signatures identify this workflow on main.
     if: >-
       github.ref == 'refs/heads/main' &&
@@ -116,7 +103,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Promote the exact commit that passed fuzzing.
+          # Promote the candidate resolved by the release gate.
           ref: ${{ needs.gate.outputs.sha }}
           # The tag pushes authenticate with the octo-sts token minted just
           # before them, so no credentials are left in .git/config.

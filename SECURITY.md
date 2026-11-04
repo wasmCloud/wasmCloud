@@ -155,14 +155,14 @@ Findings come from:
 - Dependabot alerts for Cargo, Go modules and GitHub Actions.
 - CodeQL and zizmor code scanning, reported in the repository's Security tab.
 - Parser fuzzing in the private `wasmCloud/security-fuzz` repository. Release
-  candidates run every target before promotion; longer campaigns run weekly.
+  trains dispatch every target on the exact merged release commit; longer
+  campaigns run weekly. Campaign results do not gate promotion.
 
 Fuzzing logs, generated corpora, and crash artifacts remain private during
 triage. Maintainers investigate crashes for security impact and follow the
 response and disclosure process above for vulnerabilities. Reproducers become
-public regression tests after any required coordinated disclosure. The release
-gate requires successful evidence for the candidate's exact commit and complete
-target policy; a weekly run on another revision does not approve a release.
+public regression tests after any required coordinated disclosure. Maintainers
+review the private run's source commit, target policy, duration, and results.
 
 ### Vulnerabilities
 

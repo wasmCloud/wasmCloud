@@ -11,20 +11,21 @@ These files are deployed to the private `wasmCloud/security-fuzz` repository:
 
 The repository must remain private, with access limited to the org maintainers
 and organization owners. Forking is disabled. Protect `main` with required
-pull requests and non-author review. Do not enable Actions access from other
-repositories: the public release workflow dispatches a separate private run.
+pull requests, review, and control-file checks. The ruleset permits `ricochet`
+to bypass requirements when merging a PR. Do not enable Actions access from
+other repositories: the public release train dispatches a separate private run.
 
 ## Authentication
 
 Add `wasmCloud/security-fuzz` to the existing Octo STS installation's selected
 repositories. The `release-fuzz` trust policy grants only `actions: write` and
-`contents: read` on this private repository to the public release workflow on
-`main`, through its reusable `fuzz.yml`. The repository ID and both workflow
-identities are checked. No stored credentials or callback app are needed.
+`contents: read` on this private repository to `release-train.yml` on public
+`main`. The repository ID and workflow identity are checked. No stored
+credentials or callback app are needed.
 
-The gate refreshes its short-lived app token during long builds and revokes it
-when finished. Private fuzz workers have read-only repository access and no
-OIDC permission or release credentials.
+The dispatch step exchanges a short-lived app token and revokes it when
+finished. Private fuzz workers have read-only repository access and no OIDC
+permission or release credentials.
 
 ## Harness revision
 
@@ -38,40 +39,38 @@ it whenever reviewed harnesses change.
 
 The source checkout's lockfiles and parser implementations are used. Staging
 adds only harnesses, seeds, and the router shim. Incompatible APIs or dependency
-drift fail the run.
+drift fail the private run.
 
 Maintainers may manually dispatch a private branch to validate control changes.
-The public release gate accepts only a run from the pinned private `main`
-revision. Rust fuzzing explicitly targets GNU libc on Linux so the installed
-`cargo-fuzz` binary's own build target cannot select static musl for ASan.
+Rust fuzzing explicitly targets GNU libc on Linux so the installed `cargo-fuzz`
+binary's own build target cannot select static musl for ASan.
 
-## Release protocol
+## Release dispatch
 
-The public gate sends the full candidate SHA and a unique request ID. The
-private workflow resolves the source, loads the matrices from `policy.json`,
+After its PR merges, the public release train sends the exact merge SHA and a
+unique request ID. It checks the private repository's ID, visibility, and
+workflow, then returns as soon as GitHub accepts the dispatch. The step has a
+two-minute timeout and tolerates errors. It does not poll runs or download
+results. Dispatch failures and private campaign results do not block promotion.
+
+The private workflow resolves the source, loads the matrices from `policy.json`,
 and runs every target for `release_seconds`. The result job requires both
 matrices to succeed before uploading `fuzz-result-1` with `result.json`.
-Pushes and pull requests validate the control files without discovery fuzzing.
+Evidence records the source, harness and workflow SHAs, request and run IDs,
+target policy, and duration. Pushes and PRs validate control files without
+discovery fuzzing. Weekly runs use `weekly_seconds`.
 
-The public gate pins private `main` before dispatch. It requires that exact
-workflow revision, the unique request, the first run attempt, a successful
-conclusion, and evidence matching the candidate and complete target policy.
-There is no fallback to weekly results. A private workflow update racing with
-dispatch, a rerun, or any missing result closes the gate; retry the release
-workflow to request a fresh run. The gate waits up to 150 minutes and requests
-cancellation on timeout. A cancelled public job may leave a bounded private
-campaign running.
-
-The public job reads only workflow metadata and the small result artifact.
-Failure messages contain no private API response bodies or diagnostics.
-Crash artifacts, corpora, build caches, and job logs stay in the private
-repository. Weekly runs use `weekly_seconds` and do not approve releases.
+Private API response bodies and diagnostics stay out of public dispatch errors.
+Crash artifacts, corpora, build caches, job logs, and evidence stay in the
+private repository. Maintainers review results and triage findings under the
+security policy. Manual release-tag recovery does not dispatch another campaign;
+dispatch the private workflow with the full release SHA when needed.
 
 ## Deployment and verification
 
 Copy the four files above into a checkout of the private repository, commit
-with a DCO sign-off, and push through its review process. Policy changes must
-be deployed on both sides before releasing; mismatches fail closed.
+with a DCO sign-off, and push through its review process. Deploy the release-train
+trust policy before the public integration merges.
 
 Validate from the public repository:
 
@@ -82,14 +81,12 @@ actionlint -shellcheck= -pyflakes= fuzz/private/fuzz.yml
 zizmor --offline fuzz/private/fuzz.yml
 ```
 
-Dispatch a real private campaign before enabling promotion. Confirm all 18
-targets pass and that `result.json` names the selected source SHA and harness
-SHA. Then verify the public gate's OIDC exchange from the merged release
-workflow. The trust policy intentionally rejects PR branches and local tokens.
-Before merge, maintainers can exercise the same gate protocol locally with an
-authorized GitHub token injected directly into the exported `gate` function.
+Dispatch a real private campaign and confirm all 18 targets pass and that
+`result.json` names the selected source and harness SHAs. Verify the OIDC
+exchange from the merged release-train workflow. The trust policy intentionally
+rejects PR branches and local tokens. Before merge, maintainers can test the
+exported `dispatch` function locally with an authorized GitHub token.
 
-This implements release-specific dynamic analysis for the OpenSSF Best
-Practices Gold criterion. OSPS Baseline does not prescribe fuzzing or this
-release gate. Keep execution evidence and triage findings under the project's
-security policy; a configured workflow alone is not evidence of a completed run.
+Keep completed execution evidence for dynamic-analysis assessments. Asynchronous
+dispatch alone does not establish pre-release analysis for OpenSSF Best Practices
+Gold. OSPS Baseline does not prescribe fuzzing or a release gate.

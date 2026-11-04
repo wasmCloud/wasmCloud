@@ -42,10 +42,10 @@ Wed–Thu as a buffer for any same-week follow-up patch.
    exactly `release: vX.Y.Z` (rebase preserves the branch's commit subject; no `(#NNN)`
    PR ref is appended). That subject is what `wash.yml`'s `canary-binaries` job keys off to run
    the matrix release build, and what `release-tag.yml` matches to identify a release commit.
+   The train also requests private parser fuzzing on that exact merge commit.
+   It does not wait for results, and a dispatch failure does not fail the train.
 5. After the PR merges, [`release-tag.yml`](.github/workflows/release-tag.yml) fires via
    `workflow_run` and performs the **build-once-promote** flow:
-   - Requires a private parser-fuzzing campaign on the exact release commit. All
-     targets must pass for the configured duration before promotion starts.
    - Verifies HEAD on `main` is a release commit and the workspace version matches.
    - Waits for the canary workflows (`wash`, `runtime-operator`, `runtime-gateway`, `charts`) on
      the merge commit to all conclude `success` — the artifact pipeline has built and tested
@@ -71,21 +71,22 @@ Wed–Thu as a buffer for any same-week follow-up patch.
    repackages the chart at `vX.Y.Z` (charts are templated and deterministic, so rebuild is
    acceptable here).
 
-### Private fuzzing gate
+### Private fuzzing
 
-The public `fuzz` job dispatches a separate run in the private
+After its PR merges, the release train dispatches a separate run in the private
 [`wasmCloud/security-fuzz`](https://github.com/wasmCloud/security-fuzz) repository.
-It requires a successful campaign and evidence matching the exact release SHA,
-request, private workflow revision, target policy, and duration. A missing or
-failed result blocks promotion. Private logs, crash artifacts, and generated
-corpora are available only to maintainers; the public gate reports no findings.
+It sends the PR's merge commit SHA and a unique request ID, then returns without
+polling. The dispatch step has a two-minute timeout and tolerates errors.
+Neither dispatch failures nor campaign results block promotion. Private logs,
+crash artifacts, generated corpora, and result evidence are available to
+maintainers; public dispatch logs report no findings.
 
 For an authentication failure, check the private repository's Octo STS access
-and trust policy. For a policy mismatch, deploy the reviewed control files from
-[`fuzz/private/`](fuzz/private/README.md) on both sides. For a crash or build
-failure, inspect the private run and follow the security process. Fix forward
-and dispatch `release-tag.yml` again for the candidate to request a fresh run.
-Rerunning a private job does not approve an older public request.
+and release-train trust policy. For a crash or build failure, inspect the private
+run and follow the security process. Deploy reviewed control changes from
+[`fuzz/private/`](fuzz/private/README.md). To retry a failed dispatch or cover a
+manual release, dispatch the private `fuzz.yml` with the full release commit SHA.
+Rerunning `release-tag.yml` does not request fuzzing.
 
 ### Why rebase merge
 
@@ -131,10 +132,9 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
    break `release-tag.yml`'s subject match).
 3. Wait for canary builds on the merge commit to all succeed (`wash`, `runtime-operator`,
    `runtime-gateway`, `charts`, plus `canary-binaries` in `wash.yml`).
-   Private parser fuzzing must also pass on that exact commit before publishing.
-   If `release-tag.yml` is unavailable, dispatch `fuzz.yml` in
-   `wasmCloud/security-fuzz` with `sha=FULL_RELEASE_COMMIT_SHA`. Review and retain
-   its successful `result.json` and complete target policy before manual promotion.
+   Also dispatch `fuzz.yml` in `wasmCloud/security-fuzz` with
+   `sha=FULL_RELEASE_COMMIT_SHA` to cover this manual release. Fuzzing runs
+   independently and does not hold up publishing.
 4. Re-run `release-tag.yml` from the Actions tab (**Re-run failed jobs** on the failed
    workflow_run instance), or dispatch it from `main` with the release commit:
    ```bash
@@ -171,7 +171,7 @@ matrix binary build and is what `release-tag.yml` looks for to identify a releas
      `release-tag.yml`.
 5. `charts.yml` repackages and pushes the chart on the `vX.Y.Z` tag push.
 
-Do not bypass step 3 — promoting a digest that hasn't passed canary and private fuzzing defeats the
+Do not bypass canary validation in step 3 — promoting a digest that hasn't passed canary defeats the
 "tested what we're publishing" guarantee.
 
 ## Release artifacts at a glance

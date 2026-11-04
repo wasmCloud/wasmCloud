@@ -3,8 +3,7 @@ issuer: https://token.actions.githubusercontent.com
 subject: repo:wasmCloud/wasmCloud:ref:refs/heads/main
 claim_pattern:
   repository_id: "304403692"
-  workflow_ref: wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main
-  job_workflow_ref: wasmCloud/wasmCloud/.github/workflows/fuzz.yml@refs/heads/main
+  workflow_ref: 'wasmCloud/wasmCloud/\.github/workflows/release-train\.yml@refs/heads/main'
 permissions:
   actions: write
   contents: read
