@@ -141,11 +141,14 @@ to stderr. Development mode defaults to text output, debug logging (controller
 verbosity 1), RFC3339 timestamps, and stack traces at warn and above. Use
 `--dev-mode=false` for JSON output, info logging, and stack traces at error and
 above. Text output uses slog's key=value format; JSON keeps `ts`, `level`, `msg`,
-`logger`, `error`, and `stacktrace` fields. Production logs include Kubernetes object identity without object contents.
+`logger`, `error`, and `stacktrace` fields. Kubernetes objects are logged as
+identity in every mode, including the default Helm deployment. Full contents,
+including Secret data, require an explicit `--log-full-objects` flag.
 Production logging is unsampled.
 
 | Flag | Values |
 | --- | --- |
+| `--log-full-objects` | Include full Kubernetes objects; defaults to false |
 | `--log-format` | `text`, `json` |
 | `--log-level` | `debug`, `info`, `warn`, `error`, `panic`, or verbosity `1`–`127` |
 | `--log-stacktrace-level` | `info`, `warn`, `error`, `panic` |
@@ -157,7 +160,11 @@ seconds. The existing `--zap-devel`, `--zap-encoder`, `--zap-log-level`,
 `--zap-stacktrace-level`, and `--zap-time-encoding` flags remain aliases;
 `--zap-encoder=console` selects text output. If an alias and its new flag both
 appear, the last one wins. `panic` sets a threshold above error; logging does
-not itself panic. Standard library HTTP server diagnostics are logged at error.
+not itself panic. Controller records include a numeric `v` field. Standard
+library HTTP server diagnostics are logged at error without application stack
+traces. Application stack traces start at the log call.
+
+See [release notes](RELEASE_NOTES.md) for migration details.
 
 ## Development
 
