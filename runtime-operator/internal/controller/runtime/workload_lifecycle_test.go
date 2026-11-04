@@ -13,7 +13,6 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,14 +35,12 @@ func deleteObject(t *testing.T, r *WorkloadReconciler, obj client.Object) {
 	}
 }
 
+// Config passes a Workload whose optional resources are unset, and is not
+// checked again once a host is chosen.
 func TestWorkloadConfigValidation(t *testing.T) {
-	componentContext := `materializing local resources config for component "` + fixtureComponent + `":`
-	serviceContext := "materializing local resources config: "
 	for _, tc := range []struct {
 		name  string
 		setup func(*testing.T, *WorkloadReconciler, *runtimev1alpha1.Workload)
-		// wantContext prefixes the NotFound error expected; "" expects none.
-		wantContext string
 	}{
 		{name: "valid"},
 		{name: "optional resources", setup: func(_ *testing.T, _ *WorkloadReconciler, w *runtimev1alpha1.Workload) {
@@ -66,22 +63,6 @@ func TestWorkloadConfigValidation(t *testing.T) {
 				},
 			})
 		}},
-		{name: "component config", wantContext: componentContext,
-			setup: func(t *testing.T, r *WorkloadReconciler, _ *runtimev1alpha1.Workload) {
-				deleteObject(t, r, layerConfigMap(componentLayer))
-			}},
-		{name: "component secret", wantContext: componentContext,
-			setup: func(t *testing.T, r *WorkloadReconciler, _ *runtimev1alpha1.Workload) {
-				deleteObject(t, r, layerSecret(componentLayer))
-			}},
-		{name: "service config", wantContext: serviceContext,
-			setup: func(t *testing.T, r *WorkloadReconciler, _ *runtimev1alpha1.Workload) {
-				deleteObject(t, r, layerConfigMap(serviceLayer))
-			}},
-		{name: "service secret", wantContext: serviceContext,
-			setup: func(t *testing.T, r *WorkloadReconciler, _ *runtimev1alpha1.Workload) {
-				deleteObject(t, r, layerSecret(serviceLayer))
-			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, workload, _ := unplacedFixture(t)
@@ -89,17 +70,22 @@ func TestWorkloadConfigValidation(t *testing.T) {
 				tc.setup(t, r, workload)
 			}
 			before := workload.DeepCopy()
-			err := r.reconcileConfig(t.Context(), workload)
-			if tc.wantContext == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else if !apierrors.IsNotFound(err) || !strings.HasPrefix(err.Error(), tc.wantContext) {
-				t.Fatalf("config error = %v, want NotFound starting %q", err, tc.wantContext)
+			if err := r.reconcileConfig(t.Context(), workload); err != nil {
+				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(before, workload) {
 				t.Fatal("config validation mutated the workload")
 			}
+		})
+	}
+}
+
+// Config reads everything placement does, so a Workload placement would fail
+// for is held before a host is chosen for it.
+func TestWorkloadConfigRejectsMissingDependencies(t *testing.T) {
+	for _, tc := range missingDependencies() {
+		t.Run(tc.name, func(t *testing.T) {
+			checkMissingDependency(t, tc, unplacedFixture, (*WorkloadReconciler).reconcileConfig)
 		})
 	}
 }

@@ -1,13 +1,17 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -237,4 +241,63 @@ func expireStartWaits(r *WorkloadReconciler) {
 		r.startWaits.Store(uid, expired)
 		return true
 	})
+}
+
+// missingDependency is an object the fixture Workload reads, to delete, and
+// the context of the NotFound error reading it then fails with.
+type missingDependency struct {
+	name        string
+	missing     client.Object
+	setup       func(*runtimev1alpha1.Workload)
+	wantContext string
+}
+
+func missingDependencies() []missingDependency {
+	componentContext := `materializing local resources config for component "` + fixtureComponent + `":`
+	return []missingDependency{
+		{name: "host interface config", missing: layerConfigMap(httpLayer),
+			wantContext: "materializing host interface config for wasi/http:"},
+		{name: "host interface secret", missing: layerSecret(httpLayer),
+			wantContext: "materializing host interface config for wasi/http:"},
+		{name: "component config", missing: layerConfigMap(componentLayer), wantContext: componentContext},
+		{name: "component secret", missing: layerSecret(componentLayer), wantContext: componentContext},
+		{name: "service config", missing: layerConfigMap(serviceLayer),
+			wantContext: "materializing local resources config for service:"},
+		{name: "service secret", missing: layerSecret(serviceLayer),
+			wantContext: "materializing local resources config for service:"},
+		{name: "component credentials", missing: fixturePullSecretObject(),
+			wantContext: `materializing image pull secret for component "` + fixtureComponent + `":`},
+		{name: "service credentials", missing: fixturePullSecretObject(),
+			setup:       func(w *runtimev1alpha1.Workload) { w.Spec.Components[0].ImagePullSecret = nil },
+			wantContext: "materializing image pull secret for service:"},
+	}
+}
+
+// checkMissingDependency deletes tc.missing from fixture's objects, runs
+// reconcile, and checks it failed reading it without sending anything or
+// changing the Workload.
+func checkMissingDependency(
+	t *testing.T, tc missingDependency,
+	fixture func(*testing.T) (*WorkloadReconciler, *runtimev1alpha1.Workload, *mockBus),
+	reconcile func(*WorkloadReconciler, context.Context, *runtimev1alpha1.Workload) error,
+) {
+	t.Helper()
+	r, workload, bus := fixture(t)
+	if tc.setup != nil {
+		tc.setup(workload)
+	}
+	if err := r.Delete(t.Context(), tc.missing); err != nil {
+		t.Fatal(err)
+	}
+	before := workload.DeepCopy()
+	err := reconcile(r, t.Context(), workload)
+	if !apierrors.IsNotFound(err) || !strings.HasPrefix(err.Error(), tc.wantContext) {
+		t.Fatalf("error = %v, want NotFound starting %q", err, tc.wantContext)
+	}
+	if len(bus.requests) != 0 {
+		t.Fatalf("sent %d requests with invalid dependencies", len(bus.requests))
+	}
+	if !reflect.DeepEqual(workload, before) {
+		t.Fatal("the failure changed the workload")
+	}
 }

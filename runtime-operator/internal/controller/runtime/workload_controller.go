@@ -154,33 +154,14 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 func (r *WorkloadReconciler) reconcileConfig(ctx context.Context, workload *runtimev1alpha1.Workload) error {
-	// If the workload is already assigned to a host, there's nothing to do.
-	// We only need the config during workload placement.
+	// Before a host is chosen, check that placement can read everything the
+	// start request carries. Once a host is chosen, placement reads it all again.
 	if workload.Status.HostID != "" {
 		return nil
 	}
 
-	if workload.Spec.Service != nil {
-		if workload.Spec.Service.LocalResources != nil {
-			_, err := MaterializeConfigLayer(ctx, r.Client, workload.Namespace, workload.Spec.Service.LocalResources.Environment)
-			if err != nil {
-				return fmt.Errorf("materializing local resources config: %w", err)
-			}
-		}
-	}
-
-	for _, c := range workload.Spec.Components {
-		if c.LocalResources != nil {
-			if c.LocalResources.Environment != nil {
-				_, err := MaterializeConfigLayer(ctx, r.Client, workload.Namespace, c.LocalResources.Environment)
-				if err != nil {
-					return fmt.Errorf("materializing local resources config for component %q: %w", c.Name, err)
-				}
-			}
-		}
-	}
-
-	return nil
+	_, err := r.materializeWorkload(ctx, workload)
+	return err
 }
 
 func (r *WorkloadReconciler) reconcileHostSelection(ctx context.Context, workload *runtimev1alpha1.Workload) error {
@@ -560,116 +541,15 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		return condition.ErrNoop()
 	}
 
-	volumes := make([]*runtimev2.Volume, 0, len(workload.Spec.Volumes))
-	for _, v := range workload.Spec.Volumes {
-		vol := &runtimev2.Volume{
-			Name: v.Name,
-		}
-		switch {
-		case v.EphemeralVolume != nil:
-			vol.VolumeType = &runtimev2.Volume_EmptyDir{}
-		case v.HostPathVolume != nil:
-			vol.VolumeType = &runtimev2.Volume_HostPath{
-				HostPath: &runtimev2.HostPathVolume{
-					LocalPath: v.HostPathVolume.Path,
-				},
-			}
-		}
-
-		volumes = append(volumes, vol)
-	}
-
-	witWorld := &runtimev2.WitWorld{
-		HostInterfaces: make([]*runtimev2.WitInterface, 0, len(workload.Spec.HostInterfaces)),
-		Components:     make([]*runtimev2.Component, 0, len(workload.Spec.Components)),
-	}
-	for _, hi := range workload.Spec.HostInterfaces {
-		hiConfig, err := MaterializeConfigLayer(ctx, r.Client, workload.Namespace, &hi.ConfigLayer)
-		if err != nil {
-			return fmt.Errorf("materializing host interface config for %s/%s: %w", hi.Namespace, hi.Package, err)
-		}
-		witWorld.HostInterfaces = append(witWorld.HostInterfaces, &runtimev2.WitInterface{
-			Namespace:  hi.Namespace,
-			Package:    hi.Package,
-			Version:    hi.Version,
-			Interfaces: hi.Interfaces,
-			Config:     hiConfig,
-			Name:       hi.Name,
-		})
-	}
-
-	for _, c := range workload.Spec.Components {
-		localResources, err := materializeLocalResources(ctx, r.Client, workload.Namespace, c.LocalResources, fmt.Sprintf("component %q", c.Name))
-		if err != nil {
-			return err
-		}
-
-		var imagePullSecret *runtimev2.ImagePullSecret
-		if c.ImagePullSecret != nil {
-			imagePullSecret, err = MaterializeImagePullSecret(ctx, r.Client, workload.Namespace, c.ImagePullSecret.Name, c.Image)
-			if err != nil {
-				return fmt.Errorf("materializing image pull secret for component %q: %w", c.Name, err)
-			}
-		}
-
-		witWorld.Components = append(witWorld.Components, &runtimev2.Component{
-			Name:                 c.Name,
-			Image:                c.Image,
-			ImagePullSecret:      imagePullSecret,
-			ImagePullPolicy:      translatePullPolicy(c.ImagePullPolicy),
-			PoolSize:             c.PoolSize,
-			MaxInvocations:       c.MaxInvocations,
-			MaxConcurrency:       c.MaxConcurrency,
-			ReclaimWindowSeconds: c.ReclaimWindowSeconds,
-			ReclaimMinInstances:  c.ReclaimMinInstances,
-			LocalResources:       localResources,
-		})
-	}
-
-	if workload.Spec.Kubernetes != nil && workload.Spec.Kubernetes.Service != nil {
-		injectServiceDNSAliases(witWorld.HostInterfaces, workload.Spec.Kubernetes.Service.Name, workload.Namespace)
-	}
-
-	var service *runtimev2.Service
-	if s := workload.Spec.Service; s != nil {
-		localResources, err := materializeLocalResources(ctx, r.Client, workload.Namespace, s.LocalResources, "service")
-		if err != nil {
-			return err
-		}
-
-		var imagePullSecret *runtimev2.ImagePullSecret
-		if s.ImagePullSecret != nil {
-			imagePullSecret, err = MaterializeImagePullSecret(ctx, r.Client, workload.Namespace, s.ImagePullSecret.Name, s.Image)
-			if err != nil {
-				return fmt.Errorf("materializing image pull secret for service: %w", err)
-			}
-		}
-
-		service = &runtimev2.Service{
-			Image:           s.Image,
-			ImagePullSecret: imagePullSecret,
-			ImagePullPolicy: translatePullPolicy(s.ImagePullPolicy),
-			LocalResources:  localResources,
-			MaxRestarts:     uint64(s.MaxRestarts),
-		}
-	}
-
-	annotations, err := r.replicaAnnotations(ctx, workload)
+	spec, err := r.materializeWorkload(ctx, workload)
 	if err != nil {
 		return err
 	}
-
-	req := &runtimev2.WorkloadStartRequest{
-		WorkloadId: string(workload.GetUID()),
-		Workload: &runtimev2.Workload{
-			Namespace:   workload.Namespace,
-			Name:        workload.Name,
-			Annotations: annotations,
-			WitWorld:    witWorld,
-			Volumes:     volumes,
-			Service:     service,
-		},
+	spec.Annotations, err = r.replicaAnnotations(ctx, workload)
+	if err != nil {
+		return err
 	}
+	req := &runtimev2.WorkloadStartRequest{WorkloadId: string(workload.GetUID()), Workload: spec}
 
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
 	startCtx, cancel := context.WithTimeout(ctx, workloadStartTimeout)
@@ -767,6 +647,113 @@ func heldState(ctx context.Context, host *WashHostClient, workloadID string) (ru
 			host.HostID, status.GetWorkloadId(), describeStatus(status))
 	}
 	return status.GetWorkloadState(), nil
+}
+
+// materializeWorkload is the Workload as the host is sent it, without its
+// annotations: every ConfigMap, Secret and registry credential it names, read
+// from its namespace.
+func (r *WorkloadReconciler) materializeWorkload(ctx context.Context, workload *runtimev1alpha1.Workload) (*runtimev2.Workload, error) {
+	volumes := make([]*runtimev2.Volume, 0, len(workload.Spec.Volumes))
+	for _, v := range workload.Spec.Volumes {
+		vol := &runtimev2.Volume{
+			Name: v.Name,
+		}
+		switch {
+		case v.EphemeralVolume != nil:
+			vol.VolumeType = &runtimev2.Volume_EmptyDir{}
+		case v.HostPathVolume != nil:
+			vol.VolumeType = &runtimev2.Volume_HostPath{
+				HostPath: &runtimev2.HostPathVolume{
+					LocalPath: v.HostPathVolume.Path,
+				},
+			}
+		}
+
+		volumes = append(volumes, vol)
+	}
+
+	witWorld := &runtimev2.WitWorld{
+		HostInterfaces: make([]*runtimev2.WitInterface, 0, len(workload.Spec.HostInterfaces)),
+		Components:     make([]*runtimev2.Component, 0, len(workload.Spec.Components)),
+	}
+	for _, hi := range workload.Spec.HostInterfaces {
+		hiConfig, err := MaterializeConfigLayer(ctx, r.Client, workload.Namespace, &hi.ConfigLayer)
+		if err != nil {
+			return nil, fmt.Errorf("materializing host interface config for %s/%s: %w", hi.Namespace, hi.Package, err)
+		}
+		witWorld.HostInterfaces = append(witWorld.HostInterfaces, &runtimev2.WitInterface{
+			Namespace:  hi.Namespace,
+			Package:    hi.Package,
+			Version:    hi.Version,
+			Interfaces: hi.Interfaces,
+			Config:     hiConfig,
+			Name:       hi.Name,
+		})
+	}
+
+	for _, c := range workload.Spec.Components {
+		localResources, err := materializeLocalResources(ctx, r.Client, workload.Namespace, c.LocalResources, fmt.Sprintf("component %q", c.Name))
+		if err != nil {
+			return nil, err
+		}
+
+		var imagePullSecret *runtimev2.ImagePullSecret
+		if c.ImagePullSecret != nil {
+			imagePullSecret, err = MaterializeImagePullSecret(ctx, r.Client, workload.Namespace, c.ImagePullSecret.Name, c.Image)
+			if err != nil {
+				return nil, fmt.Errorf("materializing image pull secret for component %q: %w", c.Name, err)
+			}
+		}
+
+		witWorld.Components = append(witWorld.Components, &runtimev2.Component{
+			Name:                 c.Name,
+			Image:                c.Image,
+			ImagePullSecret:      imagePullSecret,
+			ImagePullPolicy:      translatePullPolicy(c.ImagePullPolicy),
+			PoolSize:             c.PoolSize,
+			MaxInvocations:       c.MaxInvocations,
+			MaxConcurrency:       c.MaxConcurrency,
+			ReclaimWindowSeconds: c.ReclaimWindowSeconds,
+			ReclaimMinInstances:  c.ReclaimMinInstances,
+			LocalResources:       localResources,
+		})
+	}
+
+	if workload.Spec.Kubernetes != nil && workload.Spec.Kubernetes.Service != nil {
+		injectServiceDNSAliases(witWorld.HostInterfaces, workload.Spec.Kubernetes.Service.Name, workload.Namespace)
+	}
+
+	var service *runtimev2.Service
+	if s := workload.Spec.Service; s != nil {
+		localResources, err := materializeLocalResources(ctx, r.Client, workload.Namespace, s.LocalResources, "service")
+		if err != nil {
+			return nil, err
+		}
+
+		var imagePullSecret *runtimev2.ImagePullSecret
+		if s.ImagePullSecret != nil {
+			imagePullSecret, err = MaterializeImagePullSecret(ctx, r.Client, workload.Namespace, s.ImagePullSecret.Name, s.Image)
+			if err != nil {
+				return nil, fmt.Errorf("materializing image pull secret for service: %w", err)
+			}
+		}
+
+		service = &runtimev2.Service{
+			Image:           s.Image,
+			ImagePullSecret: imagePullSecret,
+			ImagePullPolicy: translatePullPolicy(s.ImagePullPolicy),
+			LocalResources:  localResources,
+			MaxRestarts:     uint64(s.MaxRestarts),
+		}
+	}
+
+	return &runtimev2.Workload{
+		Namespace: workload.Namespace,
+		Name:      workload.Name,
+		WitWorld:  witWorld,
+		Volumes:   volumes,
+		Service:   service,
+	}, nil
 }
 
 // replicaAnnotations is workload's annotations for the host, with the names of
