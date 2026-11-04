@@ -807,8 +807,12 @@ every kernel. Compare admission counts and retained memory as well as the
 pass/fail result. This test demonstrates overcommit behavior; it does not
 certify application sizing or make an expected OOM acceptable in production.
 
-The runner removes every measured container, including after a timeout,
-SIGINT, or SIGTERM. Docker retains the build-cache volumes. The `bench` workflow
+Docker control commands have a 30-second timeout, configurable with
+`--docker-timeout`. SIGINT and SIGTERM interrupt builds, measurements, and
+control commands. Cleanup is registered by name before container creation and
+attempts removal even after cancellation. Removal waits at most five seconds
+(or `--docker-timeout`, if shorter); a failed removal prints the container name
+for manual cleanup. Docker retains the build-cache volumes. The `bench` workflow
 offers `memory_pressure` as a dispatch-only diagnostic: it uploads the shared
 density report and raw evidence without publishing pressure cases to the trend
 site. Its cleanup stops Docker so the next bench's pre-flight sees the usual
