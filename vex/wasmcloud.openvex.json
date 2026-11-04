@@ -1,0 +1,446 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/vex/wasmcloud.openvex.json",
+  "author": "https://github.com/wasmCloud/wasmCloud/blob/main/SECURITY.md#security-team-membership",
+  "role": "Document Creator",
+  "timestamp": "2026-11-04T20:20:55Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "@id": "https://rustsec.org/advisories/RUSTSEC-2026-0381.html",
+        "name": "RUSTSEC-2026-0381",
+        "aliases": [
+          "CVE-2026-111943"
+        ]
+      },
+      "products": [
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-s390x-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc.zip",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0-all-features?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/webpki-roots@0.26.11"
+            },
+            {
+              "@id": "pkg:cargo/webpki-roots@1.0.10"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Cargo.lock resolves webpki-roots 0.26.11 to webpki-roots 1.0.10. The 0.26.11 compatibility crate re-exports the 1.x trust store and has no independent roots; 1.0.10 removes the affected root. In addition, the 0.26.11 dependency is only reachable through async-nats websockets, which the workspace does not enable. Evidence: https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b/Cargo.lock; https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b/Cargo.toml; https://docs.rs/crate/webpki-roots/0.26.11/source/src/lib.rs.",
+      "status_notes": "Assessed source: https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b. Covers the identified wash release binaries and default/all-features wash images with repository-defined features. Reassess when dependencies, features, or code paths change."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://rustsec.org/advisories/RUSTSEC-2026-0391.html",
+        "name": "RUSTSEC-2026-0391"
+      },
+      "products": [
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-s390x-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc.zip",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0-all-features?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd@0.13.3"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The only reverse dependency of zstd 0.13.3 is wasmtime-internal-cache 48.0.8. Its cache uses encode_all and decode_all, which create fresh contexts; it does not use the affected stream Encoder::with_context or Decoder::with_context APIs to reuse contexts. The wasmCloud engine configuration also does not enable Wasmtime disk caching. Evidence: https://docs.rs/crate/wasmtime-internal-cache/48.0.8/source/src/lib.rs; https://docs.rs/crate/wasmtime-internal-cache/48.0.8/source/src/worker.rs; https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b/crates/wash-runtime/src/engine/mod.rs. Checked with cargo tree --locked --offline -p wash --all-features --target all -i zstd.",
+      "status_notes": "Assessed source: https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b. Covers the identified wash release binaries and default/all-features wash images with repository-defined features. Reassess when dependencies, features, or code paths change."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://rustsec.org/advisories/RUSTSEC-2026-0398.html",
+        "name": "RUSTSEC-2026-0398"
+      },
+      "products": [
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-s390x-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc.zip",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0-all-features?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The affected seekable decompression APIs require the zstd-safe seekable feature. Wasmtime cache disables zstd default features, and the wash dependency graph enables only the std feature of zstd-safe 7.3.0, including with all optional wash features and all targets. The affected seekable code is not compiled. Evidence: https://docs.rs/crate/wasmtime-internal-cache/48.0.8/source/Cargo.toml; https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b/Cargo.lock. Checked with cargo tree --locked --offline -p wash --all-features --target all -e features -i zstd-safe --depth 1.",
+      "status_notes": "Assessed source: https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b. Covers the identified wash release binaries and default/all-features wash images with repository-defined features. Reassess when dependencies, features, or code paths change."
+    },
+    {
+      "vulnerability": {
+        "@id": "https://rustsec.org/advisories/RUSTSEC-2026-0403.html",
+        "name": "RUSTSEC-2026-0403"
+      },
+      "products": [
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-s390x-unknown-linux-gnu",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-unknown-linux-musl",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-aarch64-apple-darwin",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:github/wasmcloud/wasmcloud@v2.12.0?file_name=wash-x86_64-pc-windows-msvc.zip",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        },
+        {
+          "@id": "pkg:oci/wash@2.12.0-all-features?repository_url=ghcr.io%2Fwasmcloud%2Fwash",
+          "subcomponents": [
+            {
+              "@id": "pkg:cargo/zstd-safe@7.3.0"
+            }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Legacy frame support is not enabled: the wash graph enables only the std feature of zstd-safe 7.3.0, including with all optional wash features and all targets. Wasmtime cache disables zstd default features. Its only decompression API is decode_all, which the advisory also identifies as unaffected; it does not use stream::write::Decoder. Evidence: https://docs.rs/crate/wasmtime-internal-cache/48.0.8/source/Cargo.toml; https://docs.rs/crate/wasmtime-internal-cache/48.0.8/source/src/lib.rs; https://docs.rs/crate/wasmtime-internal-cache/48.0.8/source/src/worker.rs. Checked with cargo tree --locked --offline -p wash --all-features --target all -e features -i zstd-safe --depth 1.",
+      "status_notes": "Assessed source: https://github.com/wasmCloud/wasmCloud/tree/5de84384e837a5632f0bfc3a0f96a1e6a1a8b77b. Covers the identified wash release binaries and default/all-features wash images with repository-defined features. Reassess when dependencies, features, or code paths change."
+    }
+  ]
+}

@@ -217,6 +217,14 @@ verification. Keep consumer commands there.
 
 ### Release SBOMs
 
+Before a release, review the [VEX assessments](vex/README.md) against the release's dependency
+inventory, build features, and code paths. Add assessments for the exact new product versions;
+do not carry forward a `not_affected` conclusion without checking its evidence. Run
+`node .github/scripts/check-vex.mjs`. `release-tag.yml` checks and stages
+[`vex/wasmcloud.openvex.json`](vex/wasmcloud.openvex.json) before image promotion, attests it with
+`actions/attest`, and attaches it and `wasmcloud.openvex.sigstore.json` to every GitHub Release
+alongside the SBOMs. Release tags and assets retain past assessments.
+
 Before promoting anything, `release-tag.yml` scans the downloaded canary binaries and the
 `linux/amd64` and `linux/arm64` manifests of each image it is about to release, using
 version-pinned Syft (`.github/scripts/release-sboms.mjs`). The shared `setup-syft` action

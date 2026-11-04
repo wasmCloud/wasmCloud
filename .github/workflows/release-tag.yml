@@ -18,8 +18,8 @@ name: release-tag
 #      `wash:X.Y.Z-all-features`.
 #   3. Re-attests the promoted manifest digest so SLSA provenance covers
 #      the release tag (and not just the sha-prefixed canary).
-#   4. Attests the binaries and every SBOM, and creates the GitHub Release
-#      directly with those exact bytes, the SBOMs and their Sigstore bundles
+#   4. Attests the binaries, every SBOM and VEX, and creates the GitHub Release
+#      directly with those exact bytes, the documents and their Sigstore bundles
 #      attached (no rebuild on tag).
 #   5. Signs and pushes the immutable `vX.Y.Z` git tag at the merge commit.
 #      That tag triggers the remaining tag-listening workflows (charts
@@ -313,6 +313,14 @@ jobs:
           echo "STAGE=generate-sboms" >> "${GITHUB_ENV}"
           node .github/scripts/release-sboms.mjs generate
 
+      - name: Check and stage release VEX
+        run: |
+          set -euo pipefail
+          echo "STAGE=check-vex" >> "${GITHUB_ENV}"
+          node .github/scripts/check-vex.mjs
+          mkdir -p ./artifacts/vex
+          cp vex/wasmcloud.openvex.json ./artifacts/vex/wasmcloud.openvex.json
+
       - name: Promote canary container images to release tag
         id: promote
         env:
@@ -382,6 +390,21 @@ jobs:
           mkdir -p ./artifacts/attestations
           cp "${BUNDLE_PATH}" ./artifacts/attestations/wash.sigstore.json
           ls -la ./artifacts/attestations/
+
+      - name: Attest release VEX
+        id: attest_vex
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ./artifacts/vex/wasmcloud.openvex.json
+          predicate-type: https://openvex.dev/ns/v0.2.0
+          predicate-path: ./artifacts/vex/wasmcloud.openvex.json
+
+      - name: Stage VEX attestation bundle
+        env:
+          BUNDLE_PATH: ${{ steps.attest_vex.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "${BUNDLE_PATH}" ./artifacts/vex/wasmcloud.openvex.sigstore.json
 
       - name: Attest wash image SBOM
         uses: $/.github/actions/release-image-sbom
