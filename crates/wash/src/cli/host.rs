@@ -15,6 +15,11 @@ use crate::config::{HttpClientTrustRoots, load_config};
 
 #[derive(Debug, Clone, Args)]
 pub struct HostCommand {
+    /// Host ID used in NATS control subjects; defaults to a random UUID.
+    /// Use a unique ID per running host, with 1–128 ASCII letters, digits, '_' or '-'.
+    #[arg(long, env = "WASH_HOST_ID")]
+    pub host_id: Option<String>,
+
     /// The host group label to assign to the host
     #[arg(long = "host-group", default_value = "default")]
     pub host_group: String,
@@ -1050,6 +1055,14 @@ fn nats_auth(
 }
 
 impl HostCommand {
+    fn cluster_host_builder(&self) -> anyhow::Result<wash_runtime::washlet::ClusterHostBuilder> {
+        let builder = wash_runtime::washlet::ClusterHostBuilder::default();
+        match &self.host_id {
+            Some(id) => builder.with_host_id(id).context("invalid host ID"),
+            None => Ok(builder),
+        }
+    }
+
     /// `--hostcall-fuel` as the engine takes it; `None` keeps wasmtime's
     /// default.
     fn hostcall_fuel(&self) -> anyhow::Result<Option<std::num::NonZeroUsize>> {
@@ -1348,6 +1361,7 @@ impl HostCommand {
 
 impl CliCommand for HostCommand {
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
+        let cluster_host_builder = self.cluster_host_builder()?;
         // Validated before anything is connected or built. A bad size is a typo
         // in a flag, and reporting it after a NATS dial has already failed
         // buries the actionable error under an unrelated one. The resolved
@@ -1412,7 +1426,6 @@ impl CliCommand for HostCommand {
             );
         }
 
-        let cluster_host_builder = wash_runtime::washlet::ClusterHostBuilder::default();
         let mut scheduler_options = self.scheduler_nats_options(cluster_host_builder.host_id());
         scheduler_options.connect_retry = connect_retry;
         let scheduler_nats_client =
@@ -1978,6 +1991,53 @@ mod nats_tests {
 
     fn parse(args: &[&str]) -> HostCommand {
         TestCli::parse_from(std::iter::once("wash-host").chain(args.iter().copied())).host
+    }
+
+    #[test]
+    fn configured_host_id_sets_control_and_connection_identity() -> anyhow::Result<()> {
+        let host = parse(&["--host-id", "tenant-host_1"]);
+        let builder = host.cluster_host_builder()?;
+        assert_eq!(builder.host_id(), "tenant-host_1");
+        assert_eq!(
+            host.scheduler_nats_options(builder.host_id())
+                .name
+                .as_deref(),
+            Some("host:tenant-host_1")
+        );
+        assert_eq!(
+            host.data_nats_options(builder.host_id()).name.as_deref(),
+            Some("host:tenant-host_1:data")
+        );
+        assert_eq!(
+            wash_runtime::washlet::heartbeat_subject(builder.host_id()),
+            "runtime.operator.heartbeat.tenant-host_1"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn configured_host_id_is_validated_before_connecting() {
+        for id in ["", "a.b", "*", ">", "a b", "höst", "a:b", &"a".repeat(129)] {
+            assert!(
+                parse(&["--host-id", id]).cluster_host_builder().is_err(),
+                "{id:?}"
+            );
+        }
+        assert!(
+            parse(&["--host-id", &"a".repeat(128)])
+                .cluster_host_builder()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn unconfigured_host_id_is_unique() -> anyhow::Result<()> {
+        let host = parse(&[]);
+        assert_ne!(
+            host.cluster_host_builder()?.host_id(),
+            host.cluster_host_builder()?.host_id()
+        );
+        Ok(())
     }
 
     // An invalid advertised URL exposes discovery during the handshake,
