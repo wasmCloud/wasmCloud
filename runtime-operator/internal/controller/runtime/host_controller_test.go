@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -52,7 +53,7 @@ var hostStatusMeasuredKeys = []string{
 
 func patchStatusKeys(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
-	raw, err := hostStatusPatch()
+	raw, err := hostStatusPatch("")
 	if err != nil {
 		t.Fatalf("hostStatusPatch: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	// handler patches a host that reconcileReporting has not polled yet. The
 	// seven measured fields are optional now, so the API server must accept
 	// this patch leaving them unset.
-	patch, err := hostStatusPatch()
+	patch, err := hostStatusPatch("")
 	if err != nil {
 		t.Fatalf("hostStatusPatch: %v", err)
 	}
@@ -169,7 +170,7 @@ func TestHostStatusPatch_SatisfiesCRDRequired(t *testing.T) {
 	if err := c.Status().Update(ctx, got); err != nil {
 		t.Fatalf("seed reported status: %v", err)
 	}
-	patch2, err := hostStatusPatch()
+	patch2, err := hostStatusPatch("")
 	if err != nil {
 		t.Fatalf("hostStatusPatch (reported): %v", err)
 	}
@@ -604,9 +605,7 @@ func TestHeartbeatHandler_WitnessesFleet(t *testing.T) {
 	}
 
 	var fleet fleetWitness
-	// A fake client cannot serve the Server-Side Apply this handler makes, so
-	// the Host bookkeeping below fails — which is the point. Arrival is the
-	// evidence, and it has to be recorded before anything that can fail.
+	// Arrival must be recorded before any Kubernetes operation can fail.
 	updater := &hostStatusUpdater{
 		client:            fake.NewClientBuilder().WithScheme(s).Build(),
 		operatorNamespace: testNamespace,
@@ -619,7 +618,7 @@ func TestHeartbeatHandler_WitnessesFleet(t *testing.T) {
 	}
 
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytes(t, "hb-host", testHeartbeatHostID, "node-a"))
+		"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, "hb-host", testHeartbeatHostID, "node-a"))
 
 	// The handler's stamp is what lets a run start here; without it observe
 	// finds nothing heard and the witness never settles.
@@ -755,19 +754,16 @@ func TestDeleteUnresponsiveHost(t *testing.T) {
 	})
 }
 
-// applyCountingClient wraps a client.Client and counts Server-Side Apply
-// patches (the spec upsert), so a test can assert whether the heartbeat handler
-// performed or skipped the apply. Status subresource patches go through
-// Status() and are not counted.
-type applyCountingClient struct {
+// specPatchCountingClient counts Host spec patches, so a test can assert
+// whether the heartbeat handler patched or skipped the spec. Status subresource
+// patches go through Status() and are not counted.
+type specPatchCountingClient struct {
 	client.Client
-	applies atomic.Int64
+	patches atomic.Int64
 }
 
-func (c *applyCountingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-	if patch.Type() == types.ApplyPatchType {
-		c.applies.Add(1)
-	}
+func (c *specPatchCountingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	c.patches.Add(1)
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
@@ -784,24 +780,23 @@ func heartbeatBytes(t *testing.T, name, hostID, hostname string) []byte {
 	return data
 }
 
-// TestHeartbeatHandler_SkipsRedundantApply exercises the full handler path
-// against a real API server: the first heartbeat creates the Host (one apply),
-// an identical heartbeat is skipped (no apply), and a changed heartbeat applies
-// again. LastSeen is refreshed on every heartbeat regardless of the skip.
-func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
+// TestHeartbeatHandler_SkipsRedundantPatch exercises the full handler path
+// against a real API server. Valid heartbeats refresh LastSeen; only changed
+// specs need a patch.
+func TestHeartbeatHandler_SkipsRedundantPatch(t *testing.T) {
 	c, ctx := startHostEnvtest(t)
 	ns := createTestNamespace(t, ctx, c, "host-heartbeat-skip")
 
-	counter := &applyCountingClient{Client: c}
+	counter := &specPatchCountingClient{Client: c}
 	updater := &hostStatusUpdater{client: counter, operatorNamespace: ns, fleet: &fleetWitness{}}
 	log := logr.Discard()
 
 	const name = "hb-host"
 
-	// First heartbeat: object does not exist -> create via SSA.
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
-	if got := counter.applies.Load(); got != 1 {
-		t.Fatalf("first heartbeat: applies = %d, want 1", got)
+	// The first heartbeat creates the Host.
+	updater.handleHeartbeat(ctx, log, "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
+	if got := counter.patches.Load(); got != 0 {
+		t.Fatalf("first heartbeat: patches = %d, want 0", got)
 	}
 	created := &runtimev1alpha1.Host{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, created); err != nil {
@@ -814,10 +809,10 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 		t.Errorf("LastSeen must be set after the first heartbeat")
 	}
 
-	// Identical heartbeat: spec unchanged -> no apply, but LastSeen still refreshes.
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
-	if got := counter.applies.Load(); got != 1 {
-		t.Fatalf("redundant heartbeat must not re-apply: applies = %d, want 1", got)
+	// Identical heartbeat: spec unchanged -> no patch, but LastSeen still refreshes.
+	updater.handleHeartbeat(ctx, log, "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
+	if got := counter.patches.Load(); got != 0 {
+		t.Fatalf("redundant heartbeat must not patch: patches = %d, want 0", got)
 	}
 	afterRedundant := &runtimev1alpha1.Host{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, afterRedundant); err != nil {
@@ -827,10 +822,10 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 		t.Errorf("LastSeen must remain set after a redundant heartbeat")
 	}
 
-	// Changed heartbeat: hostname differs -> apply again.
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-b"))
-	if got := counter.applies.Load(); got != 2 {
-		t.Fatalf("changed heartbeat must re-apply: applies = %d, want 2", got)
+	// Changed heartbeat: hostname differs -> patch.
+	updater.handleHeartbeat(ctx, log, "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, name, testHeartbeatHostID, "node-b"))
+	if got := counter.patches.Load(); got != 1 {
+		t.Fatalf("changed heartbeat must patch: patches = %d, want 1", got)
 	}
 	updated := &runtimev1alpha1.Host{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, updated); err != nil {
@@ -840,19 +835,62 @@ func TestHeartbeatHandler_SkipsRedundantApply(t *testing.T) {
 		t.Errorf("hostname = %q, want node-b after change", updated.Hostname)
 	}
 
-	// A restarted host that reuses its friendly name reports a new host ID, and
-	// the operator addresses every RPC by that ID — so this is the one field the
-	// skip must never swallow.
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, "host-id-2", "node-b"))
-	if got := counter.applies.Load(); got != 3 {
-		t.Fatalf("changed hostID must re-apply: applies = %d, want 3", got)
+	// A new ID must not take over an existing Host's name.
+	updater.handleHeartbeat(ctx, log, "runtime.operator.heartbeat.host-id-2", heartbeatBytes(t, name, "host-id-2", "node-b"))
+	if got := counter.patches.Load(); got != 1 {
+		t.Fatalf("name takeover patched: %d", got)
 	}
 	reidentified := &runtimev1alpha1.Host{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, reidentified); err != nil {
-		t.Fatalf("get after hostID change: %v", err)
+		t.Fatalf("get after name takeover: %v", err)
 	}
-	if reidentified.HostID != "host-id-2" {
-		t.Errorf("hostID = %q, want host-id-2 after change", reidentified.HostID)
+	if reidentified.HostID != testHeartbeatHostID || !reidentified.Status.LastSeen.Equal(&updated.Status.LastSeen) {
+		t.Errorf("name takeover changed Host: %+v", reidentified)
+	}
+}
+
+// TestHeartbeatHandler_ClearsDroppedSpecFields checks that a heartbeat which
+// drops a label or clears its environment removes them from the Host.
+func TestHeartbeatHandler_ClearsDroppedSpecFields(t *testing.T) {
+	c, ctx := startHostEnvtest(t)
+	ns := createTestNamespace(t, ctx, c, "host-heartbeat-dropped")
+
+	counter := &specPatchCountingClient{Client: c}
+	updater := &hostStatusUpdater{client: counter, operatorNamespace: ns, fleet: &fleetWitness{}}
+	const name = "hb-dropped-host"
+	subject := "runtime.operator.heartbeat." + testHeartbeatHostID
+	heartbeat := func(labels map[string]string, environment string) []byte {
+		t.Helper()
+		data, err := protojson.Marshal(&runtimev2.HostHeartbeat{
+			FriendlyName: name,
+			Id:           testHeartbeatHostID,
+			Hostname:     "dropped-node",
+			Labels:       labels,
+			Environment:  environment,
+		})
+		if err != nil {
+			t.Fatalf("marshal heartbeat: %v", err)
+		}
+		return data
+	}
+
+	kept := map[string]string{"retained": "1"}
+	initial := maps.Clone(kept)
+	initial["drop"] = "2"
+	updater.handleHeartbeat(ctx, logr.Discard(), subject, heartbeat(initial, "prod"))
+	for range 2 {
+		updater.handleHeartbeat(ctx, logr.Discard(), subject, heartbeat(kept, ""))
+	}
+
+	got := &runtimev1alpha1.Host{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, got); err != nil {
+		t.Fatalf("get Host: %v", err)
+	}
+	if !maps.Equal(got.Labels, kept) || got.Environment != "" {
+		t.Errorf("dropped fields kept: labels=%v environment=%q", got.Labels, got.Environment)
+	}
+	if n := counter.patches.Load(); n != 1 {
+		t.Errorf("spec patches = %d, want 1 once the Host converges", n)
 	}
 }
 
@@ -867,7 +905,7 @@ func TestHeartbeatHandler_PreservesReportedStatus(t *testing.T) {
 	log := logr.Discard()
 
 	const name = "hb-status-host"
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
+	updater.handleHeartbeat(ctx, log, "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
 
 	// Stand in for reconcileReporting having polled the host.
 	reported := &runtimev1alpha1.Host{}
@@ -886,7 +924,7 @@ func TestHeartbeatHandler_PreservesReportedStatus(t *testing.T) {
 	}
 	seenBefore := reported.Status.LastSeen
 
-	updater.handleHeartbeat(ctx, log, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
+	updater.handleHeartbeat(ctx, log, "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, name, testHeartbeatHostID, "node-a"))
 
 	after := &runtimev1alpha1.Host{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, after); err != nil {

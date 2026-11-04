@@ -103,7 +103,12 @@ The host refuses workload volumes that expose these files.
 
 ### Permissions
 
-`<id>` is a host's id. The operator's replies arrive on its inbox prefix,
+`<id>` is a host's id. A heartbeat's payload ID must match its subject's
+ID. An existing Host name cannot be claimed by a different ID; remove the
+old Host before reusing its name with a new ID. These checks rely on NATS
+permissions restricting each host to its own heartbeat subject.
+
+The operator's replies arrive on its inbox prefix,
 `_INBOX` unless `-nats-inbox-prefix` sets another.
 
 | Client | Publish | Subscribe |
@@ -126,7 +131,8 @@ permitted host ID. IDs must contain 1–128 ASCII letters, digits, `_` or `-`
 and must be unique among running hosts. The default remains a random UUID
 chosen at startup, which needs a credential issued for that ID. With one
 credential per host group, use `*` for `<id>`: those hosts can then read
-each other's commands, though only the operator can send them.
+each other's commands and publish each other's heartbeats, though only the
+operator can send commands.
 
 ## Development
 

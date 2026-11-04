@@ -125,7 +125,7 @@ func TestHeartbeatHandler_SkipsDrainingHostPod(t *testing.T) {
 		}
 
 		updater.handleHeartbeat(context.Background(), logr.Discard(),
-			heartbeatBytes(t, "hb-host", testHeartbeatHostID, podIP))
+			"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, "hb-host", testHeartbeatHostID, podIP))
 
 		if draining && writes != 0 {
 			t.Errorf("a draining host's heartbeat wrote its Host back %d times", writes)
@@ -163,13 +163,13 @@ func TestHeartbeatHandler_SkipsRetiredHostAfterPodIsGone(t *testing.T) {
 
 	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytes(t, "hb-host", testHeartbeatHostID, podIP))
+		"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, "hb-host", testHeartbeatHostID, podIP))
 	if writes != 0 {
 		t.Errorf("retired host was recreated after its Pod disappeared: %d writes", writes)
 	}
 
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytesAt(t, "replacement", "replacement-id", podIP, condemnedAt.Add(time.Second)))
+		"runtime.operator.heartbeat."+"replacement-id", heartbeatBytesAt(t, "replacement", "replacement-id", podIP, condemnedAt.Add(time.Second)))
 	if writes == 0 {
 		t.Error("a new Host ID on the recycled IP was not registered")
 	}
@@ -197,12 +197,12 @@ func TestHeartbeatHandler_SkipsRetiredPodWhenHostWasAlreadyGone(t *testing.T) {
 
 	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytesAt(t, "old", "old-id", podIP, condemnedAt.Add(-time.Minute)))
+		"runtime.operator.heartbeat."+"old-id", heartbeatBytesAt(t, "old", "old-id", podIP, condemnedAt.Add(-time.Minute)))
 	if writes != 0 {
 		t.Errorf("old host was recreated after its Pod disappeared: %d writes", writes)
 	}
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytesAt(t, "replacement", "replacement-id", podIP, condemnedAt.Add(time.Second)))
+		"runtime.operator.heartbeat."+"replacement-id", heartbeatBytesAt(t, "replacement", "replacement-id", podIP, condemnedAt.Add(time.Second)))
 	if writes == 0 {
 		t.Error("replacement host on recycled IP was not registered")
 	}
@@ -220,7 +220,7 @@ func TestHeartbeatHandler_RejectsRetiredIDBeforeHostRead(t *testing.T) {
 	}).Build()
 	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytes(t, "old", testHeartbeatHostID, "10.1.2.3"))
+		"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, "old", testHeartbeatHostID, "10.1.2.3"))
 	if reads != 0 {
 		t.Errorf("retired Host ID reached a stale Host read: %d reads", reads)
 	}
@@ -249,12 +249,12 @@ func TestHeartbeatHandler_RegistersUnknownHostWhenPodLookupFails(t *testing.T) {
 	}).Build()
 	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytes(t, "retired", "retired-id", "10.1.2.3"))
+		"runtime.operator.heartbeat."+"retired-id", heartbeatBytes(t, "retired", "retired-id", "10.1.2.3"))
 	if writes != 0 {
 		t.Errorf("retired host was registered despite failed Pod lookup: %d writes", writes)
 	}
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		heartbeatBytes(t, "hb-host", testHeartbeatHostID, "10.1.2.3"))
+		"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeatBytes(t, "hb-host", testHeartbeatHostID, "10.1.2.3"))
 	if writes == 0 {
 		t.Error("new host was not registered after Pod lookup failed")
 	}
