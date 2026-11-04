@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 
@@ -8,7 +9,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/json"
 )
 
 const (
