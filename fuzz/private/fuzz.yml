@@ -133,7 +133,10 @@ jobs:
           cache-dependency-path: source/runtime-operator/go.sum
       - name: Locate fuzz corpus
         id: corpus
-        run: echo "path=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+        run: |
+          corpus="$(go env GOCACHE)/fuzz"
+          mkdir -p "$corpus"
+          echo "path=$corpus" >> "$GITHUB_OUTPUT"
       - name: Restore corpus
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
