@@ -74,15 +74,17 @@ jobs:
       # - Never published. On a ref whose bench ignores the variables, the
       #   rows would be indistinguishable from the bench's own series.
       #
-      # max_scale: default-layout warm and scale-to-zero runs, plus warm
-      # with each guest memory's reservation and guard shrunk, past
+      # max_scale: warm and scale-to-zero with each guest memory's
+      # reservation and guard shrunk, in growth mode, past
       # the ~16,000 warm instances the address space holds at wasmtime's
       # 4 GiB + 32 MiB (WASH_SCALE_MEMORY_RESERVATION and
       # WASH_SCALE_MEMORY_GUARD; a ref without them runs plain scale_density).
       BENCH_VARIANTS: >-
         {"max_scale": {"bench": "scale_density",
-                       "env": {"WASH_SCALE_MEMORY_RESERVATION": "default,256MiB",
-                               "WASH_SCALE_MEMORY_GUARD": "64KiB"}}}
+                       "env": {"WASH_SCALE_MEMORY_RESERVATION": "256MiB",
+                               "WASH_SCALE_MEMORY_GUARD": "64KiB",
+                               "WASH_SCALE_GUEST_MEMORY_MODE": "growth",
+                               "WASH_SCALE_MEMORY_LIMIT": "2GiB"}}}
     steps:
       - id: set
         env:

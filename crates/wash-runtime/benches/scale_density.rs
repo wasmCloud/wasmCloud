@@ -44,7 +44,7 @@
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
 //! | `WASH_SCALE_GUEST_MEMORY_MODE` | `enforce`, `count` or `growth`: how the guest budget is applied; a list (`enforce,growth`) runs each flavour in each | `enforce` |
 //! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | four times `WASH_SCALE_GUEST_MEMORY` |
-//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB, or a list (`default,256MiB`; `default` is wasmtime's layout) whose reduced entries run warm only, in the first mode; moves an isolation boundary (`THREAT_MODEL.md`) | wasmtime's default |
+//! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB, or a list (`default,256MiB`; `default` is wasmtime's layout) whose reduced entries run both flavours in the first mode; moves an isolation boundary (`THREAT_MODEL.md`) | wasmtime's default |
 //! | `WASH_SCALE_MEMORY_GUARD` | guard after each guest memory, below wasmtime's 32 MiB; moves the same boundary | wasmtime's default |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
 //! | `WASH_SCALE_MAX_SECS` | stop a flavour after this long | `600` |
@@ -138,32 +138,13 @@ fn main() -> Result<()> {
     }
 
     let mut reports = Vec::new();
-    for &layout in &settings.memory_layouts {
-        // A reduced layout only moves how many warm memories fit, so it runs
-        // warm, in the first mode: scale-to-zero holds no memories.
-        let (modes, flavours) = match layout {
-            Some(_) => (
-                settings.guest_modes.get(..1).unwrap_or_default(),
-                flavours
-                    .iter()
-                    .copied()
-                    .filter(|&f| f == Flavour::Warm)
-                    .collect::<Vec<_>>(),
-            ),
-            None => (&settings.guest_modes[..], flavours.clone()),
-        };
-        for &mode in modes {
-            for &cpus in &settings.cpus {
-                for &flavour in &flavours {
-                    let name = layout_label(report_label(flavour.name(), cpus, mode), layout);
-                    eprintln!(
-                        "
-== {name} =="
-                    );
-                    reports.push(run_child(flavour, cpus, mode, layout)?);
-                }
-            }
-        }
+    for run in selected_runs(&settings, &flavours) {
+        let name = layout_label(
+            report_label(run.flavour.name(), run.cpus, run.mode),
+            run.layout,
+        );
+        eprintln!("\n== {name} ==");
+        reports.push(run_child(run.flavour, run.cpus, run.mode, run.layout)?);
     }
     print_comparison(&reports);
     if let Some(path) = &settings.report_json {
@@ -171,6 +152,40 @@ fn main() -> Result<()> {
             .with_context(|| format!("writing {path}"))?;
     }
     Ok(())
+}
+
+/// One requested combination, run in its own child process.
+struct Run {
+    flavour: Flavour,
+    cpus: Option<usize>,
+    mode: GuestMemoryMode,
+    layout: Option<host_memory::MemoryLayout>,
+}
+
+fn selected_runs(settings: &Settings, flavours: &[Flavour]) -> Vec<Run> {
+    let mut runs = Vec::new();
+    for &layout in &settings.memory_layouts {
+        // Reduced-layout comparisons use the first mode, but must still run
+        // every selected flavour, including an explicit scale-to-zero filter.
+        let modes = if layout.is_some() {
+            settings.guest_modes.get(..1).unwrap_or_default()
+        } else {
+            &settings.guest_modes
+        };
+        for &mode in modes {
+            for &cpus in &settings.cpus {
+                for &flavour in flavours {
+                    runs.push(Run {
+                        flavour,
+                        cpus,
+                        mode,
+                        layout,
+                    });
+                }
+            }
+        }
+    }
+    runs
 }
 
 /// Run one flavour in one guest memory mode and layout in a fresh copy of this binary,
@@ -914,6 +929,41 @@ mod tests {
             "a child is told its reservation in bytes"
         );
         assert!(settings(Some("default,lots"), None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reduced_layout_runs_warm_and_scale_to_zero() -> Result<()> {
+        let settings = Settings::from_values(|key| match key {
+            "WASH_SCALE_MEMORY_LIMIT" | "WASH_SCALE_GUEST_MEMORY" => Some("2GiB".into()),
+            "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
+            MEMORY_RESERVATION => Some("256MiB".into()),
+            "WASH_SCALE_MEMORY_GUARD" => Some("64KiB".into()),
+            GUEST_MEMORY_MODE => Some("growth,enforce".into()),
+            _ => None,
+        })?;
+        let labels = |flavours: &[Flavour]| {
+            selected_runs(&settings, flavours)
+                .into_iter()
+                .map(|run| {
+                    layout_label(
+                        report_label(run.flavour.name(), run.cpus, run.mode),
+                        run.layout,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(&Flavour::ALL),
+            [
+                "warm-growth-layout256MiB+64KiB",
+                "scale-to-zero-growth-layout256MiB+64KiB",
+            ]
+        );
+        assert_eq!(
+            labels(&[Flavour::ScaleToZero]),
+            ["scale-to-zero-growth-layout256MiB+64KiB"]
+        );
         Ok(())
     }
 

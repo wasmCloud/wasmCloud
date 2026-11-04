@@ -160,17 +160,32 @@ fn render_density<W: Write>(
 ) -> Result<()> {
     writeln!(out, "## bench: `{bench}` (density)")?;
     writeln!(out)?;
-    writeln!(
-        out,
-        "_commit_ `{}` &middot; _ref_ `{}` &middot; _host_ `{}` &middot; _cpus_ {}",
-        meta.short_sha, meta.ref_name, meta.host, meta.cpus_online,
-    )?;
-    writeln!(out)?;
     let memory_limit_name = if bench == "scale_density" {
         "max-process-memory"
     } else {
         "memory limit"
     };
+    let limits: std::collections::BTreeSet<_> = reports
+        .iter()
+        .map(|report| report.memory_limit_bytes)
+        .collect();
+    let limits = limits
+        .into_iter()
+        .map(|bytes| {
+            if bytes == 0 {
+                "-".into()
+            } else {
+                format!("{:.2} GiB", bytes as f64 / (1_u64 << 30) as f64)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        out,
+        "_commit_ `{}` &middot; _ref_ `{}` &middot; _host_ `{}` &middot; _cpus_ {} &middot; _{memory_limit_name}_ {limits}",
+        meta.short_sha, meta.ref_name, meta.host, meta.cpus_online,
+    )?;
+    writeln!(out)?;
     writeln!(out, "| flavour | {memory_limit_name} |")?;
     writeln!(out, "|---|---:|")?;
     for report in reports {
