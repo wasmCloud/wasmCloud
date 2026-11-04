@@ -121,10 +121,12 @@ shared with other clients, set `-nats-inbox-prefix` to a subject only the
 operator may subscribe to, such as `runtime.operator.inbox`, and allow hosts
 to reply there or by `allow_responses`.
 
-A host id is chosen when the host process starts, so permissions that name
-`<id>` need a credential issued per host process. With one credential per
-host group, use `*` for `<id>`: those hosts can then read each other's
-commands, though only the operator can send them.
+Set `wash host --host-id <id>` or `WASH_HOST_ID` to match a credential's
+permitted host ID. IDs must contain 1–128 ASCII letters, digits, `_` or `-`
+and must be unique among running hosts. The default remains a random UUID
+chosen at startup, which needs a credential issued for that ID. With one
+credential per host group, use `*` for `<id>`: those hosts can then read
+each other's commands, though only the operator can send them.
 
 ## Development
 
