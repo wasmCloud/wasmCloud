@@ -77,7 +77,6 @@ Validate from the public repository:
 ```sh
 node --test .github/scripts/release-fuzz.test.mjs
 cargo test --locked -p xtask fuzz
-actionlint -shellcheck= -pyflakes= fuzz/private/fuzz.yml
 zizmor --offline fuzz/private/fuzz.yml
 ```
 
