@@ -35,7 +35,7 @@ name: release-tag
 # `sha=<merge-sha>` once canary builds on that SHA are green — when sha
 # is passed, verify-head reads the version from Cargo.toml at that sha
 # and skips the version-bump check, so the recovery path works against
-# any SHA whose Cargo.toml carries the version we want to release and
+# any SHA on main whose Cargo.toml carries the version we want to release and
 # whose canary binaries embed cargo-auditable metadata. The
 # automatic path (workflow_run from release-train) instead requires
 # HEAD's Cargo.toml workspace version to differ from HEAD~1's, which is
@@ -51,11 +51,11 @@ name: release-tag
 
 on:  # zizmor: ignore[dangerous-triggers]
   # workflow_run is required: this workflow must fire after release-train
-  # finishes merging the release PR. The job's `if:` requires
-  # `workflow_run.conclusion == 'success'`, the verify-head step refuses
-  # to proceed unless HEAD's commit subject matches `release: vX.Y.Z`,
-  # and every downstream step is idempotent against pre-existing tags
-  # and image manifests.
+  # finishes merging the release PR. The gate requires
+  # `workflow_run.conclusion == 'success'` and a recorded release commit
+  # on main, the verify-head step refuses a commit that doesn't bump the
+  # workspace version, and every downstream step is idempotent against
+  # pre-existing tags and image manifests.
   workflow_run:
     workflows: [release-train]
     types: [completed]
@@ -800,3 +800,18 @@ jobs:
           fi
           echo "pinned ${REF} to ${SHA}"
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
+      # promote is skipped when the gate fails, so its Slack step never runs.
+      - name: Notify Slack — release-tag gate failed
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_RELEASE_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+            echo "SLACK_RELEASE_WEBHOOK_URL not set — skipping notification"
+            exit 0
+          fi
+          TEXT=":x: release-tag could not pin the release commit, so nothing was promoted — Run: ${RUN_URL}"
+          curl -sSf -X POST -H 'Content-Type: application/json' \
+            --data "$(jq -nc --arg text "${TEXT}" '{text: $text}')" \
+            "${SLACK_WEBHOOK_URL}"
