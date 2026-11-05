@@ -1,0 +1,1 @@
+{"namespace":"wasi","package":"http","version":"not-semver","interfaces":["incoming-handler"]}

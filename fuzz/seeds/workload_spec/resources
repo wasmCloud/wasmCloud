@@ -1,0 +1,1 @@
+{"allowedHosts":["*","https://example.com","*.internal:4222"],"allowedIpNameLookups":["*.internal"],"allowedHostLoopbackPorts":["8080"]}

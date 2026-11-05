@@ -371,6 +371,7 @@ jobs:
           gh pr checks "${PR_URL}" --watch --fail-fast --interval 30 --required
 
       - name: Wait for PR auto-merge to complete
+        id: merge
         if: steps.pr.outputs.pr_url != ''
         env:
           GH_TOKEN: ${{ github.token }}
@@ -388,6 +389,11 @@ jobs:
             case "${STATE}" in
               MERGED)
                 echo "PR merged"
+                if SHA=$(gh pr view "${PR_URL}" --json mergeCommit --jq '.mergeCommit.oid') && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+                else
+                  echo "::warning::Could not resolve the merged release SHA for private fuzzing"
+                fi
                 exit 0
                 ;;
               CLOSED)
@@ -399,6 +405,14 @@ jobs:
           done
           echo "timed out waiting for PR auto-merge — likely awaiting review approval" >&2
           exit 1
+
+      - name: Request private parser fuzzing
+        if: github.repository == 'wasmCloud/wasmCloud' && github.ref == 'refs/heads/main' && steps.merge.outputs.sha != ''
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          RELEASE_SHA: ${{ steps.merge.outputs.sha }}
+        run: node .github/scripts/release-fuzz.mjs
 
       - name: Notify Slack — train failed
         if: failure()

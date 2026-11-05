@@ -1,0 +1,281 @@
+name: private-fuzz
+run-name: ${{ github.event_name == 'schedule' && 'weekly-fuzz' || format('release-fuzz {0} {1}', inputs.sha, inputs.request_id) }}
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full release commit SHA on wasmCloud/wasmCloud main (defaults to main)
+        type: string
+      request_id:
+        description: Correlation ID supplied by the release gate
+        type: string
+  schedule:
+    - cron: '23 3 * * 0'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate-control:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check control files
+        run: |
+          node --check write-result.mjs
+          node -e "JSON.parse(require('node:fs').readFileSync('policy.json', 'utf8'))"
+
+  resolve:
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.repository == 'wasmCloud/security-fuzz' && github.event.repository.private == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      harness: ${{ steps.source.outputs.harness }}
+      seconds: ${{ steps.policy.outputs.seconds }}
+      go: ${{ steps.policy.outputs.go }}
+      rust: ${{ steps.policy.outputs.rust }}
+    steps:
+      - name: Require a private repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/wasmCloud/security-fuzz --jq '(.private == true and .id == 1445861135)' | grep -qx true
+      - name: Checkout control files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: control
+          persist-credentials: false
+      - name: Checkout public main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: wasmCloud/wasmCloud
+          ref: main
+          path: validation
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve source and harness commits
+        id: source
+        working-directory: validation
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          HARNESS_SHA: ${{ vars.FUZZ_HARNESS_SHA }}
+        run: |
+          sha="${INPUT_SHA:-$(git rev-parse HEAD)}"
+          harness="${HARNESS_SHA:-$(git rev-parse HEAD)}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ && "$harness" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$sha" origin/main
+          git fetch --no-tags origin "$harness"
+          test "$(git rev-parse FETCH_HEAD)" = "$harness"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+      - name: Select target matrix and duration
+        id: policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          node --input-type=module <<'JS_POLICY'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const policy = JSON.parse(readFileSync('control/policy.json', 'utf8'));
+          const seconds = process.env.EVENT_NAME === 'schedule' ? policy.weekly_seconds : policy.release_seconds;
+          appendFileSync(process.env.GITHUB_OUTPUT, [
+            `seconds=${seconds}`,
+            `go=${JSON.stringify({ include: policy.go })}`,
+            `rust=${JSON.stringify({ target: policy.rust })}`,
+            '',
+          ].join('\n'));
+          JS_POLICY
+  go:
+    name: go (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.go) }}
+    defaults:
+      run:
+        working-directory: source/runtime-operator
+    steps:
+      - name: Checkout harnesses
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: wasmCloud/wasmCloud
+          ref: ${{ needs.resolve.outputs.harness }}
+          path: harness
+          persist-credentials: false
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: wasmCloud/wasmCloud
+          ref: ${{ needs.resolve.outputs.sha }}
+          path: source
+          persist-credentials: false
+      - name: Stage Go harnesses
+        working-directory: harness
+        run: cargo run --locked -p xtask -- fuzz prepare --source ../source --language go
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: source/runtime-operator/go.mod
+          cache-dependency-path: source/runtime-operator/go.sum
+      - name: Locate fuzz corpus
+        id: corpus
+        run: |
+          corpus="$(go env GOCACHE)/fuzz"
+          mkdir -p "$corpus"
+          echo "path=$corpus" >> "$GITHUB_OUTPUT"
+      - name: Restore corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.corpus.outputs.path }}
+          key: fuzz-go-${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-go-${{ runner.os }}-${{ matrix.target }}-
+      - name: Fuzz
+        env:
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+          FUZZ_TIME: ${{ needs.resolve.outputs.seconds }}s
+        run: go test "$PACKAGE" -run='^$' -fuzz="^${TARGET}$" -fuzztime="$FUZZ_TIME" -timeout=45m -parallel=2
+      - name: Save corpus
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.corpus.outputs.path }}
+          key: fuzz-go-${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-go-${{ matrix.target }}-${{ github.run_attempt }}
+          path: source/runtime-operator/**/testdata/fuzz/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+  rust:
+    name: rust (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.rust) }}
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - name: Checkout harnesses
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: wasmCloud/wasmCloud
+          ref: ${{ needs.resolve.outputs.harness }}
+          path: harness
+          persist-credentials: false
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: wasmCloud/wasmCloud
+          ref: ${{ needs.resolve.outputs.sha }}
+          path: source
+          persist-credentials: false
+      # The action comes from the pinned public harness checkout.
+      - uses: ./harness/.github/actions/free-disk-space # zizmor: ignore[self-repository]
+      - name: Install nightly
+        run: rustup toolchain install nightly --profile minimal --component rust-src
+      - name: Stage Rust harnesses
+        working-directory: harness
+        run: cargo +nightly run --locked -p xtask -- fuzz prepare --source ../source --language rust
+      - name: Locate LLVM libFuzzer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-rt-dev
+          archive=$(clang --print-file-name=libclang_rt.fuzzer-x86_64.a)
+          test -f "$archive"
+          echo "LLVM_LIBFUZZER_PATH=$archive" >> "$GITHUB_ENV"
+      - name: Cache Rust builds
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: source/fuzz/target
+          key: fuzz-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('source/Cargo.lock', 'harness/fuzz/**') }}-${{ github.run_id }}
+          restore-keys: fuzz-build-${{ runner.os }}-${{ matrix.target }}-
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: Restore corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: source/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-rust-${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-rust-${{ runner.os }}-${{ matrix.target }}-
+      - name: Seed corpus
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p "fuzz/corpus/$TARGET"
+          cp "fuzz/seeds/$TARGET/"* "fuzz/corpus/$TARGET/"
+      - name: Fuzz with AddressSanitizer
+        env:
+          TARGET: ${{ matrix.target }}
+          FUZZ_SECONDS: ${{ needs.resolve.outputs.seconds }}
+        run: |
+          cargo +nightly metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+          cargo +nightly run --manifest-path ../harness/xtask/Cargo.toml --locked -- fuzz verify-lock --source .
+          cargo +nightly fetch --manifest-path fuzz/Cargo.toml --locked
+          cargo +nightly fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer address --codegen-units 16 -- \
+            -max_total_time="$FUZZ_SECONDS" -timeout=30 -max_len=65536 -rss_limit_mb=4096
+      - name: Save corpus
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: source/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-rust-${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-rust-${{ matrix.target }}-${{ github.run_attempt }}
+          path: source/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  result:
+    needs: [resolve, go, rust]
+    if: always() && needs.resolve.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout control files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: control
+          persist-credentials: false
+      - name: Require every target to pass and write evidence
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: node control/write-result.mjs
+      - name: Retain release evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-result-${{ github.run_attempt }}
+          path: result.json
+          if-no-files-found: error
+          retention-days: 90

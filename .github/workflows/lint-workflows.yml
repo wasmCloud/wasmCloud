@@ -12,6 +12,10 @@ on:
       - '.github/actions/**'
       - '.github/scripts/release-*'
       - '.github/scripts/lib/release-fakes.mjs'
+      - 'xtask/**'
+      - 'fuzz/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
 
 permissions: {}
 
@@ -37,6 +41,10 @@ jobs:
               - '.github/actions/**'
               - '.github/scripts/release-*'
               - '.github/scripts/lib/release-fakes.mjs'
+              - 'xtask/**'
+              - 'fuzz/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
 
   zizmor:
     needs:
@@ -75,7 +83,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Test release promotion and SBOM checks
-        run: node --test .github/scripts/release-*.test.mjs
+        run: |
+          node --test .github/scripts/release-*.test.mjs
+          cargo test --locked -p xtask fuzz
 
   gate:
     name: gate-lint-workflows

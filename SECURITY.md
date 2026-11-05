@@ -154,6 +154,15 @@ Findings come from:
   change dependencies.
 - Dependabot alerts for Cargo, Go modules and GitHub Actions.
 - CodeQL and zizmor code scanning, reported in the repository's Security tab.
+- Parser fuzzing in the private `wasmCloud/security-fuzz` repository. Release
+  trains dispatch every target on the exact merged release commit; longer
+  campaigns run weekly. Campaign results do not gate promotion.
+
+Fuzzing logs, generated corpora, and crash artifacts remain private during
+triage. Maintainers investigate crashes for security impact and follow the
+response and disclosure process above for vulnerabilities. Reproducers become
+public regression tests after any required coordinated disclosure. Maintainers
+review the private run's source commit, target policy, duration, and results.
 
 ### Vulnerabilities
 

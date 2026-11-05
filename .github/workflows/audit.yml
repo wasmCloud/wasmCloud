@@ -64,6 +64,8 @@ jobs:
             relevant:
               - '**/Cargo.toml'
               - '**/Cargo.lock'
+              - 'fuzz/**'
+              - 'xtask/src/fuzz.rs'
               - 'deny.toml'
               - '.github/workflows/audit.yml'
               - '.github/scripts/check-dependency-licenses.mjs'
@@ -75,6 +77,7 @@ jobs:
             dependencies:
               - '**/Cargo.toml'
               - '**/Cargo.lock'
+              - 'fuzz/Cargo.toml.in'
               - '**/go.mod'
               - '**/go.sum'
               - '**/go.work'
@@ -135,6 +138,17 @@ jobs:
           tool: cargo-deny@0.20.2
       - name: Check dependency licenses
         run: node .github/scripts/check-dependency-licenses.mjs
+      - name: Checkout fuzz source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: fuzz-source
+          persist-credentials: false
+      - name: Check fuzz dependency licenses
+        run: |
+          cargo run --locked -p xtask -- fuzz prepare --source fuzz-source --language rust
+          cargo metadata --manifest-path fuzz-source/fuzz/Cargo.toml --format-version 1 > /dev/null
+          cargo run --locked -p xtask -- fuzz verify-lock --source fuzz-source
+          cargo deny --manifest-path fuzz-source/fuzz/Cargo.toml --workspace --config deny.toml --locked check licenses
 
   gate:
     name: gate-audit
