@@ -268,8 +268,14 @@ jobs:
             echo "investigate before continuing — the train should not bump transitive deps" >&2
             exit 1
           fi
+          # Carry the VEX assessments to the new version. The guard above keeps
+          # every dependency they name unchanged; a dependency that moved
+          # since the last release fails here for a maintainer to reassess.
+          node .github/scripts/release-vex.mjs --from "${CURRENT}" --to "${NEW}" \
+            --summary "${RUNNER_TEMP}/vex-summary.md"
+          node .github/scripts/check-vex.mjs --release
           echo "--- diff ---"
-          git --no-pager diff --stat -- Cargo.toml Cargo.lock charts/runtime-operator/Chart.yaml
+          git --no-pager diff --stat -- Cargo.toml Cargo.lock charts/runtime-operator/Chart.yaml vex/wasmcloud.openvex.json
 
       - name: Create release branch and commit
         env:
@@ -279,7 +285,7 @@ jobs:
           set -euo pipefail
           echo "STAGE=create-branch" >> "${GITHUB_ENV}"
           git checkout -b "${BRANCH}"
-          git add Cargo.toml Cargo.lock charts/runtime-operator/Chart.yaml
+          git add Cargo.toml Cargo.lock charts/runtime-operator/Chart.yaml vex/wasmcloud.openvex.json
           if git diff --cached --quiet; then
             echo "no changes staged — version may already be ${NEW}" >&2
             exit 1
@@ -307,6 +313,10 @@ jobs:
             printf 'Automated release-train PR for **v%s**.\n\n' "${NEW}"
             printf '**Action required:** a maintainer needs to approve this PR. Once required checks pass and approval is recorded, auto-merge fires. After merge, `release-tag.yml` waits for canary builds on `main` to pass and then pushes the immutable `v%s` tag, which the existing tag-triggered workflows pick up.\n\n' "${NEW}"
             printf 'If CI fails: fix forward and push to this branch, or close this PR. The train does not skip — patch releases out-of-cycle can be triggered via `workflow_dispatch` on `release-train.yml`.\n'
+            if [[ -s "${RUNNER_TEMP}/vex-summary.md" ]]; then
+              printf '\n'
+              cat "${RUNNER_TEMP}/vex-summary.md"
+            fi
           } > "${BODY_FILE}"
           PR_URL=$(gh pr create \
             --base main \

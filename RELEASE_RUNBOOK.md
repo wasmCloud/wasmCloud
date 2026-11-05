@@ -33,7 +33,8 @@ Wed–Thu as a buffer for any same-week follow-up patch.
 2. The job opens a `release/vX.Y.Z` branch with a patch-bump (default). It edits the workspace
    `Cargo.toml`, refreshes `Cargo.lock` via `cargo update --workspace` (with a sanity check that
    only workspace member entries change), and bumps `appVersion` in
-   `charts/runtime-operator/Chart.yaml`.
+   `charts/runtime-operator/Chart.yaml`. It then moves the
+   [VEX assessments](vex/README.md) to the new version and lists them in the PR body.
 3. A PR labeled `release-train` is opened; the job enables **rebase auto-merge** (not squash —
    see [Why rebase merge](#why-rebase-merge)) and watches the PR's required checks. If checks
    fail, the job fails loudly with a stage-tagged Slack message to `#release-bot` so a human
@@ -112,8 +113,9 @@ release-train PRs. The train will:
   auto-merge fires (auto from there)
 
 Maintainers should treat release-train PRs as a normal review item: read the diff (only
-`Cargo.toml`, `Cargo.lock`, and `Chart.yaml` should change), confirm the version bump matches
-expectations, approve. If the PR sits unapproved past the 2h timeout, the train fails with a
+`Cargo.toml`, `Cargo.lock`, `Chart.yaml`, and `vex/wasmcloud.openvex.json` should change),
+confirm the version bump matches expectations, confirm each carried VEX statement still holds
+(see [Release SBOMs](#release-sboms)), approve. If the PR sits unapproved past the 2h timeout, the train fails with a
 Slack page; resolve and re-dispatch.
 
 ### Bumping minor or major
@@ -129,7 +131,8 @@ If `release-train.yml` is broken or the bot can't push, do by hand what the trai
 matrix binary build and is what `release-tag.yml` looks for to identify a release commit.
 
 1. Bump the workspace version in `Cargo.toml` to `X.Y.Z` and `appVersion` in
-   `charts/runtime-operator/Chart.yaml` to the same value. Run `cargo update --workspace`.
+   `charts/runtime-operator/Chart.yaml` to the same value. Run `cargo update --workspace`, then
+   `node .github/scripts/release-vex.mjs --from PREVIOUS --to X.Y.Z`.
 2. Commit with subject `release: vX.Y.Z`. Open a PR, get it reviewed, **rebase-merge**
    to `main` (rebase preserves the subject verbatim; squash-merge would append ` (#NNN)` and
    break `release-tag.yml`'s subject match).
@@ -242,10 +245,12 @@ verification. Keep consumer commands there.
 
 ### Release SBOMs
 
-Before a release, review the [VEX assessments](vex/README.md) against the release's dependency
-inventory, build features, and code paths. Add assessments for the exact new product versions;
-do not carry forward a `not_affected` conclusion without checking its evidence. Run
-`node .github/scripts/check-vex.mjs`. `release-tag.yml` checks and stages
+The release train moves each [VEX assessment](vex/README.md) to the new version with
+`.github/scripts/release-vex.mjs`. It carries a statement only while `Cargo.lock` still has every
+dependency version the statement names, and fails the train otherwise. It cannot tell whether
+the code paths or build features behind a `not_affected` conclusion changed, so approving the
+release PR confirms each statement listed in its body still holds. Between releases,
+`check-vex.mjs` warns on any PR that moves an assessed dependency; reassess it then. `release-tag.yml` checks and stages
 [`vex/wasmcloud.openvex.json`](vex/wasmcloud.openvex.json) before image promotion, attests it with
 `actions/attest`, and attaches it and `wasmcloud.openvex.sigstore.json` to every GitHub Release
 alongside the SBOMs. Release tags and assets retain past assessments.

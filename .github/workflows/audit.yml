@@ -72,6 +72,7 @@ jobs:
               - 'vex/**'
               - '.github/scripts/check-vex.mjs'
               - '.github/scripts/check-vex.test.mjs'
+              - '.github/scripts/lib/vex.mjs'
             audit_config:
               - '.cargo/audit.toml'
             dependencies:
