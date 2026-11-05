@@ -313,7 +313,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "STAGE=check-vex" >> "${GITHUB_ENV}"
-          node .github/scripts/check-vex.mjs
+          node .github/scripts/check-vex.mjs --release
           mkdir -p ./artifacts/vex
           cp vex/wasmcloud.openvex.json ./artifacts/vex/wasmcloud.openvex.json
 

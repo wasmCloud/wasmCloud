@@ -12,6 +12,8 @@ on:
       - '.github/actions/**'
       - '.github/scripts/release-*'
       - '.github/scripts/lib/release-fakes.mjs'
+      - '.github/scripts/lib/vex.mjs'
+      - '.github/scripts/check-vex.mjs'
       - 'xtask/**'
       - 'fuzz/**'
       - 'Cargo.toml'
@@ -41,6 +43,8 @@ jobs:
               - '.github/actions/**'
               - '.github/scripts/release-*'
               - '.github/scripts/lib/release-fakes.mjs'
+              - '.github/scripts/lib/vex.mjs'
+              - '.github/scripts/check-vex.mjs'
               - 'xtask/**'
               - 'fuzz/**'
               - 'Cargo.toml'
@@ -86,7 +90,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Test release promotion and SBOM checks
+      - name: Test release promotion, SBOM and VEX checks
         run: |
           node --test .github/scripts/release-*.test.mjs
           cargo test --locked -p xtask fuzz

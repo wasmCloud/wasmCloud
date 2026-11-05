@@ -2,10 +2,10 @@
 // Requires a current release assessment for every Cargo audit ignore.
 
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { describeDrift, lockDrift, readArtifacts, readCargo, readVex, releaseProducts } from './lib/vex.mjs';
 
 const JUSTIFICATIONS = new Set([
   'vulnerable_code_not_in_execute_path',
@@ -23,11 +23,7 @@ export function checkVex(doc, ignored, version, artifacts) {
   assert.ok(Number.isFinite(Date.parse(doc.timestamp)), 'invalid timestamp');
   assert.ok(Number.isInteger(doc.version) && doc.version >= 1, 'invalid document version');
   assert.ok(Array.isArray(doc.statements) && doc.statements.length, 'no VEX statements');
-  const requiredProducts = [
-    ...artifacts.map((name) => `pkg:github/wasmcloud/wasmcloud@v${version}?file_name=${name}`),
-    ...['', '-all-features'].map((suffix) =>
-      `pkg:oci/wash@${version}${suffix}?repository_url=ghcr.io%2Fwasmcloud%2Fwash`),
-  ];
+  const requiredProducts = releaseProducts(version, artifacts);
   const covered = new Set();
   const seen = new Set();
   for (const statement of doc.statements) {
@@ -56,27 +52,28 @@ export function checkVex(doc, ignored, version, artifacts) {
   }
 }
 
-function main() {
-  // Use the runner's TOML parser for Cargo's quoting, comments, and arrays.
-  const { ignored, version } = JSON.parse(execFileSync('python3', ['-c', `
-import json, pathlib, tomllib
-audit = tomllib.loads(pathlib.Path('.cargo/audit.toml').read_text())
-manifest = tomllib.loads(pathlib.Path('Cargo.toml').read_text())
-print(json.dumps({'ignored': audit.get('advisories', {}).get('ignore', []),
-                  'version': manifest['workspace']['package']['version']}))
-  `], { encoding: 'utf8' }));
-  const workflow = readFileSync('.github/workflows/wash.yml', 'utf8');
-  const artifacts = [...new Set([...workflow.matchAll(/^\s+artifact: (wash-[\w-]+)\s*$/gm)].map((m) => m[1]))];
-  assert.ok(artifacts.length, 'no release binary targets found in wash.yml');
-  artifacts.push('wash-x86_64-pc-windows-msvc.zip');
-  const doc = JSON.parse(readFileSync('vex/wasmcloud.openvex.json', 'utf8'));
+// With `--release`, a dependency that moved since its assessment is an error.
+// Between releases it is a warning, since main still carries the last
+// release's version and products.
+function main(args) {
+  const release = args.includes('--release');
+  const { ignored, version, lock } = readCargo('.');
+  const artifacts = readArtifacts('.');
+  const doc = readVex('.');
   checkVex(doc, ignored, version, artifacts);
+  const drift = lockDrift(doc, version, artifacts, lock).map(describeDrift);
+  if (release) {
+    assert.ok(!drift.length, `reassess before releasing ${version}:\n${drift.join('\n')}`);
+  }
+  for (const line of drift) {
+    console.log(`::warning title=VEX assessment out of date::${line}; reassess it before the next release`);
+  }
   console.log(`VEX covers all ${ignored.length} Cargo audit ignores for release ${version}.`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    main();
+    main(process.argv.slice(2));
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
