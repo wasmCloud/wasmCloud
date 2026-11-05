@@ -5,7 +5,7 @@
 //!
 //! Bytes are emitted one per tick (via monotonic-clock `wait-for`) so a
 //! reader on the far side of the linker observes the stream arriving
-//! incrementally. That's what lets `integration_p3_streams` prove the
+//! incrementally. That's what lets `integration::p3_streams` prove the
 //! cross-component stream stays concurrent rather than being buffered at the
 //! linker boundary.
 

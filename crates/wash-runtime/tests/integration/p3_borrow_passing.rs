@@ -1,3 +1,9 @@
+#![cfg(all(
+    feature = "wasi-blobstore",
+    feature = "wasi-config",
+    feature = "wasi-keyvalue",
+    feature = "wasi-logging"
+))]
 //! Lends a guest resource (`borrow<token>`) across the P3 dynamic linker (`call_concurrent`)
 //! through two sibling components. One HTTP request drives a single `token`
 //! through every hop:

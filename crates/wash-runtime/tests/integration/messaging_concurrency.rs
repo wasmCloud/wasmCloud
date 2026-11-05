@@ -99,9 +99,7 @@ async fn start_msg_sleeper(
     max_concurrency: i32,
     max_invocations: i32,
 ) -> Result<Harness<impl HostApi>> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
     let engine = Engine::builder().build()?;
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();

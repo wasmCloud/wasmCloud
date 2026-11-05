@@ -1,3 +1,4 @@
+#![cfg(all(feature = "wasi-config", feature = "wasi-logging"))]
 //! Integration tests for same-host local routing.
 //!
 //! Two workloads run on one host:
@@ -188,9 +189,7 @@ async fn call_host(
 /// still egresses (and is refused by the stub handler).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_local_routing_declared_route() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (addr, host) = start_host(true).await?;
 
@@ -542,9 +541,7 @@ async fn test_local_dispatch_draws_on_the_outbound_http_quota() -> Result<()> {
 /// in-memory, an undeclared authority still egresses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_local_routing_declared_route_p3() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (addr, host) = start_host(true).await?;
 

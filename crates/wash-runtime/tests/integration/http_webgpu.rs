@@ -34,9 +34,7 @@ const HTTP_WEBGPU_WASM: &[u8] = include_bytes!("../wasm/http_webgpu.wasm");
 
 #[tokio::test]
 async fn test_http_webgpu_integration() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     println!("Starting HTTP + Webgpu integration test");
 

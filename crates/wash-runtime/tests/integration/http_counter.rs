@@ -36,9 +36,7 @@ fn http_counter_request(
 
 #[tokio::test]
 async fn test_http_counter_integration() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (addr, host) = start_host_with_dev_router("127.0.0.1:0").await?;
 

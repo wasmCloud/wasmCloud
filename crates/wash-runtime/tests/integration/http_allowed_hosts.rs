@@ -160,9 +160,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
 /// expand into a subdomain wildcard.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_allowed_hosts_blocks_denied_host() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (addr, host) = start_host("127.0.0.1:0").await?;
 

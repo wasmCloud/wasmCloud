@@ -151,19 +151,13 @@ async fn grow(
     serde_json::from_str(&body).with_context(|| format!("unparseable grow reply: {body}"))
 }
 
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
-}
-
 /// The upgrade-safety guarantee, end to end: a host that gains a budget it
 /// never asked for must serve exactly what it served before. Every guest gets
 /// everything it asks for, past the budget included — and the host still
 /// counts it, which is the number no host has today.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn count_mode_allows_growth_past_the_budget_and_still_accounts_for_it() -> Result<()> {
-    init_tracing();
+    crate::common::init_tracing();
     let (addr, host, budget) = start_host(GuestMemoryMode::Count).await?;
     let client = reqwest::Client::new();
 
@@ -207,7 +201,7 @@ async fn count_mode_allows_growth_past_the_budget_and_still_accounts_for_it() ->
 /// returning -1, not by trapping.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn enforce_mode_refuses_the_growth_that_crosses_the_budget() -> Result<()> {
-    init_tracing();
+    crate::common::init_tracing();
     let (addr, host, budget) = start_host(GuestMemoryMode::Enforce).await?;
     let client = reqwest::Client::new();
 
@@ -259,7 +253,7 @@ async fn enforce_mode_refuses_the_growth_that_crosses_the_budget() -> Result<()>
 /// budget and the limiter installed on the stores the host builds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn growth_mode_leaves_initial_memory_uncharged_and_enforces_growth() -> Result<()> {
-    init_tracing();
+    crate::common::init_tracing();
     let (addr, host, budget) = start_host(GuestMemoryMode::Growth).await?;
     let client = reqwest::Client::new();
     assert_eq!(
@@ -325,7 +319,7 @@ async fn growth_mode_leaves_initial_memory_uncharged_and_enforces_growth() -> Re
 /// failure than the one it was built to prevent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stopped_workload_returns_its_memory_to_the_budget() -> Result<()> {
-    init_tracing();
+    crate::common::init_tracing();
     let (addr, host, budget) = start_host(GuestMemoryMode::Enforce).await?;
     let client = reqwest::Client::new();
 

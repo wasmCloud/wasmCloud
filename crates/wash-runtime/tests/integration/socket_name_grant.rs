@@ -1,3 +1,9 @@
+#![cfg(all(
+    feature = "wasi-blobstore",
+    feature = "wasi-config",
+    feature = "wasi-keyvalue",
+    feature = "wasi-logging"
+))]
 //! Guest-level tests for a raw socket permitted by an `allowed_hosts` entry
 //! that names a host.
 //!

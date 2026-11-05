@@ -156,10 +156,7 @@ impl TestHarnessBuilder {
     }
 
     async fn start(self) -> Result<TestHarness> {
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .try_init()
-            .ok();
+        crate::common::init_tracing();
 
         let (container, washlet_client, api_client) = nats_clients().await?;
 

@@ -91,6 +91,14 @@ use wash_runtime::{
 /// second redirect while the first is live, so captures take turns.
 pub static STDERR: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// Log through `RUST_LOG`. The first call in a process installs the
+/// subscriber and later ones keep it, so every test can call this.
+pub fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+}
+
 /// HTTP incoming-handler (0.2.2) with `host` config, plus optional
 /// comma-separated `host-aliases`. (example :  "admin,user,customer")
 pub fn http_incoming_handler_interface(host_header: &str, aliases: Option<&str>) -> WitInterface {

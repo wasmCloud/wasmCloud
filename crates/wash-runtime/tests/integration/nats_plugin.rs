@@ -60,10 +60,7 @@ async fn start_nats() -> Result<Harness> {
 }
 
 async fn start_nats_version(version: &str, with_kv: bool) -> Result<Harness> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init()
-        .ok();
+    crate::common::init_tracing();
 
     let container = GenericImage::new("nats", version)
         .with_exposed_port(4222.tcp())

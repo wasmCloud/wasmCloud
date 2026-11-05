@@ -157,9 +157,7 @@ impl HostPlugin for CustomLogging {
 
 #[tokio::test]
 async fn test_inter_component_call() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     // Create engine
     let engine = Engine::builder().build()?;

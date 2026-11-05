@@ -246,9 +246,7 @@ async fn drive_requests(
 /// handful of connections, not open one per request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pooled_egress_reuses_connections_across_guest_requests() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (upstream, stats) = spawn_counting_server().await?;
     let (ingress, host) = start_host().await?;
@@ -283,9 +281,7 @@ async fn pooled_egress_reuses_connections_across_guest_requests() -> Result<()> 
 /// must not inherit them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_workload_drops_its_pooled_connections() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (upstream, stats) = spawn_counting_server().await?;
     let (ingress, host) = start_host().await?;
@@ -394,9 +390,7 @@ async fn drive_concurrent_requests(
 /// exercise the instances themselves.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_instances_reuse_connections_across_bursts() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (upstream, stats) = spawn_counting_server().await?;
     let (ingress, host) = start_host().await?;

@@ -80,6 +80,10 @@ async fn test_cron_service_integration() -> Result<()> {
     // Wait for service to execute multiple times (at least 3 times with 1 second intervals)
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
+    // Stopped before the capture ends, or the service keeps printing into the
+    // shared process's stderr for as long as the test binary runs.
+    host.stop().await.context("Failed to stop host")?;
+
     // Get captured stderr
     let mut output = String::new();
     stderr_capture

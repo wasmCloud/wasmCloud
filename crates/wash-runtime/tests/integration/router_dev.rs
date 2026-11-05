@@ -74,9 +74,7 @@ fn is_unrouted(status: reqwest::StatusCode) -> bool {
 /// stopping B clears routing (with no fallback to A).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_dev_router_last_workload_wins() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (addr, host) = start_host_with_dev_router("127.0.0.1:0").await?;
     let client = reqwest::Client::new();

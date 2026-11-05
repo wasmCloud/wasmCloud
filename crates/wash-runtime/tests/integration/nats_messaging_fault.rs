@@ -161,10 +161,7 @@ struct TestHarness {
 }
 
 async fn setup(latency: Duration) -> Result<TestHarness> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init()
-        .ok();
+    crate::common::init_tracing();
 
     let container = GenericImage::new("nats", "2.12.8-alpine")
         .with_exposed_port(4222.tcp())

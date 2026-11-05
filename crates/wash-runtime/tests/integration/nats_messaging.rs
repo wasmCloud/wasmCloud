@@ -50,10 +50,7 @@ async fn setup_with_limits(
     workloads: Vec<WorkloadStartRequest>,
     limits: MessagingLimits,
 ) -> Result<TestHarness> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init()
-        .ok();
+    crate::common::init_tracing();
 
     // -m 8222 enables NATS' HTTP monitoring endpoint. The monitoring view
     // is the authoritative answer to "is this subscription registered with

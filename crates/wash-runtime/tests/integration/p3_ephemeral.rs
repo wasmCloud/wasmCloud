@@ -43,9 +43,7 @@ const EPHEMERAL_CALLEE_P3_WASM: &[u8] = include_bytes!("../wasm/ephemeral_callee
 
 #[tokio::test]
 async fn test_p3_plain_value_async_call_uses_ephemeral_store() -> Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    crate::common::init_tracing();
 
     let (addr, host) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
 
