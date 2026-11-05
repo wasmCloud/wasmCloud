@@ -73,7 +73,7 @@ func NewEmbeddedOperator(
 	ctx context.Context,
 	mgr manager.Manager,
 	cfg EmbeddedOperatorConfig,
-) (*EmbeddedOperator, error) {
+) (_ *EmbeddedOperator, err error) {
 	// Validate before any side effects (NATS connect, controller setup).
 	// Every Host CRD is created in cfg.Namespace, and the operator's
 	// namespaced Role for Host CRUD binds there.
@@ -94,6 +94,12 @@ func NewEmbeddedOperator(
 	if err != nil {
 		return nil, err
 	}
+	// Nothing owns the connection until the operator is returned.
+	defer func() {
+		if err != nil {
+			nc.Close()
+		}
+	}()
 	bus := wasmbus.NewNatsBus(nc)
 	retiredHosts := &runtime_controllers.RetiredHosts{}
 
