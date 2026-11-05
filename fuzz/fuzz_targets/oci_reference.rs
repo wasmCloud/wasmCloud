@@ -2,11 +2,21 @@
 
 use oci_client::Reference;
 use wash_runtime::component_source::{ComponentSource, LoadedComponent};
+use wash_runtime::oci::parse_reference;
 use wash_runtime_fuzz::fuzz_target;
 
 fuzz_target!(|data: &str| {
     let (reference, expected) = data.split_once('\n').unwrap_or((data, data));
     let _ = ComponentSource::from_reference(reference);
+    // Pull and push validate with `parse_reference`; a reference it accepts
+    // must stay accepted, and unchanged, once normalized.
+    if let Ok(validated) = parse_reference(reference) {
+        let normalized = validated.to_string();
+        if let Ok(reparsed) = Reference::try_from(normalized.as_str()) {
+            assert_eq!(validated, reparsed);
+            assert!(parse_reference(&normalized).is_ok());
+        }
+    }
     if let Ok(parsed) = Reference::try_from(reference) {
         // Normalization can produce a spelling the OCI parser rejects.
         if let Ok(reparsed) = Reference::try_from(parsed.to_string().as_str()) {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import test from 'node:test';
 
-import { dispatch, federatedToken, repository, repositoryId } from './release-fuzz.mjs';
+import { dispatch, repository, repositoryId, requestTimeoutMs } from './release-fuzz.mjs';
 
 const sha = 'a'.repeat(40);
 const requestId = '123.2.12345678-1234-1234-1234-123456789abc';
@@ -28,7 +28,7 @@ function fixture() {
       default: assert.fail(`Unexpected API request: ${url}`);
     }
   };
-  return { state, options: { sha, requestId, token: async () => 'app-token', fetcher } };
+  return { state, options: { sha, requestId, token: 'app-token', fetcher } };
 }
 
 test('dispatches the exact merged commit and returns without polling or reading results', async () => {
@@ -55,8 +55,8 @@ for (const [name, mutate, message] of [
   });
 }
 
-test('rejects unresolved source refs and invalid request IDs before requesting a token', async () => {
-  for (const invalid of [{ sha: 'main' }, { sha: sha.slice(1) }, { requestId: 'old' }]) {
+test('rejects unresolved source refs, invalid request IDs and missing tokens before any request', async () => {
+  for (const invalid of [{ sha: 'main' }, { sha: sha.slice(1) }, { requestId: 'old' }, { token: '' }, { token: undefined }]) {
     const { state, options } = fixture();
     await assert.rejects(dispatch({ ...options, ...invalid }));
     assert.equal(state.requests.length, 0);
@@ -73,34 +73,19 @@ test('keeps private API failure bodies out of public errors', async () => {
   });
 });
 
-test('exchanges one OIDC token and revokes the app token after dispatch', async () => {
-  const requests = [];
-  const token = federatedToken({ ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.example/token?job=1',
-    ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'request-token' }, async (url, options) => {
-    const parsed = new URL(url);
-    requests.push({ url: parsed, options });
-    if (parsed.hostname === 'oidc.example') {
-      assert.equal(parsed.searchParams.get('audience'), 'octo-sts.dev');
-      return Response.json({ value: 'oidc-token' });
-    }
-    if (parsed.hostname === 'octo-sts.dev') {
-      assert.equal(parsed.searchParams.get('scope'), repository);
-      assert.equal(parsed.searchParams.get('identity'), 'release-fuzz');
-      assert.equal(options.headers.Authorization, 'Bearer oidc-token');
-      return Response.json({ token: 'app-token' });
-    }
-    assert.equal(options.method, 'DELETE');
-    assert.equal(options.headers.Authorization, 'Bearer app-token');
-    return new Response(null, { status: 204 });
-  });
-  assert.equal(await token(), 'app-token');
-  assert.equal(await token(), 'app-token');
-  await token.revoke();
-  await token.revoke();
-  assert.equal(requests.length, 3);
-});
-
 const train = readFileSync(new URL('../workflows/release-train.yml', import.meta.url), 'utf8');
+
+test('mints the private token with octo-sts and fits every request in the step timeout', () => {
+  const step = train.match(/      - name: Get a private fuzzing token from octo-sts\n([\s\S]*?)(?=\n      - name:)/)[1];
+  assert.match(step, /uses: octo-sts\/action@[0-9a-f]{40} /);
+  assert.match(step, new RegExp(`scope: ${repository}\\n`));
+  assert.match(step, /identity: release-fuzz\n/);
+  assert.match(step, /continue-on-error: true/);
+  const dispatchStep = train.match(/      - name: Request private parser fuzzing\n([\s\S]*?)(?=\n      - name:)/)[1];
+  assert.match(dispatchStep, /FUZZ_TOKEN: \$\{\{ steps\.fuzz-token\.outputs\.token \}\}/);
+  const minutes = Number(dispatchStep.match(/timeout-minutes: (\d+)/)[1]);
+  assert.ok(3 * requestTimeoutMs < minutes * 60_000);
+});
 const mergeStep = train.match(/      - name: Wait for PR auto-merge to complete\n([\s\S]*?)(?=\n      - name:)/)[1];
 const mergeScript = mergeStep.split('        run: |\n')[1].split('\n').map((line) => line.slice(10)).join('\n');
 

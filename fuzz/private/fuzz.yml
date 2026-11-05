@@ -98,17 +98,12 @@ jobs:
             '',
           ].join('\n'));
           JS_POLICY
-  go:
-    name: go (${{ matrix.target }})
+
+  # Stages the Go harnesses once so each target only downloads them.
+  stage-go:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 20
     needs: resolve
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.resolve.outputs.go) }}
-    defaults:
-      run:
-        working-directory: source/runtime-operator
     steps:
       - name: Checkout harnesses
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -126,7 +121,45 @@ jobs:
           persist-credentials: false
       - name: Stage Go harnesses
         working-directory: harness
-        run: cargo run --locked -p xtask -- fuzz prepare --source ../source --language go
+        run: |
+          cargo run --locked -p xtask -- fuzz prepare --source ../source --language go
+          find runtime-operator -name '*_fuzz_test.go' -print0 |
+            tar -C ../source --null -T - -cf "$RUNNER_TEMP/go-harnesses.tar"
+      - name: Upload Go harnesses
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: go-harnesses
+          path: ${{ runner.temp }}/go-harnesses.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  go:
+    name: go (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [resolve, stage-go]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.go) }}
+    defaults:
+      run:
+        working-directory: source/runtime-operator
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: wasmCloud/wasmCloud
+          ref: ${{ needs.resolve.outputs.sha }}
+          path: source
+          persist-credentials: false
+      - name: Download Go harnesses
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: go-harnesses
+          path: ${{ runner.temp }}
+      - name: Stage Go harnesses
+        working-directory: source
+        run: tar -xf "$RUNNER_TEMP/go-harnesses.tar"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: source/runtime-operator/go.mod
@@ -164,17 +197,17 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  rust:
-    name: rust (${{ matrix.target }})
+  # Builds every Rust target once; the matrix below only fuzzes.
+  build-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     needs: resolve
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.resolve.outputs.rust) }}
     env:
       CARGO_INCREMENTAL: '0'
       CARGO_BUILD_JOBS: '2'
+      # A dated nightly keeps new compiler warnings from failing the
+      # workspace's `warnings = 'deny'` lint between campaigns.
+      RUSTUP_TOOLCHAIN: nightly-2026-11-01
     defaults:
       run:
         working-directory: source
@@ -196,10 +229,10 @@ jobs:
       # The action comes from the pinned public harness checkout.
       - uses: ./harness/.github/actions/free-disk-space # zizmor: ignore[self-repository]
       - name: Install nightly
-        run: rustup toolchain install nightly --profile minimal --component rust-src
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rust-src
       - name: Stage Rust harnesses
         working-directory: harness
-        run: cargo +nightly run --locked -p xtask -- fuzz prepare --source ../source --language rust
+        run: cargo run --locked -p xtask -- fuzz prepare --source ../source --language rust
       - name: Locate LLVM libFuzzer
         run: |
           sudo apt-get update
@@ -207,57 +240,98 @@ jobs:
           archive=$(clang --print-file-name=libclang_rt.fuzzer-x86_64.a)
           test -f "$archive"
           echo "LLVM_LIBFUZZER_PATH=$archive" >> "$GITHUB_ENV"
+      # One entry per toolchain, lockfile and harness revision. A per-run key
+      # would save a new multi-GB entry each run and evict the corpus caches.
       - name: Cache Rust builds
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: source/fuzz/target
-          key: fuzz-build-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('source/Cargo.lock', 'harness/fuzz/**') }}-${{ github.run_id }}
-          restore-keys: fuzz-build-${{ runner.os }}-${{ matrix.target }}-
+          key: fuzz-build-${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('source/Cargo.lock', 'harness/fuzz/**') }}
+          restore-keys: fuzz-build-${{ runner.os }}-${{ env.RUSTUP_TOOLCHAIN }}-
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           tool: cargo-fuzz@0.13.2
+      - name: Build with AddressSanitizer
+        run: |
+          cargo metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
+          cargo run --manifest-path ../harness/xtask/Cargo.toml --locked -- fuzz verify-lock --source .
+          cargo fetch --manifest-path fuzz/Cargo.toml --locked
+          cargo fuzz build --target x86_64-unknown-linux-gnu --sanitizer address --codegen-units 16
+      - name: Bundle binaries and seeds
+        env:
+          TARGETS: ${{ join(fromJSON(needs.resolve.outputs.rust).target, ' ') }}
+        run: |
+          bundle="$RUNNER_TEMP/rust-fuzz"
+          mkdir -p "$bundle/bin"
+          for target in $TARGETS; do
+            cp "fuzz/target/x86_64-unknown-linux-gnu/release/$target" "$bundle/bin/"
+          done
+          cp -R fuzz/seeds "$bundle/seeds"
+      - name: Upload binaries and seeds
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-fuzz
+          path: ${{ runner.temp }}/rust-fuzz
+          if-no-files-found: error
+          retention-days: 1
+
+  rust:
+    name: rust (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [resolve, build-rust]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.rust) }}
+    steps:
+      - name: Download binaries and seeds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rust-fuzz
+          path: rust-fuzz
       - name: Restore corpus
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: source/fuzz/corpus/${{ matrix.target }}
+          path: corpus/${{ matrix.target }}
           key: fuzz-rust-${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: fuzz-rust-${{ runner.os }}-${{ matrix.target }}-
       - name: Seed corpus
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          mkdir -p "fuzz/corpus/$TARGET"
-          cp "fuzz/seeds/$TARGET/"* "fuzz/corpus/$TARGET/"
+          mkdir -p "corpus/$TARGET"
+          cp "rust-fuzz/seeds/$TARGET/"* "corpus/$TARGET/"
+      # Runs the binary with the options `cargo fuzz run` would pass.
       - name: Fuzz with AddressSanitizer
         env:
           TARGET: ${{ matrix.target }}
           FUZZ_SECONDS: ${{ needs.resolve.outputs.seconds }}
         run: |
-          cargo +nightly metadata --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
-          cargo +nightly run --manifest-path ../harness/xtask/Cargo.toml --locked -- fuzz verify-lock --source .
-          cargo +nightly fetch --manifest-path fuzz/Cargo.toml --locked
-          cargo +nightly fuzz run "$TARGET" --target x86_64-unknown-linux-gnu --sanitizer address --codegen-units 16 -- \
-            -max_total_time="$FUZZ_SECONDS" -timeout=30 -max_len=65536 -rss_limit_mb=4096
+          chmod +x "rust-fuzz/bin/$TARGET"
+          mkdir -p "artifacts/$TARGET"
+          "rust-fuzz/bin/$TARGET" -artifact_prefix="artifacts/$TARGET/" \
+            -max_total_time="$FUZZ_SECONDS" -timeout=30 -max_len=65536 -rss_limit_mb=4096 \
+            "corpus/$TARGET"
       - name: Save corpus
         if: ${{ !cancelled() }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: source/fuzz/corpus/${{ matrix.target }}
+          path: corpus/${{ matrix.target }}
           key: fuzz-rust-${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Upload failing inputs
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-rust-${{ matrix.target }}-${{ github.run_attempt }}
-          path: source/fuzz/artifacts/${{ matrix.target }}/
+          path: artifacts/${{ matrix.target }}/
           if-no-files-found: ignore
           retention-days: 30
 
   result:
-    needs: [resolve, go, rust]
+    needs: [resolve, stage-go, go, build-rust, rust]
     if: always() && needs.resolve.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5

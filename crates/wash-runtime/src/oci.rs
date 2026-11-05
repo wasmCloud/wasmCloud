@@ -459,7 +459,11 @@ pub async fn pull_component(
     Ok((bytes.to_vec(), digest))
 }
 
-fn parse_reference(reference: &str) -> Result<Reference> {
+/// Parse an OCI reference the way [`pull_component`] and [`push_component`] do.
+///
+/// Rejects references whose repository name has uppercase letters.
+/// Registry hosts and tags keep their case.
+pub fn parse_reference(reference: &str) -> Result<Reference> {
     let parsed = Reference::try_from(reference)
         .with_context(|| format!("invalid OCI reference: {reference}"))?;
     // Repository names are lowercase; registry hosts and tags may contain uppercase.
