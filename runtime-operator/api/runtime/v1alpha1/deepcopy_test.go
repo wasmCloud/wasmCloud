@@ -264,8 +264,8 @@ func TestDeepCopyKeepsNilAndEmptyApart(t *testing.T) {
 			}
 
 			for name, original := range map[string]reflect.Value{
-				"zero":  reflect.New(typ),
-				"empty": emptied(typ),
+				"zero":    reflect.New(typ),
+				"emptied": emptied(typ),
 			} {
 				copied := deepCopy(original)
 				if !reflect.DeepEqual(original.Interface(), copied.Interface()) {
