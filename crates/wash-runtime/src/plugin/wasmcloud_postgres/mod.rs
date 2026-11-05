@@ -281,6 +281,33 @@ fn check_egress(
     Ok(())
 }
 
+/// What each host [`check_egress`] accepted resolves to now. A host with a
+/// `hostaddr` is never looked up, so only the others are resolved.
+#[cfg(feature = "wasm_component_model_implements")]
+async fn check_resolved_egress(
+    config: &tokio_postgres::Config,
+    policy: &crate::plugin::PluginEgressPolicy,
+) -> anyhow::Result<()> {
+    let hostaddrs = config.get_hostaddrs();
+    let ports = config.get_ports();
+    let lookups = config
+        .get_hosts()
+        .iter()
+        .enumerate()
+        .filter_map(|(i, host)| match (hostaddrs.get(i), host) {
+            (None, tokio_postgres::config::Host::Tcp(host)) => {
+                let port = ports
+                    .get(i)
+                    .or_else(|| ports.first())
+                    .copied()
+                    .unwrap_or(5432);
+                Some(policy.check_resolved(host, port, crate::host::declared_port::Protocol::Tcp))
+            }
+            _ => None,
+        });
+    futures::future::try_join_all(lookups).await.map(drop)
+}
+
 /// The one database an unnamed import's resolved config selects. A workload
 /// that leaves `database` unset under `deny` takes the operator's whole
 /// ceiling, which names one database only when the operator listed one.

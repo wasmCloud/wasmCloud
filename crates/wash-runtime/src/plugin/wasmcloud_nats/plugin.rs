@@ -136,13 +136,22 @@ impl WasmcloudNats {
     }
 
     fn check_egress(&self, servers: &[String]) -> anyhow::Result<()> {
+        match self.egress_policy.load_full() {
+            Some(policy) => servers.iter().try_for_each(|s| policy.check_nats_server(s)),
+            None => Ok(()),
+        }
+    }
+
+    /// [`Self::check_egress`], then what each server resolves to now, both
+    /// against one load of the policy.
+    async fn check_egress_resolved(&self, servers: &[String]) -> anyhow::Result<()> {
         let Some(policy) = self.egress_policy.load_full() else {
             return Ok(());
         };
-        for server in servers {
-            policy.check_nats_server(server)?;
-        }
-        Ok(())
+        servers
+            .iter()
+            .try_for_each(|s| policy.check_nats_server(s))?;
+        policy.check_nats_servers_resolved(servers).await
     }
 
     /// Opens one connection per binding name.
@@ -195,7 +204,7 @@ impl WasmcloudNats {
                     describe_binding(binding)
                 )
             })?;
-            let checked = self.check_egress(&config.servers);
+            let checked = self.check_egress_resolved(&config.servers).await;
             match super::keys::get(&merged, "servers") {
                 Some(servers) => servers.guard("servers", checked)?,
                 None => checked?,

@@ -22,6 +22,9 @@ const SCHEME_ALIASES: &[&[&str]] = &[
     &["rediss", "valkeys"],
 ];
 
+/// How long [`PluginEgressPolicy::check_resolved`] waits on a lookup.
+const RESOLVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A TLS scheme and the plaintext scheme it upgrades. An entry granting the
 /// plaintext scheme also grants TLS to the same endpoint; never the reverse.
 const TLS_UPGRADES: &[(&str, &str)] = &[("rediss", "redis"), ("tls", "nats")];
@@ -79,9 +82,9 @@ fn redact_userinfo(server: &str) -> String {
 /// A native plugin's declared network ceiling.
 ///
 /// Native plugins do not pass through WASI socket hooks. Each implementation
-/// must check this policy before its networking library connects. This checks
-/// the declared endpoint; a native client's own DNS and socket operations
-/// cannot be intercepted for resolved-address filtering.
+/// must check this policy before its networking library connects: the endpoint
+/// as written, then what its name resolves to ([`Self::check_resolved`]). A
+/// native client's own later DNS lookups and sockets cannot be intercepted.
 ///
 /// The rules are the ones [`SocketPolicy`] applies to a workload's sockets, so
 /// the same declaration means the same thing on both sides: the loopback and
@@ -187,44 +190,16 @@ impl PluginEgressPolicy {
             addr.is_loopback() || addr.is_unspecified()
         }) || host.trim_end_matches('.').eq_ignore_ascii_case("localhost");
         if loopback {
-            if !self.host_loopback_enabled {
-                bail!(
-                    "native plugin endpoint {target:?} reaches host loopback, but host-loopback \
-                     access is disabled"
-                );
-            }
-            let addr =
-                core::net::SocketAddr::new(core::net::IpAddr::V4([127, 0, 0, 1].into()), port);
-            if !check_allowed_loopback(&self.allowed_host_loopback_ports, addr, protocol) {
-                bail!(
-                    "native plugin endpoint {target:?} reaches host loopback port {port}/{protocol}, \
-                     which allowedHostLoopbackPorts does not permit"
-                );
-            }
-            if let Some(table) = &self.host_owned_ports {
-                let ipv4 = core::net::SocketAddr::new(core::net::Ipv4Addr::LOCALHOST.into(), port);
-                let ipv6 = core::net::SocketAddr::new(core::net::Ipv6Addr::LOCALHOST.into(), port);
-                let host_owned = match literal_ip.map(|ip| ip.to_canonical()) {
-                    Some(core::net::IpAddr::V4(_)) => table.is_published(protocol, ipv4),
-                    Some(core::net::IpAddr::V6(_)) => table.is_published(protocol, ipv6),
-                    None => {
-                        table.is_published(protocol, ipv4) || table.is_published(protocol, ipv6)
-                    }
-                };
-                if host_owned {
-                    bail!(
-                        "native plugin endpoint {target:?} reaches host-owned port {port}/{protocol}"
-                    );
-                }
-            }
-            return Ok(());
+            return match self.loopback_refusal(target, literal_ip, port, protocol) {
+                Some((_, message)) => Err(anyhow!(message)),
+                None => Ok(()),
+            };
         }
 
         // An address carries no name, so it answers to `permits_addr` — the
         // matcher `SocketPolicy` uses — and never to a suffix wildcard, which
-        // describes names only. A name is matched as a name, and cannot be
-        // range-checked here at all: the native client resolves it itself,
-        // outside anything this policy sees.
+        // describes names only. A name is matched as a name here; what it
+        // resolves to is judged by `check_resolved`.
         let admitting = admitting_schemes(url.scheme());
         if let Some(ip) = literal_ip {
             let addr = core::net::SocketAddr::new(ip, port);
@@ -290,6 +265,53 @@ impl PluginEgressPolicy {
         Ok(())
     }
 
+    /// Why an endpoint on this machine's loopback, by literal, by `localhost`,
+    /// or by whatever a name resolved to, is refused, if it is: the host
+    /// switch, a loopback port grant, and never a port the host owns.
+    fn loopback_refusal(
+        &self,
+        target: &str,
+        literal_ip: Option<core::net::IpAddr>,
+        port: u16,
+        protocol: Protocol,
+    ) -> Option<(DenyReason, String)> {
+        if !self.host_loopback_enabled {
+            return Some((
+                DenyReason::HostLoopbackNotPermitted,
+                format!(
+                    "native plugin endpoint {target:?} reaches host loopback, but host-loopback \
+                     access is disabled"
+                ),
+            ));
+        }
+        let addr = core::net::SocketAddr::new(core::net::IpAddr::V4([127, 0, 0, 1].into()), port);
+        if !check_allowed_loopback(&self.allowed_host_loopback_ports, addr, protocol) {
+            return Some((
+                DenyReason::HostLoopbackNotPermitted,
+                format!(
+                    "native plugin endpoint {target:?} reaches host loopback port \
+                     {port}/{protocol}, which allowedHostLoopbackPorts does not permit"
+                ),
+            ));
+        }
+        let table = self.host_owned_ports.as_ref()?;
+        let ipv4 = core::net::SocketAddr::new(core::net::Ipv4Addr::LOCALHOST.into(), port);
+        let ipv6 = core::net::SocketAddr::new(core::net::Ipv6Addr::LOCALHOST.into(), port);
+        let host_owned = match literal_ip.map(|ip| ip.to_canonical()) {
+            Some(core::net::IpAddr::V4(_)) => table.is_published(protocol, ipv4),
+            Some(core::net::IpAddr::V6(_)) => table.is_published(protocol, ipv6),
+            None => table.is_published(protocol, ipv4) || table.is_published(protocol, ipv6),
+        };
+        host_owned.then(|| {
+            (
+                DenyReason::HostOwnedPort,
+                format!(
+                    "native plugin endpoint {target:?} reaches host-owned port {port}/{protocol}"
+                ),
+            )
+        })
+    }
+
     /// Checks one NATS server address as `async_nats` reads it: a schemeless
     /// address is `nats://`, and a missing port is 4222.
     ///
@@ -328,6 +350,110 @@ impl PluginEgressPolicy {
             }
         };
         self.check_url(&target, Protocol::Tcp, port)
+    }
+
+    /// Checks every address `host` resolves to now, as a workload's connect
+    /// is checked: a name `allowedHosts` permitted may not resolve into
+    /// loopback without the loopback grants, nor into a denied range. The
+    /// client resolves again itself, so a name that does not resolve in time
+    /// here is left to it, as a later reconnect is.
+    pub async fn check_resolved(
+        &self,
+        host: &str,
+        port: u16,
+        protocol: Protocol,
+    ) -> anyhow::Result<()> {
+        let bare = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(host);
+        if bare.parse::<core::net::IpAddr>().is_ok() {
+            return Ok(());
+        }
+        match tokio::time::timeout(RESOLVE_TIMEOUT, tokio::net::lookup_host((bare, port))).await {
+            Ok(Ok(addrs)) => self.check_resolved_addrs(host, port, protocol, addrs),
+            Ok(Err(e)) => {
+                tracing::debug!(host, err = %e, "native plugin endpoint did not resolve; leaving it to the client");
+                Ok(())
+            }
+            Err(_) => {
+                tracing::debug!(
+                    host,
+                    "native plugin endpoint lookup timed out; leaving it to the client"
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// [`Self::check_resolved`] for the addresses a lookup returned. Every
+    /// refusal answers to [`EgressMode`], since a name was admitted before
+    /// its addresses were judged at all.
+    fn check_resolved_addrs(
+        &self,
+        host: &str,
+        port: u16,
+        protocol: Protocol,
+        addrs: impl IntoIterator<Item = core::net::SocketAddr>,
+    ) -> anyhow::Result<()> {
+        for addr in addrs {
+            let ip = addr.ip().to_canonical();
+            let target = format!("{host}:{port} ({ip})");
+            if ip.is_loopback() || ip.is_unspecified() {
+                if let Some((reason, message)) =
+                    self.loopback_refusal(&target, Some(ip), port, protocol)
+                {
+                    self.gate(reason, message)?;
+                }
+            } else if !self.egress_addrs.permits(ip) {
+                self.gate(
+                    DenyReason::BlockedRange,
+                    format!(
+                        "native plugin endpoint {target:?} resolves into an address range the \
+                         egress policy denies"
+                    ),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// [`Self::check_resolved`] for a URL [`Self::check_url`] accepted.
+    pub async fn check_url_resolved(
+        &self,
+        target: &str,
+        protocol: Protocol,
+        default_port: u16,
+    ) -> anyhow::Result<()> {
+        let url = url::Url::parse(target).context("native plugin endpoint is not a valid URL")?;
+        let host = url
+            .host_str()
+            .context("native plugin endpoint has no host")?;
+        let port = url.port_or_known_default().unwrap_or(default_port);
+        self.check_resolved(host, port, protocol).await
+    }
+
+    /// [`Self::check_resolved`] for a NATS server [`Self::check_nats_server`]
+    /// accepted.
+    pub async fn check_nats_server_resolved(&self, server: &str) -> anyhow::Result<()> {
+        let addr = server
+            .parse::<async_nats::ServerAddr>()
+            .with_context(|| format!("NATS server {:?} is invalid", redact_userinfo(server)))?;
+        self.check_resolved(addr.host(), addr.port(), Protocol::Tcp)
+            .await
+            .context("NATS server is denied")
+    }
+
+    /// [`Self::check_nats_server_resolved`] for each of `servers`, looked up
+    /// together.
+    pub async fn check_nats_servers_resolved(&self, servers: &[String]) -> anyhow::Result<()> {
+        futures::future::try_join_all(
+            servers
+                .iter()
+                .map(|server| self.check_nats_server_resolved(server)),
+        )
+        .await
+        .map(drop)
     }
 
     /// An enforcing policy permitting exactly `hosts`, for tests of the
@@ -759,5 +885,145 @@ mod tests {
                 "{host:?} must be refused"
             );
         }
+    }
+
+    fn addrs(list: &[&str]) -> Vec<core::net::SocketAddr> {
+        list.iter().map(|addr| addr.parse().unwrap()).collect()
+    }
+
+    /// A permitted name resolving to loopback reaches this machine, so it is
+    /// held to the loopback grants as a loopback literal is.
+    #[test]
+    fn a_name_resolving_to_loopback_needs_the_loopback_grants() {
+        for loopback in [
+            "127.0.0.1:4222",
+            "[::1]:4222",
+            "0.0.0.0:4222",
+            "[::ffff:127.0.0.1]:4222",
+        ] {
+            assert!(
+                policy(false)
+                    .check_resolved_addrs("example.com", 4222, Protocol::Tcp, addrs(&[loopback]))
+                    .is_err(),
+                "{loopback} must need the host switch"
+            );
+            policy(true)
+                .check_resolved_addrs("example.com", 4222, Protocol::Tcp, addrs(&[loopback]))
+                .unwrap();
+        }
+        assert!(
+            policy(true)
+                .check_resolved_addrs(
+                    "example.com",
+                    6222,
+                    Protocol::Tcp,
+                    addrs(&["127.0.0.1:6222"])
+                )
+                .is_err()
+        );
+    }
+
+    /// A permitted name resolving into a denied range is refused, even when
+    /// only one of its addresses is: the client may dial any of them.
+    #[test]
+    fn a_name_resolving_into_a_denied_range_is_refused() {
+        let egress = PluginEgressPolicy::allowing(&["db.example.com:5432"]);
+        egress
+            .check_resolved_addrs(
+                "db.example.com",
+                5432,
+                Protocol::Tcp,
+                addrs(&["10.0.0.5:5432"]),
+            )
+            .unwrap();
+        for resolved in [
+            &["169.254.169.254:5432"][..],
+            &["10.0.0.5:5432", "169.254.169.254:5432"],
+            &["[fe80::1]:5432"],
+        ] {
+            assert!(
+                egress
+                    .check_resolved_addrs("db.example.com", 5432, Protocol::Tcp, addrs(resolved))
+                    .is_err(),
+                "{resolved:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn count_mode_counts_what_a_name_resolves_to() {
+        let meters = Arc::new(PolicyMeters::default());
+        let policy = PluginEgressPolicy::new(
+            Arc::from(["db.example.com:5432".parse().unwrap()]),
+            Arc::from([]),
+            Arc::from([]),
+            &SocketPolicy {
+                egress_mode: EgressMode::Count,
+                meters: Some(Arc::clone(&meters)),
+                ..Default::default()
+            },
+        );
+        policy
+            .check_resolved_addrs(
+                "db.example.com",
+                5432,
+                Protocol::Tcp,
+                addrs(&["169.254.169.254:5432", "127.0.0.1:5432"]),
+            )
+            .unwrap();
+        assert_eq!(meters.would_deny(DenyReason::BlockedRange), 1);
+        assert_eq!(meters.would_deny(DenyReason::HostLoopbackNotPermitted), 1);
+    }
+
+    /// A literal was judged as written, so only a name is looked up.
+    #[tokio::test]
+    async fn check_resolved_looks_up_names_only() {
+        let egress = policy(false);
+        egress
+            .check_resolved("10.0.0.5", 4222, Protocol::Tcp)
+            .await
+            .unwrap();
+        egress
+            .check_resolved("[::1]", 4222, Protocol::Tcp)
+            .await
+            .unwrap();
+        assert!(
+            egress
+                .check_resolved("localhost", 4222, Protocol::Tcp)
+                .await
+                .is_err()
+        );
+        assert!(
+            egress
+                .check_url_resolved("redis://localhost:4222", Protocol::Tcp, 6379)
+                .await
+                .is_err()
+        );
+        assert!(
+            egress
+                .check_nats_server_resolved("nats://localhost:4222")
+                .await
+                .is_err()
+        );
+        policy(true)
+            .check_nats_server_resolved("localhost:4222")
+            .await
+            .unwrap();
+        assert!(
+            egress
+                .check_nats_servers_resolved(&["nats://10.0.0.5".into(), "localhost".into()])
+                .await
+                .is_err()
+        );
+    }
+
+    /// The client looks the name up again itself, so one that does not
+    /// resolve here is left to it.
+    #[tokio::test]
+    async fn a_name_that_does_not_resolve_is_left_to_the_client() {
+        policy(false)
+            .check_resolved("no-such-host.invalid", 4222, Protocol::Tcp)
+            .await
+            .unwrap();
     }
 }

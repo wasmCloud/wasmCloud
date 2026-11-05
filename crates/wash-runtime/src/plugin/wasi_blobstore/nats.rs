@@ -163,12 +163,17 @@ impl NatsBlobstore {
         let config = NatsConfig::from_map(values)?;
         let policy = self.egress_policy.load_full();
         if let Some(policy) = &policy {
-            for server in &config.servers {
-                let checked = policy.check_nats_server(server);
-                match nats_keys::get(values, "servers") {
-                    Some(servers) => servers.guard("servers", checked)?,
-                    None => checked?,
-                }
+            let checked = match config
+                .servers
+                .iter()
+                .try_for_each(|server| policy.check_nats_server(server))
+            {
+                Ok(()) => policy.check_nats_servers_resolved(&config.servers).await,
+                Err(e) => Err(e),
+            };
+            match nats_keys::get(values, "servers") {
+                Some(servers) => servers.guard("servers", checked)?,
+                None => checked?,
             }
         }
         let jetstream = nats_conn::connect(

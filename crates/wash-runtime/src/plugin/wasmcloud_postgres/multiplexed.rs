@@ -56,6 +56,12 @@ fn check_url_egress(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()
     super::check_egress(&pg_config, policy)
 }
 
+async fn check_resolved_url_egress(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
+    let pg_config: tokio_postgres::Config =
+        url.parse().context("failed to parse postgres config")?;
+    super::check_resolved_egress(&pg_config, policy).await
+}
+
 /// Build a deadpool connection pool from a full postgres URL (credentials +
 /// database). Unlike the legacy bouncer config, the URL here is complete: the
 /// named interface owns its role and target database.
@@ -237,6 +243,17 @@ impl BackendProvider<PgId> for PostgresProvider {
         };
         url.guard("url", check_url_egress(url.expose(), policy))
     }
+
+    async fn check_resolved_egress(
+        &self,
+        config: &crate::wit::Config,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        let Some(url) = config.value("url") else {
+            return Ok(());
+        };
+        url.guard("url", check_resolved_url_egress(url.expose(), policy).await)
+    }
 }
 
 impl WasmcloudPostgres {
@@ -342,5 +359,17 @@ mod secret_url_tests {
             PostgresProvider.check_egress(&secret, &policy).unwrap_err()
         );
         assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    /// A permitted name is judged by what it resolves to.
+    #[tokio::test]
+    async fn a_name_resolving_to_loopback_is_refused() {
+        let policy = PluginEgressPolicy::allowing(&["postgres://localhost:5432"]);
+        let config: crate::wit::Config =
+            [("url", "postgres://localhost/app")].into_iter().collect();
+        PostgresProvider
+            .check_resolved_egress(&config, &policy)
+            .await
+            .unwrap_err();
     }
 }

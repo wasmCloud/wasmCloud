@@ -8,7 +8,9 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::RwLock;
 
 use crate::plugin::PluginEgressPolicy;
-use crate::plugin::multiplex::{BackendProvider, check_nats_url, connect_nats};
+use crate::plugin::multiplex::{
+    BackendProvider, check_nats_url, check_nats_url_resolved, connect_nats,
+};
 
 use super::{
     CasGuard, CasOutcome, KeyResponse, KvBackend, KvId, LIST_KEYS_BATCH_SIZE, StoreError, Versioned,
@@ -363,5 +365,13 @@ impl BackendProvider<KvId> for NatsProvider {
         policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         check_nats_url(config, policy)
+    }
+
+    async fn check_resolved_egress(
+        &self,
+        config: &crate::wit::Config,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        check_nats_url_resolved(config, policy).await
     }
 }
