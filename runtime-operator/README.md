@@ -169,8 +169,6 @@ library HTTP server diagnostics are logged at error without application stack
 traces. Application stack traces start at the log call. In text output a stack
 trace is a single escaped `stacktrace="…\n\t…"` value.
 
-See [release notes](RELEASE_NOTES.md) for migration details.
-
 ## Development
 
 You will need a local Kind cluster, NATS, and a Wash host.
