@@ -1,0 +1,263 @@
+diff --git a/src/futures.rs b/src/futures.rs
+new file mode 100644
+index 0000000..5ccc1cf
+--- /dev/null
++++ b/src/futures.rs
+@@ -0,0 +1,113 @@
++//! Futures for the webgpu.h async entry points, and `wgpuInstanceWaitAny`.
++//!
++//! Every async entry point hands out an id. Ones whose callback has already
++//! run when they return (adapter and device requests, error scopes) hand out
++//! an id that is complete from the start; buffer maps and queue work-done
++//! callbacks stay pending until wgpu-core runs their callback during a poll.
++
++use std::collections::BTreeSet;
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::time::{Duration, Instant};
++
++use parking_lot::Mutex;
++
++use crate::native;
++
++static NEXT_ID: AtomicU64 = AtomicU64::new(1);
++static PENDING: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
++
++/// A future whose callback runs later; pass its id to [`complete`] when it does.
++pub fn issue() -> u64 {
++    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
++    PENDING.lock().insert(id);
++    id
++}
++
++pub fn complete(id: u64) {
++    PENDING.lock().remove(&id);
++}
++
++/// A future whose callback has already run.
++pub fn ready() -> native::WGPUFuture {
++    native::WGPUFuture {
++        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
++    }
++}
++
++fn mark(futures: &mut [native::WGPUFutureWaitInfo]) -> bool {
++    let pending = PENDING.lock();
++    let mut any = false;
++    for f in futures.iter_mut() {
++        let done = !pending.contains(&f.future.id);
++        f.completed = done as native::WGPUBool;
++        any |= done;
++    }
++    any
++}
++
++#[no_mangle]
++pub unsafe extern "C" fn wgpuInstanceWaitAny(
++    instance: native::WGPUInstance,
++    future_count: usize,
++    futures: *mut native::WGPUFutureWaitInfo,
++    timeout_ns: u64,
++) -> native::WGPUWaitStatus {
++    let instance = instance.as_ref().expect("invalid instance");
++    if future_count == 0 {
++        return native::WGPUWaitStatus_TimedOut;
++    }
++    let futures = std::slice::from_raw_parts_mut(futures, future_count);
++    if futures.iter().any(|f| f.future.id == 0) {
++        return native::WGPUWaitStatus_Error;
++    }
++    let deadline = Instant::now().checked_add(Duration::from_nanos(timeout_ns));
++    loop {
++        if mark(futures) {
++            return native::WGPUWaitStatus_Success;
++        }
++        if timeout_ns == 0 || deadline.is_some_and(|d| Instant::now() >= d) {
++            return native::WGPUWaitStatus_TimedOut;
++        }
++        // Waits for submitted work, running the map and work-done callbacks
++        // it completes. A future no queue work will complete would spin here,
++        // as it would block under Dawn.
++        if let Err(cause) = instance.context.poll_all_devices(true) {
++            crate::handle_error_fatal(cause, "wgpuInstanceWaitAny");
++        }
++    }
++}
++
++/// Answered as the `wasi:webgpu` host answers it: a WGSL language extension
++/// is supported when naga implements it.
++#[no_mangle]
++pub extern "C" fn wgpuInstanceHasWGSLLanguageFeature(
++    _instance: native::WGPUInstance,
++    feature: native::WGPUWGSLLanguageFeatureName,
++) -> bool {
++    use wgc::naga::front::wgsl::LanguageExtension;
++    let name = match feature {
++        native::WGPUWGSLLanguageFeatureName_ReadonlyAndReadwriteStorageTextures => {
++            "readonly_and_readwrite_storage_textures"
++        }
++        native::WGPUWGSLLanguageFeatureName_Packed4x8IntegerDotProduct => {
++            "packed_4x8_integer_dot_product"
++        }
++        native::WGPUWGSLLanguageFeatureName_UnrestrictedPointerParameters => {
++            "unrestricted_pointer_parameters"
++        }
++        native::WGPUWGSLLanguageFeatureName_PointerCompositeAccess => "pointer_composite_access",
++        native::WGPUWGSLLanguageFeatureName_UniformBufferStandardLayout => {
++            "uniform_buffer_standard_layout"
++        }
++        native::WGPUWGSLLanguageFeatureName_SubgroupId => "subgroup_id",
++        native::WGPUWGSLLanguageFeatureName_SubgroupUniformity => "subgroup_uniformity",
++        native::WGPUWGSLLanguageFeatureName_TextureAndSamplerLet => "texture_and_sampler_let",
++        native::WGPUWGSLLanguageFeatureName_TextureFormatsTier1 => "texture_formats_tier1",
++        native::WGPUWGSLLanguageFeatureName_LinearIndexing => "linear_indexing",
++        _ => return false,
++    };
++    matches!(
++        LanguageExtension::from_ident(name),
++        Some(LanguageExtension::Implemented(_))
++    )
++}
+diff --git a/src/lib.rs b/src/lib.rs
+index ba92673..318540f 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -31,6 +31,7 @@ use wgc::{
+ use crate::conv::map_primitive_state;
+ 
+ pub mod conv;
++pub mod futures;
+ pub mod logging;
+ pub mod unimplemented;
+ pub mod utils;
+@@ -395,7 +396,6 @@ impl Drop for WGPUTextureViewImpl {
+     }
+ }
+ 
+-const NULL_FUTURE: native::WGPUFuture = native::WGPUFuture { id: 0 };
+ const EMPTY_STRING: native::WGPUStringView = native::WGPUStringView {
+     length: 0,
+     data: std::ptr::null(),
+@@ -898,7 +898,7 @@ pub unsafe extern "C" fn wgpuAdapterRequestDevice(
+         }
+     };
+ 
+-    NULL_FUTURE
++    futures::ready()
+ }
+ 
+ #[no_mangle]
+@@ -1030,6 +1030,7 @@ pub unsafe extern "C" fn wgpuBufferMapAsync(
+     };
+     let callback = callback_info.callback.expect("invalid callback");
+     let userdata = new_userdata!(callback_info);
++    let future = futures::issue();
+ 
+     let operation = wgc::resource::BufferMapOperation {
+         host: match mode as native::WGPUMapMode {
+@@ -1058,6 +1059,7 @@ pub unsafe extern "C" fn wgpuBufferMapAsync(
+                 userdata.get_1(),
+                 userdata.get_2(),
+             );
++            futures::complete(future);
+         })),
+     };
+ 
+@@ -1068,10 +1070,10 @@ pub unsafe extern "C" fn wgpuBufferMapAsync(
+         operation,
+     ) {
+         handle_error(error_sink, cause, None, "wgpuBufferMapAsync");
++        futures::complete(future);
+     };
+ 
+-    // TODO: Properly handle futures.
+-    NULL_FUTURE
++    native::WGPUFuture { id: future }
+ }
+ 
+ #[no_mangle]
+@@ -2749,7 +2751,7 @@ pub unsafe extern "C" fn wgpuDevicePopErrorScope(
+         }
+     };
+ 
+-    NULL_FUTURE
++    futures::ready()
+ }
+ 
+ #[no_mangle]
+@@ -2885,7 +2887,7 @@ pub unsafe extern "C" fn wgpuInstanceRequestAdapter(
+                         callback_info.userdata1,
+                         callback_info.userdata2,
+                     );
+-                    return NULL_FUTURE;
++                    return futures::ready();
+                 }
+                 backend_type => panic!("invalid backend type: 0x{backend_type:08X}"),
+             },
+@@ -2928,7 +2930,7 @@ pub unsafe extern "C" fn wgpuInstanceRequestAdapter(
+         }
+     };
+ 
+-    NULL_FUTURE
++    futures::ready()
+ }
+ 
+ #[no_mangle]
+@@ -3046,6 +3048,7 @@ pub unsafe extern "C" fn wgpuQueueOnSubmittedWorkDone(
+     };
+     let callback = callback_info.callback.expect("invalid callback");
+     let userdata = new_userdata!(callback_info);
++    let future = futures::issue();
+ 
+     let closure: wgc::device::queue::SubmittedWorkDoneClosure = Box::new(move || {
+         let empty_message = native::WGPUStringView {
+@@ -3058,12 +3061,12 @@ pub unsafe extern "C" fn wgpuQueueOnSubmittedWorkDone(
+             userdata.get_1(),
+             userdata.get_2(),
+         );
++        futures::complete(future);
+     });
+ 
+     context.queue_on_submitted_work_done(queue_id, closure);
+ 
+-    // TODO: Properly handle futures.
+-    NULL_FUTURE
++    native::WGPUFuture { id: future }
+ }
+ 
+ #[no_mangle]
+diff --git a/src/unimplemented.rs b/src/unimplemented.rs
+index 33bf84c..1b79023 100644
+--- a/src/unimplemented.rs
++++ b/src/unimplemented.rs
+@@ -107,14 +107,6 @@ pub extern "C" fn wgpuInstanceGetWGSLLanguageFeatures(
+     unimplemented!();
+ }
+ 
+-#[no_mangle]
+-pub extern "C" fn wgpuInstanceHasWGSLLanguageFeature(
+-    _instance: native::WGPUInstance,
+-    _feature: native::WGPUWGSLLanguageFeatureName,
+-) -> bool {
+-    unimplemented!();
+-}
+-
+ #[no_mangle]
+ pub extern "C" fn wgpuPipelineLayoutSetLabel(
+     _pipeline_layout: native::WGPUPipelineLayout,
+@@ -223,16 +215,6 @@ pub extern "C" fn wgpuTextureViewSetLabel(
+     unimplemented!();
+ }
+ 
+-#[no_mangle]
+-pub extern "C" fn wgpuInstanceWaitAny(
+-    _instance: native::WGPUInstance,
+-    _future_count: usize,
+-    _futures: *mut native::WGPUFutureWaitInfo,
+-    _timeout_ns: u64,
+-) -> native::WGPUWaitStatus {
+-    unimplemented!();
+-}
+-
+ #[no_mangle]
+ pub extern "C" fn wgpuExternalTextureSetLabel(
+     _external_texture: native::WGPUExternalTexture,

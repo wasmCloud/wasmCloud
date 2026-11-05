@@ -1,0 +1,21 @@
+diff --git a/common/common.cpp b/common/common.cpp
+index bc51de0..0aa4bfd 100644
+--- a/common/common.cpp
++++ b/common/common.cpp
+@@ -292,11 +292,16 @@ bool set_process_priority(enum ggml_sched_priority prio) {
+         case GGML_SCHED_PRIO_REALTIME: p = -20; break;
+     }
+ 
++#ifdef __wasi__
++    GGML_UNUSED(p); // WASI has no process priority
++    return false;
++#else
+     if (setpriority(PRIO_PROCESS, 0, p) != 0) {
+         COM_WRN("failed to set process priority %d : %s (%d)\n", prio, strerror(errno), errno);
+         return false;
+     }
+     return true;
++#endif
+ }
+ 
+ #endif
