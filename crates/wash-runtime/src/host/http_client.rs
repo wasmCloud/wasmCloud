@@ -457,11 +457,14 @@ fn is_resolver_error(err: &std::io::Error) -> bool {
 }
 
 /// Open an HTTP TCP connection and return guest-visible connection errors.
+///
+/// The stream has `TCP_NODELAY` set, matching the pooled client's connector,
+/// so a request head and its first body frame are not held back by Nagle.
 pub(crate) async fn connect_http_tcp(
     authority: &str,
     connect_timeout: Duration,
 ) -> Result<TcpStream, HttpError> {
-    timeout(connect_timeout, TcpStream::connect(authority))
+    let stream = timeout(connect_timeout, TcpStream::connect(authority))
         .await
         .map_err(|_| HttpError::ConnectionTimeout)?
         .map_err(|e| {
@@ -470,7 +473,11 @@ pub(crate) async fn connect_http_tcp(
             } else {
                 HttpError::ConnectionRefused
             }
-        })
+        })?;
+    if let Err(e) = stream.set_nodelay(true) {
+        warn!(err = ?e, authority = %authority, "failed to set TCP_NODELAY on outbound connection");
+    }
+    Ok(stream)
 }
 
 /// Clone a TLS configuration without resumable session state.
@@ -2036,6 +2043,22 @@ mod tests {
             .uri(uri)
             .body(WasiBody::default())
             .unwrap()
+    }
+
+    /// Unpooled egress (the gRPC HTTP/2 path) connects through
+    /// `connect_http_tcp`, so it must hand back a stream with Nagle disabled.
+    #[tokio::test]
+    async fn connect_http_tcp_disables_nagle() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = connect_http_tcp(&addr.to_string(), Duration::from_secs(5))
+            .await
+            .expect("connect should succeed");
+        let _accepted = listener.accept().await.unwrap();
+        assert!(
+            stream.nodelay().unwrap(),
+            "connect_http_tcp must set TCP_NODELAY on outbound connections"
+        );
     }
 
     /// Sequential requests to the same authority must reuse one pooled
