@@ -84,6 +84,120 @@ fn point_to_hashable_f64s(p: Point<f64>) -> (HashableF64, HashableF64) {
     (x.integer_decode(), y.integer_decode())
 }
 
+/// A guest's open `path`, which Postgres refuses without a point.
+fn line_string(
+    points: &[(HashableF64, HashableF64)],
+) -> Result<LineString<f64>, Box<dyn Error + Sync + Send>> {
+    if points.is_empty() {
+        return Err("invalid path, no points specified".into());
+    }
+    Ok(points
+        .iter()
+        .map(|(x, y)| coord! { x: f64_from_tuple(x), y: f64_from_tuple(y) })
+        .collect())
+}
+
+/// A guest's `polygon`, which Postgres refuses without a point.
+fn polygon(
+    points: &[(HashableF64, HashableF64)],
+) -> Result<PgPolygon, Box<dyn Error + Sync + Send>> {
+    if points.is_empty() {
+        return Err("invalid polygon, no points specified".into());
+    }
+    Ok(PgPolygon(
+        points
+            .iter()
+            .map(|(x, y)| Point::<f64>::new(f64_from_tuple(x), f64_from_tuple(y)))
+            .collect(),
+    ))
+}
+
+/// Most digits a guest's `numeric` may carry: the largest precision a declared
+/// `numeric(p)` column holds. pg_bigdecimal's encoder is quadratic in digits,
+/// about 0.1 ms here but 2 s at an unconstrained column's 131072. A larger
+/// value can be bound as text and cast with `$1::text::numeric`.
+const MAX_NUMERIC_DIGITS: i64 = 1000;
+
+/// Longest `numeric` text parsed: the digits plus a sign, point and exponent.
+const MAX_NUMERIC_TEXT_LEN: usize = 1024;
+
+/// Parse a guest's `numeric` text for the encoder.
+///
+/// The encoder raises ten to the scale as a `u32`, so a negative scale (from
+/// text like `1e9`) would wrap to a power the host cannot compute. Such a value
+/// is rescaled to zero first.
+fn parse_numeric(s: &str) -> Result<PgNumeric, Box<dyn Error + Sync + Send>> {
+    if s.len() > MAX_NUMERIC_TEXT_LEN {
+        return Err(format!("numeric text is longer than {MAX_NUMERIC_TEXT_LEN} bytes").into());
+    }
+    let value = pg_bigdecimal::BigDecimal::parse_bytes(s.as_bytes(), 10)
+        .ok_or_else(|| format!("failed to parse numeric [{s}]"))?;
+    let (_, scale) = value.as_bigint_and_exponent();
+    let value = match scale {
+        0.. => value,
+        _ if scale < -MAX_NUMERIC_DIGITS => {
+            return Err(format!("numeric [{s}] has more than {MAX_NUMERIC_DIGITS} digits").into());
+        }
+        _ => value.with_scale(0),
+    };
+    Ok(PgNumeric::new(Some(value)))
+}
+
+/// A `polygon`: its point count, then each point. geo-types' `Polygon` is not
+/// encoded by postgres-types, and a `Vec<Point>` encodes as `point[]`.
+#[derive(Debug)]
+struct PgPolygon(Vec<Point<f64>>);
+
+impl ToSql for PgPolygon {
+    fn to_sql(
+        &self,
+        _: &PgType,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
+        out.put_i32(i32::try_from(self.0.len())?);
+        for point in &self.0 {
+            out.put_f64(point.x());
+            out.put_f64(point.y());
+        }
+        Ok(IsNull::No)
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::POLYGON
+    }
+
+    tokio_postgres::types::to_sql_checked!();
+}
+
+impl FromSql<'_> for PgPolygon {
+    fn from_sql(_: &PgType, raw: &[u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        let (count, points) = raw
+            .split_first_chunk::<4>()
+            .ok_or("invalid polygon, no point count")?;
+        let count = usize::try_from(i32::from_be_bytes(*count))?;
+        if Some(points.len()) != count.checked_mul(16) {
+            return Err("invalid polygon, point count does not match its length".into());
+        }
+        points
+            .chunks_exact(16)
+            .map(|point| {
+                let (x, y) = point
+                    .split_first_chunk::<8>()
+                    .ok_or("invalid polygon point")?;
+                Ok(Point::new(
+                    f64::from_be_bytes(*x),
+                    f64::from_be_bytes(<[u8; 8]>::try_from(y)?),
+                ))
+            })
+            .collect::<Result<_, Box<dyn Error + Sync + Send>>>()
+            .map(PgPolygon)
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::POLYGON
+    }
+}
+
 // ── MAC address helpers ─────────────────────────────────────────────────────
 
 fn mac_eui48_as_bytes(m: MacAddressEui48) -> [u8; 6] {
@@ -379,6 +493,8 @@ fn check_scalar_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error +
         ),
         // `json`, `xml`, enums and domains over text still read text as is.
         PgValue::Text(_) => wrong(!NON_TEXT_TYPES.contains(base), WrongType::new::<String>),
+        PgValue::Path(_) => wrong(*base == PgType::PATH, WrongType::new::<LineString<f64>>),
+        PgValue::Polygon(_) => wrong(*base == PgType::POLYGON, WrongType::new::<PgPolygon>),
         _ => Ok(()),
     }
 }
@@ -535,17 +651,11 @@ impl ToSql for PgValue {
             PgValue::Integer(n) | PgValue::Int(n) | PgValue::Int4(n) => n.to_sql(ty, out),
             PgValue::Int4Array(ns) => ns.to_sql(ty, out),
             PgValue::Numeric(s) | PgValue::Decimal(s) | PgValue::Money(s) => {
-                let bigd = pg_bigdecimal::BigDecimal::parse_bytes(s.as_bytes(), 10)
-                    .ok_or_else(|| format!("failed to parse bigint [{s}]"))?;
-                PgNumeric::new(Some(bigd)).to_sql(ty, out)
+                parse_numeric(s)?.to_sql(ty, out)
             }
             PgValue::NumericArray(ss) | PgValue::MoneyArray(ss) => ss
                 .iter()
-                .map(|s| {
-                    pg_bigdecimal::BigDecimal::parse_bytes(s.as_bytes(), 10)
-                        .map(|v| PgNumeric::new(Some(v)))
-                        .ok_or_else(|| format!("failed to parse bigint [{s}]"))
-                })
+                .map(|s| parse_numeric(s))
                 .collect::<Result<Vec<PgNumeric>, _>>()?
                 .to_sql(ty, out),
             PgValue::SmallInt(n) | PgValue::Int2(n) => n.to_sql(ty, out),
@@ -716,24 +826,17 @@ impl ToSql for PgValue {
                 .map(|(x, y)| Point::<f64>::new(f64_from_tuple(x), f64_from_tuple(y)))
                 .collect::<Vec<Point>>()
                 .to_sql(ty, out),
-            PgValue::Path(points) | PgValue::Polygon(points) => {
-                if points.is_empty() {
-                    return Err("invalid polygon, no points specified".into());
-                }
-                points
-                    .iter()
-                    .map(|(x, y)| Point::<f64>::new(f64_from_tuple(x), f64_from_tuple(y)))
-                    .collect::<Vec<Point<f64>>>()
-                    .to_sql(ty, out)
-            }
-            PgValue::PathArray(paths) | PgValue::PolygonArray(paths) => paths
+            PgValue::Path(points) => line_string(points)?.to_sql(ty, out),
+            PgValue::Polygon(points) => polygon(points)?.to_sql(ty, out),
+            PgValue::PathArray(paths) => paths
                 .iter()
-                .map(|path| {
-                    path.iter()
-                        .map(|(x, y)| Point::<f64>::new(f64_from_tuple(x), f64_from_tuple(y)))
-                        .collect::<Vec<Point<f64>>>()
-                })
-                .collect::<Vec<Vec<Point<f64>>>>()
+                .map(|points| line_string(points))
+                .collect::<Result<Vec<_>, _>>()?
+                .to_sql(ty, out),
+            PgValue::PolygonArray(polygons) => polygons
+                .iter()
+                .map(|points| polygon(points))
+                .collect::<Result<Vec<_>, _>>()?
                 .to_sql(ty, out),
 
             // Date-time
@@ -1043,16 +1146,13 @@ impl FromSql<'_> for PgValue {
                     .map(linestring_to_hashable_f64s_tuple)
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            &tokio_postgres::types::Type::PATH => Ok(PgValue::Path(
-                Vec::<Point<f64>>::from_sql(ty, raw)?
-                    .into_iter()
-                    .map(point_to_hashable_f64s)
-                    .collect::<Vec<_>>(),
-            )),
+            &tokio_postgres::types::Type::PATH => Ok(PgValue::Path(linestring_to_hashable_f64s(
+                LineString::<f64>::from_sql(ty, raw)?,
+            ))),
             &tokio_postgres::types::Type::PATH_ARRAY => Ok(PgValue::PathArray(
-                Vec::<Vec<Point<f64>>>::from_sql(ty, raw)?
+                Vec::<LineString<f64>>::from_sql(ty, raw)?
                     .into_iter()
-                    .map(|points| points.into_iter().map(point_to_hashable_f64s).collect())
+                    .map(linestring_to_hashable_f64s)
                     .collect::<Vec<_>>(),
             )),
             &tokio_postgres::types::Type::POINT => {
@@ -1066,15 +1166,16 @@ impl FromSql<'_> for PgValue {
                     .collect::<Vec<_>>(),
             )),
             &tokio_postgres::types::Type::POLYGON => Ok(PgValue::Polygon(
-                Vec::<Point<f64>>::from_sql(ty, raw)?
+                PgPolygon::from_sql(ty, raw)?
+                    .0
                     .into_iter()
                     .map(point_to_hashable_f64s)
                     .collect::<Vec<_>>(),
             )),
             &tokio_postgres::types::Type::POLYGON_ARRAY => Ok(PgValue::PolygonArray(
-                Vec::<Vec<Point<f64>>>::from_sql(ty, raw)?
+                Vec::<PgPolygon>::from_sql(ty, raw)?
                     .into_iter()
-                    .map(|v| v.into_iter().map(point_to_hashable_f64s).collect())
+                    .map(|v| v.0.into_iter().map(point_to_hashable_f64s).collect())
                     .collect::<Vec<Vec<_>>>(),
             )),
 
@@ -1301,7 +1402,13 @@ mod tests {
         assert!(err.is::<WrongType>(), "{err}");
         assert!(bind(&PgValue::TextArray(vec!["x".into()]), &PgType::TEXT).is_err());
         assert!(bind(&PgValue::Int2Vector(vec![1]), &PgType::INT2).is_err());
-        assert!(bind(&PgValue::Int2VectorArray(vec![vec![1]]), &PgType::INT2_ARRAY).is_err());
+        assert!(
+            bind(
+                &PgValue::Int2VectorArray(vec![vec![1]]),
+                &PgType::INT2_ARRAY
+            )
+            .is_err()
+        );
 
         assert!(bind(&PgValue::Int4Array(vec![1]), &PgType::INT4_ARRAY).is_ok());
         assert!(bind(&PgValue::Int2Vector(vec![1]), &PgType::INT2_VECTOR).is_ok());
@@ -1578,6 +1685,89 @@ mod tests {
     }
 
     #[test]
+    fn paths_and_polygons_match_postgres_wire_values() -> TestResult {
+        let points = vec![
+            (0.5_f64.integer_decode(), (-1.0_f64).integer_decode()),
+            (2.0_f64.integer_decode(), 3.25_f64.integer_decode()),
+        ];
+        let line = LineString::<f64>::from(vec![(0.5, -1.0), (2.0, 3.25)]);
+        round_trip(
+            PgValue::Path(points.clone()),
+            PgValue::Path(points.clone()),
+            PgType::PATH,
+            &line,
+        )?;
+        round_trip(
+            PgValue::PathArray(vec![points.clone()]),
+            PgValue::PathArray(vec![points.clone()]),
+            PgType::PATH_ARRAY,
+            &vec![line],
+        )?;
+
+        // polygon_send: the point count, then each point's x and y.
+        let mut polygon = BytesMut::new();
+        polygon.put_i32(2);
+        for v in [0.5_f64, -1.0, 2.0, 3.25] {
+            polygon.put_f64(v);
+        }
+        let mut encoded = BytesMut::new();
+        PgValue::Polygon(points.clone()).to_sql_checked(&PgType::POLYGON, &mut encoded)?;
+        assert_eq!(encoded, polygon);
+        assert_eq!(
+            format!("{:?}", PgValue::from_sql(&PgType::POLYGON, &polygon)?),
+            format!("{:?}", PgValue::Polygon(points.clone()))
+        );
+        let array = PgValue::PolygonArray(vec![points.clone()]);
+        let mut encoded = BytesMut::new();
+        array.to_sql_checked(&PgType::POLYGON_ARRAY, &mut encoded)?;
+        assert_eq!(
+            format!("{:?}", PgValue::from_sql(&PgType::POLYGON_ARRAY, &encoded)?),
+            format!("{array:?}")
+        );
+
+        for (value, ty) in [
+            (PgValue::Path(points.clone()), PgType::POINT_ARRAY),
+            (PgValue::Polygon(points.clone()), PgType::PATH),
+            (PgValue::PathArray(vec![points.clone()]), PgType::PATH),
+            (PgValue::Polygon(vec![]), PgType::POLYGON),
+        ] {
+            assert!(bind(&value, &ty).is_err(), "{value:?} as {ty}");
+        }
+        for raw in [
+            &polygon[..3],
+            &polygon[..polygon.len() - 1],
+            &[255, 255, 255, 255],
+        ] {
+            assert!(PgValue::from_sql(&PgType::POLYGON, raw).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn numeric_exponents_are_rescaled_or_refused() -> TestResult {
+        let ten = PgNumeric::new(pg_bigdecimal::BigDecimal::parse_bytes(b"10", 10));
+        for text in ["1e1", "1.0e1", "10"] {
+            let mut encoded = BytesMut::new();
+            PgValue::Numeric(text.into()).to_sql_checked(&PgType::NUMERIC, &mut encoded)?;
+            let mut wire = BytesMut::new();
+            ten.to_sql(&PgType::NUMERIC, &mut wire)?;
+            assert_eq!(encoded, wire, "{text}");
+        }
+        bind(
+            &PgValue::NumericArray(vec!["1e1000".into(), "-2.5e3".into()]),
+            &PgType::NUMERIC_ARRAY,
+        )?;
+        for text in [
+            "1e1001".to_string(),
+            "1e9223372036854775807".to_string(),
+            "1".repeat(MAX_NUMERIC_TEXT_LEN + 1),
+        ] {
+            assert!(bind(&PgValue::Numeric(text), &PgType::NUMERIC).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn malformed_and_unsupported_wire_values_return_errors() {
         for ty in [
             PgType::BOOL,
@@ -1615,9 +1805,11 @@ mod tests {
             PgType::BOX_ARRAY,
             PgType::LSEG,
             PgType::LSEG_ARRAY,
+            PgType::PATH,
             PgType::PATH_ARRAY,
             PgType::POINT,
             PgType::POINT_ARRAY,
+            PgType::POLYGON,
             PgType::POLYGON_ARRAY,
             PgType::CIDR,
             PgType::CIDR_ARRAY,
