@@ -1,9 +1,6 @@
 [advisories]
 ignore = [
     # VEX: vex/wasmcloud.openvex.json
-    # webpki-roots 0.26.11 re-exports the patched 1.0.10 roots.
-    "RUSTSEC-2026-0381",
-    # VEX: vex/wasmcloud.openvex.json
     # Wasmtime's cache uses encode_all/decode_all without seekable or legacy.
     "RUSTSEC-2026-0391", # `with_context` on a reused context
     "RUSTSEC-2026-0398", # `seekable` only
