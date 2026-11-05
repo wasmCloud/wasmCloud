@@ -1,4 +1,6 @@
-package main
+// Package logging configures log/slog, the standard log package, and
+// controller-runtime's logr bridge from one set of command-line flags.
+package logging
 
 import (
 	"context"
@@ -29,31 +31,41 @@ const (
 	logWarn  = "warn"
 )
 
-type loggingOptions struct {
-	fullObjects bool
-	development bool
-	jsonLog     bool
-	format      string
-	level       string
-	stackLevel  string
-	timeEncoder string
+// Options holds the logging flag values. Values set before BindFlags become
+// the flag defaults, so each binary can choose its own.
+type Options struct {
+	// FullObjects logs whole Kubernetes objects instead of their identity.
+	FullObjects bool
+	// Development defaults to text output, debug logging, and stack traces at warn.
+	Development bool
+	// JSONLog forces JSON output with numeric epoch timestamps.
+	JSONLog         bool
+	Format          string
+	Level           string
+	StacktraceLevel string
+	// TimeEncoding defaults to rfc3339 when empty.
+	TimeEncoding string
 }
 
-func (options *loggingOptions) bindFlags(flags *flag.FlagSet) {
-	flags.BoolVar(&options.fullObjects, "log-full-objects", false,
+// BindFlags registers the logging flags and their zap-named aliases.
+func (options *Options) BindFlags(flags *flag.FlagSet) {
+	flags.BoolVar(&options.FullObjects, "log-full-objects", options.FullObjects,
 		"Include full Kubernetes objects, including Secret contents")
-	flags.BoolVar(&options.development, "dev-mode", options.development, "Enable development logging defaults")
-	flags.BoolVar(&options.jsonLog, "json-log", false, "Output JSON logs with epoch timestamps")
-	flags.StringVar(&options.format, "log-format", "", "Log format: text or json")
-	flags.StringVar(&options.level, "log-level", "", "Log level: debug, info, warn, error, panic, or positive verbosity")
-	flags.StringVar(&options.stackLevel, "log-stacktrace-level", "", "Stacktrace threshold: info, warn, error, or panic")
-	flags.StringVar(&options.timeEncoder, "log-time-encoding", "",
+	flags.BoolVar(&options.Development, "dev-mode", options.Development, "Enable development logging defaults")
+	flags.BoolVar(&options.JSONLog, "json-log", options.JSONLog, "Output JSON logs with epoch timestamps")
+	flags.StringVar(&options.Format, "log-format", options.Format, "Log format: text or json")
+	flags.StringVar(&options.Level, "log-level", options.Level,
+		"Log level: debug, info, warn, error, panic, or positive verbosity")
+	flags.StringVar(&options.StacktraceLevel, "log-stacktrace-level", options.StacktraceLevel,
+		"Stacktrace threshold: info, warn, error, or panic")
+	flags.StringVar(&options.TimeEncoding, "log-time-encoding", options.TimeEncoding,
 		"Timestamp format: epoch, millis, nanos, iso8601, rfc3339, or rfc3339nano")
-	flags.BoolVar(&options.development, "zap-devel", options.development, "Alias for --dev-mode")
-	flags.StringVar(&options.format, "zap-encoder", "", "Alias for --log-format; console means text")
-	flags.StringVar(&options.level, "zap-log-level", "", "Alias for --log-level")
-	flags.StringVar(&options.stackLevel, "zap-stacktrace-level", "", "Alias for --log-stacktrace-level")
-	flags.StringVar(&options.timeEncoder, "zap-time-encoding", "", "Alias for --log-time-encoding")
+	flags.BoolVar(&options.Development, "zap-devel", options.Development, "Alias for --dev-mode")
+	flags.StringVar(&options.Format, "zap-encoder", options.Format, "Alias for --log-format; console means text")
+	flags.StringVar(&options.Level, "zap-log-level", options.Level, "Alias for --log-level")
+	flags.StringVar(&options.StacktraceLevel, "zap-stacktrace-level", options.StacktraceLevel,
+		"Alias for --log-stacktrace-level")
+	flags.StringVar(&options.TimeEncoding, "zap-time-encoding", options.TimeEncoding, "Alias for --log-time-encoding")
 }
 
 func logLevel(value string) (slog.Level, error) {
@@ -77,57 +89,77 @@ func logLevel(value string) (slog.Level, error) {
 	}
 }
 
-func (options loggingOptions) logger(output io.Writer) (*slog.Logger, error) {
-	level, stackLevel := slog.LevelInfo, slog.LevelError
+type config struct {
+	level, stackLevel slog.Level
+	text              bool
+	encoding          string
+}
+
+func (options Options) config() (config, error) {
+	result := config{level: slog.LevelInfo, stackLevel: slog.LevelError, encoding: "rfc3339"}
 	format := logJSON
-	if options.development {
-		level, stackLevel, format = slog.LevelDebug, slog.LevelWarn, logText
+	if options.Development {
+		result.level, result.stackLevel, format = slog.LevelDebug, slog.LevelWarn, logText
 	}
-	if options.level != "" {
+	if options.Level != "" {
 		var err error
-		level, err = logLevel(options.level)
-		if err != nil {
-			return nil, err
+		if result.level, err = logLevel(options.Level); err != nil {
+			return config{}, err
 		}
 	}
-	if options.stackLevel != "" {
-		switch strings.ToLower(options.stackLevel) {
+	if options.StacktraceLevel != "" {
+		switch strings.ToLower(options.StacktraceLevel) {
 		case logInfo, logWarn, logError, "panic":
-			stackLevel, _ = logLevel(options.stackLevel)
+			result.stackLevel, _ = logLevel(options.StacktraceLevel)
 		default:
-			return nil, fmt.Errorf("invalid stacktrace level %q", options.stackLevel)
+			return config{}, fmt.Errorf("invalid stacktrace level %q", options.StacktraceLevel)
 		}
 	}
-	if options.format != "" {
-		format = strings.ToLower(options.format)
+	if options.Format != "" {
+		format = strings.ToLower(options.Format)
 	}
 	if format == "console" {
 		format = logText
 	}
 	if format != logText && format != logJSON {
-		return nil, fmt.Errorf("invalid log format %q", options.format)
+		return config{}, fmt.Errorf("invalid log format %q", options.Format)
 	}
-	encoding := strings.ToLower(options.timeEncoder)
-	if encoding == "" {
-		encoding = "rfc3339"
+	if options.TimeEncoding != "" {
+		result.encoding = strings.ToLower(options.TimeEncoding)
 	}
-	switch encoding {
+	switch result.encoding {
 	case logEpoch, "millis", "nanos", "iso8601", "rfc3339", "rfc3339nano":
 	default:
-		return nil, fmt.Errorf("invalid log time encoding %q", options.timeEncoder)
+		return config{}, fmt.Errorf("invalid log time encoding %q", options.TimeEncoding)
 	}
 	// --json-log overrides encoder flags, including timestamp encoding.
-	if options.jsonLog {
-		format, encoding = logJSON, logEpoch
+	if options.JSONLog {
+		format, result.encoding = logJSON, logEpoch
+	}
+	result.text = format == logText
+	return result, nil
+}
+
+// Validate reports the error Logger would return for these options.
+func (options Options) Validate() error {
+	_, err := options.config()
+	return err
+}
+
+// Logger returns a logger that writes to output in the configured format.
+func (options Options) Logger(output io.Writer) (*slog.Logger, error) {
+	config, err := options.config()
+	if err != nil {
+		return nil, err
 	}
 	handlerOptions := &slog.HandlerOptions{
-		Level: level, ReplaceAttr: logAttributes(options.fullObjects, encoding, format == logText),
+		Level: config.level, ReplaceAttr: logAttributes(options.FullObjects, config.encoding, config.text),
 	}
 	var handler slog.Handler = slog.NewJSONHandler(output, handlerOptions)
-	if format == logText {
+	if config.text {
 		handler = slog.NewTextHandler(output, handlerOptions)
 	}
-	return slog.New(stacktraceHandler{Handler: handler, level: stackLevel}), nil
+	return slog.New(stacktraceHandler{Handler: handler, level: config.stackLevel}), nil
 }
 
 func nilPointer(value any) bool {
@@ -398,14 +430,22 @@ func (handler controllerLogHandler) WithGroup(name string) slog.Handler {
 	return controllerLogHandler{handler.Handler.WithGroup(name)}
 }
 
-func configureLogging(logger *slog.Logger) {
+// Configure makes logger the slog default, the standard log output, and the
+// controller-runtime logger.
+func Configure(logger *slog.Logger) {
 	slog.SetDefault(logger)
-	// HTTP diagnostics stay visible at error thresholds without application stack traces.
+	log.SetOutput(ErrorLog(logger).Writer())
+	ctrl.SetLogger(logr.FromSlogHandler(controllerLogHandler{logger.Handler()}))
+}
+
+// ErrorLog returns a standard library logger, such as an http.Server ErrorLog,
+// that writes at error level. HTTP diagnostics stay visible at every level
+// threshold, without application stack traces.
+func ErrorLog(logger *slog.Logger) *log.Logger {
 	handler := logger.Handler()
 	if stack, ok := handler.(stacktraceHandler); ok {
 		stack.skipStack = true
 		handler = stack
 	}
-	log.SetOutput(slog.NewLogLogger(handler, slog.LevelError).Writer())
-	ctrl.SetLogger(logr.FromSlogHandler(controllerLogHandler{logger.Handler()}))
+	return slog.NewLogLogger(handler, slog.LevelError)
 }

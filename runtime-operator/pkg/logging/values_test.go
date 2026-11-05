@@ -1,4 +1,4 @@
-package main
+package logging
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ const (
 	testWorkload = "workload"
 )
 
-func TestOperatorKubernetesLogValues(t *testing.T) {
+func TestKubernetesLogValues(t *testing.T) {
 	key := types.NamespacedName{Namespace: testTenant, Name: testWorkload}
 	for _, tc := range []struct {
 		name   string
@@ -48,7 +48,7 @@ func TestOperatorKubernetesLogValues(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			options := parseLogging(t, testJSONFlag)
 			var output bytes.Buffer
-			logger, err := options.logger(&output)
+			logger, err := options.Logger(&output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,10 +82,10 @@ func (groupedLogMarshaler) MarshalLog() any {
 	return slog.GroupValue(slog.Any("object", types.NamespacedName{Namespace: testTenant, Name: testWorkload}))
 }
 
-func TestOperatorLogMarshalerSafetyAndGroups(t *testing.T) {
+func TestLogMarshalerSafetyAndGroups(t *testing.T) {
 	options := parseLogging(t, testJSONFlag)
 	var output bytes.Buffer
-	logger, err := options.logger(&output)
+	logger, err := options.Logger(&output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestProductionObjectLogging(t *testing.T) {
 			} {
 				t.Run(mode.name+"/"+value.name+"/"+tc.name, func(t *testing.T) {
 					var output bytes.Buffer
-					logger, err := parseLogging(t, mode.args...).logger(&output)
+					logger, err := parseLogging(t, mode.args...).Logger(&output)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -194,7 +194,7 @@ func TestNilLogValues(t *testing.T) {
 	} {
 		for _, value := range []any{secret, objectLogMarshaler{secret}, key, objectLogMarshaler{key}} {
 			var output bytes.Buffer
-			logger, err := parseLogging(t, mode.args...).logger(&output)
+			logger, err := parseLogging(t, mode.args...).Logger(&output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -215,7 +215,7 @@ func TestFullObjectLoggingRequiresOptIn(t *testing.T) {
 		for _, value := range []any{secret, objectLogMarshaler{secret}} {
 			var output bytes.Buffer
 			args := append(append([]string(nil), mode...), "--log-full-objects")
-			logger, err := parseLogging(t, args...).logger(&output)
+			logger, err := parseLogging(t, args...).Logger(&output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -234,7 +234,7 @@ func TestObjectListLoggingOmitsContents(t *testing.T) {
 	}
 	for _, value := range []any{list, objectLogMarshaler{list}} {
 		var output bytes.Buffer
-		logger, err := parseLogging(t, testJSONFormatFlag).logger(&output)
+		logger, err := parseLogging(t, testJSONFormatFlag).Logger(&output)
 		if err != nil {
 			t.Fatal(err)
 		}
