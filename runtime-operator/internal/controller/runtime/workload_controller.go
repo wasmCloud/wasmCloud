@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -62,14 +63,36 @@ type WorkloadReconciler struct {
 	// EvictionLimiter paces stopping workloads placed outside the
 	// Environment they may run in. Nil stops them all as they are found.
 	EvictionLimiter *rate.Limiter
-	// stalledHosts and pinnedWaits are this process's memory only. A restart
-	// or a new leader starts them empty: each stalled host gets one fresh stop
-	// attempt, and each pinned wait still under way is recorded once more.
+	// stalledHosts, pinnedWaits and startWaits are this process's memory only.
+	// A restart or a new leader starts them empty: each stalled host gets one
+	// fresh stop attempt, each pinned wait still under way is recorded once
+	// more, and each start held back is sent at once.
 	stalledHosts stalledHosts
 	// pinnedWaits maps the UID of a Workload waiting for its pinned host to
 	// register to that host's ID, once the wait has been recorded.
 	pinnedWaits sync.Map
-	reconciler  condition.AnyConditionedReconciler
+	// startWaits maps the UID of a Workload whose last start its host turned
+	// down to a startWait.
+	startWaits sync.Map
+	reconciler condition.AnyConditionedReconciler
+}
+
+// startWait holds back a Workload's next start after its host turned one down.
+// The host's reason can differ each time, such as a memory reading, and the
+// status write each new reason makes sets off the next pass at once. Once
+// Placement records the reason, the next start to that host for that spec
+// waits a reconcile interval instead.
+type startWait struct {
+	hostID     string
+	generation int64
+	reason     string
+	until      time.Time
+}
+
+func (w startWait) holds(workload *runtimev1alpha1.Workload) bool {
+	return w.hostID == workload.Status.HostID && w.generation == workload.Generation &&
+		w.reason == workload.Status.GetCondition(runtimev1alpha1.WorkloadConditionPlacement).Message &&
+		time.Now().Before(w.until)
 }
 
 // stalledHosts remembers hosts that did not answer an eviction's stop, so the
@@ -525,6 +548,10 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		}
 		return condition.ErrStatusUnknown(fmt.Errorf("host %s is gone or being deleted", hostID))
 	}
+	if wait, ok := r.startWaits.Load(workload.UID); ok && wait.(startWait).holds(workload) {
+		// Placement keeps the host's last answer until the next start.
+		return condition.ErrNoop()
+	}
 
 	volumes := make([]*runtimev2.Volume, 0, len(workload.Spec.Volumes))
 	for _, v := range workload.Spec.Volumes {
@@ -638,18 +665,101 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	}
 
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
-	ctx, cancel := context.WithTimeout(ctx, workloadStartTimeout)
+	startCtx, cancel := context.WithTimeout(ctx, workloadStartTimeout)
 	defer cancel()
 
-	resp, err := client.Start(ctx, req)
+	resp, err := client.Start(startCtx, req)
 	if err != nil {
 		return err
 	}
+	workloadID, err := placedID(ctx, client, resp)
+	if err != nil {
+		if resp.GetWorkloadStatus().GetWorkloadState() == runtimev2.WorkloadState_WORKLOAD_STATE_ERROR {
+			r.startWaits.Store(workload.UID, startWait{
+				hostID:     workload.Status.HostID,
+				generation: workload.Generation,
+				reason:     err.Error(),
+				until:      time.Now().Add(workloadReconcileInterval),
+			})
+		}
+		return err
+	}
+	r.startWaits.Delete(workload.UID)
 
-	// Set the WorkloadID in the status
-	workload.Status.WorkloadID = resp.WorkloadStatus.WorkloadId
+	workload.Status.WorkloadID = workloadID
 	condition.ForceStatusUpdate(ctx)
 	return condition.ErrSkipReconciliation()
+}
+
+// placedID is the id under which host's answer to a start places the workload.
+func placedID(ctx context.Context, host *WashHostClient, resp *runtimev2.WorkloadStartResponse) (string, error) {
+	started := resp.GetWorkloadStatus()
+	switch state := started.GetWorkloadState(); state {
+	case runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING, runtimev2.WorkloadState_WORKLOAD_STATE_COMPLETED:
+		if started.GetWorkloadId() == "" {
+			return "", fmt.Errorf("host %s answered the start without a workload id", host.HostID)
+		}
+		return started.GetWorkloadId(), nil
+	case runtimev2.WorkloadState_WORKLOAD_STATE_ERROR:
+		return heldID(ctx, host, started)
+	default:
+		return "", fmt.Errorf("host %s answered the start with %s", host.HostID, describeStatus(started))
+	}
+}
+
+// describeStatus is a host's workload status as its state, then the host's
+// message when it gives one.
+func describeStatus(status *runtimev2.WorkloadStatus) string {
+	if message := status.GetMessage(); message != "" {
+		return status.GetWorkloadState().String() + ": " + message
+	}
+	return status.GetWorkloadState().String()
+}
+
+// heldID is the placement a start the host turned down still makes. When the
+// host holds the id afterwards, as for a replayed start or a failure it keeps
+// for Sync to report, that is the placement. Held as starting or stopping, as
+// while the host retries a failed start's cleanup, the id can yet be released,
+// so Placement waits with the host's reason.
+func heldID(ctx context.Context, host *WashHostClient, refusal *runtimev2.WorkloadStatus) (string, error) {
+	refused := fmt.Errorf("host %s did not start the workload: %s",
+		host.HostID, cmp.Or(refusal.GetMessage(), refusal.GetWorkloadState().String()))
+	workloadID := refusal.GetWorkloadId()
+	if workloadID == "" {
+		return "", refused
+	}
+	held, err := heldState(ctx, host, workloadID)
+	if err != nil {
+		return "", fmt.Errorf("%w; checking for an earlier start: %w", refused, err)
+	}
+	switch held {
+	case runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING, runtimev2.WorkloadState_WORKLOAD_STATE_COMPLETED,
+		runtimev2.WorkloadState_WORKLOAD_STATE_ERROR:
+		return workloadID, nil
+	case runtimev2.WorkloadState_WORKLOAD_STATE_STARTING, runtimev2.WorkloadState_WORKLOAD_STATE_STOPPING:
+		return "", condition.ErrStatusUnknown(fmt.Errorf("%w; the host holds the id in %s", refused, held))
+	default:
+		return "", refused
+	}
+}
+
+// heldState is the state host holds workloadID in, checked under its own
+// deadline rather than what is left of the start's.
+func heldState(ctx context.Context, host *WashHostClient, workloadID string) (runtimev2.WorkloadState, error) {
+	ctx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
+	defer cancel()
+	resp, err := host.Status(ctx, &runtimev2.WorkloadStatusRequest{WorkloadId: workloadID})
+	if err != nil {
+		return runtimev2.WorkloadState_WORKLOAD_STATE_UNSPECIFIED, err
+	}
+	// A status request the host could not read is answered with an error
+	// state for no workload id, which says nothing about this one.
+	status := resp.GetWorkloadStatus()
+	if status.GetWorkloadId() != workloadID {
+		return runtimev2.WorkloadState_WORKLOAD_STATE_UNSPECIFIED, fmt.Errorf("host %s answered for workload %q with %s",
+			host.HostID, status.GetWorkloadId(), describeStatus(status))
+	}
+	return status.GetWorkloadState(), nil
 }
 
 // replicaAnnotations is workload's annotations for the host, with the names of
@@ -736,8 +846,9 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 	if err != nil {
 		return err
 	}
-	if resp.WorkloadStatus.WorkloadState == runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING ||
-		resp.WorkloadStatus.WorkloadState == runtimev2.WorkloadState_WORKLOAD_STATE_COMPLETED {
+	status := resp.GetWorkloadStatus()
+	if state := status.GetWorkloadState(); state == runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING ||
+		state == runtimev2.WorkloadState_WORKLOAD_STATE_COMPLETED {
 		return nil
 	}
 
@@ -750,11 +861,7 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 	// host logs, so it carries it.
 	// Only an errored workload carries a message; every other state is named
 	// by WorkloadState alone, so this does not render the state twice.
-	if msg := resp.WorkloadStatus.Message; msg != "" {
-		return fmt.Errorf("workload is not operational: %s: %s",
-			resp.WorkloadStatus.WorkloadState.String(), msg)
-	}
-	return fmt.Errorf("workload is not operational: %s", resp.WorkloadStatus.WorkloadState.String())
+	return fmt.Errorf("workload is not operational: %s", describeStatus(status))
 }
 
 func (r *WorkloadReconciler) reconcileReady(_ context.Context, workload *runtimev1alpha1.Workload) error {
@@ -767,6 +874,7 @@ func (r *WorkloadReconciler) reconcileReady(_ context.Context, workload *runtime
 
 func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1alpha1.Workload) error {
 	r.pinnedWaits.Delete(workload.UID)
+	r.startWaits.Delete(workload.UID)
 	// Don't gate on Placement: it is recorded only after the start returns, so a
 	// Workload deleted mid-start would skip the stop and stay running on the host.
 	// HostID is set before any start is sent.

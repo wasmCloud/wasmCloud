@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -111,12 +112,42 @@ func rpcReply(t *testing.T, response proto.Message) *wasmbus.Message {
 	return &wasmbus.Message{Data: data}
 }
 
+// startReply is the host's answer to a start, placing workloadID in state.
+func startReply(t *testing.T, workloadID string, state runtimev2.WorkloadState, message string) *wasmbus.Message {
+	t.Helper()
+	return rpcReply(t, &runtimev2.WorkloadStartResponse{WorkloadStatus: &runtimev2.WorkloadStatus{
+		WorkloadId: workloadID, WorkloadState: state, Message: message,
+	}})
+}
+
 // startedReply is the host's answer to a start it accepted.
 func startedReply(t *testing.T) *wasmbus.Message {
-	return rpcReply(t, &runtimev2.WorkloadStartResponse{WorkloadStatus: &runtimev2.WorkloadStatus{
-		WorkloadId:    fixtureRuntimeID,
-		WorkloadState: runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING,
+	t.Helper()
+	return startReply(t, fixtureRuntimeID, runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING, "")
+}
+
+// refusedReply is the host's answer to a start of workloadID it turned down.
+func refusedReply(t *testing.T, workloadID, reason string) *wasmbus.Message {
+	t.Helper()
+	return startReply(t, workloadID, runtimev2.WorkloadState_WORKLOAD_STATE_ERROR, reason)
+}
+
+// statusReply is the host's answer to a status check of workloadID.
+func statusReply(t *testing.T, workloadID string, state runtimev2.WorkloadState, message string) *wasmbus.Message {
+	t.Helper()
+	return rpcReply(t, &runtimev2.WorkloadStatusResponse{WorkloadStatus: &runtimev2.WorkloadStatus{
+		WorkloadId: workloadID, WorkloadState: state, Message: message,
 	}})
+}
+
+// recordPlacement records the error reconcilePlacement returned as the
+// Workload's Placement condition, as the condition pipeline does.
+func recordPlacement(workload *runtimev1alpha1.Workload, err error) {
+	placement := condition.ErrorCondition(runtimev1alpha1.WorkloadConditionPlacement, "Reconcile", err)
+	if condition.IsStatusUnknown(err) {
+		placement = condition.UnknownCondition(runtimev1alpha1.WorkloadConditionPlacement, "Reconcile", err.Error())
+	}
+	workload.Status.SetConditions(placement)
 }
 
 // placementFixture is a Workload in testTenant whose components, service and
@@ -196,4 +227,14 @@ func placedFixture(t *testing.T) (*WorkloadReconciler, *runtimev1alpha1.Workload
 	workload.Status.WorkloadID = fixtureRuntimeID
 	workload.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionPlacement))
 	return r, workload, bus
+}
+
+// expireStartWaits lets each start held back after a refusal go now.
+func expireStartWaits(r *WorkloadReconciler) {
+	r.startWaits.Range(func(uid, wait any) bool {
+		expired := wait.(startWait)
+		expired.until = time.Time{}
+		r.startWaits.Store(uid, expired)
+		return true
+	})
 }

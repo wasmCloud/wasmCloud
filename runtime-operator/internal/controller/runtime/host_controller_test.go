@@ -318,12 +318,16 @@ type mockBus struct {
 	gotSubject string
 	gotData    []byte
 	requests   []*wasmbus.Message
+	// deadlines holds each request's context deadline, zero for none.
+	deadlines []time.Time
 }
 
-func (m *mockBus) Request(_ context.Context, msg *wasmbus.Message) (*wasmbus.Message, error) {
+func (m *mockBus) Request(ctx context.Context, msg *wasmbus.Message) (*wasmbus.Message, error) {
 	m.gotSubject = msg.Subject
 	m.gotData = msg.Data
 	m.requests = append(m.requests, msg)
+	deadline, _ := ctx.Deadline()
+	m.deadlines = append(m.deadlines, deadline)
 	if m.respond != nil {
 		return m.respond(msg)
 	}

@@ -35,7 +35,10 @@ import (
 // above it, without needing a cluster.
 func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 	reply, err := protojson.Marshal(&runtimev2.WorkloadStartResponse{
-		WorkloadStatus: &runtimev2.WorkloadStatus{WorkloadId: "workload-1"},
+		WorkloadStatus: &runtimev2.WorkloadStatus{
+			WorkloadId:    "workload-1",
+			WorkloadState: runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING,
+		},
 	})
 	if err != nil {
 		t.Fatalf("marshal start response: %v", err)
