@@ -20,6 +20,8 @@ NC='\033[0m' # No Color
 
 # Constants
 REPO="wasmcloud/wasmCloud"
+# Release binaries are attested only by release-tag.yml running on main.
+SIGNER_IDENTITY="https://github.com/wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.wash/bin}"
 TMP_DIR="/tmp/wash-install-$$"
 VERIFY_SIGNATURE=false
@@ -519,6 +521,8 @@ verify_artifact_signature() {
     # Verify build provenance attestation
     if ! gh attestation verify "$artifact_path" \
         --repo "$REPO" \
+        --cert-identity "$SIGNER_IDENTITY" \
+        --source-ref refs/heads/main \
         --predicate-type https://slsa.dev/provenance/v1; then
         log_error "Build provenance attestation verification failed!"
         return 1
