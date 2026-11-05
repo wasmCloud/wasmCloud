@@ -82,9 +82,11 @@ async fn test_p3_tls_tcp_round_trip() -> Result<()> {
     let req =
         echo_client_workload_request("tls-echo-client-p3", TLS_ECHO_CLIENT_P3_WASM, echo_addr);
 
-    let resp = timeout(Duration::from_secs(15), host.workload_start(req))
+    // Generous: the deploy compiles the component, competing for CPU with
+    // every other module in this binary. The round trip has its own bound.
+    let resp = timeout(Duration::from_secs(60), host.workload_start(req))
         .await
-        .context("P3 tls round-trip test timed out")?
+        .context("P3 tls client workload did not finish starting")?
         .context("workload_start failed")?;
     assert_eq!(
         resp.workload_status.workload_state,

@@ -188,8 +188,10 @@ async fn mismatched_payload_adapter_is_rejected() -> Result<()> {
     exercise(Registration::Mismatched).await
 }
 
+/// The bound only guards against a hang. It covers every compile and deploy
+/// below, which compete for CPU with the other modules in this binary.
 async fn exercise(registration: Registration) -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(45), async {
+    tokio::time::timeout(Duration::from_secs(180), async {
         let engine = Engine::builder()
             .with_pooling_allocator(false)
             .with_wasm_proposal(WasmProposal::ComponentModelAsync)

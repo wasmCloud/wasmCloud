@@ -130,9 +130,11 @@ async fn a_binding_outside_allowed_hosts_is_refused_at_bind() -> Result<()> {
         ("redis://127.0.0.1:6380", "127.0.0.1:6380"),
     ] {
         // Bounded, so a check that let the bind reach a connect fails here
-        // rather than hanging on DNS.
+        // rather than hanging on DNS. Generous, because the bind also compiles
+        // the component alongside every other module; the message assertions
+        // below are what prove no connect was tried.
         let resp = timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(60),
             host.workload_start(start_request(url)),
         )
         .await
