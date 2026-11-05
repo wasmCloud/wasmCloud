@@ -391,10 +391,10 @@ jobs:
                 echo "PR merged"
                 if SHA=$(gh pr view "${PR_URL}" --json mergeCommit --jq '.mergeCommit.oid') && [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
                   echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-                else
-                  echo "::warning::Could not resolve the merged release SHA; release-tag falls back to main and private fuzzing is skipped"
+                  exit 0
                 fi
-                exit 0
+                echo "::error::Could not resolve the merged release SHA; dispatch release-tag with sha=<merge-sha>"
+                exit 1
                 ;;
               CLOSED)
                 echo "PR was closed without merging" >&2
@@ -413,10 +413,10 @@ jobs:
         env:
           RELEASE_SHA: ${{ steps.merge.outputs.sha }}
         run: echo "${RELEASE_SHA}" > "${RUNNER_TEMP}/release-sha"
+      # release-tag refuses to promote without this, so a failed upload fails
+      # the train and pages Slack.
       - name: Upload the merged release commit
         if: steps.merge.outputs.sha != ''
-        # The PR has merged; release-tag falls back to main without this.
-        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-sha

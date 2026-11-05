@@ -47,7 +47,8 @@ Wed–Thu as a buffer for any same-week follow-up patch.
 5. After the PR merges, [`release-tag.yml`](.github/workflows/release-tag.yml) fires via
    `workflow_run` and performs the **build-once-promote** flow:
    - Pins the merge commit the train recorded, so a later push to `main` can't change what
-     is promoted. If the train recorded none, it falls back to `main` with a warning.
+     is promoted, and refuses a commit that isn't on `main`. If the train couldn't record
+     the commit, the train fails; dispatch `release-tag.yml` with `sha=<merge-sha>`.
    - Verifies that commit is a release commit and the workspace version matches.
    - Waits for the canary workflows (`wash`, `runtime-operator`, `runtime-gateway`, `charts`) on
      the merge commit to all conclude `success` — the artifact pipeline has built and tested

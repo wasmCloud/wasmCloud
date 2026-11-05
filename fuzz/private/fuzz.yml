@@ -304,11 +304,13 @@ jobs:
         run: |
           mkdir -p "corpus/$TARGET"
           cp "rust-fuzz/seeds/$TARGET/"* "corpus/$TARGET/"
-      # Runs the binary with the options `cargo fuzz run` would pass.
+      # Runs the binary with the options and ASan defaults `cargo fuzz run`
+      # would pass.
       - name: Fuzz with AddressSanitizer
         env:
           TARGET: ${{ matrix.target }}
           FUZZ_SECONDS: ${{ needs.resolve.outputs.seconds }}
+          ASAN_OPTIONS: detect_odr_violation=0
         run: |
           chmod +x "rust-fuzz/bin/$TARGET"
           mkdir -p "artifacts/$TARGET"
