@@ -61,19 +61,17 @@ pub fn convert_wasi_log_record<R: OtelLogRecord>(
     );
 
     // Set timestamp
-    if let Some(ts) = wasi_record.timestamp {
-        let duration = Duration::new(ts.seconds, ts.nanoseconds);
-        if let Some(time) = UNIX_EPOCH.checked_add(duration) {
-            otel_record.set_timestamp(time);
-        }
+    if let Some(ts) = wasi_record.timestamp
+        && let Some(time) = time_since_epoch(ts.seconds, ts.nanoseconds)
+    {
+        otel_record.set_timestamp(time);
     }
 
     // Set observed timestamp
-    if let Some(ts) = wasi_record.observed_timestamp {
-        let duration = Duration::new(ts.seconds, ts.nanoseconds);
-        if let Some(time) = UNIX_EPOCH.checked_add(duration) {
-            otel_record.set_observed_timestamp(time);
-        }
+    if let Some(ts) = wasi_record.observed_timestamp
+        && let Some(time) = time_since_epoch(ts.seconds, ts.nanoseconds)
+    {
+        otel_record.set_observed_timestamp(time);
     }
 
     // Set severity number (map u8 to Severity enum)
@@ -334,8 +332,16 @@ pub fn extract_counter_values(metrics: &wasi_metrics::ResourceMetrics) -> Vec<Co
 pub(super) fn convert_datetime(
     dt: &super::bindings::wasi::clocks::wall_clock::Datetime,
 ) -> SystemTime {
-    let duration = Duration::new(dt.seconds, dt.nanoseconds);
-    UNIX_EPOCH.checked_add(duration).unwrap_or(UNIX_EPOCH)
+    time_since_epoch(dt.seconds, dt.nanoseconds).unwrap_or(UNIX_EPOCH)
+}
+
+/// The time a guest's datetime names, or `None` if it is past what
+/// [`SystemTime`] holds. `Duration::new` would panic when the nanoseconds carry
+/// past `u64::MAX` seconds.
+fn time_since_epoch(seconds: u64, nanoseconds: u32) -> Option<SystemTime> {
+    Duration::from_secs(seconds)
+        .checked_add(Duration::from_nanos(u64::from(nanoseconds)))
+        .and_then(|duration| UNIX_EPOCH.checked_add(duration))
 }
 
 /// Convert WASI key-value pairs to OpenTelemetry KeyValue attributes
@@ -843,6 +849,20 @@ mod tests {
         assert_eq!(
             output.trace_context().map(|c| c.trace_id),
             Some(TraceId::INVALID)
+        );
+    }
+
+    #[test]
+    fn a_datetime_past_system_time_is_dropped_not_a_panic() {
+        let last = Datetime {
+            seconds: u64::MAX,
+            nanoseconds: 999_999_999,
+        };
+        assert_eq!(convert_datetime(&last), UNIX_EPOCH);
+        assert_eq!(time_since_epoch(u64::MAX, 1_000_000_000), None);
+        assert_eq!(
+            time_since_epoch(10, 1_000_000_020),
+            Some(UNIX_EPOCH + Duration::new(11, 20))
         );
     }
 }
