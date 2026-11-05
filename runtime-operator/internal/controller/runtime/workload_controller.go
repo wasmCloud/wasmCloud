@@ -477,9 +477,10 @@ func materializeLocalResources(ctx context.Context, c client.Client, namespace s
 	return lr, nil
 }
 
-// injectServiceDNSAliases adds host-aliases to wasi:http/incoming-handler
-// HostInterfaces so the wash-runtime DynamicRouter accepts requests arriving
-// via Kubernetes Service DNS. Aliases the workload already lists come first.
+// injectServiceDNSAliases adds host-aliases to the HostInterfaces the host
+// routes incoming wasi:http requests to, p2's incoming-handler and p3's
+// handler, so the wash-runtime DynamicRouter accepts requests arriving via
+// Kubernetes Service DNS. Aliases the workload already lists come first.
 func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, namespace string) {
 	serviceAliases := []string{
 		fmt.Sprintf("%s.%s", svcName, namespace),
@@ -487,7 +488,8 @@ func injectServiceDNSAliases(hostInterfaces []*runtimev2.WitInterface, svcName, 
 	}
 
 	for _, hi := range hostInterfaces {
-		if hi.Namespace != "wasi" || hi.Package != "http" || !slices.Contains(hi.Interfaces, "incoming-handler") {
+		incoming := slices.Contains(hi.Interfaces, "incoming-handler") || slices.Contains(hi.Interfaces, "handler")
+		if hi.Namespace != "wasi" || hi.Package != "http" || !incoming {
 			continue
 		}
 		if hi.Config == nil {
