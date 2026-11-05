@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +21,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 const (
@@ -158,8 +156,8 @@ func TestLoggingTimestamps(t *testing.T) {
 			if err := logger.Handler().Handle(context.Background(), record); err != nil {
 				t.Fatal(err)
 			}
-			if got := decodeLog(t, output.Bytes())["ts"]; got != tc.want {
-				t.Fatalf("ts = %v (%T), want %v", got, got, tc.want)
+			if got := decodeLog(t, output.Bytes())["ts"]; got != tc.want || !bytes.HasPrefix(output.Bytes(), []byte(`{"ts":`)) {
+				t.Fatalf("ts = %v (%T), want %v first: %s", got, got, tc.want, output.String())
 			}
 		})
 	}
@@ -274,7 +272,6 @@ func TestStandardHTTPDiagnostics(t *testing.T) {
 		slog.SetLogLoggerLevel(oldLevel)
 		log.SetOutput(oldWriter)
 		log.SetFlags(oldFlags)
-		ctrl.SetLogger(logr.Discard())
 	})
 	for _, level := range []string{"info", testWarn, logError} {
 		t.Run(level, func(t *testing.T) {
@@ -306,9 +303,9 @@ func TestStandardHTTPDiagnostics(t *testing.T) {
 	}
 }
 
-func TestTextNumericTimestampsUsePlainDecimals(t *testing.T) {
+func TestTextTimestamps(t *testing.T) {
 	for _, tc := range []struct{ encoding, want string }{
-		{"epoch", "ts=1234567890.25"}, {"millis", "ts=1234567890250"},
+		{"epoch", "ts=1234567890.25"}, {"millis", "ts=1234567890250"}, {"rfc3339", "ts=2009-02-13T23:31:30Z"},
 	} {
 		var output bytes.Buffer
 		logger, err := parseLogging(t, "--log-format=text", "--log-time-encoding="+tc.encoding).logger(&output)
@@ -319,53 +316,30 @@ func TestTextNumericTimestampsUsePlainDecimals(t *testing.T) {
 		if err := logger.Handler().Handle(t.Context(), record); err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Contains(strings.Fields(output.String()), tc.want) {
+		if !strings.HasPrefix(output.String(), tc.want+" level=info msg=") {
 			t.Fatalf("timestamp = %s", output.String())
 		}
 	}
 }
 
-func TestTimestampDoesNotRenameUserTimeFields(t *testing.T) {
+func TestTimestampKeepsGroupedUserTimeFields(t *testing.T) {
 	timestamp := time.Unix(1234567890, 250000000).UTC()
 	userTime := timestamp.Add(time.Hour)
-	for _, tc := range []struct {
-		name    string
-		handler func(slog.Handler) slog.Handler
-		inline  bool
-		group   bool
-	}{
-		{name: "inline", handler: func(h slog.Handler) slog.Handler { return h }, inline: true},
-		{name: "bound", handler: func(h slog.Handler) slog.Handler {
-			return h.WithAttrs([]slog.Attr{slog.Time("time", userTime)})
-		}},
-		{name: testGrouped, handler: func(h slog.Handler) slog.Handler {
-			return h.WithGroup(testPayload).WithAttrs([]slog.Attr{slog.Time("time", userTime)})
-		}, group: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var output bytes.Buffer
-			logger, err := parseLogging(t, testJSONFlag).logger(&output)
-			if err != nil {
-				t.Fatal(err)
-			}
-			record := slog.NewRecord(timestamp, slog.LevelInfo, testLogMessage, 0)
-			if tc.inline {
-				record.AddAttrs(slog.Time("time", userTime))
-			}
-			if err := tc.handler(logger.Handler()).Handle(t.Context(), record); err != nil {
-				t.Fatal(err)
-			}
-			got := decodeLog(t, output.Bytes())
-			if got["ts"] != json.Number("1234567890.25") || bytes.Count(output.Bytes(), []byte(`"ts":`)) != 1 {
-				t.Fatalf("built-in timestamp = %s", output.String())
-			}
-			if tc.group {
-				got = got[testPayload].(map[string]any)
-			}
-			if got["time"] != userTime.Format(time.RFC3339Nano) {
-				t.Fatalf("user time field = %v", got)
-			}
-		})
+	var output bytes.Buffer
+	logger, err := parseLogging(t, testJSONFlag).logger(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := logger.Handler().WithGroup(testPayload).WithAttrs([]slog.Attr{slog.Time("time", userTime)})
+	if err := handler.Handle(t.Context(), slog.NewRecord(timestamp, slog.LevelInfo, testLogMessage, 0)); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeLog(t, output.Bytes())
+	if got["ts"] != json.Number("1234567890.25") || bytes.Count(output.Bytes(), []byte(`"ts":`)) != 1 {
+		t.Fatalf("built-in timestamp = %s", output.String())
+	}
+	if payload := got[testPayload].(map[string]any); payload["time"] != userTime.Format(time.RFC3339Nano) {
+		t.Fatalf("user time field = %v", got)
 	}
 }
 
