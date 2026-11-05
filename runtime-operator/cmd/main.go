@@ -42,6 +42,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/logging"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/natsclient"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
 
@@ -160,16 +161,16 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 			"environment is rejected.",
 	)
 
-	logging := loggingOptions{development: true}
-	logging.bindFlags(fs)
+	logOptions := logging.Options{Development: true}
+	logOptions.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	logger, err := logging.logger(os.Stderr)
+	logger, err := logOptions.Logger(os.Stderr)
 	if err != nil {
 		return invalidLoggingError{err}
 	}
-	configureLogging(logger)
+	logging.Configure(logger)
 
 	// OPERATOR_NAMESPACE is required: every Host CRD is created here, and
 	// the namespaced Role for Host CRUD binds to this namespace.
