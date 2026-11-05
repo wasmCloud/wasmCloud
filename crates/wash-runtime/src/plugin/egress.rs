@@ -163,6 +163,15 @@ impl PluginEgressPolicy {
             .with_context(|| format!("native plugin endpoint {target:?} has no host"))?;
         let port = url.port_or_known_default().unwrap_or(default_port);
         let parsed_host = url::Host::parse(host)?;
+        // A non-special scheme leaves its host opaque, so the client dials the
+        // host as written while `Host::parse` percent-decodes and maps it. Only
+        // a host both read the same way is judged.
+        if !host.eq_ignore_ascii_case(&parsed_host.to_string()) {
+            bail!(
+                "native plugin endpoint {target:?} spells its host {host:?} in a form a client \
+                 would not dial as {parsed_host}"
+            );
+        }
         let literal_ip = match &parsed_host {
             url::Host::Ipv4(addr) => Some(core::net::IpAddr::V4(*addr)),
             url::Host::Ipv6(addr) => Some(core::net::IpAddr::V6(*addr)),
@@ -296,10 +305,27 @@ impl PluginEgressPolicy {
 
     /// Checks a TCP `host` and `port` a native client takes from something
     /// other than a URL, such as a parsed postgres or redis connection config.
+    ///
+    /// The rebuilt URL must carry `host` unchanged: a host holding `@`, `/`,
+    /// `?`, `#` or whitespace would otherwise be checked as whatever the URL
+    /// parser cuts it down to, while the client dials the whole string.
     pub fn check_host_port(&self, scheme: &str, host: &str, port: u16) -> anyhow::Result<()> {
         let target = match host.parse::<core::net::Ipv6Addr>() {
             Ok(_) => format!("{scheme}://[{host}]:{port}"),
-            Err(_) => format!("{scheme}://{host}:{port}"),
+            Err(_) => {
+                let target = format!("{scheme}://{host}:{port}");
+                let carried = url::Url::parse(&target).ok();
+                if !carried
+                    .as_ref()
+                    .and_then(url::Url::host_str)
+                    .is_some_and(|carried| carried.eq_ignore_ascii_case(host))
+                {
+                    bail!(
+                        "native plugin endpoint host {host:?} is not a plain host name or address"
+                    );
+                }
+                target
+            }
         };
         self.check_url(&target, Protocol::Tcp, port)
     }
@@ -671,5 +697,67 @@ mod tests {
             .unwrap();
         assert_eq!(meters.would_deny(DenyReason::NotPermitted), 1);
         assert_eq!(meters.would_deny(DenyReason::BlockedRange), 1);
+    }
+
+    /// An opaque host is dialed as written, so an encoded spelling of a
+    /// permitted address is not that address.
+    #[test]
+    fn an_encoded_host_is_not_the_address_it_decodes_to() {
+        let egress = PluginEgressPolicy::allowing(&[
+            "nats://10.0.0.5:4222",
+            "redis://10.0.0.5:6379",
+            "nats://allowed.com:4222",
+        ]);
+        egress
+            .check_url("nats://10.0.0.5:4222", Protocol::Tcp, 4222)
+            .unwrap();
+        egress
+            .check_url("nats://allowed.com:4222", Protocol::Tcp, 4222)
+            .unwrap();
+        for target in [
+            "nats://10%2E0%2E0%2E5:4222",
+            "redis://10%2E0%2E0%2E5:6379",
+            "nats://%EF%BC%91%EF%BC%90.0.0.5:4222",
+            "nats://0x0a.0.0.5:4222",
+            "nats://allowed%2Ecom:4222",
+        ] {
+            assert!(
+                egress.check_url(target, Protocol::Tcp, 4222).is_err(),
+                "{target} must be refused"
+            );
+        }
+        assert!(
+            egress
+                .check_nats_server("nats://10%2E0%2E0%2E5:4222")
+                .is_err()
+        );
+    }
+
+    /// A host a client config hands over must reach the check whole, not as
+    /// the part a URL parser keeps.
+    #[test]
+    fn a_host_with_url_delimiters_is_refused() {
+        let egress =
+            PluginEgressPolicy::allowing(&["postgres://10.0.0.5:5432", "allowed.com:5432"]);
+        egress
+            .check_host_port("postgres", "10.0.0.5", 5432)
+            .unwrap();
+        egress
+            .check_host_port("postgres", "allowed.com", 5432)
+            .unwrap();
+        for host in [
+            "x@10.0.0.5",
+            "evil.com@allowed.com",
+            "evil.com#@allowed.com",
+            "evil.com?@allowed.com",
+            "allowed.com/x",
+            "allowed.c\nom",
+            "allowed.com ",
+        ] {
+            assert!(
+                egress.check_host_port("postgres", host, 5432).is_err(),
+                "{host:?} must be refused"
+            );
+        }
     }
 }
