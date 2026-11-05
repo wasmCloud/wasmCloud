@@ -31,6 +31,7 @@
 /.github/               @wasmCloud/ci-maintainers
 /install.sh             @wasmCloud/ci-maintainers
 /install.ps1            @wasmCloud/ci-maintainers
+/vex/                   @wasmCloud/ci-maintainers
 /Dockerfile             @wasmCloud/ci-maintainers
 /.dockerignore          @wasmCloud/ci-maintainers
 /RELEASE_RUNBOOK.md     @wasmCloud/ci-maintainers
