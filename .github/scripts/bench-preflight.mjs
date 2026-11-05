@@ -238,6 +238,13 @@ if (process.env.WASMCLOUD_BENCH_K6 === '1') {
   if (!hasDocker || spawnSync('docker', ['info'], { stdio: 'ignore' }).status !== 0) {
     fail('docker is not usable by this user');
   }
+  // A non-release ref builds images from the tree, and the Dockerfile needs
+  // BuildKit, which `docker build` uses only when the buildx plugin exists.
+  if (spawnSync('docker', ['buildx', 'version'], { stdio: 'ignore' }).status !== 0) {
+    fail(
+      'docker buildx not installed (scripts/bench/ansible/provision.yml installs docker-buildx)',
+    );
+  }
   for (const tool of ['kind', 'kubectl', 'helm', 'k6']) {
     if (spawnSync('sh', ['-c', `command -v ${tool}`], { stdio: 'ignore' }).status !== 0) {
       fail(`${tool} not on PATH (scripts/bench/ansible/provision.yml installs it)`);

@@ -17,7 +17,7 @@ and gate regressions commit by commit. k6bench measures a deployed stack:
 
 Prerequisites:
 
-- Docker
+- Docker with the buildx plugin (`--build-local` needs BuildKit)
 - [kind](https://kind.sigs.k8s.io)
 - kubectl
 - helm

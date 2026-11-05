@@ -190,6 +190,9 @@ registry_in_cluster() {
 
 build_images() {
   local tag ctx
+  # The legacy builder leaves WORKDIR root-owned and the nonroot build fails.
+  docker buildx version >/dev/null 2>&1 ||
+    die "--build-local needs docker buildx (BuildKit); install the buildx plugin"
   ctx="$(mktemp -d)"
   # git ls-files, not the directory: .dockerignore skips only target/, and
   # examples/*/target and fixture targets are several GB. COPYFILE_DISABLE

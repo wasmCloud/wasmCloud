@@ -255,9 +255,11 @@
     # daemon is gone, so criterion and gungraun see the host they always
     # have. The userland proxy is off so published ports go through iptables
     # instead of a copying process (run.sh targets the kind node's IP anyway).
+    # buildx makes `docker build` use BuildKit: the legacy builder creates the
+    # Dockerfile's WORKDIR as root, so its nonroot `cargo build` can't write.
     - name: Apt — Docker engine
       ansible.builtin.apt:
-        name: docker.io
+        name: [docker.io, docker-buildx]
         state: present
       tags: [k6bench]
 
