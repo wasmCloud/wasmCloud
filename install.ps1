@@ -30,6 +30,8 @@ $ErrorActionPreference = 'Stop'
 
 # Constants
 $REPO = "wasmcloud/wasmCloud"
+# Release binaries are attested only by release-tag.yml running on main.
+$SIGNER_IDENTITY = "https://github.com/wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main"
 $TMP_DIR = Join-Path $env:TEMP "wash-install-$((Get-Date).Ticks)"
 
 # Helper functions
@@ -153,6 +155,8 @@ function Test-ArtifactSignature {
     try {
         $ghOutput = gh attestation verify $ArtifactPath `
             --repo $REPO `
+            --cert-identity $SIGNER_IDENTITY `
+            --source-ref refs/heads/main `
             --predicate-type "https://slsa.dev/provenance/v1" 2>&1
 
         if ($LASTEXITCODE -ne 0) {

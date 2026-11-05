@@ -375,7 +375,7 @@ jobs:
       # Verify with:
       #   cosign verify-blob-attestation \
       #     --bundle wash.sigstore.json \
-      #     --certificate-identity-regexp 'https://github\.com/wasmCloud/wasmCloud/' \
+      #     --certificate-identity https://github.com/wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
       #     wash-x86_64-unknown-linux-gnu
       - name: Stage attestation bundle for release upload
