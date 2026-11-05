@@ -8,6 +8,7 @@ import (
 
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/config/configfile"
+	"github.com/docker/cli/cli/config/credentials"
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
@@ -184,12 +185,13 @@ func MaterializeImagePullSecret(ctx context.Context,
 	// extract the domain from the normalized reference
 	// assume the default docker registry if none is specified
 	configKey := getAuthConfigKey(reference.Domain(registryRef))
-	authConfig, err := cfg.GetAuthConfig(configKey)
+	// Only the secret's own auths. Its credsStore and credHelpers name programs
+	// on the operator's PATH, and DOCKER_AUTH_CONFIG holds the operator's own
+	// credentials: a Workload's secret must reach neither.
+	authConfig, err := credentials.NewFileStore(cfg).Get(configKey)
 	if err != nil {
 		return nil, fmt.Errorf("getting auth config for image %q: %w", image, err)
 	}
-
-	// NOTE(lxf): here we have the opportunity to run credential helpers if needed
 
 	return &runtimev2.ImagePullSecret{
 		Username: authConfig.Username,
