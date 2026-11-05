@@ -503,16 +503,9 @@ pub trait Router: Send + Sync + 'static {
 /// touched shard or replica set. Path buckets remain a small ordered vector.
 pub struct DynamicRouter {
     /// Maps a hostname to the path-scoped buckets registered under it, split
-    /// across shards by hostname. Updates copy persistent tree paths.
+    /// across shards by hostname, each with the lock its writers take.
+    /// Updates copy persistent tree paths.
     hosts: Box<[RouteShard; ROUTE_SHARDS]>,
-    /// One writer lock per `hosts` shard. A writer holds it across its
-    /// load-copy-store of that shard, so two writers to one shard never copy
-    /// the same snapshot and lose an edit, and an edit of one shard never
-    /// takes another shard's lock. It lives outside [`RouteShard`] because a
-    /// waiting writer writes the lock word: inside the shard, a burst of
-    /// writers to one hostname would keep taking the cache line that every
-    /// request for that hostname loads. Requests never take it.
-    route_writers: Box<[RouteWriter; ROUTE_SHARDS]>,
     /// Maps workload_id -> every route (primary + aliases, each with its path
     /// prefix) registered for it, so `on_workload_unbind` can remove all
     /// entries cleanly. Split across shards by workload id.
@@ -535,21 +528,23 @@ pub struct DynamicRouter {
 /// one.
 type WorkloadRecord = Arc<std::sync::Mutex<Option<Vec<IngressRoute>>>>;
 
+/// A value on a cache line pair of its own.
+///
+/// The 128-byte alignment is there to avoid false sharing: two values that
+/// share a cache line contend whenever either is written, even though no
+/// thread touches the other's data. 128 rather than 64 because x86's
+/// adjacent-line prefetcher pulls lines in pairs, and Apple's M-series cores
+/// use 128-byte lines.
+#[repr(align(128))]
+#[derive(Default)]
+struct CacheAligned<T>(T);
+
 /// One shard of [`DynamicRouter`]'s workload map.
 ///
-/// On a cache line pair of its own, like [`RouteShard`]: every register and
-/// unregister writes its lock word and map, so neighbouring shards would
-/// otherwise take one line from each other's writers.
-#[repr(align(128))]
+/// Every register and unregister writes its lock word and map, so it is
+/// [`CacheAligned`] to keep neighbouring shards' writers off one line.
 #[derive(Default)]
-struct WorkloadShard(std::sync::Mutex<HashMap<String, WorkloadRecord>>);
-
-/// The writer lock of one `hosts` shard, on a cache line pair of its own for
-/// the same reason as [`WorkloadShard`]: writers to neighbouring shards must
-/// not contend on one line.
-#[repr(align(128))]
-#[derive(Default)]
-struct RouteWriter(std::sync::Mutex<()>);
+struct WorkloadShard(CacheAligned<std::sync::Mutex<HashMap<String, WorkloadRecord>>>);
 
 /// One shard of [`DynamicRouter`]'s hostname table.
 ///
@@ -561,11 +556,24 @@ struct RouteWriter(std::sync::Mutex<()>);
 /// hostname's bucket vector; replica sets share their unchanged tree nodes.
 type HostBuckets = imbl::HashMap<Arc<str>, Arc<Vec<PathBucket>>>;
 
-/// A shard on its own cache line pair, so a writer storing one shard does not
-/// invalidate the line readers of its neighbours load from.
-#[repr(align(128))]
+/// One shard of [`DynamicRouter`]'s hostname table, and its writer lock.
+///
+/// Each field is [`CacheAligned`], so the two never share a cache line with
+/// each other or with a neighbouring shard:
+/// - `routes` is what every request for these hostnames loads, so a writer
+///   storing a neighbouring shard must not invalidate its line.
+/// - `writer` has its lock word written by every writer that takes or waits
+///   on it, so a burst of writers to one hostname must not keep taking the
+///   line its requests load.
 #[derive(Default)]
-struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
+struct RouteShard {
+    routes: CacheAligned<arc_swap::ArcSwap<HostBuckets>>,
+    /// Held by a writer across its load-copy-store of `routes`, so two writers
+    /// to one shard never copy the same snapshot and lose an edit, and an
+    /// edit of one shard never takes another shard's lock. Requests never
+    /// take it.
+    writer: CacheAligned<std::sync::Mutex<()>>,
+}
 
 /// Bound each snapshot publication to one hostname shard.
 ///
@@ -573,17 +581,17 @@ struct RouteShard(arc_swap::ArcSwap<HostBuckets>);
 /// shards no longer bound how much a write copies. They keep a writer's store
 /// off the `ArcSwap` and cache lines that requests for other hostnames load,
 /// and keep each shard's tree a level or two shallower. 256 keeps an empty
-/// router small: 32 KiB of 128-byte shards, plus one ~48-byte `Arc` per shard
-/// for its empty map (an empty `imbl::HashMap` allocates no root node). The
-/// writer locks and the workload map use the same count of 128-byte slots and
-/// add 64 KiB (an empty `HashMap` allocates nothing).
+/// router small: 64 KiB of 256-byte shards (a 128-byte slot each for the
+/// table and its writer lock), plus one ~48-byte `Arc` per shard for its
+/// empty map (an empty `imbl::HashMap` allocates no root node). The workload
+/// map uses the same count of 128-byte slots and adds 32 KiB (an empty
+/// `HashMap` allocates nothing).
 const ROUTE_SHARDS: usize = 256;
 
 impl Default for DynamicRouter {
     fn default() -> Self {
         Self {
             hosts: Box::new(std::array::from_fn(|_| RouteShard::default())),
-            route_writers: Box::new(std::array::from_fn(|_| RouteWriter::default())),
             workload_to_host: Box::new(std::array::from_fn(|_| WorkloadShard::default())),
         }
     }
@@ -654,8 +662,8 @@ fn lock_routes<G>(result: std::sync::LockResult<G>) -> G {
     result.unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The shard `key` lives in: a hostname's in [`DynamicRouter`]'s `hosts` and
-/// `route_writers`, a workload id's in its `workload_to_host`. FNV-1a rather
+/// The shard `key` lives in: a hostname's in [`DynamicRouter`]'s `hosts`, a
+/// workload id's in its `workload_to_host`. FNV-1a rather
 /// than the maps' SipHash: it runs on every request, the shard index needs
 /// spread rather than DoS resistance (a probe cannot change which shard a
 /// registered name lives in), and it folds ASCII case so a request's
@@ -684,12 +692,12 @@ struct WouldBlock;
 
 impl DynamicRouter {
     fn shard(&self, index: usize) -> &arc_swap::ArcSwap<HostBuckets> {
-        &shard_slot(&self.hosts, index).0
+        &shard_slot(&self.hosts, index).routes.0
     }
 
     /// The writer lock for `hosts` shard `index`.
     fn route_writer(&self, index: usize) -> &std::sync::Mutex<()> {
-        &shard_slot(&self.route_writers, index).0
+        &shard_slot(&self.hosts, index).writer.0
     }
 
     /// The workload map shard that records `workload_id`.
@@ -697,7 +705,9 @@ impl DynamicRouter {
         &self,
         workload_id: &str,
     ) -> &std::sync::Mutex<HashMap<String, WorkloadRecord>> {
-        &shard_slot(&self.workload_to_host, shard_index(workload_id)).0
+        &shard_slot(&self.workload_to_host, shard_index(workload_id))
+            .0
+            .0
     }
 
     /// The record the workload map holds for `workload_id`, if any.
@@ -880,11 +890,13 @@ impl DynamicRouter {
     /// poisoned lock, so a writer that panicked fails the test that asks.
     #[cfg(test)]
     fn is_empty(&self) -> bool {
-        self.hosts.iter().all(|shard| shard.0.load().is_empty())
+        self.hosts
+            .iter()
+            .all(|shard| shard.routes.0.load().is_empty())
             && self
                 .workload_to_host
                 .iter()
-                .all(|shard| shard.0.lock().unwrap().is_empty())
+                .all(|shard| shard.0.0.lock().unwrap().is_empty())
     }
 
     /// How many workloads the workload map records. Panics on a poisoned
@@ -893,7 +905,7 @@ impl DynamicRouter {
     fn recorded_workloads(&self) -> usize {
         self.workload_to_host
             .iter()
-            .map(|shard| shard.0.lock().unwrap().len())
+            .map(|shard| shard.0.0.lock().unwrap().len())
             .sum()
     }
 
@@ -7107,7 +7119,11 @@ mod tests {
                         .host_buckets("shared.scale.test")
                         .map_or(0, |buckets| buckets.iter().map(|b| b.workloads.len()).sum())
                 } else {
-                    router.hosts.iter().map(|shard| shard.0.load().len()).sum()
+                    router
+                        .hosts
+                        .iter()
+                        .map(|shard| shard.routes.0.load().len())
+                        .sum()
                 };
                 assert_eq!(recorded, REGISTERS, "a registration left no record");
                 assert_eq!(routed, REGISTERS, "a registration left no route");
