@@ -3,6 +3,7 @@ resolver = "3"
 exclude = ["fuzz", "vendor"]
 default-members = ["crates/wash"]
 members = [
+    "crates/bench-gpu",
     "crates/bench-scale",
     "crates/bench-tools",
     "crates/wash-runtime",
