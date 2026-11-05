@@ -66,6 +66,10 @@ jobs:
           persist-credentials: false
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          # The private fuzz workflow is deployed from here but lives outside
+          # .github/workflows, so name it explicitly.
+          inputs: . fuzz/private/fuzz.yml
         env:
           # Used by zizmor for online audits (e.g. checking whether a
           # referenced action's tag still resolves to its pinned SHA).
@@ -86,6 +90,10 @@ jobs:
         run: |
           node --test .github/scripts/release-*.test.mjs
           cargo test --locked -p xtask fuzz
+      - name: Lint private fuzz workflow
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -shellcheck= -pyflakes= fuzz/private/fuzz.yml
 
   gate:
     name: gate-lint-workflows

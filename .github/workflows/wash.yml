@@ -62,6 +62,7 @@ jobs:
               - '.github/scripts/release-sboms.mjs'
               - '.cargo/**'
               - 'xtask/**'
+              - 'fuzz/**'
               - 'scripts/bench/run-bench.sh'
               - 'scripts/bench/install-runner.sh'
               - 'scripts/bench/ansible/**'
@@ -135,6 +136,20 @@ jobs:
       - name: Check parser feature build
         if: matrix.os == 'ubuntu-latest'
         run: cargo check --locked -p wash-runtime --no-default-features --features washlet
+      # The private release campaign stages these harnesses against the
+      # release; catch API drift here instead. The libFuzzer archive is only
+      # linked, so `cargo check` accepts a placeholder.
+      - name: Check fuzz harnesses
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          FUZZ_SOURCE="${RUNNER_TEMP}/fuzz-source"
+          git worktree add --detach "${FUZZ_SOURCE}"
+          cargo xtask fuzz prepare --source "${FUZZ_SOURCE}" --language rust
+          cargo metadata --manifest-path "${FUZZ_SOURCE}/fuzz/Cargo.toml" --format-version 1 > /dev/null
+          cargo xtask fuzz verify-lock --source "${FUZZ_SOURCE}"
+          touch "${RUNNER_TEMP}/libclang_rt.fuzzer-x86_64.a"
+          LLVM_LIBFUZZER_PATH="${RUNNER_TEMP}/libclang_rt.fuzzer-x86_64.a" RUSTFLAGS="--cfg fuzzing" \
+            cargo check --locked --manifest-path "${FUZZ_SOURCE}/fuzz/Cargo.toml" --bins
       # One pass with the optional features on. A default-feature pass would
       # recompile the tree to re-run the ~58 targets neither feature gates, so
       # nothing here runs in the configuration the released image ships.

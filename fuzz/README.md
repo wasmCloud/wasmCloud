@@ -75,6 +75,12 @@ export LLVM_LIBFUZZER_PATH=$(clang --print-file-name=libclang_rt.fuzzer-x86_64.a
 export LLVM_LIBFUZZER_PATH=$(/opt/homebrew/opt/llvm/bin/clang --print-file-name=libclang_rt.fuzzer_osx.a)
 ```
 
+The private workflow builds every Rust target once on a dated nightly, set as
+`RUSTUP_TOOLCHAIN` in `private/fuzz.yml`, and then fuzzes each binary in its
+own job. Advance that date deliberately; an unpinned nightly can fail the build
+with new warnings. Public CI's `wash` workflow compiles the harnesses against
+each change, so API drift fails there rather than in a private campaign.
+
 Install nightly with `rust-src` and cargo-fuzz, then prepare a disposable source
 checkout. Run from the harness repository root, replacing `<release-sha>` with
 the commit to test:

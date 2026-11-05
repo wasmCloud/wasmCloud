@@ -23,8 +23,8 @@ repositories. The `release-fuzz` trust policy grants only `actions: write` and
 `main`. The repository ID and workflow identity are checked. No stored
 credentials or callback app are needed.
 
-The dispatch step exchanges a short-lived app token and revokes it when
-finished. Private fuzz workers have read-only repository access and no OIDC
+The release train mints a short-lived app token with `octo-sts/action`,
+which revokes it when the job finishes. Private fuzz workers have read-only repository access and no OIDC
 permission or release credentials.
 
 ## Harness revision

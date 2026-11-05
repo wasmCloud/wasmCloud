@@ -78,11 +78,8 @@ concurrency:
 jobs:
   promote:
     needs: gate
-    # Release signatures identify this workflow on main.
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      needs.gate.outputs.run == 'true' &&
-      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    # The gate checks the ref and the release-train conclusion.
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -721,7 +718,15 @@ jobs:
     # was dispatched (off-cycle patch). The latter is the only signal we
     # have that the upstream was a manual run; without it, an off-cycle
     # dispatch on an even-parity week would silently skip promote.
+    #
+    # This gate also carries every other promote condition, so promote only
+    # checks `run`: release signatures identify this workflow on main, and a
+    # failed release-train never promotes.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reads the merged release SHA uploaded by the triggering release-train.
+      actions: read
     outputs:
       run: ${{ steps.gate.outputs.run }}
       sha: ${{ steps.commit.outputs.sha }}
@@ -730,8 +735,19 @@ jobs:
         id: gate
         env:
           UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          UPSTREAM_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -euo pipefail
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "not on main — release signatures must identify this workflow on main"
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" && "${UPSTREAM_CONCLUSION}" != "success" ]]; then
+            echo "release-train concluded ${UPSTREAM_CONCLUSION} — skipping"
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           if [[ "${{ github.event_name }}" == "workflow_dispatch" || "${UPSTREAM_EVENT}" == "workflow_dispatch" ]]; then
             echo "manual dispatch (this workflow or upstream release-train) — bypassing every-two-weeks gate"
             echo "run=true" >> "${GITHUB_OUTPUT}"
@@ -748,19 +764,32 @@ jobs:
             echo "ISO week ${WEEK} does not match parity ${TRAIN_PARITY} — skipping (every-two-weeks cadence)"
             echo "run=false" >> "${GITHUB_OUTPUT}"
           fi
-      - name: Resolve release commit
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          steps.gate.outputs.run == 'true' &&
-          (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.sha || 'main' }}
-          persist-credentials: false
+      # A recovery dispatch names its SHA. Otherwise promote the commit the
+      # triggering release-train merged, not whatever main is by now.
       - name: Pin release commit
         id: commit
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          steps.gate.outputs.run == 'true' &&
-          (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT_SHA: ${{ inputs.sha }}
+          UPSTREAM_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          REF="${INPUT_SHA}"
+          if [[ -z "${REF}" && -n "${UPSTREAM_RUN}" ]]; then
+            if gh run download "${UPSTREAM_RUN}" -R "${REPO}" -n release-sha -D "${RUNNER_TEMP}/release-sha"; then
+              REF=$(cat "${RUNNER_TEMP}/release-sha/release-sha")
+            else
+              echo "::warning::release-train run ${UPSTREAM_RUN} has no merged release SHA — falling back to main"
+            fi
+          fi
+          REF="${REF:-main}"
+          if [[ ! "${REF}" =~ ^([0-9a-f]{7,40}|main)$ ]]; then
+            echo "invalid release ref: ${REF}" >&2
+            exit 1
+          fi
+          SHA=$(gh api "repos/${REPO}/commits/${REF}" --jq .sha)
+          [[ "${SHA}" =~ ^[0-9a-f]{40}$ ]]
+          echo "pinned ${REF} to ${SHA}"
+          echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"
