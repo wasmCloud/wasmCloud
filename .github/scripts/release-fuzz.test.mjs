@@ -90,7 +90,7 @@ const mergeStep = train.match(/      - name: Wait for PR auto-merge to complete\
 const mergeScript = mergeStep.split('        run: |\n')[1].split('\n').map((line) => line.slice(10)).join('\n');
 
 for (const resolution of ['valid', 'missing', 'error']) {
-  test(`release train completes after merge with ${resolution} fuzz SHA resolution`, () => {
+  test(`release train records the merged SHA or fails after merge (${resolution} resolution)`, () => {
     const root = mkdtempSync(join(tmpdir(), 'release-fuzz-merge-'));
     try {
       const gh = join(root, 'gh');
@@ -103,9 +103,9 @@ for (const resolution of ['valid', 'missing', 'error']) {
       const result = spawnSync('bash', ['-c', mergeScript], { encoding: 'utf8',
         env: { ...process.env, PATH: `${root}${delimiter}${process.env.PATH}`, GITHUB_ENV: join(root, 'env'),
           GITHUB_OUTPUT: output, PR_URL: 'https://github.com/wasmCloud/wasmCloud/pull/123' } });
-      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.status, resolution === 'valid' ? 0 : 1, result.stderr);
       assert.equal(readFileSync(output, 'utf8'), resolution === 'valid' ? `sha=${sha}\n` : '');
-      if (resolution !== 'valid') assert.match(result.stdout, /::warning::/);
+      if (resolution !== 'valid') assert.match(result.stdout, /::error::.*sha=<merge-sha>/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

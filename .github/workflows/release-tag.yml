@@ -778,11 +778,11 @@ jobs:
           set -euo pipefail
           REF="${INPUT_SHA}"
           if [[ -z "${REF}" && -n "${UPSTREAM_RUN}" ]]; then
-            if gh run download "${UPSTREAM_RUN}" -R "${REPO}" -n release-sha -D "${RUNNER_TEMP}/release-sha"; then
-              REF=$(cat "${RUNNER_TEMP}/release-sha/release-sha")
-            else
-              echo "::warning::release-train run ${UPSTREAM_RUN} has no merged release SHA — falling back to main"
+            if ! gh run download "${UPSTREAM_RUN}" -R "${REPO}" -n release-sha -D "${RUNNER_TEMP}/release-sha"; then
+              echo "::error::Could not read the merged release SHA from release-train run ${UPSTREAM_RUN}; dispatch release-tag with sha=<merge-sha>"
+              exit 1
             fi
+            REF=$(cat "${RUNNER_TEMP}/release-sha/release-sha")
           fi
           REF="${REF:-main}"
           if [[ ! "${REF}" =~ ^([0-9a-f]{7,40}|main)$ ]]; then
@@ -791,5 +791,12 @@ jobs:
           fi
           SHA=$(gh api "repos/${REPO}/commits/${REF}" --jq .sha)
           [[ "${SHA}" =~ ^[0-9a-f]{40}$ ]]
+          # Release signatures identify this workflow on main, so only main's
+          # history may be promoted, whichever run supplied the SHA.
+          STATUS=$(gh api "repos/${REPO}/compare/${SHA}...main" --jq .status)
+          if [[ "${STATUS}" != "ahead" && "${STATUS}" != "identical" ]]; then
+            echo "::error::${SHA} is not on main (compare status: ${STATUS})"
+            exit 1
+          fi
           echo "pinned ${REF} to ${SHA}"
           echo "sha=${SHA}" >> "${GITHUB_OUTPUT}"

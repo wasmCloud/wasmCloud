@@ -138,7 +138,9 @@ jobs:
         run: cargo check --locked -p wash-runtime --no-default-features --features washlet
       # The private release campaign stages these harnesses against the
       # release; catch API drift here instead. The libFuzzer archive is only
-      # linked, so `cargo check` accepts a placeholder.
+      # linked, so `cargo check` accepts a placeholder. `--cfg fuzzing` changes
+      # every dependency's fingerprint, so the build gets its own directory
+      # under `target/`, which rust-cache saves with the rest.
       - name: Check fuzz harnesses
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -149,6 +151,7 @@ jobs:
           cargo xtask fuzz verify-lock --source "${FUZZ_SOURCE}"
           touch "${RUNNER_TEMP}/libclang_rt.fuzzer-x86_64.a"
           LLVM_LIBFUZZER_PATH="${RUNNER_TEMP}/libclang_rt.fuzzer-x86_64.a" RUSTFLAGS="--cfg fuzzing" \
+            CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target/fuzz-check" \
             cargo check --locked --manifest-path "${FUZZ_SOURCE}/fuzz/Cargo.toml" --bins
       # One pass with the optional features on. A default-feature pass would
       # recompile the tree to re-run the ~58 targets neither feature gates, so
