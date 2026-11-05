@@ -7,7 +7,9 @@
 use std::sync::Arc;
 
 use crate::plugin::PluginEgressPolicy;
-use crate::plugin::multiplex::{BackendProvider, check_nats_url, connect_nats};
+use crate::plugin::multiplex::{
+    BackendProvider, check_nats_url, check_nats_url_resolved, connect_nats,
+};
 
 use super::{BrokerMessage, MsgBackend, MsgError, MsgId};
 
@@ -112,5 +114,13 @@ impl BackendProvider<MsgId> for NatsMsgProvider {
         policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         check_nats_url(config, policy)
+    }
+
+    async fn check_resolved_egress(
+        &self,
+        config: &crate::wit::Config,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        check_nats_url_resolved(config, policy).await
     }
 }

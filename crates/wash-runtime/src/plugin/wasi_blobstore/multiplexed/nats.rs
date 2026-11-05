@@ -14,7 +14,9 @@ use futures::StreamExt;
 use tokio::io::AsyncReadExt;
 
 use crate::plugin::PluginEgressPolicy;
-use crate::plugin::multiplex::{BackendProvider, check_nats_url, connect_nats};
+use crate::plugin::multiplex::{
+    BackendProvider, check_nats_url, check_nats_url_resolved, connect_nats,
+};
 
 use super::{
     BlobBackend, BlobBackendError, BlobId, BlobResult, ContainerInfo, ObjectInfo, clamp_range,
@@ -248,5 +250,13 @@ impl BackendProvider<BlobId> for NatsBlobProvider {
         policy: &PluginEgressPolicy,
     ) -> anyhow::Result<()> {
         check_nats_url(config, policy)
+    }
+
+    async fn check_resolved_egress(
+        &self,
+        config: &crate::wit::Config,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        check_nats_url_resolved(config, policy).await
     }
 }

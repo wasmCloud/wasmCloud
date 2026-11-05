@@ -25,9 +25,9 @@
 //! to [`Multiplexer::configure_egress_policy`]. Every bind then runs
 //! [`BackendProvider::check_egress`] on the resolved config *before* the pool
 //! is consulted, so a pooled connection is never handed to a binding whose url
-//! the policy refuses. A url naming a host is matched by name only: the client
-//! resolves it itself, so the host's egress address ranges hold only for a url
-//! that names an address.
+//! the policy refuses. A url naming a host is matched by name, then
+//! [`BackendProvider::check_resolved_egress`] judges what it resolves to now.
+//! The client resolves it again itself, so a later reconnect is not judged.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,7 +102,8 @@ pub trait BackendProvider<Id>: Send + Sync {
     /// Build a backend from a named host interface's config.
     ///
     /// `egress` is the plugin's declared ceiling, already checked against
-    /// `config` by [`BackendProvider::check_egress`]; a client that can learn
+    /// `config` by [`BackendProvider::check_egress`] and
+    /// [`BackendProvider::check_resolved_egress`]; a client that can learn
     /// further endpoints on the wire should stay on the checked ones under it.
     async fn instantiate(
         &self,
@@ -112,6 +113,16 @@ pub trait BackendProvider<Id>: Send + Sync {
     /// Check every endpoint `config` would dial against the plugin's declared
     /// ceiling. A provider that does not connect out returns `Ok(())`.
     fn check_egress(&self, config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()>;
+    /// Check what the endpoints [`BackendProvider::check_egress`] accepted
+    /// resolve to now. Runs on every bind, before the pool, so a pooled
+    /// connection answers to the current policy too.
+    async fn check_resolved_egress(
+        &self,
+        _config: &Config,
+        _policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// A pool key for connection reuse, or `None` to never pool.
     ///
     /// Providers backed by a shared external connection (redis, NATS) return
@@ -289,19 +300,21 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
         // handed out just because some earlier bind opened it.
         let egress = self.egress.load_full();
         if let Some(policy) = &egress {
-            provider
-                .check_egress(&iface.config, policy)
-                .with_context(|| {
-                    format!(
-                        "{}:{} binding `{}` (backend '{backend}') is refused by the egress \
+            let checked = match provider.check_egress(&iface.config, policy) {
+                Ok(()) => provider.check_resolved_egress(&iface.config, policy).await,
+                Err(e) => Err(e),
+            };
+            checked.with_context(|| {
+                format!(
+                    "{}:{} binding `{}` (backend '{backend}') is refused by the egress \
                          policy declared for this plugin",
-                        self.namespace,
-                        self.package,
-                        crate::plugin::bindings::describe_binding(
-                            iface.name.as_deref().unwrap_or_default()
-                        )
+                    self.namespace,
+                    self.package,
+                    crate::plugin::bindings::describe_binding(
+                        iface.name.as_deref().unwrap_or_default()
                     )
-                })?;
+                )
+            })?;
         }
         let egress = egress.as_deref();
 
@@ -506,6 +519,18 @@ pub(crate) fn check_nats_url(config: &Config, policy: &PluginEgressPolicy) -> an
     }
 }
 
+/// What a multiplexed NATS backend's `url`, which [`check_nats_url`]
+/// accepted, resolves to now.
+pub(crate) async fn check_nats_url_resolved(
+    config: &Config,
+    policy: &PluginEgressPolicy,
+) -> anyhow::Result<()> {
+    match config.value("url") {
+        Some(url) => url.guard("url", policy.check_nats_server_resolved(url.expose()).await),
+        None => Ok(()),
+    }
+}
+
 /// Drop initialized pool entries idle longer than `ttl`. In-flight entries
 /// (cell not yet initialized) are always kept — they are being connected right
 /// now. Dropping an entry releases the pool's reference to the backend; a
@@ -678,6 +703,7 @@ mod tests {
         count: AtomicUsize,
         pooled: bool,
         delay: Duration,
+        refuse_resolved: AtomicBool,
     }
 
     impl CountingProvider {
@@ -693,6 +719,7 @@ mod tests {
                 count: AtomicUsize::new(0),
                 pooled,
                 delay,
+                refuse_resolved: AtomicBool::new(false),
             })
         }
     }
@@ -718,6 +745,16 @@ mod tests {
                 crate::host::declared_port::Protocol::Tcp,
                 6379,
             )
+        }
+        async fn check_resolved_egress(
+            &self,
+            _: &Config,
+            _: &PluginEgressPolicy,
+        ) -> anyhow::Result<()> {
+            if self.refuse_resolved.load(SeqCst) {
+                anyhow::bail!("resolves into a denied range");
+            }
+            Ok(())
         }
         fn pool_key(&self, config: &Config) -> Option<String> {
             self.pooled
@@ -914,6 +951,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(provider.count.load(SeqCst), 2);
+    }
+
+    /// What a name resolves to is judged on every bind, so a pooled connection
+    /// is not handed out once the name no longer passes.
+    #[tokio::test]
+    async fn resolution_is_checked_before_a_pooled_connection_is_reused() {
+        let provider = CountingProvider::new(true);
+        let mux = Multiplexer::new("wasi", "keyvalue", "test").with_provider(provider.clone());
+        mux.configure_egress_policy(PluginEgressPolicy::allowing(&["redis://db.example:6379"]))
+            .unwrap();
+        mux.instantiate(&url_iface("redis://db.example:6379"))
+            .await
+            .unwrap();
+
+        provider.refuse_resolved.store(true, SeqCst);
+        let err = mux
+            .instantiate(&url_iface("redis://db.example:6379"))
+            .await
+            .expect_err("a pooled connection whose name no longer passes must be refused");
+        assert!(format!("{err:#}").contains("denied range"), "{err:#}");
+        assert_eq!(provider.count.load(SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_nats_url_resolving_to_loopback_is_refused() {
+        let policy = PluginEgressPolicy::allowing(&["nats://localhost:4222"]);
+        let config = Config::from_iter([("url", "nats://localhost:4222")]);
+        check_nats_url_resolved(&config, &policy).await.unwrap_err();
+        check_nats_url_resolved(&Config::new(), &policy)
+            .await
+            .unwrap();
     }
 
     /// A malformed url is reported as malformed, not as a policy refusal.

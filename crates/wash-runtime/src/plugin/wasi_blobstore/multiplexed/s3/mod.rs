@@ -488,8 +488,7 @@ impl BackendProvider<BlobId> for S3BlobProvider {
         )))
     }
 
-    /// The endpoint the client dials, derived as `AmazonS3Builder::build`
-    /// derives it, without the bucket.
+    /// Checks the endpoint the client dials ([`dialed_endpoint`]).
     fn check_egress(&self, config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
         // A config the builder refuses fails in `instantiate`, as the config
         // error it is rather than an egress refusal.
@@ -502,24 +501,51 @@ impl BackendProvider<BlobId> for S3BlobProvider {
                  cannot check; use path-style requests"
             );
         }
-        let get = |key| builder.get_config_value(&key);
-        let url = get(AmazonS3ConfigKey::S3Endpoint)
-            .or_else(|| get(AmazonS3ConfigKey::Endpoint))
-            .unwrap_or_else(|| {
-                let region = get(AmazonS3ConfigKey::Region).unwrap_or_else(|| "us-east-1".into());
-                format!("https://s3.{region}.amazonaws.com")
-            });
-        let checked = policy.check_url(&url, Protocol::Tcp, 443);
-        if parses_a_secret(config) {
-            checked.map_err(|_| {
-                anyhow::anyhow!(
-                    "s3 blobstore endpoint was refused; the reason is withheld because it may \
-                     quote a secret"
-                )
-            })
-        } else {
-            checked
-        }
+        withhold_if_secret(
+            config,
+            policy.check_url(&dialed_endpoint(&builder), Protocol::Tcp, 443),
+        )
+    }
+
+    async fn check_resolved_egress(
+        &self,
+        config: &Config,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        let Ok(builder) = builder_from_config(config) else {
+            return Ok(());
+        };
+        let checked = policy
+            .check_url_resolved(&dialed_endpoint(&builder), Protocol::Tcp, 443)
+            .await;
+        withhold_if_secret(config, checked)
+    }
+}
+
+/// The endpoint the client dials, derived as `AmazonS3Builder::build` derives
+/// it, without the bucket.
+fn dialed_endpoint(builder: &AmazonS3Builder) -> String {
+    let get = |key| builder.get_config_value(&key);
+    get(AmazonS3ConfigKey::S3Endpoint)
+        .or_else(|| get(AmazonS3ConfigKey::Endpoint))
+        .unwrap_or_else(|| {
+            let region = get(AmazonS3ConfigKey::Region).unwrap_or_else(|| "us-east-1".into());
+            format!("https://s3.{region}.amazonaws.com")
+        })
+}
+
+/// An egress refusal, without its reason when the config holds a secret the
+/// reason may quote.
+fn withhold_if_secret(config: &Config, checked: anyhow::Result<()>) -> anyhow::Result<()> {
+    if parses_a_secret(config) {
+        checked.map_err(|_| {
+            anyhow::anyhow!(
+                "s3 blobstore endpoint was refused; the reason is withheld because it may quote \
+                 a secret"
+            )
+        })
+    } else {
+        checked
     }
 }
 
@@ -743,6 +769,20 @@ mod tests {
         let policy = PluginEgressPolicy::allowing(&[]);
         let err = egress(&config, &policy).expect_err("an unlisted endpoint is refused");
         assert!(!format!("{err:#}").contains("must-not-leak"), "{err:#}");
+    }
+
+    /// A permitted name is judged by what it resolves to.
+    #[tokio::test]
+    async fn an_endpoint_resolving_to_loopback_is_refused() {
+        let policy = PluginEgressPolicy::allowing(&["http://localhost:9000"]);
+        let config = keyed(&[
+            ("endpoint", "http://localhost:9000"),
+            ("allow_http", "true"),
+        ]);
+        S3BlobProvider
+            .check_resolved_egress(&config, &policy)
+            .await
+            .unwrap_err();
     }
 
     fn egress(config: &Config, policy: &PluginEgressPolicy) -> anyhow::Result<()> {

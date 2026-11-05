@@ -261,6 +261,17 @@ impl BackendProvider<KvId> for RedisProvider {
         };
         url.guard("url", check_url_egress(url.expose(), policy))
     }
+
+    async fn check_resolved_egress(
+        &self,
+        config: &crate::wit::Config,
+        policy: &PluginEgressPolicy,
+    ) -> anyhow::Result<()> {
+        let Some(url) = config.value("url") else {
+            return Ok(());
+        };
+        url.guard("url", check_resolved_url_egress(url.expose(), policy).await)
+    }
 }
 
 /// Checks the address `redis` itself parses out of the url. A unix socket has
@@ -276,6 +287,21 @@ fn check_url_egress(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()
         redis::ConnectionAddr::Unix(path) => anyhow::bail!(
             "redis endpoint {path:?} is a unix socket, which allowedHosts cannot permit"
         ),
+    }
+}
+
+/// What the address [`check_url_egress`] accepted resolves to now.
+async fn check_resolved_url_egress(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
+    let info =
+        redis::IntoConnectionInfo::into_connection_info(url).context("redis url is invalid")?;
+    match info.addr {
+        redis::ConnectionAddr::Tcp(host, port)
+        | redis::ConnectionAddr::TcpTls { host, port, .. } => {
+            policy
+                .check_resolved(&host, port, crate::host::declared_port::Protocol::Tcp)
+                .await
+        }
+        redis::ConnectionAddr::Unix(_) => Ok(()),
     }
 }
 
@@ -425,5 +451,16 @@ mod tests {
             RedisProvider.check_egress(&secret, &policy).unwrap_err()
         );
         assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    /// A permitted name is judged by what it resolves to.
+    #[tokio::test]
+    async fn a_name_resolving_to_loopback_is_refused() {
+        let policy = PluginEgressPolicy::allowing(&["redis://localhost:6379"]);
+        let config: crate::wit::Config = [("url", "redis://localhost:6379")].into_iter().collect();
+        RedisProvider
+            .check_resolved_egress(&config, &policy)
+            .await
+            .unwrap_err();
     }
 }
