@@ -270,11 +270,15 @@ jobs:
       # Split into two single-output builds: dual `type=image`+`type=docker`
       # on one call confuses `digest` output (last write to
       # `containerimage.digest` wins → docker-tarball envelope, not
-      # registry). The second call hits the cache the first wrote.
+      # registry). The second call reuses the first's layers from the
+      # builder's local cache.
       # RELEASE image — DEFAULT features only: exactly what we ship. The
       # operator-e2e `release` leg loads this tarball, so we test the bytes we
       # release. build_push below reuses this build's cache (same features), so
       # the pushed canary is byte-identical to what that e2e leg exercised.
+      # No GHA layer cache on any wash image: `COPY . .` comes before
+      # `cargo build`, so every commit misses the ~1 GB cargo layer, and
+      # writing it crowds the Rust caches out of the 10 GB Actions cache.
       - name: Build wash runtime image — release / default features (tarball for operator-e2e)
         id: build_tar_release
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -283,29 +287,18 @@ jobs:
           outputs: type=docker,dest=/tmp/wash-image-release.tar,name=localhost/wasmcloud-wash:e2e
           # No `build-args`: the Dockerfile's `CARGO_FEATURES=""` default applies
           # (a plain `cargo build`, default features).
-          # head_ref on PRs (the source branch, shared across re-pushes and
-          # across PRs from the same branch); falls back to ref_name on main
-          # ("main"), then the main scope for cold-cache reads on first push.
-          cache-from: |
-            type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-release-arm64-main
-          cache-to: type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }},mode=max
       - name: Push wash runtime image to GHCR by digest (main only)
         # PRs lack org-package write access; only push on main so
         # canary-publish can assemble the manifest after all gates pass.
         # Ships DEFAULT features only — byte-identical to the RELEASE tarball
         # above (whose cache this reuses), so the pushed canary is the exact
-        # bytes the operator-e2e `release` leg tested. No `cache-to` — the
-        # release build already wrote it.
+        # bytes the operator-e2e `release` leg tested.
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         id: build_push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
-          cache-from: |
-            type=gha,scope=wash-release-arm64-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-release-arm64-main
       - name: Export digest
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
@@ -373,10 +366,6 @@ jobs:
           outputs: type=docker,dest=/tmp/wash-image-all-features.tar,name=localhost/wasmcloud-wash:e2e
           build-args: |
             CARGO_FEATURES=host-component-plugins
-          cache-from: |
-            type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-all-features-arm64-main
-          cache-to: type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }},mode=max
       # Same split as `wash-image`: reuses the tarball build's cache, so the
       # pushed image is the bytes the operator-e2e legs tested.
       - name: Push all-features image to GHCR by digest (main only)
@@ -388,9 +377,6 @@ jobs:
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
           build-args: |
             CARGO_FEATURES=host-component-plugins
-          cache-from: |
-            type=gha,scope=wash-all-features-arm64-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-all-features-arm64-main
       - name: Export digest
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
@@ -458,10 +444,6 @@ jobs:
         with:
           context: .
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
-          cache-from: |
-            type=gha,scope=wash-release-amd64-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-release-amd64-main
-          cache-to: type=gha,scope=wash-release-amd64-${{ github.head_ref || github.ref_name }},mode=max
       - name: Export digest
         env:
           DIGEST: ${{ steps.build_push.outputs.digest }}
@@ -514,10 +496,6 @@ jobs:
           outputs: type=image,name=ghcr.io/wasmcloud/wash,push-by-digest=true,name-canonical=true,push=true
           build-args: |
             CARGO_FEATURES=host-component-plugins
-          cache-from: |
-            type=gha,scope=wash-all-features-amd64-${{ github.head_ref || github.ref_name }}
-            type=gha,scope=wash-all-features-amd64-main
-          cache-to: type=gha,scope=wash-all-features-amd64-${{ github.head_ref || github.ref_name }},mode=max
       - name: Export digest
         env:
           DIGEST: ${{ steps.build_push.outputs.digest }}

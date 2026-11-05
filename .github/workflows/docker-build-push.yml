@@ -41,7 +41,7 @@ on:
       build-cache:
         type: boolean
         required: false
-        description: "Enables Github Actions Image cache. Default=true"
+        description: "Read the GitHub Actions buildx cache, and write it on pushes to main. Default=true"
         default: true
     outputs:
       image_digest:
@@ -109,11 +109,11 @@ jobs:
           build-contexts: ${{ inputs.build-contexts }}
           outputs: type=image,push-by-digest=${{ inputs.push-by-digest }},name-canonical=true,push=${{ inputs.push-by-digest }}
           build-args: ${{ inputs.build-args }}
-          cache-from: |
-            type=gha,scope=buildx-${{ steps.meta.outputs.artifact_prefix }}-${{ matrix.arch }}-${{ github.ref_name }}
-            type=gha,scope=buildx-${{ steps.meta.outputs.artifact_prefix }}-${{ matrix.arch }}-main
-          cache-to: |
-            type=gha,scope=buildx-${{ steps.meta.outputs.artifact_prefix }}-${{ matrix.arch }}-${{ github.ref_name }},mode=max
+          # Only the caller's push to main writes the cache; every other run
+          # reads `-main`. Per-PR scopes would compete for the repo's 10 GB
+          # Actions cache, which also holds the Rust caches.
+          cache-from: ${{ inputs.build-cache && format('type=gha,scope=buildx-{0}-{1}-main', steps.meta.outputs.artifact_prefix, matrix.arch) || '' }}
+          cache-to: ${{ inputs.build-cache && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,scope=buildx-{0}-{1}-main,mode=max', steps.meta.outputs.artifact_prefix, matrix.arch) || '' }}
 
       - name: Export digest
         id: export
