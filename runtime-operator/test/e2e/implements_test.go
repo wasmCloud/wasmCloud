@@ -29,7 +29,7 @@ import (
 //
 // The byte-level isolation check (write `from-a` via team-a, `from-b` via
 // team-b, read back `isolated`) is covered in-process by
-// crates/wash-runtime/tests/integration_keyvalue_implements.rs; this spec proves
+// crates/wash-runtime/tests/integration/keyvalue_implements.rs; this spec proves
 // the operator and host wire that routing up in a real cluster. The
 // merge/canon-version logic has direct unit tests in
 // api/runtime/v1alpha1/workload_types_test.go, and envtest (`make test`)

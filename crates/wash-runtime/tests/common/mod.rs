@@ -87,6 +87,10 @@ use wash_runtime::{
     wit::WitInterface,
 };
 
+/// Held while a test redirects stderr. A process has one, and `gag` refuses a
+/// second redirect while the first is live, so captures take turns.
+pub static STDERR: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// HTTP incoming-handler (0.2.2) with `host` config, plus optional
 /// comma-separated `host-aliases`. (example :  "admin,user,customer")
 pub fn http_incoming_handler_interface(host_header: &str, aliases: Option<&str>) -> WitInterface {

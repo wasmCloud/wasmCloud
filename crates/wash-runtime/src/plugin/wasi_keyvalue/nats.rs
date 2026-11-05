@@ -562,7 +562,7 @@ mod tests {
     //! delegates to.
     //!
     //! These live here (rather than under `tests/`) because they exercise
-    //! private items directly; the repo's `tests/integration_nats_*` files can
+    //! private items directly; the repo's `tests/integration/nats_*` modules can
     //! only reach the public host API. The bucket tests spin up a real
     //! JetStream via testcontainers (require Docker; marked `#[ignore]`, run
     //! with `cargo test --include-ignored`). The pagination tests run on
