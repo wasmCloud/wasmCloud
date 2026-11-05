@@ -680,7 +680,7 @@ jobs:
         working-directory: runtime-gateway
         run: |
           for attempt in 1 2 3; do
-            if docker build -t localhost/runtime-gateway:e2e .; then
+            if docker build --build-context runtime-operator=../runtime-operator -t localhost/runtime-gateway:e2e .; then
               exit 0
             fi
             if [ "${attempt}" -eq 3 ]; then

@@ -3,16 +3,22 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-logr/logr"
 )
+
+func gatewayLogger(t *testing.T, options gatewayOptions, output io.Writer) *slog.Logger {
+	t.Helper()
+	logger, err := options.logging.Logger(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return logger
+}
 
 func TestGatewayLogFormatsAndTimestamps(t *testing.T) {
 	timestamp := time.Unix(1234567890, 250000000).UTC()
@@ -24,7 +30,7 @@ func TestGatewayLogFormatsAndTimestamps(t *testing.T) {
 					t.Fatal(err)
 				}
 				var output bytes.Buffer
-				logger := newGatewayLogger(options.logging, &output)
+				logger := gatewayLogger(t, options, &output)
 				record := slog.NewRecord(timestamp, slog.LevelInfo, testGatewayMessage, 0)
 				if err := logger.Handler().Handle(t.Context(), record); err != nil {
 					t.Fatal(err)
@@ -73,68 +79,27 @@ func TestGatewayLogFormatsAndTimestamps(t *testing.T) {
 }
 
 func TestGatewayDefaultLogTimestamps(t *testing.T) {
-	for _, args := range [][]string{nil, {"--dev-mode"}} {
-		options, err := parseGatewayOptions(args, io.Discard)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, `{"ts":1234567890.25,`},
+		{[]string{"--dev-mode"}, "ts=1234567890.25 "},
+		{[]string{"--json-log"}, `{"ts":1234567890.25,`},
+	} {
+		options, err := parseGatewayOptions(tc.args, io.Discard)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var output bytes.Buffer
-		logger := newGatewayLogger(options.logging, &output)
+		logger := gatewayLogger(t, options, &output)
 		if err := logger.Handler().Handle(t.Context(), slog.NewRecord(time.Unix(1234567890, 250000000),
 			slog.LevelInfo, testGatewayMessage, 0)); err != nil {
 			t.Fatal(err)
 		}
-		var fields map[string]any
-		if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
-			t.Fatal(err)
+		if !strings.HasPrefix(output.String(), tc.want) {
+			t.Fatalf("default timestamp with %v = %q, want prefix %q", tc.args, output.String(), tc.want)
 		}
-		if fields["ts"] != 1234567890.25 {
-			t.Fatalf("default timestamp with %v = %v, want numeric epoch seconds", args, fields["ts"])
-		}
-	}
-}
-
-func TestGatewayControllerLoggingBridge(t *testing.T) {
-	options, err := parseGatewayOptions([]string{"--dev-mode"}, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	logger := newGatewayLogger(options.logging, &output)
-	controller := logr.FromSlogHandler(logger.Handler()).WithName("gateway").WithValues("namespace", "tenant")
-	controller.V(1).Info("controller detail")
-	controller.V(4).Info("controller debug")
-	controller.V(5).Info("filtered detail")
-	controller.Info("controller info")
-	logger.Warn("slog warning")
-	wantError := errors.New("backend missing")
-	controller.Error(wantError, "controller error")
-	decoder := json.NewDecoder(&output)
-	for _, want := range []struct{ message, level string }{
-		{"controller detail", "debug"}, {"controller debug", "debug"},
-		{"controller info", "info"}, {"slog warning", "warn"}, {"controller error", "error"},
-	} {
-		var fields map[string]any
-		if err := decoder.Decode(&fields); err != nil {
-			t.Fatal(err)
-		}
-		if fields["msg"] != want.message || fields["level"] != want.level {
-			t.Fatalf("log fields = %v, want %+v", fields, want)
-		}
-		if strings.HasPrefix(want.message, "controller") && (fields["logger"] != "gateway" || fields["namespace"] != "tenant") {
-			t.Fatalf("controller lost its name or fields: %v", fields)
-		}
-		if want.level == "error" {
-			if fields["error"] != wantError.Error() {
-				t.Fatalf("controller error = %v", fields)
-			}
-			if _, exists := fields["err"]; exists {
-				t.Fatal("controller error has the wrong field name")
-			}
-		}
-	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		t.Fatalf("extra log record or invalid JSON: %v", err)
 	}
 }
 
@@ -144,7 +109,7 @@ func TestGatewayLoggingPreservesApplicationFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	logger := newGatewayLogger(options.logging, &output)
+	logger := gatewayLogger(t, options, &output)
 	timestamp := time.Unix(1234567890, 250000000).UTC()
 	logger.With("time", "application time").WithGroup("payload").With("err", "application error").Info(testGatewayMessage,
 		slog.Time("time", timestamp), slog.String("level", "application level"))

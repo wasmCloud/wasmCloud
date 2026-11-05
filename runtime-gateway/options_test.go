@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/logging"
 )
 
 const (
@@ -33,6 +35,8 @@ func TestGatewayFlagsAndLogging(t *testing.T) {
 		{"explicit error", []string{"--log-level=error"}, slog.LevelError},
 		{"level before development", []string{"--log-level=info", "--dev-mode"}, slog.LevelInfo},
 		{"level after development", []string{"--dev-mode", "--log-level=error"}, slog.LevelError},
+		{"controller verbosity", []string{"--log-level=2"}, -8},
+		{"zap aliases", []string{"--zap-devel", "--zap-log-level=warn"}, slog.LevelWarn},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"--bind-addr=" + testGatewayBind, "--fallback-endpoint=" + testFallbackOrigin,
@@ -42,11 +46,11 @@ func TestGatewayFlagsAndLogging(t *testing.T) {
 				t.Fatal(err)
 			}
 			if options.bindAddr != testGatewayBind || options.fallbackEndpoint != testFallbackOrigin ||
-				options.kubeconfig != "/test/kubeconfig" || options.logging.level != tc.level {
+				options.kubeconfig != "/test/kubeconfig" {
 				t.Fatalf("parsed options = %+v", options)
 			}
-			logger := newGatewayLogger(options.logging, io.Discard)
-			for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+			logger := gatewayLogger(t, options, io.Discard)
+			for _, level := range []slog.Level{-8, slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
 				if logger.Enabled(t.Context(), level) != (level >= tc.level) {
 					t.Fatalf("level %s enabled = %v", level, logger.Enabled(t.Context(), level))
 				}
@@ -55,14 +59,14 @@ func TestGatewayFlagsAndLogging(t *testing.T) {
 	}
 	options, err := parseGatewayOptions(nil, io.Discard)
 	if err != nil || options.bindAddr != ":8000" || options.fallbackEndpoint != "" || options.kubeconfig != "" ||
-		options.logging.format != "json" || options.logging.timeEncoding != "epoch" {
+		options.logging != (logging.Options{TimeEncoding: "epoch"}) {
 		t.Fatalf("default options = %+v, %v", options, err)
 	}
 }
 
 func TestGatewayFlagErrorsAndHelp(t *testing.T) {
 	for _, arg := range []string{"--unknown", "--dev-mode=invalid", "--log-format=invalid", "--log-level=invalid",
-		"--log-time-encoding=invalid", "--log-level=error+1", "--zap-devel"} {
+		"--log-time-encoding=invalid", "--log-level=error+1", "--log-stacktrace-level=debug", "--zap-encoder=xml"} {
 		var output bytes.Buffer
 		if _, err := parseGatewayOptions([]string{arg}, &output); err == nil || output.Len() == 0 {
 			t.Fatalf("parse %q = %v, output=%q", arg, err, output.String())
@@ -72,7 +76,8 @@ func TestGatewayFlagErrorsAndHelp(t *testing.T) {
 	if _, err := parseGatewayOptions([]string{"--help"}, &output); !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("help = %v", err)
 	}
-	for _, name := range []string{"bind-addr", "fallback-endpoint", "kubeconfig", "dev-mode", "log-level", "log-format", "log-time-encoding"} {
+	for _, name := range []string{"bind-addr", "fallback-endpoint", "kubeconfig", "dev-mode", "json-log", "log-level",
+		"log-format", "log-time-encoding", "log-stacktrace-level", "log-full-objects", "zap-devel"} {
 		if !strings.Contains(output.String(), name) {
 			t.Errorf("help omitted %s", name)
 		}

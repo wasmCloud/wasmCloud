@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import {
+  appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const targets = { statements: 90, branches: 80 };
@@ -70,6 +73,24 @@ function percentage({ covered, total }) {
   return total ? `${(covered * 100 / total).toFixed(2)}%` : 'N/A';
 }
 
+// gobco tests a temporary copy of the module, where a relative replace path points
+// nowhere. Returns go.mod with those paths made absolute, or null if it has none.
+export function absoluteReplacements(gomod, dir) {
+  let block = false;
+  let changed = false;
+  const lines = gomod.split('\n').map((line) => {
+    const trimmed = line.trim();
+    if (/^replace\s*\(/.test(trimmed)) block = true;
+    else if (block && trimmed === ')') block = false;
+    const match = (block || /^replace\s/.test(trimmed)) && line.match(/^(.*=>\s*)(\.{1,2}\/\S*)(.*)$/);
+    if (!match) return line;
+    changed = true;
+    const target = resolve(dir, match[2]);
+    return match[1] + (/[\s"'`]/.test(target) ? JSON.stringify(target) : target) + match[3];
+  });
+  return changed ? lines.join('\n') : null;
+}
+
 async function run(module) {
   if (!['runtime-operator', 'runtime-gateway'].includes(module)) {
     throw new Error('Usage: node .github/scripts/go-coverage.mjs runtime-operator|runtime-gateway');
@@ -83,6 +104,16 @@ async function run(module) {
     throw new Error('KUBEBUILDER_ASSETS is required for operator integration tests');
   }
   const env = { ...process.env, GOWORK: 'off' };
+  const gomod = resolve(cwd, 'go.mod');
+  const modfile = existsSync(gomod) ? absoluteReplacements(readFileSync(gomod, 'utf8'), cwd) : null;
+  if (modfile) {
+    // GOFLAGS values cannot contain spaces, so the modfile lives outside the checkout.
+    const dir = mkdtempSync(join(tmpdir(), 'go-coverage-'));
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(join(dir, 'go.mod'), modfile);
+    if (existsSync(resolve(cwd, 'go.sum'))) copyFileSync(resolve(cwd, 'go.sum'), join(dir, 'go.sum'));
+    env.GOFLAGS = [env.GOFLAGS, `-modfile=${join(dir, 'go.mod')}`].filter(Boolean).join(' ');
+  }
   const commands = [];
   const failures = [];
 

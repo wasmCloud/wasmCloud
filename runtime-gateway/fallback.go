@@ -8,6 +8,8 @@ import (
 	"net/http"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+
+	"go.wasmcloud.dev/runtime-operator/v2/pkg/logging"
 )
 
 // Fallback defines an interface for obtaining a fallback endpoint
@@ -84,7 +86,7 @@ func (fs *FallbackServer) Start(ctx context.Context) error {
 
 	internalServer := &http.Server{
 		Handler:  internalMux,
-		ErrorLog: slog.NewLogLogger(slog.Default().With("logger", "fallback").Handler(), slog.LevelError),
+		ErrorLog: logging.ErrorLog(slog.Default().With("logger", "fallback")),
 		BaseContext: func(_ net.Listener) context.Context {
 			return ctx
 		},

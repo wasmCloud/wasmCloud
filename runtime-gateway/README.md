@@ -21,11 +21,6 @@ Without `--fallback-endpoint`, requests without a matching workload receive a bu
 
 Use `--kubeconfig` to select a Kubernetes configuration file. Otherwise, the gateway uses controller-runtime's configuration discovery, including `KUBECONFIG` and in-cluster credentials.
 
-Logs use Go's `log/slog`, including controller-runtime logs through its logr bridge. JSON output preserves the `ts`, `level`, `msg`, `logger`, and `error` field names, with numeric epoch timestamps by default.
+Logging uses the operator's `pkg/logging` package, so the gateway accepts the same flags and aliases as the operator; see [the operator's logging section](../runtime-operator/README.md#logging). The only difference is the default timestamp: the gateway writes numeric epoch seconds unless `--log-time-encoding` says otherwise.
 
-- `--dev-mode` enables debug logging.
-- `--log-level=debug|info|warn|error` overrides the level, including when `--dev-mode` is set. The default is `info`.
-- `--log-format=json|text` selects the output format. The default is `json`.
-- `--log-time-encoding=epoch|rfc3339|rfc3339nano` selects timestamp encoding. The default is `epoch`.
-
-Zap-specific flags are not supported.
+By default the gateway writes JSON at info level, with stack traces at error. `--dev-mode` (or `--zap-devel`) switches to text output, debug logging, and stack traces at warn. HTTP server diagnostics are logged at error under the `http-gateway` and `fallback` loggers, without stack traces.

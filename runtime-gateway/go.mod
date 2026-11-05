@@ -7,7 +7,6 @@ toolchain go1.27.2
 tool github.com/air-verse/air
 
 require (
-	github.com/go-logr/logr v1.4.4
 	go.wasmcloud.dev/runtime-operator/v2 v2.11.0
 	k8s.io/api v0.37.1
 	k8s.io/apimachinery v0.37.1
@@ -31,6 +30,7 @@ require (
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-openapi/jsonpointer v1.0.0 // indirect
 	github.com/go-openapi/jsonreference v1.0.0 // indirect
 	github.com/go-openapi/swag v0.27.1 // indirect
@@ -91,3 +91,6 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+// Build against the operator in this repository, including its shared logging package.
+replace go.wasmcloud.dev/runtime-operator/v2 => ../runtime-operator

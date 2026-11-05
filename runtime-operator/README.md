@@ -136,7 +136,8 @@ operator can send commands.
 
 ## Logging
 
-The operator uses Go's `log/slog` with controller-runtime's logr bridge. Logs go
+The operator and the gateway both configure Go's `log/slog` and controller-runtime's
+logr bridge through [`pkg/logging`](pkg/logging), so they accept the same flags. Logs go
 to stderr. Development mode defaults to text output, debug logging (controller
 verbosity 1), RFC3339 timestamps, and stack traces at warn and above. Use
 `--dev-mode=false` for JSON output, info logging, and stack traces at error and
