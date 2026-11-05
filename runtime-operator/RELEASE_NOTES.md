@@ -11,8 +11,7 @@ for the new logging flags.
 - Kubernetes object pointers, passed directly or through `logr.Marshaler`, are
   logged as identity in every mode, including the default Helm deployment.
   `--log-full-objects` explicitly enables full contents, including Secret data.
-  Objects passed by value or inside slices and maps are not redacted.
-- A top-level `time` field holding a `time.Time` is renamed to `ts` and encoded
-  like the record timestamp. Fields inside a group keep their names.
+  Objects passed by value, or nested in slices, maps, or other structs, are not
+  redacted.
 - Standard-library HTTP diagnostics remain visible at error thresholds without
   added application stack traces.

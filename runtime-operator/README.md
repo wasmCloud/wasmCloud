@@ -141,14 +141,14 @@ to stderr. Development mode defaults to text output, debug logging (controller
 verbosity 1), RFC3339 timestamps, and stack traces at warn and above. Use
 `--dev-mode=false` for JSON output, info logging, and stack traces at error and
 above. Text output uses slog's key=value format; JSON keeps `ts`, `level`, `msg`,
-`logger`, `error`, and `stacktrace` fields. A top-level `time` field holding a
-`time.Time` is renamed to `ts` and encoded like the record timestamp; fields
-inside a group keep their names. Production logging is unsampled.
+`logger`, `error`, and `stacktrace` fields. User fields named `time` keep their
+name. Production logging is unsampled.
 
 Kubernetes object pointers, passed directly or through `logr.Marshaler`, are
 logged as identity in every mode, including the default Helm deployment. Full
 contents, including Secret data, require an explicit `--log-full-objects` flag.
-Objects passed by value or inside slices and maps are not redacted.
+Objects passed by value, or nested in slices, maps, or other structs, are not
+redacted.
 
 | Flag | Values |
 | --- | --- |
