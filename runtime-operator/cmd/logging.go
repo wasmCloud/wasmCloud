@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"reflect"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -118,14 +119,14 @@ func (options loggingOptions) logger(output io.Writer) (*slog.Logger, error) {
 	if options.jsonLog {
 		format, encoding = logJSON, logEpoch
 	}
-	handlerOptions := &slog.HandlerOptions{Level: level, ReplaceAttr: logAttributes(options.fullObjects)}
+	handlerOptions := &slog.HandlerOptions{
+		Level: level, ReplaceAttr: logAttributes(options.fullObjects, encoding, format == logText),
+	}
 	var handler slog.Handler = slog.NewJSONHandler(output, handlerOptions)
 	if format == logText {
 		handler = slog.NewTextHandler(output, handlerOptions)
 	}
-	return slog.New(stacktraceHandler{
-		Handler: handler, level: stackLevel, timeEncoder: encoding, text: format == logText,
-	}), nil
+	return slog.New(stacktraceHandler{Handler: handler, level: stackLevel}), nil
 }
 
 type marshalerValue struct{ logr.Marshaler }
@@ -135,6 +136,9 @@ func (value marshalerValue) LogValue() slog.Value { return slog.AnyValue(value.M
 type objectLogValue struct{ runtime.Object }
 
 func (value objectLogValue) LogValue() slog.Value {
+	if object := reflect.ValueOf(value.Object); object.Kind() == reflect.Pointer && object.IsNil() {
+		return slog.AnyValue(nil)
+	}
 	// Object logs contain identity unless full contents are explicitly enabled.
 	var attrs []slog.Attr
 	if metadata, err := meta.Accessor(value.Object); err == nil {
@@ -149,7 +153,7 @@ func (value objectLogValue) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
-func logAttributes(fullObjects bool) func([]string, slog.Attr) slog.Attr {
+func logAttributes(fullObjects bool, timeEncoder string, text bool) func([]string, slog.Attr) slog.Attr {
 	return func(groups []string, attr slog.Attr) slog.Attr {
 		if marshaler, ok := attr.Value.Any().(logr.Marshaler); ok {
 			attr.Value = slog.AnyValue(marshalerValue{marshaler}).Resolve()
@@ -163,6 +167,15 @@ func logAttributes(fullObjects bool) func([]string, slog.Attr) slog.Attr {
 			return attr
 		}
 		switch attr.Key {
+		case slog.TimeKey:
+			// Top-level time values, built-in or user, are emitted as ts.
+			if attr.Value.Kind() == slog.KindTime {
+				timestamp := timestampAttribute(timeEncoder, attr.Value.Time())
+				if text && timestamp.Value.Kind() == slog.KindFloat64 {
+					timestamp.Value = slog.StringValue(strconv.FormatFloat(timestamp.Value.Float64(), 'f', -1, 64))
+				}
+				return timestamp
+			}
 		case slog.LevelKey:
 			if level, ok := attr.Value.Any().(slog.Level); ok {
 				label := "debug"
@@ -200,45 +213,20 @@ func timestampAttribute(encoding string, timestamp time.Time) slog.Attr {
 	}
 }
 
-type logScope struct {
-	group string
-	attrs []slog.Attr
-}
-
 type stacktraceHandler struct {
 	slog.Handler
-	level       slog.Level
-	timeEncoder string
-	text        bool
-	skipStack   bool
-	scopes      []logScope
+	level     slog.Level
+	skipStack bool
 }
 
 func (handler stacktraceHandler) Handle(ctx context.Context, record slog.Record) error {
-	record = record.Clone()
-	output := handler.Handler
-	// Built-in timestamps stay outside groups and do not rewrite user fields.
-	if !record.Time.IsZero() {
-		timestamp := timestampAttribute(handler.timeEncoder, record.Time)
-		if handler.text && timestamp.Value.Kind() == slog.KindFloat64 {
-			timestamp = slog.String(timestamp.Key, strconv.FormatFloat(timestamp.Value.Float64(), 'f', -1, 64))
-		}
-		output = output.WithAttrs([]slog.Attr{timestamp})
-		record.Time = time.Time{}
-	}
-	for _, scope := range handler.scopes {
-		if scope.group != "" {
-			output = output.WithGroup(scope.group)
-		} else {
-			output = output.WithAttrs(scope.attrs)
-		}
-	}
 	if !handler.skipStack && record.Level >= handler.level {
 		if stack := logStack(record.PC); stack != "" {
+			record = record.Clone()
 			record.AddAttrs(slog.String("stacktrace", stack))
 		}
 	}
-	return output.Handle(ctx, record)
+	return handler.Handler.Handle(ctx, record)
 }
 
 func logStack(pc uintptr) string {
@@ -270,15 +258,12 @@ func logStack(pc uintptr) string {
 }
 
 func (handler stacktraceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	scope := logScope{attrs: append([]slog.Attr(nil), attrs...)}
-	handler.scopes = append(append([]logScope(nil), handler.scopes...), scope)
+	handler.Handler = handler.Handler.WithAttrs(attrs)
 	return handler
 }
 
 func (handler stacktraceHandler) WithGroup(name string) slog.Handler {
-	if name != "" {
-		handler.scopes = append(append([]logScope(nil), handler.scopes...), logScope{group: name})
-	}
+	handler.Handler = handler.Handler.WithGroup(name)
 	return handler
 }
 

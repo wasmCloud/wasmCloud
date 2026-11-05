@@ -182,6 +182,29 @@ func TestProductionObjectLogging(t *testing.T) {
 	}
 }
 
+func TestNilObjectLogging(t *testing.T) {
+	var secret *corev1.Secret
+	for _, mode := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{testJSONFormatFlag}, `"object":null`},
+		{nil, "object=<nil>"},
+	} {
+		for _, value := range []any{secret, objectLogMarshaler{secret}} {
+			var output bytes.Buffer
+			logger, err := parseLogging(t, mode.args...).logger(&output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logger.Info(testLogMessage, "object", value)
+			if !strings.Contains(output.String(), mode.want) || strings.Contains(output.String(), "panic") {
+				t.Fatalf("nil object log = %s", output.String())
+			}
+		}
+	}
+}
+
 func TestFullObjectLoggingRequiresOptIn(t *testing.T) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "credentials"},
