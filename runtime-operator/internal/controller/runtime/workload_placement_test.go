@@ -99,8 +99,8 @@ func TestPlacementStartRequestUsesWorkloadNamespace(t *testing.T) {
 	}
 }
 
-// The Service DNS names join the aliases a wasi:http incoming handler already
-// lists, and every other interface is left alone.
+// The Service DNS names join the aliases a wasi:http incoming handler, p2 or
+// p3, already lists, and every other interface is left alone.
 func TestServiceDNSAliasesOnlyAffectIncomingHTTP(t *testing.T) {
 	serviceAliases := "api." + testTenant + ",api." + testTenant + ".svc"
 	incoming := []string{incomingHandler}
@@ -122,6 +122,10 @@ func TestServiceDNSAliasesOnlyAffectIncomingHTTP(t *testing.T) {
 		{name: "incoming among other interfaces", namespace: wasiNamespace, pkg: httpLayer,
 			ifaces: []string{"outgoing-handler", incomingHandler},
 			want:   map[string]string{hostAliasesKey: serviceAliases}},
+		{name: "p3 handler", namespace: wasiNamespace, pkg: httpLayer, ifaces: []string{"handler"},
+			config: map[string]string{hostAliasesKey: "gateway.example.com"},
+			want:   map[string]string{hostAliasesKey: "gateway.example.com," + serviceAliases}},
+		{name: "p3 client", namespace: wasiNamespace, pkg: httpLayer, ifaces: []string{"client"}},
 		{name: "foreign namespace", namespace: "custom", pkg: httpLayer, ifaces: incoming},
 		{name: "other package", namespace: wasiNamespace, pkg: "unrelated-package", ifaces: incoming},
 		{name: "outgoing interface", namespace: wasiNamespace, pkg: httpLayer, ifaces: []string{"outgoing-handler"},
