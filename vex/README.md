@@ -26,10 +26,14 @@ It does not prove non-exploitability; maintainers must review the evidence.
 
 Every GitHub Release includes `wasmcloud.openvex.json` and `wasmcloud.openvex.sigstore.json`
 next to its SBOMs. Release tags and assets preserve past assessments. After downloading the
-VEX file, verify its attestation with:
+VEX file, verify that `release-tag.yml` on `main` attested it:
 
 ```sh
 gh attestation verify wasmcloud.openvex.json --repo wasmCloud/wasmCloud \
-  --signer-workflow wasmCloud/wasmCloud/.github/workflows/release-tag.yml \
+  --cert-identity https://github.com/wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main \
+  --source-ref refs/heads/main \
   --predicate-type https://openvex.dev/ns/v0.2.0
 ```
+
+Naming only the workflow is not enough: a copy of `release-tag.yml` dispatched from any other
+branch signs with the same workflow path.
