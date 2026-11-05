@@ -1512,7 +1512,8 @@ pub async fn connect_nats(
     // Configured TLS material means TLS is required. Otherwise async-nats
     // upgrades only when the server's plaintext INFO asks for it, and a peer
     // on the path can drop that and read the credentials in CONNECT.
-    if options.tls_ca.is_some() || options.tls_cert.is_some() {
+    let tls_required = options.tls_ca.is_some() || options.tls_cert.is_some();
+    if tls_required {
         opts = opts.require_tls(true);
     }
 
@@ -1528,7 +1529,9 @@ pub async fn connect_nats(
         opts = opts.add_client_certificate(cert_path, key_path)
     }
 
-    if options.ignore_discovered_servers {
+    // That INFO can also advertise a `ws://` server, which async-nats dials
+    // without TLS whatever it is told to require.
+    if options.ignore_discovered_servers || tls_required || options.tls_first {
         opts = opts.ignore_discovered_servers();
     }
 
@@ -3304,6 +3307,29 @@ mod tests {
                 usize::from(!ignore)
             );
         }
+        Ok(())
+    }
+
+    /// A `ws://` server is dialed without TLS, so a connection that requires TLS
+    /// never takes one from the plaintext INFO.
+    #[tokio::test]
+    async fn a_tls_connection_ignores_advertised_servers() -> anyhow::Result<()> {
+        let server = crate::nats_test::TlsServer::new()?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsConnectionOptions {
+            tls_ca: Some(server.ca.clone()),
+            ..Default::default()
+        };
+        let (_stream, client) = tokio::try_join!(
+            server.accept_advertising(&listener, "ws://127.0.0.1:1"),
+            connect_nats(
+                format!("nats://localhost:{}", listener.local_addr()?.port()),
+                options,
+            ),
+        )?;
+        let pool = client.server_pool().await?;
+        assert_eq!(pool.len(), 1);
+        assert!(pool.iter().all(|s| !s.is_discovered));
         Ok(())
     }
 

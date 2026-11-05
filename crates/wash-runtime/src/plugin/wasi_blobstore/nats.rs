@@ -130,6 +130,7 @@ pub struct NatsBlobstore {
     tracker: Arc<RwLock<WorkloadTracker<WorkloadData, ()>>>,
     /// Network ceiling checked before a binding's own connection is made.
     egress_policy: Arc<arc_swap::ArcSwapOption<PluginEgressPolicy>>,
+    ignore_discovered_servers: bool,
 }
 
 impl NatsBlobstore {
@@ -138,7 +139,16 @@ impl NatsBlobstore {
             client: async_nats::jetstream::new(client.clone()).into(),
             tracker: Arc::default(),
             egress_policy: Arc::default(),
+            ignore_discovered_servers: false,
         }
+    }
+
+    /// Reconnects every binding connection only to its declared `servers`,
+    /// never to ones the cluster advertises.
+    #[must_use]
+    pub fn with_ignore_discovered_servers(mut self, ignore: bool) -> Self {
+        self.ignore_discovered_servers = ignore;
+        self
     }
 
     /// NATS credentials or a TLS client identity select a binding connection.
@@ -165,7 +175,7 @@ impl NatsBlobstore {
             &config,
             tokio::sync::watch::channel(0).0,
             tokio::sync::broadcast::channel(1).0,
-            policy.is_some(),
+            self.ignore_discovered_servers || policy.is_some(),
         )
         .await;
         let jetstream = nats_keys::guard_connection(values, jetstream)?;

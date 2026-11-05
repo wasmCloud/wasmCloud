@@ -219,3 +219,27 @@ async fn certificate_only_binding_presents_its_own_identity() -> anyhow::Result<
     assert!(binding.is_some());
     Ok(())
 }
+
+#[tokio::test]
+async fn a_binding_follows_advertised_servers_only_when_allowed() -> anyhow::Result<()> {
+    for ignore in [false, true] {
+        let plugin = plugin().await?.with_ignore_discovered_servers(ignore);
+        let given = TcpListener::bind("127.0.0.1:0").await?;
+        let advertised = TcpListener::bind("127.0.0.1:0").await?;
+        let config = Config::from(HashMap::from([
+            ("servers".into(), format!("nats://{}", given.local_addr()?)),
+            ("token".into(), "binding-token".into()),
+        ]));
+        let (_socket, binding) = tokio::try_join!(
+            crate::nats_test::accept_advertising(&given, advertised.local_addr()?),
+            plugin.connect_binding(&config),
+        )?;
+        let pool = binding
+            .context("a token binding opens its own connection")?
+            .client()
+            .server_pool()
+            .await?;
+        assert_eq!(pool.len(), if ignore { 1 } else { 2 });
+    }
+    Ok(())
+}

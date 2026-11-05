@@ -222,8 +222,11 @@ async fn build_options(
             .add_client_certificate(cert.clone(), key.clone())
             .require_tls(true);
     }
-    if ignore_discovered_servers {
-        // Only operator-declared servers are checked against an egress policy.
+    // Only operator-declared servers are checked against an egress policy. A
+    // server the plaintext INFO advertises may also be `ws://`, which
+    // async-nats dials without TLS whatever it is told to require.
+    let tls_required = config.tls.ca.is_some() || config.tls.cert.is_some() || config.tls.first;
+    if ignore_discovered_servers || tls_required {
         opts = opts.ignore_discovered_servers();
     }
 
@@ -766,6 +769,39 @@ mod tests {
         assert!(!received.contains("CONNECT"), "{received}");
         assert!(!received.contains("secret-token"), "{received}");
         assert!(client.is_err());
+        Ok(())
+    }
+
+    /// A `ws://` server is dialed without TLS, so a binding that requires TLS
+    /// never takes one from the plaintext INFO.
+    #[tokio::test]
+    async fn a_binding_ca_ignores_advertised_servers() -> anyhow::Result<()> {
+        let server = crate::nats_test::TlsServer::new()?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let config = NatsConfig::from_map(
+            &[
+                (
+                    "servers",
+                    format!("nats://localhost:{}", listener.local_addr()?.port()),
+                ),
+                ("tls-ca", server.ca.display().to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        )?;
+        let (_stream, jetstream) = tokio::try_join!(
+            server.accept_advertising(&listener, "ws://127.0.0.1:1"),
+            connect(
+                &config,
+                tokio::sync::watch::channel(0).0,
+                tokio::sync::broadcast::channel(1).0,
+                false,
+            ),
+        )?;
+        let pool = jetstream.client().server_pool().await?;
+        assert_eq!(pool.len(), 1);
+        assert!(pool.iter().all(|s| !s.is_discovered));
         Ok(())
     }
 

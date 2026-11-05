@@ -89,6 +89,7 @@ pub struct HostCommand {
     /// Restrict host and workload NATS connections to their configured URLs.
     /// Set this when each URL is a load-balanced address such as a Kubernetes
     /// Service. A single-server URL loses discovery-based cluster failover.
+    /// Connections with a TLS CA, client certificate or TLS-first always do.
     #[arg(long = "nats-ignore-discovered-servers", default_value_t = false)]
     pub nats_ignore_discovered_servers: bool,
 
@@ -1605,9 +1606,10 @@ impl CliCommand for HostCommand {
             ))?
             .with_plugin(Arc::new(plugin::wasmcloud_secrets::WasmcloudSecrets::new()))?
             .with_plugin(Arc::new(plugin::wasi_logging::TracingLogger::default()))?
-            .with_plugin(Arc::new(plugin::wasi_blobstore::NatsBlobstore::new(
-                &data_nats_client,
-            )))?
+            .with_plugin(Arc::new(
+                plugin::wasi_blobstore::NatsBlobstore::new(&data_nats_client)
+                    .with_ignore_discovered_servers(self.nats_ignore_discovered_servers),
+            ))?
             .with_plugin(Arc::new(
                 plugin::wasmcloud_messaging::NatsMessaging::with_limits(
                     data_nats_client.clone(),
