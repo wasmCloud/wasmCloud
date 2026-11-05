@@ -113,6 +113,7 @@ jobs:
     with:
       working-directory: runtime-gateway
       file: runtime-gateway/Dockerfile
+      build-contexts: runtime-operator=runtime-operator
       image: ghcr.io/wasmcloud/runtime-gateway
       push: true
       tags: |

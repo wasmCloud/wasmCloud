@@ -5,7 +5,39 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { branchCounts, isTestCode, meetsTarget, statementCounts } from './go-coverage.mjs';
+import { absoluteReplacements, branchCounts, isTestCode, meetsTarget, statementCounts } from './go-coverage.mjs';
+
+test('relative replace paths become absolute; module and versioned targets stay', () => {
+  const gomod = [
+    'module example.org/mod',
+    '',
+    'replace example.org/a => ../a',
+    'replace example.org/b v1.0.0 => ./vendor/b // local',
+    'replace example.org/c => example.org/fork v1.2.3',
+    'replace (',
+    '\texample.org/d => ../d',
+    '\texample.org/e => example.org/e v0.1.0',
+    ')',
+    'require example.org/f v1.0.0',
+    '',
+  ].join('\n');
+  assert.equal(absoluteReplacements(gomod, '/repo/mod'), [
+    'module example.org/mod',
+    '',
+    'replace example.org/a => /repo/a',
+    'replace example.org/b v1.0.0 => /repo/mod/vendor/b // local',
+    'replace example.org/c => example.org/fork v1.2.3',
+    'replace (',
+    '\texample.org/d => /repo/d',
+    '\texample.org/e => example.org/e v0.1.0',
+    ')',
+    'require example.org/f v1.0.0',
+    '',
+  ].join('\n'));
+  assert.equal(absoluteReplacements('replace example.org/a => ../a\n', '/my repo/mod'),
+    'replace example.org/a => "/my repo/a"\n');
+  assert.equal(absoluteReplacements('module example.org/mod\nrequire example.org/a v1.0.0\n', '/repo/mod'), null);
+});
 
 test('statements are weighted by block size, including unexecuted packages', () => {
   assert.deepEqual(statementCounts([
@@ -93,6 +125,13 @@ const path = require('node:path');
 const args = process.argv.slice(2);
 const tool = path.basename(process.argv[1]);
 const mode = process.env.FIXTURE_MODE;
+if ((tool === 'gobco' && args[0] !== '-version') || (tool === 'go' && args[0] === 'test')) {
+  const modfile = (process.env.GOFLAGS ?? '').split(' ').find(flag => flag.startsWith('-modfile='))?.slice('-modfile='.length);
+  // The fixture root contains spaces, so the absolute replacement is quoted.
+  if (!modfile || !/example\\.org\\/dep => "\\/.* .*\\/dep"/.test(fs.readFileSync(modfile, 'utf8'))) {
+    throw new Error('relative replace not made absolute');
+  }
+}
 if (tool === 'git') {
   if (args[0] === 'rev-parse') console.log('fixture-commit');
 } else if (tool === 'go') {
@@ -128,6 +167,7 @@ if (tool === 'git') {
   }
 } else throw new Error('unexpected tool');
 `;
+    writeFileSync(join(module, 'go.mod'), 'module example.org/mod\n\nreplace example.org/dep => ../dep\n');
     for (const tool of ['go', 'gobco', 'git']) {
       writeFileSync(join(bin, tool), fake);
       chmodSync(join(bin, tool), 0o755);

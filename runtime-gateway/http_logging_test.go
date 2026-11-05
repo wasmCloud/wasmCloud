@@ -41,7 +41,7 @@ func captureGatewayDefaultLogs(t *testing.T, level string) *synchronizedLogBuffe
 	}
 	oldLogger, oldWriter, oldFlags := slog.Default(), log.Writer(), log.Flags()
 	output := &synchronizedLogBuffer{}
-	slog.SetDefault(newGatewayLogger(options.logging, output))
+	slog.SetDefault(gatewayLogger(t, options, output))
 	t.Cleanup(func() {
 		slog.SetDefault(oldLogger)
 		log.SetOutput(oldWriter)
@@ -123,7 +123,8 @@ func TestGatewayHTTPDiagnosticsAtAllLogLevels(t *testing.T) {
 					t.Fatalf("missing or invalid HTTP diagnostic: %s: %v", output.snapshot(), err)
 				}
 				message, ok := record["msg"].(string)
-				if !ok || !strings.Contains(message, diagnostic) || record["level"] != "error" || record["logger"] != kind {
+				if !ok || !strings.Contains(message, diagnostic) || record["level"] != "error" || record["logger"] != kind ||
+					record["stacktrace"] != nil {
 					t.Fatalf("HTTP diagnostic = %v", record)
 				}
 			})

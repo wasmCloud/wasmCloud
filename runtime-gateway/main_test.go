@@ -35,7 +35,7 @@ func TestGatewayMainExitCodes(t *testing.T) {
 	}{
 		{"help", []string{"--help"}, 0, "-log-level"},
 		{"unknown flag", []string{"--unknown"}, 2, "flag provided but not defined"},
-		{"invalid logging", []string{"--log-level=invalid"}, 2, "invalid value"},
+		{"invalid log level", []string{"--log-level=invalid"}, 2, "invalid log level"},
 		{"invalid log format", []string{"--log-format=invalid"}, 2, "invalid log format"},
 		{"invalid log timestamp", []string{"--log-time-encoding=invalid"}, 2, "invalid log time encoding"},
 		{"missing kubeconfig", []string{"--log-level=debug", "--kubeconfig=" + missingConfig}, 1, "get kubeconfig"},
