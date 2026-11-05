@@ -182,8 +182,9 @@ func TestProductionObjectLogging(t *testing.T) {
 	}
 }
 
-func TestNilObjectLogging(t *testing.T) {
+func TestNilLogValues(t *testing.T) {
 	var secret *corev1.Secret
+	var key *types.NamespacedName
 	for _, mode := range []struct {
 		args []string
 		want string
@@ -191,7 +192,7 @@ func TestNilObjectLogging(t *testing.T) {
 		{[]string{testJSONFormatFlag}, `"object":null`},
 		{nil, "object=<nil>"},
 	} {
-		for _, value := range []any{secret, objectLogMarshaler{secret}} {
+		for _, value := range []any{secret, objectLogMarshaler{secret}, key, objectLogMarshaler{key}} {
 			var output bytes.Buffer
 			logger, err := parseLogging(t, mode.args...).logger(&output)
 			if err != nil {

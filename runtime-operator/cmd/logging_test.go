@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -280,6 +281,7 @@ func TestStandardHTTPDiagnostics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// controller-runtime keeps only the process's first SetLogger, so controller logs stay on the first buffer.
 			configureLogging(logger)
 			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("test HTTP panic") }))
 			defer server.Close()
@@ -322,24 +324,86 @@ func TestTextTimestamps(t *testing.T) {
 	}
 }
 
-func TestTimestampKeepsGroupedUserTimeFields(t *testing.T) {
+type timeLogValuer time.Time
+
+func (value timeLogValuer) LogValue() slog.Value { return slog.TimeValue(time.Time(value)) }
+
+func TestTimestampDoesNotRenameUserTimeFields(t *testing.T) {
 	timestamp := time.Unix(1234567890, 250000000).UTC()
 	userTime := timestamp.Add(time.Hour)
-	var output bytes.Buffer
-	logger, err := parseLogging(t, testJSONFlag).logger(&output)
+	controller := func(logger *slog.Logger) logr.Logger {
+		return logr.FromSlogHandler(controllerLogHandler{logger.Handler()})
+	}
+	for _, tc := range []struct {
+		name  string
+		group bool
+		emit  func(*slog.Logger)
+	}{
+		{"inline", false, func(logger *slog.Logger) { logger.Info(testLogMessage, "time", userTime) }},
+		{"bound", false, func(logger *slog.Logger) { logger.With("time", userTime).Info(testLogMessage) }},
+		{"inline group", false, func(logger *slog.Logger) {
+			logger.Info(testLogMessage, slog.Group("", slog.Time("time", userTime)))
+		}},
+		{"valuer", false, func(logger *slog.Logger) { logger.Info(testLogMessage, "time", timeLogValuer(userTime)) }},
+		{"marshaler", false, func(logger *slog.Logger) {
+			logger.Info(testLogMessage, "time", objectLogMarshaler{userTime})
+		}},
+		{"controller inline", false, func(logger *slog.Logger) { controller(logger).Info(testLogMessage, "time", userTime) }},
+		{"controller bound", false, func(logger *slog.Logger) {
+			controller(logger).WithValues("time", userTime).Info(testLogMessage)
+		}},
+		{testGrouped, true, func(logger *slog.Logger) {
+			logger.WithGroup(testPayload).With("time", userTime).Info(testLogMessage)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			logger, err := parseLogging(t, testJSONFlag).logger(&output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.emit(logger)
+			got := decodeLog(t, output.Bytes())
+			if _, ok := got["ts"].(json.Number); !ok || bytes.Count(output.Bytes(), []byte(`"ts":`)) != 1 {
+				t.Fatalf("built-in timestamp = %s", output.String())
+			}
+			if tc.group {
+				got = got[testPayload].(map[string]any)
+			}
+			if got["time"] != userTime.Format(time.RFC3339Nano) {
+				t.Fatalf("user time field = %s", output.String())
+			}
+		})
+	}
+}
+
+type countingLogValuer struct{ calls *atomic.Int32 }
+
+func (value countingLogValuer) LogValue() slog.Value {
+	value.calls.Add(1)
+	return slog.StringValue(testLogMessage)
+}
+
+func TestBoundFieldsResolveOnce(t *testing.T) {
+	var calls atomic.Int32
+	value := countingLogValuer{&calls}
+	logger, err := parseLogging(t, testJSONFlag).logger(io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := logger.Handler().WithGroup(testPayload).WithAttrs([]slog.Attr{slog.Time("time", userTime)})
-	if err := handler.Handle(t.Context(), slog.NewRecord(timestamp, slog.LevelInfo, testLogMessage, 0)); err != nil {
-		t.Fatal(err)
+	bound := []func(string, ...any){
+		logger.With("field", value).Info,
+		logger.With("time", value).Info,
+		logger.WithGroup(testPayload).With("field", value).Info,
+		logr.FromSlogHandler(controllerLogHandler{logger.Handler()}).WithValues("field", value).Info,
 	}
-	got := decodeLog(t, output.Bytes())
-	if got["ts"] != json.Number("1234567890.25") || bytes.Count(output.Bytes(), []byte(`"ts":`)) != 1 {
-		t.Fatalf("built-in timestamp = %s", output.String())
+	for range 3 {
+		for _, info := range bound {
+			info(testLogMessage)
+		}
 	}
-	if payload := got[testPayload].(map[string]any); payload["time"] != userTime.Format(time.RFC3339Nano) {
-		t.Fatalf("user time field = %v", got)
+	if got := calls.Load(); got != int32(len(bound)) {
+		t.Fatalf("bound values resolved %d times, want once per binding (%d)", got, len(bound))
 	}
 }
 

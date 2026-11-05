@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"reflect"
 	goruntime "runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -129,14 +130,25 @@ func (options loggingOptions) logger(output io.Writer) (*slog.Logger, error) {
 	return slog.New(stacktraceHandler{Handler: handler, level: stackLevel}), nil
 }
 
+func nilPointer(value any) bool {
+	reflected := reflect.ValueOf(value)
+	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
+}
+
 type marshalerValue struct{ logr.Marshaler }
 
-func (value marshalerValue) LogValue() slog.Value { return slog.AnyValue(value.MarshalLog()) }
+func (value marshalerValue) LogValue() slog.Value {
+	// Nil pointers log as null instead of panicking in MarshalLog.
+	if nilPointer(value.Marshaler) {
+		return slog.AnyValue(nil)
+	}
+	return slog.AnyValue(value.MarshalLog())
+}
 
 type objectLogValue struct{ runtime.Object }
 
 func (value objectLogValue) LogValue() slog.Value {
-	if object := reflect.ValueOf(value.Object); object.Kind() == reflect.Pointer && object.IsNil() {
+	if nilPointer(value.Object) {
 		return slog.AnyValue(nil)
 	}
 	// Object logs contain identity unless full contents are explicitly enabled.
@@ -153,30 +165,44 @@ func (value objectLogValue) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
+// Value.Any boxes scalar kinds into a new interface, so only KindAny values are inspected.
+func logValue(value slog.Value, fullObjects bool) slog.Value {
+	if value.Kind() != slog.KindAny {
+		return value
+	}
+	if marshaler, ok := value.Any().(logr.Marshaler); ok {
+		value = slog.AnyValue(marshalerValue{marshaler}).Resolve()
+	}
+	if !fullObjects && value.Kind() == slog.KindAny {
+		if object, ok := value.Any().(runtime.Object); ok {
+			value = slog.AnyValue(objectLogValue{object}).Resolve()
+		}
+	}
+	return value
+}
+
 func logAttributes(fullObjects bool, timeEncoder string, text bool) func([]string, slog.Attr) slog.Attr {
 	return func(groups []string, attr slog.Attr) slog.Attr {
-		if marshaler, ok := attr.Value.Any().(logr.Marshaler); ok {
-			attr.Value = slog.AnyValue(marshalerValue{marshaler}).Resolve()
-		}
-		if !fullObjects {
-			if object, ok := attr.Value.Any().(runtime.Object); ok {
-				attr.Value = slog.AnyValue(objectLogValue{object}).Resolve()
+		if attr.Value.Kind() == slog.KindAny {
+			if field, ok := attr.Value.Any().(timeField); ok {
+				attr.Value = logValue(field.value.Resolve(), fullObjects)
+				return attr
 			}
 		}
+		attr.Value = logValue(attr.Value, fullObjects)
 		if len(groups) != 0 {
 			return attr
 		}
 		switch attr.Key {
 		case slog.TimeKey:
-			// Top-level time values, built-in or user, are emitted as ts.
+			// User time fields arrive as timeField, so this is the built-in timestamp.
 			if attr.Value.Kind() == slog.KindTime {
-				timestamp := timestampAttribute(timeEncoder, attr.Value.Time())
-				if text && timestamp.Value.Kind() == slog.KindFloat64 {
-					timestamp.Value = slog.StringValue(strconv.FormatFloat(timestamp.Value.Float64(), 'f', -1, 64))
-				}
-				return timestamp
+				return timestampAttribute(timeEncoder, text, attr.Value.Time())
 			}
 		case slog.LevelKey:
+			if attr.Value.Kind() != slog.KindAny {
+				break
+			}
 			if level, ok := attr.Value.Any().(slog.Level); ok {
 				label := "debug"
 				switch {
@@ -196,30 +222,96 @@ func logAttributes(fullObjects bool, timeEncoder string, text bool) func([]strin
 	}
 }
 
-func timestampAttribute(encoding string, timestamp time.Time) slog.Attr {
+func timestampAttribute(encoding string, text bool, timestamp time.Time) slog.Attr {
 	switch encoding {
 	case logEpoch:
-		return slog.Float64("ts", float64(timestamp.Unix())+float64(timestamp.Nanosecond())/1e9)
+		return numericTimestamp(text, float64(timestamp.Unix())+float64(timestamp.Nanosecond())/1e9)
 	case "millis":
-		return slog.Float64("ts", float64(timestamp.Unix())*1e3+float64(timestamp.Nanosecond())/1e6)
+		return numericTimestamp(text, float64(timestamp.Unix())*1e3+float64(timestamp.Nanosecond())/1e6)
 	case "nanos":
 		return slog.Int64("ts", timestamp.UnixNano())
 	case "iso8601":
 		return slog.String("ts", timestamp.Format("2006-01-02T15:04:05.000Z0700"))
 	case "rfc3339nano":
+		// JSON writes time values as RFC3339Nano directly into its buffer.
+		if !text {
+			return slog.Time("ts", timestamp)
+		}
 		return slog.String("ts", timestamp.Format(time.RFC3339Nano))
 	default:
 		return slog.String("ts", timestamp.Format(time.RFC3339))
 	}
 }
 
+// Text output writes floats in exponent form, so text timestamps are plain decimal strings.
+func numericTimestamp(text bool, value float64) slog.Attr {
+	if text {
+		return slog.String("ts", strconv.FormatFloat(value, 'f', -1, 64))
+	}
+	return slog.Float64("ts", value)
+}
+
+// timeField wraps a user attribute named time that lands outside every group,
+// so ReplaceAttr renames only the built-in timestamp to ts.
+type timeField struct{ value slog.Value }
+
+func isTimeField(attr slog.Attr) bool {
+	if attr.Key == "" && attr.Value.Kind() == slog.KindGroup {
+		return slices.ContainsFunc(attr.Value.Group(), isTimeField)
+	}
+	return attr.Key == slog.TimeKey && attr.Value.Kind() != slog.KindGroup
+}
+
+func markTimeField(attr slog.Attr) slog.Attr {
+	switch {
+	case !isTimeField(attr):
+		return attr
+	case attr.Key == "":
+		return slog.Attr{Value: slog.GroupValue(markTimeFields(attr.Value.Group())...)}
+	default:
+		return slog.Any(attr.Key, timeField{attr.Value})
+	}
+}
+
+func markTimeFields(attrs []slog.Attr) []slog.Attr {
+	if !slices.ContainsFunc(attrs, isTimeField) {
+		return attrs
+	}
+	marked := make([]slog.Attr, len(attrs))
+	for i, attr := range attrs {
+		marked[i] = markTimeField(attr)
+	}
+	return marked
+}
+
+func markRecordTimeFields(record slog.Record) slog.Record {
+	found := false
+	record.Attrs(func(attr slog.Attr) bool {
+		found = isTimeField(attr)
+		return !found
+	})
+	if !found {
+		return record
+	}
+	marked := slog.NewRecord(record.Time, record.Level, record.Message, record.PC)
+	record.Attrs(func(attr slog.Attr) bool {
+		marked.AddAttrs(markTimeField(attr))
+		return true
+	})
+	return marked
+}
+
 type stacktraceHandler struct {
 	slog.Handler
 	level     slog.Level
 	skipStack bool
+	grouped   bool
 }
 
 func (handler stacktraceHandler) Handle(ctx context.Context, record slog.Record) error {
+	if !handler.grouped {
+		record = markRecordTimeFields(record)
+	}
 	if !handler.skipStack && record.Level >= handler.level {
 		if stack := logStack(record.PC); stack != "" {
 			record = record.Clone()
@@ -258,11 +350,15 @@ func logStack(pc uintptr) string {
 }
 
 func (handler stacktraceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	if !handler.grouped {
+		attrs = markTimeFields(attrs)
+	}
 	handler.Handler = handler.Handler.WithAttrs(attrs)
 	return handler
 }
 
 func (handler stacktraceHandler) WithGroup(name string) slog.Handler {
+	handler.grouped = handler.grouped || name != ""
 	handler.Handler = handler.Handler.WithGroup(name)
 	return handler
 }
