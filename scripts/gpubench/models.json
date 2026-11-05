@@ -1,0 +1,29 @@
+{
+  "qwen2.5-7b-q4km": {
+    "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+    "revision": "8911e8a47f92bac19d6f5c64a2e2095bd2f7d031",
+    "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "bytes": 4683074240,
+    "sha256": "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423",
+    "license": "apache-2.0",
+    "note": "the gap bench model: over 4 GiB, so a wasm32 guest cannot hold its weights"
+  },
+  "qwen2.5-1.5b-q4km": {
+    "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+    "revision": "91cad51170dc346986eccefdc2dd33a9da36ead9",
+    "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "bytes": 1117320736,
+    "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+    "license": "apache-2.0",
+    "note": "second of the three serverless workloads"
+  },
+  "qwen2.5-0.5b-q4km": {
+    "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+    "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+    "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    "bytes": 491400032,
+    "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+    "license": "apache-2.0",
+    "note": "third serverless workload, and the smoke-test model (--smoke)"
+  }
+}

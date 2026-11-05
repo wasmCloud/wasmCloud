@@ -1,0 +1,17 @@
+diff --git a/common/file-lock.cpp b/common/file-lock.cpp
+index 553a066..6ccc5c6 100644
+--- a/common/file-lock.cpp
++++ b/common/file-lock.cpp
+@@ -23,6 +23,12 @@
+ #include <cstring>
+ #endif
+ 
++#if defined(__wasi__)
++// wasi-libc declares flock but has no file locks. A WASI guest is one
++// process with its own preopens, so there is nothing to lock against.
++#define flock(fd, op) (errno = ENOSYS, -1)
++#endif
++
+ common_file_lock::common_file_lock(const std::string & lock_path) {
+     this->lock_path = lock_path;
+ }
