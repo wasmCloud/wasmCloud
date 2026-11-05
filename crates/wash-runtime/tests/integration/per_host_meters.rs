@@ -1,13 +1,11 @@
 //! Two hosts in one process measure through their own meters, not each other's.
 //!
-//! Its own binary, because reading metrics back means installing a global OTel
-//! meter provider and that provider is process-wide.
-//!
 //! This is the wiring `host::tests` cannot reach: `Host::meters` →
 //! `UnresolvedWorkload::resolve` → the store builders → the stamp every call
 //! path reads. Asserting on `Meters` alone would pass with none of it connected.
 
 use anyhow::{Context, Result};
+use opentelemetry::metrics::{Meter, MeterProvider as _};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use wash_runtime::engine::Engine;
 use wash_runtime::host::http::{DevRouter, Ingress};
@@ -15,31 +13,28 @@ use wash_runtime::host::{Host, HostApi};
 use wash_runtime::observability::{MeterKind, Meters};
 use wash_runtime::types::{LocalResources, WorkloadStopRequest};
 
-mod common;
-use common::{component_workload_request, http_only_host_interfaces};
+use crate::common::{component_workload_request, http_only_host_interfaces};
 
 /// p3, deliberately: the p2 path records through the ingress's own injected
 /// `GuestMeter`, which was always per-host. `InvocationSample` — the reader that
 /// takes its meter off the store's stamp — is on the p3 path.
-const HTTP_HANDLER_P3_WASM: &[u8] = include_bytes!("wasm/http_handler_p3.wasm");
+const HTTP_HANDLER_P3_WASM: &[u8] = include_bytes!("../wasm/http_handler_p3.wasm");
 
 /// A host that meters nothing, started alongside one that meters, must leave
 /// the histogram empty. It shares the process, the OTel provider and the
-/// instrument name with the other host; only its own meter says otherwise.
+/// instrument name with the other host; only its own meter kind says otherwise.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_host_metering_nothing_records_nothing_beside_one_that_meters() -> Result<()> {
     let exporter = InMemoryMetricExporter::default();
     let provider = SdkMeterProvider::builder()
         .with_reader(PeriodicReader::builder(exporter.clone()).build())
         .build();
-    // Installed before any meter is built: `Meters::new` resolves its
-    // instruments from whatever provider is global at that moment.
-    opentelemetry::global::set_meter_provider(provider.clone());
+    let meter = provider.meter("wash-runtime");
 
     // The metering host goes first, so it is also the one a process-wide meter
     // would have published — making the quiet host's silence meaningful.
-    let metered = start_workload(MeterKind::Duration, "metered").await?;
-    let quiet = start_workload(MeterKind::Off, "quiet").await?;
+    let metered = start_workload(MeterKind::Duration, &meter, "metered").await?;
+    let quiet = start_workload(MeterKind::Off, &meter, "quiet").await?;
 
     // Only the quiet host is called, so any data point at all is one it
     // recorded.
@@ -122,9 +117,9 @@ impl Started {
     }
 }
 
-/// Start one host under `kind` with a single p2 HTTP component on it, so its
+/// Start one host under `kind` with a single p3 HTTP component on it, so its
 /// stores go through the stamping path this test is about.
-async fn start_workload(kind: MeterKind, name: &str) -> Result<Started> {
+async fn start_workload(kind: MeterKind, meter: &Meter, name: &str) -> Result<Started> {
     let engine = Engine::builder()
         .with_pooling_allocator(false)
         .with_fuel_consumption(kind.consumes_fuel())
@@ -139,7 +134,7 @@ async fn start_workload(kind: MeterKind, name: &str) -> Result<Started> {
     let host = Host::builder()
         .with_engine(engine)
         .with_http_handler(std::sync::Arc::new(ingress))
-        .with_meters(Meters::new(kind))
+        .with_meters(Meters::with_meter(kind, meter))
         .build()
         .context("failed to build the host")?;
     let host = host.start().await.context("failed to start the host")?;

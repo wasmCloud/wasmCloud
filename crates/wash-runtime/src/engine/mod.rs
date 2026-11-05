@@ -1357,6 +1357,7 @@ pub struct EngineBuilder {
     guest_memory_mode: guest_memory::GuestMemoryMode,
     max_initial_guest_memory_bytes: Option<u64>,
     hostcall_fuel: Option<std::num::NonZeroUsize>,
+    meter: Option<opentelemetry::metrics::Meter>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1521,6 +1522,14 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_hostcall_fuel(mut self, fuel: std::num::NonZeroUsize) -> Self {
         self.hostcall_fuel = Some(fuel);
+        self
+    }
+
+    /// The meter the engine publishes its memory instruments on. Unset, it is
+    /// the process-wide OTel meter provider as it is when the engine is built.
+    #[must_use]
+    pub fn with_meter(mut self, meter: opentelemetry::metrics::Meter) -> Self {
+        self.meter = Some(meter);
         self
     }
 
@@ -2108,13 +2117,14 @@ impl EngineBuilder {
         }
 
         spawn_epoch_ticker(&inner)?;
+        let meter = self
+            .meter
+            .unwrap_or_else(|| opentelemetry::global::meter("wash-runtime"));
         let process_memory = match max_process_memory_bytes {
             Some(limit) => {
                 let guard = Arc::new(process_memory::ProcessMemoryGuard::new(limit));
                 guard.spawn_sampler()?;
-                process_memory::ProcessMemoryGuard::register_metrics(
-                    &opentelemetry::global::meter("wash-runtime"),
-                );
+                process_memory::ProcessMemoryGuard::register_metrics(&meter);
                 Some(guard)
             }
             None => None,
@@ -2189,7 +2199,7 @@ impl EngineBuilder {
                     Some(guard) => budget.with_process_guard(Arc::clone(guard)),
                     None => budget,
                 }
-                .into_metered()
+                .into_metered(&meter)
             },
             store_settings: store_settings::StoreSettings {
                 hostcall_fuel: self.hostcall_fuel,

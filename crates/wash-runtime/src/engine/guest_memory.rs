@@ -516,14 +516,14 @@ impl GuestMemoryBudget {
         }
     }
 
-    /// The budget, published as metrics on the process-wide meter.
+    /// The budget, published as metrics on `meter`.
     ///
     /// Registration needs an [`Arc`] — the callbacks hold a
     /// [`std::sync::Weak`] back to it — so this is the one place the two are
     /// wired together.
-    pub fn into_metered(self) -> Arc<Self> {
+    pub fn into_metered(self, meter: &opentelemetry::metrics::Meter) -> Arc<Self> {
         let budget = Arc::new(self);
-        budget.register_metrics(&opentelemetry::global::meter("wash-runtime"));
+        budget.register_metrics(meter);
         budget
     }
 

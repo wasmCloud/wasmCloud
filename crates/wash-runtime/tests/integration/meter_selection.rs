@@ -1,15 +1,12 @@
 //! The chosen meter is the one that actually records.
 //!
-//! Its own binary, and one test: reading back what was recorded means installing
-//! a global OTel meter provider, and that provider is process-wide. Three tests
-//! doing it in parallel each see whichever provider won the race.
-//!
 //! Without reading the histogram back these assertions would be vacuous. A
 //! `GuestMeter` whose meters are both inert runs the call and returns its value
 //! exactly like one that measured it, so "the call succeeded" proves nothing
 //! about metering. What distinguishes them is a data point.
 
 use anyhow::{Context, Result};
+use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 use wash_runtime::{
     engine::{
@@ -26,14 +23,11 @@ async fn record_one(kind: MeterKind) -> Result<Vec<String>> {
     let provider = SdkMeterProvider::builder()
         .with_reader(PeriodicReader::builder(exporter.clone()).build())
         .build();
-    // Installed before the meters are built: `Meters::new` resolves its
-    // histograms from whatever provider is global at that moment.
-    opentelemetry::global::set_meter_provider(provider.clone());
 
     let engine = Engine::builder()
         .with_fuel_consumption(kind.consumes_fuel())
         .build()?;
-    let meter = Meters::new(kind).guest();
+    let meter = Meters::with_meter(kind, &provider.meter("wash-runtime")).guest();
     let ctx = Ctx::builder("test-workload", "test-component").build();
     let mut store = wasmtime::Store::new(engine.inner(), SharedCtx::new(ctx));
 
@@ -60,9 +54,6 @@ async fn record_one(kind: MeterKind) -> Result<Vec<String>> {
 /// through `GuestMeter`, which uses the meter the host chose; before, those
 /// paths named the fuel meter, so under `epoch` the p2 HTTP path and both
 /// messaging backends recorded nothing at all.
-///
-/// One test, sequentially, because the meter provider each case installs is
-/// process-global.
 #[tokio::test]
 async fn a_meter_kind_records_duration_and_only_its_own_cpu_metric() -> Result<()> {
     // Duration is not the choice: it is what an operator asks for first, it

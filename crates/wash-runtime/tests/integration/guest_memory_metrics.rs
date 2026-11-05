@@ -14,19 +14,12 @@
 //! counter, breaks every dashboard silently and at a distance — nothing in the
 //! runtime fails. So they are pinned here as a spec, and changing one should
 //! mean deliberately editing this list.
-//!
-//! # Why this is a file of its own
-//!
-//! It installs the *process-wide* meter provider, which is what `Engine::build`
-//! reads. Cargo gives each `tests/*.rs` its own binary and therefore its own
-//! process, so doing that here cannot disturb another test's metrics — but any
-//! test added to this file shares that provider, and will see this engine's
-//! instruments too.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry_sdk::metrics::{
     InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
     data::{AggregatedMetrics, MetricData},
@@ -50,15 +43,12 @@ fn a_built_engine_publishes_its_guest_memory_budget() {
     let provider = SdkMeterProvider::builder()
         .with_reader(PeriodicReader::builder(exporter.clone()).build())
         .build();
-    // Before the engine is built: `Engine::build` resolves its meter from
-    // whatever the global provider is at that moment, so a provider installed
-    // afterwards would leave the instruments bound to the no-op one.
-    opentelemetry::global::set_meter_provider(provider.clone());
 
     // Held, not dropped: the callbacks hold a weak reference to the budget, so
     // an engine that went away before the flush would export nothing and this
     // test would pass for the wrong reason.
     let engine = Engine::builder()
+        .with_meter(provider.meter("wash-runtime"))
         .with_host_memory(HostMemoryBudgets::resolve(Some(BUDGET), None, None, None).unwrap())
         .with_guest_memory_mode(GuestMemoryMode::Enforce)
         .build()

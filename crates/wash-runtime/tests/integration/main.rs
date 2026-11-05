@@ -4,10 +4,11 @@
 //! wash-runtime, wasmtime and cranelift, so a suite of separate files spends
 //! most of its build linking. A module here costs only its own compile.
 //!
-//! The modules share a process: a module installs its tracing subscriber
-//! with `try_init`, leaves environment variables alone, and holds
-//! [`common::STDERR`] while it redirects stderr. A test that needs a
-//! process to itself stays a `tests/*.rs` file and says why.
+//! The modules share a process: a module logs through
+//! [`common::init_tracing`], leaves environment variables and the global OTel
+//! meter provider alone, and holds [`common::STDERR`] while it redirects
+//! stderr. A test that needs a process to itself stays a `tests/*.rs` file and
+//! says why.
 
 #![cfg_attr(coverage_nightly, recursion_limit = "256")]
 
@@ -29,6 +30,7 @@ mod density_pool;
 mod fuel_metering;
 mod guest_implements_routing;
 mod guest_memory_budget;
+mod guest_memory_metrics;
 mod host_plugin_loader;
 mod http_allowed_hosts;
 mod http_blobstore;
@@ -52,6 +54,7 @@ mod keyvalue_redis_interop;
 mod messaging_async;
 mod messaging_concurrency;
 mod messaging_multiplexed;
+mod meter_selection;
 mod multi_component_config;
 mod nats_blobstore;
 mod nats_messaging;
@@ -67,6 +70,7 @@ mod p3_loopback_service;
 mod p3_resources;
 mod p3_sockets;
 mod p3_streams;
+mod per_host_meters;
 mod plugin_calls_workload;
 mod plugin_dispatch;
 mod plugin_http_egress;
