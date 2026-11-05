@@ -61,8 +61,18 @@ func TestMaterializeConfigLayerPrecedenceAndIsolation(t *testing.T) {
 	}
 }
 
+// A pull secret yields its own auths for the image's registry and nothing
+// else: no credential helper it names is run, and none of the operator's own
+// registry credentials are handed out in its place.
 func TestMaterializeImagePullSecret(t *testing.T) {
 	credentials := base64.StdEncoding.EncodeToString([]byte("test-user:test-password"))
+	operatorCredentials := base64.StdEncoding.EncodeToString([]byte("operator-user:operator-password"))
+	// The operator's own credentials, which the unmatched registry must not get.
+	t.Setenv("DOCKER_AUTH_CONFIG", `{"auths":{"another.example":{"auth":"`+operatorCredentials+`"}}}`)
+	const privateImage = "registry.example/component:v1"
+	// The store and helper cases name docker-credential-wasmcloud-absent, which
+	// does not exist, so running it fails the case.
+	const privateAuths = `"auths":{"registry.example":{"username":"test-user","password":"test-password"}}`
 	for _, tt := range []struct {
 		name, image, config string
 		secretType          corev1.SecretType
@@ -70,7 +80,9 @@ func TestMaterializeImagePullSecret(t *testing.T) {
 		wantCredentials     bool
 	}{
 		{name: "docker hub", image: "ubuntu:latest", config: `{"auths":{"https://index.docker.io/v1/":{"auth":"` + credentials + `"}}}`, secretType: corev1.SecretTypeDockerConfigJson, wantCredentials: true},
-		{name: "private registry", image: "registry.example/component:v1", config: `{"auths":{"registry.example":{"username":"test-user","password":"test-password"}}}`, secretType: corev1.SecretTypeDockerConfigJson, wantCredentials: true},
+		{name: "private registry", image: privateImage, config: `{` + privateAuths + `}`, secretType: corev1.SecretTypeDockerConfigJson, wantCredentials: true},
+		{name: "credential store", image: privateImage, config: `{"credsStore":"wasmcloud-absent",` + privateAuths + `}`, secretType: corev1.SecretTypeDockerConfigJson, wantCredentials: true},
+		{name: "credential helper", image: privateImage, config: `{"credHelpers":{"registry.example":"wasmcloud-absent"},` + privateAuths + `}`, secretType: corev1.SecretTypeDockerConfigJson, wantCredentials: true},
 		{name: "unmatched registry", image: "another.example/component:v1", config: `{"auths":{}}`, secretType: corev1.SecretTypeDockerConfigJson},
 		{name: "wrong type", image: "ubuntu", config: `{}`, secretType: corev1.SecretTypeOpaque, wantError: "is not of type"},
 		{name: "invalid JSON", image: "ubuntu", config: `{`, secretType: corev1.SecretTypeDockerConfigJson, wantError: "loading docker config"},
