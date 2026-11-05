@@ -87,7 +87,9 @@ jobs:
       - changes
     if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # The macOS and Windows legs run close to 60 minutes. This limit is a
+    # stopgap while their build time is being reduced.
+    timeout-minutes: 75
     permissions:
       contents: read
     strategy:
