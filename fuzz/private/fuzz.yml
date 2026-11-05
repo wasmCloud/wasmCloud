@@ -131,7 +131,7 @@ jobs:
           name: go-harnesses
           path: ${{ runner.temp }}/go-harnesses.tar
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   go:
     name: go (${{ matrix.target }})
@@ -276,7 +276,7 @@ jobs:
           name: rust-fuzz
           path: ${{ runner.temp }}/rust-fuzz
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   rust:
     name: rust (${{ matrix.target }})
