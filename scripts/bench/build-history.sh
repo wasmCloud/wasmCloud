@@ -30,7 +30,7 @@ aws s3 sync --no-progress \
   --exclude '*' --include '*results.jsonl' \
   "s3://${WASMCLOUD_BENCH_S3_BUCKET}/runs/" "${work}/"
 
-# Concatenate and JSON-encode. unique_by(.sha + .group + .param + .run_attempt)
+# Concatenate and JSON-encode. unique_by the publish dedup key (bench-push-results.mjs)
 # in case the same row was uploaded twice; sort_by(.timestamp) so the frontend
 # can iterate in chronological order.
 #
@@ -47,7 +47,7 @@ aws s3 sync --no-progress \
       select(.timestamp != null) |
       select(((now - (.timestamp | fromdate)) / 86400) <= $max_age)
     ' \
-  | jq -s 'unique_by([.sha, .bench, .group, .param, .run_attempt, (.metric // null)]) | sort_by(.timestamp)' \
+  | jq -s 'unique_by([.sha, .bench, .group, .param, .run_attempt, (.metric // null), (.host_label // "hetzner")]) | sort_by(.timestamp)' \
   > "$out"
 
 count=$(jq 'length' < "$out")

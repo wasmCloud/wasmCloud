@@ -21,6 +21,8 @@ test('publishes the data artifact and retries a conflicting history write', () =
       group: 'g', param: 'p', metric: 'mean_ns', timestamp: '2026-10-06T12:00:00Z',
     };
     const competing = { ...row, sha: 'b'.repeat(40) };
+    // Same key as `row` but measured on another host: a different series.
+    const otherHost = { ...row, host_label: 'aws-c7i' };
     writeFileSync(join(bundle, 'metadata.json'), JSON.stringify({
       bench: 'http_invoke',
       run_id: '123',
@@ -29,9 +31,10 @@ test('publishes the data artifact and retries a conflicting history write', () =
       sha: 'a'.repeat(40),
       short_sha: 'a'.repeat(12),
       timestamp: '2026-10-06T12:00:00Z',
+      host_label: 'hetzner',
     }));
     writeFileSync(join(bundle, 'results.jsonl'), JSON.stringify(row) + '\n');
-    writeFileSync(join(root, 'competing.json'), JSON.stringify([competing]));
+    writeFileSync(join(root, 'competing.json'), JSON.stringify([competing, otherHost]));
     writeFileSync(join(root, 'conflict'), '');
     writeFileSync(join(bin, 'aws'), `#!/usr/bin/env node
 import { createHash } from 'node:crypto';
@@ -90,7 +93,9 @@ if (args[0] === 's3' && args[1] === 'cp') {
     assert.equal(validate.status, 0, validate.stderr);
     const publish = spawnSync(process.execPath, [script, 'publish', bundle], { env, encoding: 'utf8' });
     assert.equal(publish.status, 0, publish.stderr);
-    assert.equal(JSON.parse(readFileSync(join(root, 'history.json'), 'utf8')).length, 2);
+    const history = JSON.parse(readFileSync(join(root, 'history.json'), 'utf8'));
+    assert.equal(history.length, 3);
+    assert.deepEqual(history.filter((r) => r.sha === row.sha).map((r) => r.host_label ?? 'hetzner').sort(), ['aws-c7i', 'hetzner']);
     assert.equal(readFileSync(join(root, 'bucket/runs/2026-10-06/aaaaaaaaaaaa/123/http_invoke/results.jsonl'), 'utf8'), JSON.stringify(row) + '\n');
 
     writeFileSync(join(bundle, 'results.jsonl'), JSON.stringify({ ...row, sha: 'b'.repeat(40) }) + '\n');
@@ -117,6 +122,7 @@ test('validates k6 rows against the resolved run', () => {
       run_id: '456',
       run_attempt: '2',
       timestamp: '2026-10-06T12:00:00Z',
+      host_label: 'hetzner',
     };
     const row = {
       bench: 'k6', group: 'http-hello', param: 'constant-1000',
@@ -139,6 +145,58 @@ test('validates k6 rows against the resolved run', () => {
     writeFileSync(join(root, 'results.jsonl'), JSON.stringify({ ...row, run_attempt: '1' }) + '\n');
     const stale = spawnSync(process.execPath, [script, 'validate', root], { env, encoding: 'utf8' });
     assert.notEqual(stale.status, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('validates the host label of the artifact and every row', () => {
+  const root = mkdtempSync(join(tmpdir(), 'bench-host-label-test-'));
+  try {
+    const metadata = {
+      bench: 'http_invoke', ref: 'main', sha: 'd'.repeat(40), short_sha: 'd'.repeat(12),
+      run_id: '789', run_attempt: '1', timestamp: '2026-11-05T12:00:00Z', host_label: 'aws-c7i',
+    };
+    const row = {
+      bench: 'http_invoke', group: 'g', param: 'p',
+      sha: metadata.sha, short_sha: metadata.short_sha, ref: metadata.ref,
+      run_id: metadata.run_id, run_attempt: metadata.run_attempt, host_label: 'aws-c7i',
+    };
+    const env = {
+      ...process.env,
+      WASMCLOUD_BENCH_NAME: metadata.bench,
+      WASMCLOUD_BENCH_REF: metadata.ref,
+      WASMCLOUD_BENCH_SHA: metadata.sha,
+      WASMCLOUD_BENCH_HOST_LABEL: 'aws-c7i',
+      GITHUB_RUN_ID: metadata.run_id,
+      GITHUB_RUN_ATTEMPT: metadata.run_attempt,
+    };
+    const validate = (meta, rows, environment = env) => {
+      writeFileSync(join(root, 'metadata.json'), JSON.stringify(meta));
+      writeFileSync(join(root, 'results.jsonl'), rows.map((r) => JSON.stringify(r) + '\n').join(''));
+      return spawnSync(process.execPath, [script, 'validate', root], { env: environment, encoding: 'utf8' });
+    };
+
+    const valid = validate(metadata, [row]);
+    assert.equal(valid.status, 0, valid.stderr);
+
+    const wrongMeta = validate({ ...metadata, host_label: 'hetzner' }, [row]);
+    assert.match(wrongMeta.stderr, /artifact host label does not match/);
+    const noMeta = validate({ ...metadata, host_label: undefined }, [row]);
+    assert.match(noMeta.stderr, /artifact host label does not match/);
+
+    const wrongRow = validate(metadata, [{ ...row, host_label: 'hetzner' }]);
+    assert.match(wrongRow.stderr, /artifact row does not match/);
+    const { host_label: _, ...unlabeled } = row;
+    const unlabeledRow = validate(metadata, [unlabeled]);
+    assert.match(unlabeledRow.stderr, /artifact row does not match/);
+
+    const { WASMCLOUD_BENCH_HOST_LABEL: __, ...hetznerEnv } = env;
+    const hetzner = validate({ ...metadata, host_label: 'hetzner' }, [unlabeled], hetznerEnv);
+    assert.equal(hetzner.status, 0, hetzner.stderr);
+
+    const badLabel = validate(metadata, [row], { ...env, WASMCLOUD_BENCH_HOST_LABEL: 'AWS_C7I' });
+    assert.match(badLabel.stderr, /invalid bench host label/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

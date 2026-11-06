@@ -1,6 +1,6 @@
 name: k6bench
 
-# System-level load tests (scripts/k6bench) on the Hetzner bench host: a kind
+# System-level load tests (scripts/k6bench) on a bench host: a kind
 # cluster running the runtime-operator chart, driven by k6. Sibling of
 # bench.yml, which measures wash-runtime in-process; see
 # scripts/k6bench/README.md.
@@ -53,6 +53,10 @@ on:
         description: also archive k6's per-request stream (large)
         type: boolean
         default: false
+      host:
+        description: "runner label of the bench host (hetzner = the dedicated host)"
+        type: string
+        default: hetzner
   release:
     types: [published]
 
@@ -61,7 +65,7 @@ defaults:
     shell: bash
 
 # No concurrency group: GitHub keeps only one pending run per group, so a
-# dispatch would cancel a queued release run. The single self-hosted runner
+# dispatch would cancel a queued release run. Each bench host's runner
 # already serializes jobs, and its queue never drops one.
 
 permissions: {}
@@ -80,6 +84,7 @@ jobs:
       ref: ${{ steps.set.outputs.ref }}
       release: ${{ steps.set.outputs.release }}
       sha: ${{ steps.commit.outputs.sha }}
+      host: ${{ steps.set.outputs.host }}
     env:
       # What every release publishes to the timeline, as
       # `scenario:profile[:routing]`. stress gives the headline
@@ -95,10 +100,19 @@ jobs:
           INPUT_PROFILE: ${{ inputs.profile }}
           INPUT_ROUTING: ${{ inputs.routing }}
           INPUT_REF: ${{ inputs.ref }}
+          INPUT_HOST: ${{ inputs.host }}
           DEFAULT_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
+          # Release runs measure the dedicated host. Same shape as
+          # bench-host.mjs's parseHostLabel.
+          host="hetzner"
+          [ "$EVENT" = "release" ] || host="${INPUT_HOST:-hetzner}"
+          if ! [[ "$host" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "invalid host label '${host}'" >&2
+            exit 1
+          fi
           if [ "$EVENT" = "release" ]; then
             runs="${RELEASE_RUNS}"
             ref="${RELEASE_TAG}"
@@ -140,6 +154,7 @@ jobs:
             echo "ref=${ref}"
             echo "checkout_ref=${checkout_ref}"
             echo "release=${release}"
+            echo "host=${host}"
           } >> "$GITHUB_OUTPUT"
 
       - name: resolve commit
@@ -170,6 +185,10 @@ jobs:
       rate: ${{ inputs.rate || '1000' }}
       duration: ${{ inputs.duration || '3m' }}
       raw: ${{ inputs.raw || false }}
+      # arewefastyet has no host filter yet, so only the dedicated host's
+      # rows enter the public history.
+      publish: ${{ needs.matrix.outputs.host == 'hetzner' }}
+      host: ${{ needs.matrix.outputs.host }}
     secrets:
       aws_role_arn: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
       aws_region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}

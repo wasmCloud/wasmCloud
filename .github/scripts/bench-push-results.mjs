@@ -6,6 +6,8 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { hostname, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import { DEFAULT_HOST_LABEL, labelRows, parseHostLabel, rowHostLabel } from './bench-host.mjs';
+
 const [mode, bundle] = process.argv.slice(2);
 if (!bundle || !['prepare', 'validate', 'publish'].includes(mode)) {
   throw new Error('usage: bench-push-results.mjs <prepare|validate|publish> <bundle-dir>');
@@ -25,6 +27,7 @@ function prepare(out) {
   const k6Dir = process.env.WASMCLOUD_BENCH_K6_DIR;
   const targetDir = process.env.CARGO_TARGET_DIR ?? '/var/lib/bench/target';
   const runId = process.env.GITHUB_RUN_ID ?? 'local';
+  const hostLabel = expectedHostLabel();
 
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
@@ -48,7 +51,7 @@ function prepare(out) {
   const jsonl = k6Dir
     ? run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'k6', 'jsonl', k6Dir])
     : run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'jsonl', '--bench', bench]);
-  writeFileSync(join(out, 'results.jsonl'), jsonl ? `${jsonl}\n` : '');
+  writeFileSync(join(out, 'results.jsonl'), labelRows(jsonl, hostLabel));
 
   const sha = run('git', ['rev-parse', 'HEAD']);
   const metadata = {
@@ -66,6 +69,7 @@ function prepare(out) {
       `${process.env.GITHUB_SERVER_URL ?? 'https://github.com'}/${process.env.GITHUB_REPOSITORY ?? ''}` +
       `/actions/runs/${runId}`,
     host: hostname(),
+    host_label: hostLabel,
     kernel: run('uname', ['-r']),
     cpu: readFirstModelName('/proc/cpuinfo'),
     cpus_online: parseInt(run('nproc'), 10),
@@ -97,7 +101,7 @@ function publish(bundle) {
 
     const newRows = rows.filter((row) => !row.generator_saturated);
     const dedupKey = (row) =>
-      JSON.stringify([row.sha, row.bench, row.group, row.param, row.run_attempt, row.metric ?? null]);
+      JSON.stringify([row.sha, row.bench, row.group, row.param, row.run_attempt, row.metric ?? null, rowHostLabel(row)]);
     const histOut = join(work, 'history.json');
     let final;
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -164,6 +168,10 @@ function validate(bundle) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(metadata.timestamp)) {
     throw new Error('invalid artifact timestamp');
   }
+  const hostLabel = expectedHostLabel();
+  if (metadata.host_label !== hostLabel) {
+    throw new Error('artifact host label does not match this job');
+  }
   const rows = readFileSync(join(bundle, 'results.jsonl'), 'utf8')
     .split('\n')
     .filter((line) => line.length > 0)
@@ -172,7 +180,8 @@ function validate(bundle) {
     if (!row || typeof row !== 'object' || Array.isArray(row) ||
         row.bench !== expectedRowBench || row.sha !== metadata.sha ||
         row.short_sha !== metadata.short_sha || row.ref !== metadata.ref ||
-        row.run_id !== metadata.run_id || row.run_attempt !== metadata.run_attempt) {
+        row.run_id !== metadata.run_id || row.run_attempt !== metadata.run_attempt ||
+        rowHostLabel(row) !== hostLabel) {
       throw new Error('artifact row does not match this job');
     }
   }
@@ -191,6 +200,10 @@ function readHistory(bucket, work) {
     return { rows: [], etag: null };
   }
   return { rows: JSON.parse(readFileSync(path, 'utf8')), etag: JSON.parse(get.stdout).ETag };
+}
+
+function expectedHostLabel() {
+  return parseHostLabel(process.env.WASMCLOUD_BENCH_HOST_LABEL || DEFAULT_HOST_LABEL);
 }
 
 function required(name) {
