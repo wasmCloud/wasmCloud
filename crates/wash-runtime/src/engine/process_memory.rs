@@ -230,8 +230,7 @@ impl ProcessMemoryGuard {
         self.refused_starts.load(Ordering::Relaxed)
     }
 
-    /// Read the footprint now, for a caller about to add to it, unless some
-    /// caller in this process already did within [`REFRESH_INTERVAL`].
+    /// Read the footprint now, for a caller about to add to it.
     ///
     /// The once-a-second sampler is too slow on its own for a host that grows
     /// fast: at a thousand workload starts a second the footprint can pass
@@ -241,9 +240,21 @@ impl ProcessMemoryGuard {
     /// footprint that has stopped growing, stay with the sampler, so how soon
     /// refusals end does not depend on how much traffic is asking.
     ///
-    /// Cheap when it does not read: one clock read and an atomic load.
+    /// Below [`HIGH_PERCENT`] the read is skipped when some caller in this
+    /// process already read within [`REFRESH_INTERVAL`]: one clock read and an
+    /// atomic load. Past it, every caller reads, because one interval of fast
+    /// starts can carry the host from the high-water mark past the limit.
     pub fn refresh(&self) {
-        sampling::refresh();
+        if self.refresh_is_throttled() {
+            sampling::refresh();
+        } else {
+            sampling::refresh_now();
+        }
+    }
+
+    /// Whether [`Self::refresh`] may skip a read within [`REFRESH_INTERVAL`].
+    fn refresh_is_throttled(&self) -> bool {
+        self.state() == ProcessMemoryState::Normal
     }
 
     /// Whether a workload may start, on a fresh reading: `Err` with the reason
@@ -673,6 +684,26 @@ mod tests {
         assert_eq!(guard.footprint_bytes(), 10 * MIB);
         guard.observe(10 * MIB);
         assert_eq!(guard.state(), ProcessMemoryState::Normal);
+    }
+
+    #[test]
+    fn refreshes_stop_skipping_reads_past_the_high_water_mark() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        guard.observe(100 * MIB);
+        assert!(
+            guard.refresh_is_throttled(),
+            "normal hosts share one read per interval"
+        );
+        guard.observe(850 * MIB);
+        assert_eq!(guard.state(), ProcessMemoryState::High);
+        assert!(
+            !guard.refresh_is_throttled(),
+            "near the limit every start reads"
+        );
+        guard.observe(1001 * MIB);
+        assert!(!guard.refresh_is_throttled());
+        guard.observe(10 * MIB);
+        assert!(guard.refresh_is_throttled());
     }
 
     #[test]
