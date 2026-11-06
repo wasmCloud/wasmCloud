@@ -98,8 +98,16 @@ the cause. The workspace builds wash-runtime on a fixed copy in
 `vendor/wasi-webgpu-wasmtime/` through `[patch.crates-io]`, until a fixed
 release is in `Cargo.lock`.
 
+### llama.cpp patches
+
+llama.cpp builds with the patch series, wasip3 toolchain and header shims from
+[llama.wit](https://github.com/cosmonic-labs/llama.wit), pinned in `pins.env`
+(`LLAMA_WIT_COMMIT`). Its patches apply to exactly one llama.cpp tag, so
+`LLAMA_CPP_TAG` must match the tag that llama.wit commit builds, and the build
+stops if it doesn't. Change llama.cpp there, then move the pin here.
+
 ## Credits
 
-The wasip3 toolchain file and the header shims in `llama-wasip3/` are Mendy
-Berger's, from the `benchmark` branch of his llama.cpp fork, which first ran
-llama-bench on `wasi:webgpu`.
+The wasip3 toolchain and the header shims started as Mendy Berger's, from the
+`benchmark` branch of his llama.cpp fork, which first ran llama-bench on
+`wasi:webgpu`.
