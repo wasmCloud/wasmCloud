@@ -19,7 +19,7 @@ import (
 // End-to-end coverage for the instance limits a component declares —
 // `poolSize`, `maxConcurrency`, `maxInvocations` — and the `replicas` above
 // them. What the runtime does with each is covered in-process by
-// crates/wash-runtime/tests/integration_instance_concurrency.rs, against
+// crates/wash-runtime/tests/integration/instance_concurrency.rs, against
 // `Component` structs built by hand; nothing there proves a limit survives the
 // path a real deployment takes:
 //
@@ -245,7 +245,7 @@ spec:
 // probing the instance that holds it, and an instance retired by its budget is
 // exactly the one that can no longer answer; the budget is set high enough to
 // stay out of the way. That a delivery spends the budget at all is covered in
-// process by integration_messaging_concurrency.rs, which reads the consequence
+// process by integration/messaging_concurrency.rs, which reads the consequence
 // (a replacement counting from one) rather than the retired instance.
 //
 // Needs the in-cluster registry and NATS; self-skips otherwise.

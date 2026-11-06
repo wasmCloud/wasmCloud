@@ -27,10 +27,10 @@ import (
 //
 // What the layers below already cover, and why neither substitutes for this:
 //
-//   - crates/wash-runtime/tests/integration_thundering_herd.rs drives `HostApi`
+//   - crates/wash-runtime/tests/integration/thundering_herd.rs drives `HostApi`
 //     directly, so the whole herd starts at once. That is the host's own
 //     concurrency, with no admission control in front of it.
-//   - integration_washlet_api.rs covers the NATS command path — the
+//   - integration/washlet_api.rs covers the NATS command path — the
 //     `max_concurrent_starts` permit, and that heartbeats survive a burst — but
 //     every start there hangs on a stalling registry, so nothing in it reaches
 //     Running.

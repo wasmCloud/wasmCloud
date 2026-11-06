@@ -8,7 +8,7 @@ by hand inside a bench before, and that copy had to be deleted in review.
 | In-process host with HTTP | `HostBuilder` + `Ingress::new(DynamicRouter::default(), addr)`; see `benches/common/mod.rs` (`start_host_and_workload`, `BenchHost`, `bench_client`) |
 | Fixture wasm | `cargo xtask build-fixtures <name>` → `tests/wasm/<name>.wasm`; sources in `tests/fixtures/`; `common::Flavor::{P2,P3}.wasm()` |
 | Host NATS API | `wash_runtime::washlet::types::v2::*` (generated, serde as proto-JSON) and `washlet::{rpc_subject, heartbeat_subject}` |
-| NATS / OCI in tests | testcontainers `nats` (`tests/integration_washlet_api.rs::nats_endpoint`); `tests/common/oci_registry.rs`; `wash_runtime::oci::push_component` |
+| NATS / OCI in tests | testcontainers `nats` (`tests/integration/washlet_api.rs::nats_endpoint`); `tests/common/oci_registry.rs`; `wash_runtime::oci::push_component` |
 | Byte sizes | `engine::host_memory::{parse_bytes, render_bytes}` |
 | Memory limit (cgroup ∧ RAM) | `engine::host_memory::detected_memory_limit()` |
 | Footprint (self / another pid) | `engine::process_memory::{process_footprint, pid_footprint}`: the guard's own accounting |
