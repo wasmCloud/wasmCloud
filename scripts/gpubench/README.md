@@ -21,11 +21,22 @@ native-only features off, and both run on one CPU thread, so the step from
 interface cost, and the step from `vendor` to `webgpu-native` what WebGPU
 costs.
 
-Measured with `llama-bench` (pp512 and tg128, 5 reps, all layers on the GPU)
-on Qwen2.5-7B-Instruct Q4_K_M, a 4.7 GB file: more than a wasm32 guest can
-address, so the run shows the weights don't pass through guest memory. The
-`llama-memory` rows record the model size and the guest's memory high-water
-mark side by side.
+Measured with `llama-bench` (pp512 and tg128, all layers on the GPU) on all
+three Qwen2.5 Q4_K_M models. The headline is the 7B, a 4.7 GB file: more than
+a wasm32 guest can address, so the run shows the weights don't pass through
+guest memory. The `llama-memory` rows record the model size and the guest's
+memory high-water mark side by side. The smaller models show the per-token
+cost of the host interface, which a big model's GPU time hides.
+
+Each of the 5 repetitions is one llama-bench run, and every repetition
+rotates the order of the three steps, so drift lands on all of them. A gap
+row is `significant` only when it is larger than the two steps' combined
+standard deviation. Two diagnostics run on the headline model:
+`webgpu-native` on every CPU thread (if it moves, CPU work is in the WebGPU
+number) and `GGML_SCHED_DEBUG=2`, which logs where ggml placed each op.
+`metadata.json` records GPU clocks, temperature and throttle reasons around
+each part, and how much of each model the page cache held.
+`GPUBENCH_LOCK_CLOCKS=<MHz>` locks an NVIDIA GPU's clocks for the run.
 
 ONNX Runtime (MobileNetV2, SqueezeNet) is not wired up yet: its WebGPU EP
 builds for wasip3 on a fork, and that build is the next piece of work.
@@ -33,13 +44,18 @@ builds for wasip3 on a fork, and that build is the next piece of work.
 ## 2. Serverless
 
 Three models (7B, 1.5B and 0.5B) take turns on one GPU. Each turn starts the
-model's workload cold, generates one token, and stops it, then the GPU sits
-idle for 20 s. `sample-gpu.sh` records GPU memory throughout.
+model's workload cold, generates one token with `llama-simple`, and stops it,
+then the GPU sits idle for 20 s. The same plan then runs as native
+`webgpu-native` processes, for a baseline. `sample-gpu.sh` records GPU memory
+throughout.
 
-Reported: cold start to first token (weights included), GPU memory while busy
-and while idle (over the box's idle baseline), and how many models shared the
-GPU. The `peak_gpu_mem` row carries the memory-over-time timeline for the
-chart.
+Reported per model and side: `ttft_ms` (workload start, model load, first
+token) and its parts (`start_ms`, `load_ms` and `first_token_ms`, the last two
+from llama.cpp's own timings), plus `turn_ms`, start to exit. Per side: GPU
+memory while busy, while idle between turns, and while idle before the first
+turn (`host_idle_gpu_mem`: what the started host holds before serving
+anything), all over the box's baseline. The `peak_gpu_mem` row carries the
+memory-over-time timeline for the chart.
 
 ## Running
 
