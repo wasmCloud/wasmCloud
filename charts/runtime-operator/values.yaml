@@ -1182,6 +1182,15 @@ runtime:
       #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
       #   hostcallFuel: "256MiB"
+      # -- Node labels this group's host pods must match, e.g. to keep a
+      # webgpu group on GPU nodes. Add `tolerations` when those nodes are
+      # tainted:
+      # nodeSelector:
+      #   nvidia.com/gpu.present: "true"
+      # tolerations:
+      #   - key: nvidia.com/gpu
+      #     operator: Exists
+      #     effect: NoSchedule
       # -- Per-host-group probes. Merged field by field over
       # `runtime.probes`, so a group can retune one timing and inherit the
       # rest:

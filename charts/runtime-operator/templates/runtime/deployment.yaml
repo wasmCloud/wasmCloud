@@ -199,6 +199,14 @@ spec:
         {{- end }}
       serviceAccountName: {{ include "runtime.serviceAccountName" $top }}
       {{- include "runtime-operator.imagePullSecrets" $top | nindent 6 }}
+      {{- with .nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: host
           image: {{ if $imgRegistry }}{{ printf "%s/%s" $imgRegistry $imgRepo }}{{ else }}{{ $imgRepo }}{{ end }}:{{ $imgTag }}
