@@ -140,6 +140,20 @@ const PRESSURE_DENOMINATOR: u64 = 4;
 /// `Enforce` would.
 pub const DEFAULT_INITIAL_OVERCOMMIT: u64 = 4;
 
+/// The floor on the derived initial cap when the host has a
+/// `max-process-memory`, as a multiple of that limit.
+///
+/// [`DEFAULT_INITIAL_OVERCOMMIT`] scales with the guest budget, which
+/// defaults to the whole machine and so says nothing about the limit the host
+/// is actually held to: at 32 GiB on a 48 GiB machine it stopped warm
+/// `http-handler-p3` at 185,000 instances, 88% of the 210,000 the process
+/// limit holds. Instances declare about 7 times what they touch on 16 KiB
+/// pages and about 15 times on 4 KiB ones, so the cap should not bind before
+/// the process guard does while the declared-to-touched ratio stays under
+/// this. The process guard still refuses new instances and growth past its
+/// limit; this bounds only what admitted instances could write beyond it.
+pub const DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS: u64 = 16;
+
 /// How much of each memory's first allocation [`GuestMemoryMode::Growth`]
 /// leaves uncharged; the rest is charged as growth.
 ///

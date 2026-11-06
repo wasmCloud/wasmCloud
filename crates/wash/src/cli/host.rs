@@ -490,7 +490,8 @@ pub struct HostCommand {
     /// fails to instantiate, and a running guest's first `memory.grow` of an
     /// empty memory returns -1.
     ///
-    /// Unset, it is four times `--max-guest-memory`. Ignored in the other
+    /// Unset, it is four times `--max-guest-memory` or sixteen times
+    /// `--max-process-memory`, whichever is larger. Ignored in the other
     /// modes, which charge initial memory to `--max-guest-memory`, and the
     /// host warns if it is set there.
     #[arg(
