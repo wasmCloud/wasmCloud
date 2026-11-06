@@ -8,8 +8,10 @@ use std::sync::Barrier;
 
 use anyhow::{Context as _, Result, ensure};
 use bench_tools::pressure::{
-    CASE_ENV, Case, Host, MIB, Mode, Phase, REPORT_ENV, Report, Sample, print_sample,
+    CASE_ENV, Case, Host, MIB, Mode, Phase, REPORT_ENV, Report, Sample, WARM_BYTES, print_sample,
 };
+
+const WASM_PAGE: u64 = 64 * 1024;
 use wash_runtime::engine::{
     Engine,
     ctx::{Ctx, SharedCtx},
@@ -19,11 +21,24 @@ use wash_runtime::engine::{
 };
 use wasmtime::component::{Component, Linker, TypedFunc};
 
-/// Pool slot per memory. Each synthetic memory's maximum is 1024 pages,
-/// so this is the smallest slot that holds it.
+/// Heap ceiling per memory: each synthetic memory's maximum is 1024 pages.
+/// Pool slots stay the default reservation plus guard.
 const HEAP_BYTES: u64 = 64 * MIB;
 /// Pool memories: room for `4 × G` of 1 MiB memories at the largest limit.
 const MAX_MEMORIES: u32 = 8192;
+
+/// Stores the budgets alone admit, before the guard or the pool can stop admission.
+fn budget_stores(case: &Case, guest_cap: u64, initial_cap: u64) -> u64 {
+    let (memories, per_memory, _) = case.dimensions();
+    let uncharged = match case.mode {
+        Mode::Enforce => 0,
+        Mode::Growth => memories * per_memory.min(FIRST_ALLOCATION_UNCHARGED),
+    };
+    let charged = case.initial_bytes() - uncharged;
+    let by_charged = guest_cap.checked_div(charged).unwrap_or(u64::MAX);
+    let by_uncharged = initial_cap.checked_div(uncharged).unwrap_or(u64::MAX);
+    by_charged.min(by_uncharged)
+}
 
 struct Recorder {
     report: Report,
@@ -131,6 +146,14 @@ fn main() -> Result<()> {
     if args.iter().any(|arg| arg == "--list") || !args.iter().any(|arg| arg == "--bench") {
         return Ok(());
     }
+    // The runtime's guard and budget warnings are rate-limited; keep them in stderr.log.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -204,6 +227,15 @@ async fn run() -> Result<()> {
             "initial cap was not applied"
         );
     }
+    // `enforce` ignores the initial cap the engine always installs.
+    let initial_limit = (case.mode == Mode::Growth).then(|| budget.initial_cap());
+    let budget_stores = budget_stores(&case, budget.cap(), initial_limit.unwrap_or(u64::MAX));
+    ensure!(
+        budget_stores.saturating_mul(memories) <= u64::from(MAX_MEMORIES),
+        "the budgets admit {budget_stores} stores ({} memories), more than the pool's \
+         {MAX_MEMORIES}; lower --guest-memory-mib or --initial-cap-mib",
+        budget_stores.saturating_mul(memories)
+    );
     let mut report = Report::new(case.clone());
     report.host = Some(Host {
         architecture: std::env::consts::ARCH.into(),
@@ -213,7 +245,8 @@ async fn run() -> Result<()> {
         cpus: cgroup_cpus(),
         memory_limit: limit,
         guest_limit: budget.cap(),
-        initial_limit: budget.initial_cap(),
+        initial_limit,
+        budget_stores,
         process_limit: engine
             .process_memory()
             .context("missing process guard")?
@@ -230,18 +263,18 @@ async fn run() -> Result<()> {
                 (memory {} 1024)
                 (data (i32.const 0) "{}")
                 (func (export "warm")
-                    (memory.fill (i32.const 0) (i32.const 17) (i32.const 65536)))
+                    (memory.fill (i32.const 0) (i32.const 17) (i32.const {WARM_BYTES})))
                 (func (export "touch")
                     (memory.fill (i32.const 0) (i32.const 29) (i32.const {}))))
             (core instance $i{index} (instantiate $m{index}))
             (func (export "warm-{suffix}") (canon lift (core func $i{index} "warm")))
             (func (export "touch-{suffix}") (canon lift (core func $i{index} "touch")))"#,
-            bytes_per_memory / 65536,
+            bytes_per_memory / WASM_PAGE,
             "\\ab".repeat(usize::try_from(data_bytes)?),
             if case.shape == bench_tools::pressure::Shape::Dirty {
                 bytes_per_memory
             } else {
-                65536
+                WARM_BYTES
             },
         ));
     }
@@ -280,7 +313,6 @@ async fn run() -> Result<()> {
         guests.push(Guest { store, touch });
     };
     recorder.report.stop = stop;
-    recorder.record(&engine, Phase::Ready, guests.len())?;
 
     let admitted = guests.len() as u64;
     let uncharged = match case.mode {
@@ -300,6 +332,7 @@ async fn run() -> Result<()> {
         charged <= budget.cap() && uncharged <= budget.initial_cap(),
         "guest reservations exceeded their budgets"
     );
+    recorder.record(&engine, Phase::Ready, guests.len())?;
 
     let guests = touch_all(guests)?;
     ensure!(

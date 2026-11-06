@@ -241,7 +241,7 @@ fn render_pressure<W: Write>(
     writeln!(out)?;
     writeln!(
         out,
-        "| case | outcome | admitted | completed | charged | uncharged | cgroup peak | THP (anon / shmem) | stopped by |"
+        "| case | outcome | admitted / budget | completed | charged | uncharged | cgroup peak | THP (anon / shmem) | stopped by |"
     )?;
     writeln!(out, "|---|---|---:|---:|---:|---:|---:|---|---|")?;
     for report in reports {
@@ -262,7 +262,7 @@ fn render_pressure<W: Write>(
             "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             report.case.label(),
             report.outcome.map_or("-", |o| o.name()),
-            report.admitted(),
+            report.admissions(),
             report.completed(),
             bytes(ready.map(|s| s.guest_memory_bytes)),
             bytes(ready.map(|s| s.initial_memory_bytes)),
