@@ -1,0 +1,21 @@
+diff --git a/ggml/src/ggml-webgpu/ggml-webgpu.cpp b/ggml/src/ggml-webgpu/ggml-webgpu.cpp
+index 051a5ac..31bddca 100644
+--- a/ggml/src/ggml-webgpu/ggml-webgpu.cpp
++++ b/ggml/src/ggml-webgpu/ggml-webgpu.cpp
+@@ -4024,7 +4024,15 @@ static size_t ggml_backend_webgpu_buffer_type_get_alignment(ggml_backend_buffer_
+ static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+     ggml_backend_webgpu_device_context * dev_ctx =
+         static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
+-    return dev_ctx->webgpu_global_ctx->capabilities.limits.maxBufferSize;
++    uint64_t max_size = dev_ctx->webgpu_global_ctx->capabilities.limits.maxBufferSize;
++#if UINTPTR_MAX < UINT64_MAX
++    // ggml_backend_buft_alloc_buffer_n sums tensor sizes up to this in size_t.
++    // At SIZE_MAX/2 one more tensor cannot wrap the sum on a 32-bit target.
++    if (max_size > SIZE_MAX / 2) {
++        max_size = SIZE_MAX / 2;
++    }
++#endif
++    return static_cast<size_t>(max_size);
+ }
+ 
+ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
