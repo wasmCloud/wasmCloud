@@ -6465,8 +6465,6 @@ checksum = "ab0702b5f6a92430482eeae78e34c51fb36d97483842220d641b91b38e4ac8c0"
 [[package]]
 name = "wasi-webgpu-wasmtime"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89b1cc67e8892f64983c254018ac1a633f4f8894f14b74db5de6d56c0eabe361"
 dependencies = [
  "async-broadcast",
  "callback-future",
