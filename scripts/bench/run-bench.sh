@@ -33,6 +33,30 @@ set -euo pipefail
 # avoid maintaining the bench list in two places.
 bench="${1:?bench name required}"
 
+# Benches that take arguments after the bench name: memory_pressure's runner
+# flags, and scale_density's flavour filters and presets. Any other bench
+# refuses them.
+args_benches="memory_pressure scale_density"
+
+# `run-bench.sh --takes-args <bench>` exits 0 when this script passes
+# arguments on to <bench>, and 1 otherwise, without running anything.
+# bench-run.yml asks before it runs a bench with arguments.
+if [ "$bench" = --takes-args ]; then
+  if [[ " $args_benches " == *" ${2:?bench name required} "* ]]; then
+    exit 0
+  fi
+  exit 1
+fi
+
+# scale_density's presets (`Preset` in benches/scale_density/settings.rs).
+# Each sets its own memory mode and reservation, and refuses the sweep's.
+scale_density_presets="max-scale"
+
+if [ "$#" -gt 1 ] && [[ " $args_benches " != *" $bench "* ]]; then
+  echo "${bench} takes no arguments, got: ${*:2}" >&2
+  exit 1
+fi
+
 # shellcheck disable=SC1091
 . "$HOME/.cargo/env"
 
@@ -136,12 +160,21 @@ case "$bench" in
   scale_density)
     mkdir -p "${CARGO_TARGET_DIR}/density"
     export WASH_SCALE_REPORT_JSON="${CARGO_TARGET_DIR}/density/${bench}.json"
-    # Each mode publishes its own series: enforce keeps the default name,
-    # growth runs as `<flavour>-growth`.
-    export WASH_SCALE_GUEST_MEMORY_MODE="${WASH_SCALE_GUEST_MEMORY_MODE:-enforce,growth}"
-    # Both flavours at reduced memory reservations publish their own series,
-    # `<flavour>-layout<reservation>+<guard>`, using the first mode.
-    export WASH_SCALE_MEMORY_RESERVATION="${WASH_SCALE_MEMORY_RESERVATION:-default,1GiB,256MiB,64MiB}"
+    # The published sweep, unless a preset is named.
+    preset=""
+    for arg in "${@:2}"; do
+      if [[ " $scale_density_presets " == *" $arg "* ]]; then
+        preset="$arg"
+      fi
+    done
+    if [ -z "$preset" ]; then
+      # Each mode publishes its own series: enforce keeps the default name,
+      # growth runs as `<flavour>-growth`.
+      export WASH_SCALE_GUEST_MEMORY_MODE="${WASH_SCALE_GUEST_MEMORY_MODE:-enforce,growth}"
+      # Both flavours at reduced memory reservations publish their own series,
+      # `<flavour>-layout<reservation>+<guard>`, using the first mode.
+      export WASH_SCALE_MEMORY_RESERVATION="${WASH_SCALE_MEMORY_RESERVATION:-default,1GiB,256MiB,64MiB}"
+    fi
     ;;
   gungraun_plugin)
     features=(--features host-component-plugins)
@@ -153,7 +186,7 @@ if [[ "$bench" == memory_pressure ]]; then
   cargo run -p bench-tools --quiet -- memory-pressure --target-dir "$CARGO_TARGET_DIR" "${@:2}" 2>&1 \
     | tee -a "$log"
 else
-  "${prefix[@]}" cargo bench -p wash-runtime "${features[@]}" --bench "$bench" 2>&1 \
+  "${prefix[@]}" cargo bench -p wash-runtime "${features[@]}" --bench "$bench" -- "${@:2}" 2>&1 \
     | tee -a "$log"
 fi
 

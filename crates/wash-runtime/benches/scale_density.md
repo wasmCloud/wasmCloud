@@ -31,9 +31,13 @@ runs `enforce,growth`, so CI publishes both series.
   `warm-layout<reservation>+<guard>` and
   `scale-to-zero-layout<reservation>+<guard>`. An explicit flavour filter
   still selects only that flavour.
-- The `max_scale` workflow variant selects only `256MiB` with a `64KiB`
-  guard and `growth` mode, producing `warm-growth-layout256MiB+64KiB`
-  and `scale-to-zero-growth-layout256MiB+64KiB`.
+- The `max-scale` preset (`-- max-scale`, the `max_scale` workflow
+  variant) selects only `256MiB` with a `64KiB` guard and `growth` mode at a
+  2 GiB limit, producing `warm-growth-layout256MiB+64KiB` and
+  `scale-to-zero-growth-layout256MiB+64KiB`. Setting any of those four
+  variables alongside it is an error. `run-bench.sh` skips its sweep when a
+  preset is named, and applies it otherwise, flavour filters included.
+  CI publishes its rows as group `density-max-scale`, apart from `density`.
 - A reduced reservation moves an isolation boundary; see `THREAT_MODEL.md`.
 
 - Count mode measures guest bytes,
