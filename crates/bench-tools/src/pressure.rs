@@ -327,7 +327,14 @@ pub fn classify(report: &Report, exit: &Exit) -> Result<Outcome, String> {
             exit.exit_code
         ));
     }
-    if phases != [Phase::Baseline, Phase::Ready, Phase::Touched, Phase::Released] {
+    if phases
+        != [
+            Phase::Baseline,
+            Phase::Ready,
+            Phase::Touched,
+            Phase::Released,
+        ]
+    {
         return Err("missing or out-of-order completion samples".into());
     }
     if case.shape == Shape::Dirty && ready.stores as u64 * case.initial_bytes() > host.memory_limit

@@ -431,7 +431,11 @@ pub fn run(args: Args) -> Result<()> {
     let artifacts = output.join(format!("memory_pressure-{stamp}"));
     fs::create_dir(&artifacts)?;
     eprintln!("pressure artifacts: {}", artifacts.display());
-    let commands = Commands::new(&artifacts, &cancel, Duration::from_secs(args.docker_timeout))?;
+    let commands = Commands::new(
+        &artifacts,
+        &cancel,
+        Duration::from_secs(args.docker_timeout),
+    )?;
     let (image, binary) = build(&args, &root, &artifacts, &commands)?;
     fs::write(
         artifacts.join("source.patch"),
@@ -472,7 +476,9 @@ pub fn run(args: Args) -> Result<()> {
                             repeat,
                         };
                         cancel.check()?;
-                        reports.push(run_case(&args, &artifacts, &image, &binary, &case, &cancel)?);
+                        reports.push(run_case(
+                            &args, &artifacts, &image, &binary, &case, &cancel,
+                        )?);
                         fs::write(&aggregate, serde_json::to_vec_pretty(&reports)?)?;
                     }
                 }
