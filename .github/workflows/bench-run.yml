@@ -177,9 +177,12 @@ jobs:
 
       - name: stop pressure-test Docker daemon
         if: ${{ always() && inputs.bench == 'memory_pressure' }}
+        # Container removal is best effort; the daemon stop must always run,
+        # or the next bench's pre-flight finds Docker up.
         run: |
-          docker ps -aq --filter label=wasmcloud.bench=memory_pressure | xargs -r docker rm --force
-          sudo systemctl stop docker.service
+          docker ps -aq --filter label=wasmcloud.bench=memory_pressure | xargs -r docker rm --force \
+            || echo "::warning::could not remove memory_pressure containers"
+          sudo -n systemctl stop docker.service
 
   publish:
     needs: bench

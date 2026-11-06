@@ -208,13 +208,16 @@ ok(`cargo: ${runStdout(cargoBin, ['--version'])}`);
 //     with a running daemon; k6bench.yml stops it after every run, so one
 //     running here means that teardown didn't happen. A k6 run starts it
 //     anyway, and only needs no leftover containers: a stray kind cluster
-//     keeps kube-apiserver and etcd busy on every CPU.
+//     keeps kube-apiserver and etcd busy on every CPU. memory_pressure also
+//     drives Docker itself, and it records counts rather than timings.
 const hasDocker = spawnSync('sh', ['-c', 'command -v docker'], { stdio: 'ignore' }).status === 0;
 const dockerUp =
   hasDocker &&
   spawnSync('systemctl', ['is-active', '--quiet', 'docker.service'], { stdio: 'ignore' }).status ===
     0;
-if (dockerUp && process.env.WASMCLOUD_BENCH_K6 !== '1') {
+const usesDocker =
+  process.env.WASMCLOUD_BENCH_K6 === '1' || process.env.WASMCLOUD_BENCH_NAME === 'memory_pressure';
+if (dockerUp && !usesDocker) {
   fail('docker daemon is running; stop it first (sudo systemctl stop docker.service)');
 }
 if (dockerUp) {
