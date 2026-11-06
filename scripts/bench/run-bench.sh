@@ -40,14 +40,24 @@ bench="${1:?bench name required}"
 # including on runners registered before install-runner.sh configured Cargo.
 # An explicit caller override still wins. Installing a binary on PATH alone
 # does not replace Rust's older bundled wasm32-wasip2 linker.
+# Fall back to PATH off the provisioned host, not Rust's bundled linker.
+if [ -z "${CARGO_TARGET_WASM32_WASIP2_LINKER:-}" ] && [ ! -x /usr/local/bin/wasm-component-ld ] \
+  && on_path=$(command -v wasm-component-ld); then
+  CARGO_TARGET_WASM32_WASIP2_LINKER="$on_path"
+fi
 export CARGO_TARGET_WASM32_WASIP2_LINKER="${CARGO_TARGET_WASM32_WASIP2_LINKER:-/usr/local/bin/wasm-component-ld}"
 linker_version="not needed"
 if [[ "$bench" != memory_pressure ]] && ! linker_version=$("$CARGO_TARGET_WASM32_WASIP2_LINKER" --version); then
-  echo "cannot run the fixture linker at ${CARGO_TARGET_WASM32_WASIP2_LINKER}; run ansible-playbook provision.yml --tags wasm-component-ld" >&2
+  echo "cannot run the fixture linker at ${CARGO_TARGET_WASM32_WASIP2_LINKER}; install wasm-component-ld 0.5.26 or set CARGO_TARGET_WASM32_WASIP2_LINKER" >&2
   exit 1
 fi
 
+# Use the workspace target directory off the provisioned host.
+if [ -z "${CARGO_TARGET_DIR:-}" ] && [ ! -w /var/lib/bench ]; then
+  CARGO_TARGET_DIR="$(git rev-parse --show-toplevel)/target"
+fi
 : "${CARGO_TARGET_DIR:=/var/lib/bench/target}"
+export CARGO_TARGET_DIR
 mkdir -p "$CARGO_TARGET_DIR"
 
 # CPU index reserved by isolcpus= in hetzner-postinstall.sh. Must match.
@@ -63,8 +73,13 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
   echo "=== run-bench: ${bench} ==="
   echo "host:   $(hostname)"
   echo "kernel: $(uname -srm)"
-  echo "cpu:    $(awk -F: '/^model name/{print $2; exit}' /proc/cpuinfo | sed 's/^ //')"
-  echo "online: $(nproc) cpu(s)"
+  if [ "$(uname -s)" = Darwin ]; then
+    echo "cpu:    $(sysctl -n machdep.cpu.brand_string)"
+    echo "online: $(sysctl -n hw.ncpu) cpu(s)"
+  else
+    echo "cpu:    $(awk -F: '/^model name/{print $2; exit}' /proc/cpuinfo | sed 's/^ //')"
+    echo "online: $(nproc) cpu(s)"
+  fi
   echo "git:    $(git rev-parse HEAD)"
   # Match what bench-tools/meta.rs records (WASMCLOUD_BENCH_REF), not the
   # dispatch ref, so this log header agrees with the emitted data rows.
@@ -153,7 +168,7 @@ if [[ "$bench" == memory_pressure ]]; then
   cargo run -p bench-tools --quiet -- memory-pressure --target-dir "$CARGO_TARGET_DIR" "${@:2}" 2>&1 \
     | tee -a "$log"
 else
-  "${prefix[@]}" cargo bench -p wash-runtime "${features[@]}" --bench "$bench" 2>&1 \
+  ${prefix[@]+"${prefix[@]}"} cargo bench -p wash-runtime ${features[@]+"${features[@]}"} --bench "$bench" 2>&1 \
     | tee -a "$log"
 fi
 
