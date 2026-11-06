@@ -342,7 +342,11 @@ fn run_case(
         Completion::TimedOut
     );
     if timed_out {
-        commands.docker("kill", &["kill", &container.name])?;
+        // The container may exit between the deadline and the kill.
+        if let Err(error) = commands.docker("kill", &["kill", &container.name]) {
+            cancel.check()?;
+            eprintln!("warning: docker kill {}: {error:#}", container.name);
+        }
         ensure!(
             matches!(
                 attached.wait(Some(cancel), Some(commands.timeout))?,
@@ -397,7 +401,22 @@ fn run_case(
     Ok(report)
 }
 
-pub fn run(args: Args) -> Result<()> {
+/// Drop repeated values, keeping first-seen order; a repeat would reuse a case's directory.
+fn dedup<T: PartialEq>(values: &mut Vec<T>) {
+    let mut kept: Vec<T> = Vec::with_capacity(values.len());
+    for value in values.drain(..) {
+        if !kept.contains(&value) {
+            kept.push(value);
+        }
+    }
+    *values = kept;
+}
+
+pub fn run(mut args: Args) -> Result<()> {
+    dedup(&mut args.memory_mib);
+    dedup(&mut args.shapes);
+    dedup(&mut args.modes);
+    dedup(&mut args.cow);
     let cancel = Cancel(Arc::new(AtomicBool::new(false)));
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -476,9 +495,20 @@ pub fn run(args: Args) -> Result<()> {
                             repeat,
                         };
                         cancel.check()?;
-                        reports.push(run_case(
-                            &args, &artifacts, &image, &binary, &case, &cancel,
-                        )?);
+                        // A runner error fails this case only; cancellation stops the run.
+                        let report =
+                            match run_case(&args, &artifacts, &image, &binary, &case, &cancel) {
+                                Ok(report) => report,
+                                Err(error) => {
+                                    cancel.check()?;
+                                    eprintln!("FAIL {}: runner error: {error:#}", case.label());
+                                    let mut report = Report::new(case);
+                                    report.stop = format!("runner error: {error:#}");
+                                    report.outcome = Some(Outcome::Failed);
+                                    report
+                                }
+                            };
+                        reports.push(report);
                         fs::write(&aggregate, serde_json::to_vec_pretty(&reports)?)?;
                     }
                 }
