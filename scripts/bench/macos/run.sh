@@ -28,10 +28,11 @@ limit="${MEMORY_LIMIT:-32GiB}"
 dense=(WASH_SCALE_GUEST_MEMORY_MODE=growth WASH_SCALE_MEMORY_RESERVATION=2MiB
        WASH_SCALE_MEMORY_GUARD=0 WASH_SCALE_MAX_MEMORIES=300000)
 
-# Reset freed slots in place rather than remapping them. Only takes effect
-# with the patched wasmtime (wasmtime-optimizations.md); harmless without it.
-keep=(WASMTIME_POOLING_LINEAR_MEMORY_KEEP_RESIDENT=262144
-      WASMTIME_POOLING_TABLE_KEEP_RESIDENT=65536)
+# Reset freed slots in place rather than remapping them. Linear memory only
+# takes effect with the patched wasmtime (wasmtime/README.md); harmless
+# without it. Set either to 0 to compare against the old path.
+keep=(WASMTIME_POOLING_LINEAR_MEMORY_KEEP_RESIDENT="${WASMTIME_POOLING_LINEAR_MEMORY_KEEP_RESIDENT:-262144}"
+      WASMTIME_POOLING_TABLE_KEEP_RESIDENT="${WASMTIME_POOLING_TABLE_KEEP_RESIDENT:-65536}")
 
 # Steps big enough to load every core: CI's 250 starts and 200 requests per
 # step finish in milliseconds.

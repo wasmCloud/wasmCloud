@@ -1,0 +1,171 @@
+From 44dd97a3f4f1acf5c5d308ea7d609bd537e27a81 Mon Sep 17 00:00:00 2001
+From: Liam Randall <liam@cosmonic.com>
+Date: Thu, 5 Nov 2026 22:39:32 -0600
+Subject: [PATCH 2/2] macOS: test the in-place memory slot reset
+
+- touched pages, including read-only-touched ones, are zeroed and the
+  slot stays mapped at its accessible size, then instantiates clean
+- more touched pages than keep_resident falls back to remapping
+- keep_resident = 0 keeps the remapping behaviour
+- untouched pages carrying only MINCORE_ANONYMOUS are not counted
+---
+ src/runtime/vm/cow.rs | 146 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 146 insertions(+)
+
+diff --git a/src/runtime/vm/cow.rs b/src/runtime/vm/cow.rs
+index 55d66ff..c2a5db6 100644
+--- a/src/runtime/vm/cow.rs
++++ b/src/runtime/vm/cow.rs
+@@ -1425,3 +1425,149 @@ mod test {
+         assert_pristine_after_reset(&mut memfd);
+     }
+ }
++
++#[cfg(all(test, target_os = "macos", not(miri)))]
++mod macos_inplace_reset {
++    use super::*;
++    use crate::runtime::vm::host_page_size;
++    use crate::runtime::vm::mmap::{AlignedLength, Mmap};
++    use std::sync::Arc;
++    use wasmtime_environ::{IndexType, Limits, Memory, MemoryKind, Tunables};
++
++    fn dummy_memory() -> Memory {
++        Memory {
++            idx_type: IndexType::I32,
++            limits: Limits { min: 0, max: None },
++            shared: false,
++            page_size_log2: Memory::DEFAULT_PAGE_SIZE_LOG2,
++        }
++    }
++
++    fn tunables() -> Tunables {
++        Tunables {
++            memory_reservation: 4 << 30,
++            ..Tunables::default_miri()
++        }
++    }
++
++    /// A 4 MiB inaccessible reservation and a slot over it, instantiated at
++    /// 1 MiB with no image.
++    fn slot() -> (Arc<Mmap<AlignedLength>>, MemoryImageSlot) {
++        let four_mib = HostAlignedByteCount::new(4 << 20).unwrap();
++        let mmap =
++            Arc::new(Mmap::accessible_reserved(HostAlignedByteCount::ZERO, four_mib).unwrap());
++        let mut slot = MemoryImageSlot::create(
++            mmap.zero_offset(),
++            HostAlignedByteCount::ZERO,
++            4 << 20,
++            None,
++        );
++        let tunables = tunables();
++        slot.instantiate(
++            1 << 20,
++            None,
++            &dummy_memory(),
++            &MemoryTunables::new(&tunables, MemoryKind::LinearMemory),
++        )
++        .unwrap();
++        (mmap, slot)
++    }
++
++    fn write(mmap: &Arc<Mmap<AlignedLength>>, offset: usize, value: u8) {
++        unsafe { *mmap.as_ptr().cast_mut().add(offset) = value };
++    }
++
++    fn read(mmap: &Arc<Mmap<AlignedLength>>, offset: usize) -> u8 {
++        unsafe { *mmap.as_ptr().add(offset) }
++    }
++
++    fn no_decommit(_: *mut u8, _: usize) {
++        panic!("the in-place reset should not decommit");
++    }
++
++    fn keep(bytes: usize) -> HostAlignedByteCount {
++        HostAlignedByteCount::new_rounded_up(bytes).unwrap()
++    }
++
++    #[test]
++    fn touched_pages_are_zeroed_in_place() {
++        let page = host_page_size();
++        let (mmap, mut slot) = slot();
++        let offsets = [0, 5 * page + 7, 60 * page - 1];
++        for &o in &offsets {
++            write(&mmap, o, 0xAB);
++        }
++        // Read a page without writing it: in core, still zero, still reset.
++        let _ = read(&mmap, 30 * page);
++        let accessible = slot.accessible;
++
++        let resident = slot
++            .clear_and_remain_ready(None, keep(256 << 10), no_decommit)
++            .unwrap();
++
++        assert!(!slot.is_dirty());
++        // The slot was not remapped: still accessible at its old size.
++        assert_eq!(slot.accessible, accessible);
++        assert!(
++            resident >= 3 * page && resident <= 4 * page,
++            "resident = {resident}"
++        );
++        for &o in &offsets {
++            assert_eq!(read(&mmap, o), 0, "offset {o} not zeroed");
++        }
++
++        // And it instantiates again, clean.
++        let tunables = tunables();
++        slot.instantiate(
++            1 << 20,
++            None,
++            &dummy_memory(),
++            &MemoryTunables::new(&tunables, MemoryKind::LinearMemory),
++        )
++        .unwrap();
++        for &o in &offsets {
++            assert_eq!(read(&mmap, o), 0);
++        }
++    }
++
++    #[test]
++    fn more_than_keep_resident_falls_back_to_remapping() {
++        let page = host_page_size();
++        let (mmap, mut slot) = slot();
++        for i in 0..8 {
++            write(&mmap, i * page, 1);
++        }
++        // Room for fewer pages than were touched.
++        let resident = slot
++            .clear_and_remain_ready(None, keep(4 * page), no_decommit)
++            .unwrap();
++        assert_eq!(resident, 0);
++        // Remapped: inaccessible again, as before this patch.
++        assert_eq!(slot.accessible.byte_count(), 0);
++    }
++
++    #[test]
++    fn zero_keep_resident_keeps_the_old_behaviour() {
++        let (mmap, mut slot) = slot();
++        write(&mmap, 0, 1);
++        let resident = slot
++            .clear_and_remain_ready(None, HostAlignedByteCount::ZERO, no_decommit)
++            .unwrap();
++        assert_eq!(resident, 0);
++        assert_eq!(slot.accessible.byte_count(), 0);
++    }
++
++    #[test]
++    fn untouched_anonymous_pages_do_not_count_as_touched() {
++        // macOS sets MINCORE_ANONYMOUS on every anonymous page; a slot with
++        // one page written must still fit a one-page keep_resident.
++        let page = host_page_size();
++        let (mmap, mut slot) = slot();
++        write(&mmap, 2 * page, 9);
++        let resident = slot
++            .clear_and_remain_ready(None, keep(page), no_decommit)
++            .unwrap();
++        assert_eq!(resident, page);
++        assert_eq!(read(&mmap, 2 * page), 0);
++    }
++}
+-- 
+2.50.1 (Apple Git-155)
+

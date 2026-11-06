@@ -44,8 +44,9 @@ scripts/bench/run-bench.sh scale_density   # CI's full matrix, now runs on macOS
 ```
 
 `MEMORY_LIMIT` (default `32GiB`) must sit well under physical RAM. The
-throughput numbers need the patched wasmtime: see
-[wasmtime-optimizations.md](wasmtime-optimizations.md).
+throughput numbers need the patched wasmtime: `scripts/bench/macos/wasmtime/apply.sh`
+vendors it, applies the patches and wires up `[patch.crates-io]`. Patch notes:
+[wasmtime/README.md](wasmtime/README.md).
 
 ## What this branch changes
 
@@ -55,7 +56,7 @@ throughput numbers need the patched wasmtime: see
 | Growth mode's derived initial cap is the larger of 4x max-guest-memory and 16x max-process-memory | `engine/guest_memory.rs`, `engine/mod.rs` | warm 185k -> 210k with no override |
 | The load generator runs one task per worker, not one task for every request | `benches/scale_density/load.rs` | warm 112k -> 124k req/s |
 | Store and workload ids come from a per-thread v7 context, not `Uuid::now_v7`'s global mutex | `src/ids.rs` | removes the top mutex wait on the start path |
-| EXPERIMENT: `[patch.crates-io]` to a local wasmtime with an in-place slot reset | `Cargo.toml` | cold requests 22k -> 114k/s; drop before pushing |
+| EXPERIMENT: `[patch.crates-io]` to a local wasmtime with an in-place slot reset ([patches](wasmtime/patches/), [notes](wasmtime/README.md)) | `Cargo.toml` | cold requests 22k -> 114k/s; drop before merging |
 
 ## Where warm memory goes
 
@@ -98,8 +99,8 @@ broke warm starts.
 
 ## Next
 
-1. Upstream the wasmtime reset (wasmtime-optimizations.md), after a security
-   review of the zeroing.
+1. Upstream the wasmtime reset ([wasmtime/README.md](wasmtime/README.md)),
+   after a security review of the zeroing.
 2. Size the derived pool by `max-process-memory` too, so small reservations
    work without `MAX_MEMORIES`.
 3. Tokio timer contention: every request arms hyper's header-read timeout and
