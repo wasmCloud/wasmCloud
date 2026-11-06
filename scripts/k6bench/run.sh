@@ -124,6 +124,9 @@ registry_port="${K6BENCH_REGISTRY_PORT:-5001}"
 cpus_control_plane="${K6BENCH_CPUS_CONTROL_PLANE:-0}"
 cpus_hosts="${K6BENCH_CPUS_HOSTS:-1-4}"
 cpus_k6="${K6BENCH_CPUS_K6:-${WASMCLOUD_BENCH_ISOLATED_CPU:-5}}"
+# k6's Go GC (see run_k6). GOMEMLIMIT backstops the raised GOGC on long runs.
+k6_gogc="${K6BENCH_K6_GOGC:-800}"
+k6_gomemlimit="${K6BENCH_K6_GOMEMLIMIT:-4GiB}"
 
 log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -460,13 +463,17 @@ run_k6() {
   # The progress bar is one line per second in a log; the summary is enough.
   [ "${K6BENCH_PROGRESS:-0}" = 1 ] || k6_env="$k6_env --quiet"
   [ "$ci" = 1 ] && k6_env="$k6_env --no-color"
+  # k6 keeps every sample, so its heap grows all run. At Go's default GOGC, a
+  # collection that lands on a step's start charges up to ~100 ms of mark
+  # assist to the VUs, which reads as a host stall plus dropped iterations.
+  local gc_env="GOGC=$k6_gogc GOMEMLIMIT=$k6_gomemlimit"
 
   set +e
   if [ "$mode" = native ]; then
-    local raw_arg="" pin_cmd=""
+    local raw_arg="" pin_cmd="env $gc_env"
     [ "$raw" = 1 ] && raw_arg="--out json=$out_dir/raw.ndjson.gz"
     if [ "$pin" = 1 ]; then
-      pin_cmd="env GOMAXPROCS=1"
+      pin_cmd="$pin_cmd GOMAXPROCS=1"
       command -v taskset >/dev/null 2>&1 && pin_cmd="$pin_cmd taskset -c $cpus_k6"
     fi
     # `times` reports the subshell's children, which is k6 alone: the CPU it
@@ -480,9 +487,9 @@ run_k6() {
     ) >&2
     status=$?
   else
-    local raw_arg="" pin_arg="" net_arg=""
+    local raw_arg="" pin_arg="-e GOGC=$k6_gogc -e GOMEMLIMIT=$k6_gomemlimit" net_arg=""
     [ "$raw" = 1 ] && raw_arg="--out json=/out/raw.ndjson.gz"
-    [ "$pin" = 1 ] && pin_arg="--cpuset-cpus $cpus_k6 -e GOMAXPROCS=1"
+    [ "$pin" = 1 ] && pin_arg="$pin_arg --cpuset-cpus $cpus_k6 -e GOMAXPROCS=1"
     [ "$target" = kind ] && net_arg="--network kind"
     # shellcheck disable=SC2086
     docker run --rm --name "$cluster-k6" $net_arg $pin_arg -u "$(id -u):$(id -g)" \

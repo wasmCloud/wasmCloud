@@ -249,6 +249,13 @@ Override the layout with `K6BENCH_CPUS_CONTROL_PLANE`, `K6BENCH_CPUS_HOSTS` and
 `K6BENCH_CPUS_K6`. On the bench host, k6 runs natively and targets the worker
 node's IP directly, which bypasses Docker's port forwarding.
 
+k6 runs with `GOGC=800` and `GOMEMLIMIT=4GiB` (`K6BENCH_K6_GOGC`,
+`K6BENCH_K6_GOMEMLIMIT`). At Go's default `GOGC`, k6's growing heap collects
+about every 3 s on its one core, and a collection that overlaps a step's start
+pauses every VU for up to ~100 ms. That shows up as a host stall with dropped
+iterations, and it held `http-hello` stress at 3000–4000 rps on the bench host
+where the host sustains 6000.
+
 [`.github/workflows/k6bench-smoke.yml`](../../.github/workflows/k6bench-smoke.yml)
 runs a 20-second `http-hello` on a GitHub-hosted runner for every PR that
 touches this directory or `bench-tools`.
