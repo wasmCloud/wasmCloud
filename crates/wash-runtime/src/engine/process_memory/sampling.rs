@@ -95,6 +95,12 @@ pub(super) fn refresh() {
     try_refresh(&SAMPLED, FootprintReader::read);
 }
 
+/// Read now, without the [`REFRESH_INTERVAL`] clock, unless another read
+/// holds the lock: that read is at least as fresh as this one would be.
+pub(super) fn refresh_now() {
+    try_refresh(&SAMPLED, FootprintReader::read);
+}
+
 fn try_refresh(
     sampled: &Mutex<Sampled>,
     read: impl FnOnce(&mut FootprintReader) -> Option<u64>,
