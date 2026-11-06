@@ -26,8 +26,9 @@ on:
         required: false
         type: string
         default: "{}"
-      # Extra flags for the memory_pressure runner, separated by spaces.
-      # bench.yml accepts them for that bench only.
+      # Arguments for the bench, separated by spaces: memory_pressure's
+      # runner flags, or a scale_density preset. bench.yml accepts them for
+      # those benches only.
       args:
         required: false
         type: string
@@ -134,6 +135,22 @@ jobs:
               fs.appendFileSync(process.env.GITHUB_ENV, `${name}=${value}\n`);
               console.log(`${name}=${value}`);
             }'
+
+      # A run-bench.sh older than `--takes-args` passes arguments to
+      # memory_pressure at most, so another bench would run without them:
+      # fail instead. The unusable linker stops such a script at its first
+      # check, before it builds anything.
+      - name: check the ref takes the args
+        if: ${{ inputs.args != '' }}
+        run: |
+          if [ "$WASMCLOUD_BENCH_NAME" = memory_pressure ]; then
+            exit 0
+          fi
+          if ! CARGO_TARGET_WASM32_WASIP2_LINKER=false \
+            ./scripts/bench/run-bench.sh --takes-args "$WASMCLOUD_BENCH_NAME"; then
+            echo "this ref's scripts/bench/run-bench.sh does not pass arguments to ${WASMCLOUD_BENCH_NAME}" >&2
+            exit 1
+          fi
 
       # Pre-flight runs under the box lock with the bench: another runner's
       # bench would fail its load check, and the lock must not be released

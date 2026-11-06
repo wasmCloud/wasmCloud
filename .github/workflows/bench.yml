@@ -17,7 +17,7 @@ on:
           - gungraun_plugin
           - scale_density
           - memory_pressure
-          # scale_density with the settings in BENCH_VARIANTS below.
+          # scale_density with the argument in BENCH_VARIANTS below.
           - max_scale
           - million_warm
       ref:
@@ -25,7 +25,7 @@ on:
         type: string
         default: ""
       args:
-        description: "memory_pressure only: extra runner flags (e.g. --memory-mib 384 2048 --repeats 3)"
+        description: "memory_pressure: extra runner flags (e.g. --memory-mib 384 2048 --repeats 3); scale_density: a preset (max-scale)"
         type: string
         default: ""
       host:
@@ -51,7 +51,7 @@ permissions: {}
 jobs:
   # Compute the matrix shape from the trigger:
   #   - workflow_dispatch: a one-element matrix (just inputs.bench, or the
-  #                        bench and environment a BENCH_VARIANTS name stands for)
+  #                        bench and argument a BENCH_VARIANTS name stands for)
   #   - release:           a matrix of $RELEASE_BENCHES (the reference
   #                        subset we track on the releases timeline)
   # The dispatch path keeps the one-bench UX so a maintainer can compare
@@ -65,13 +65,12 @@ jobs:
     permissions:
       contents: read
     outputs:
-      # One entry per bench job: {name, bench, env, publish, group}.
+      # One entry per bench job: {name, bench, env, args, publish, group}.
       runs: ${{ steps.set.outputs.runs }}
       # `ref` labels each data row; the matrix checkout resolves the commit.
       # Pull-request labels use `pull/123`, while checkout uses the full ref.
       ref: ${{ steps.set.outputs.ref }}
       sha: ${{ steps.commit.outputs.sha }}
-      args: ${{ steps.set.outputs.args }}
       host: ${{ steps.set.outputs.host }}
     env:
       # Subset of inputs.bench.options to run automatically on `release:
@@ -79,23 +78,26 @@ jobs:
       # and don't shift with our changes — run them on demand via
       # workflow_dispatch when wasmtime is upgraded.
       RELEASE_BENCHES: '["http_invoke","service_http","gungraun","max_scale"]'
-      # Named runs of an existing bench with environment variables preset,
-      # for settings a bench reads from its environment:
+      # Named runs of an existing bench with a preset, either a preset the
+      # bench defines (`args`) or environment variables it reads (`env`):
       #
-      # - `bench` is the bench that runs, `env` what it runs with.
-      # - Available to both dispatch and the release subset.
+      # - `bench` is the bench that runs. `args` names a preset the bench
+      #   versions with its code; a ref that does not know the name fails.
+      #   `env` sets variables the bench reads from its environment.
+      # - Available to both dispatch and the release subset. A dispatch of
+      #   `bench` with `args` set to a variant's preset runs that variant.
       # - Not published unless the preset names a `publish_group`: its rows
       #   then enter history under that group instead of the bench's own
       #   (`density` for scale_density), so they never mix with the bench's
-      #   default series. Only density benches take a group. A preset
-      #   without one stays unpublished: on a ref whose bench ignores the
-      #   variables, its rows would be indistinguishable from the bench's.
+      #   default series. Only density benches take a group. An `env`
+      #   preset without one stays unpublished: on a ref whose bench
+      #   ignores the variables, its rows would be indistinguishable from
+      #   the bench's.
       #
-      # max_scale: warm and scale-to-zero with each guest memory's
-      # reservation and guard shrunk, in growth mode, past
-      # the ~16,000 warm instances the address space holds at wasmtime's
-      # 4 GiB + 32 MiB (WASH_SCALE_MEMORY_RESERVATION and
-      # WASH_SCALE_MEMORY_GUARD; a ref without them runs plain scale_density).
+      # max_scale: scale_density's max-scale preset, warm and scale-to-zero
+      # in growth mode with each guest memory's reservation and guard
+      # shrunk, past the ~16,000 warm instances the address space holds at
+      # wasmtime's 4 GiB + 32 MiB. Published as group density-max-scale.
       #
       # million_warm: the densest settings measured on aws-c9g-16xlarge
       # (64 cores, 123 GiB, arm64's 256 TiB address space), for that host
@@ -108,11 +110,8 @@ jobs:
       # vm.max_map_count >= ~10M (provision.yml -e vm_max_map_count=16777216).
       # Published as group density-max, the record the density page shows.
       BENCH_VARIANTS: >-
-        {"max_scale": {"bench": "scale_density",
-                       "env": {"WASH_SCALE_MEMORY_RESERVATION": "256MiB",
-                               "WASH_SCALE_MEMORY_GUARD": "64KiB",
-                               "WASH_SCALE_GUEST_MEMORY_MODE": "growth",
-                               "WASH_SCALE_MEMORY_LIMIT": "2GiB"}},
+        {"max_scale": {"bench": "scale_density", "args": "max-scale",
+                       "publish_group": "density-max-scale"},
          "million_warm": {"bench": "scale_density",
                           "env": {"WASH_SCALE_MEMORY_RESERVATION": "64MiB",
                                   "WASH_SCALE_MEMORY_GUARD": "64KiB",
@@ -138,19 +137,33 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          # Only memory_pressure's runner takes flags. Refuse them here,
-          # before the job queues on the bench host, rather than drop them.
+          # memory_pressure's runner takes flags, and scale_density one of
+          # the presets BENCH_VARIANTS names. Refuse anything else here,
+          # before the job queues on the bench host, rather than drop it.
           args="${INPUT_ARGS:-}"
           if [ -n "$args" ]; then
-            if [ "$INPUT_BENCH" != memory_pressure ]; then
-              echo "args are only accepted for memory_pressure, not ${INPUT_BENCH}" >&2
-              exit 1
-            fi
-            # Flags and values only; the runner validates the rest.
-            if ! [[ "$args" =~ ^[A-Za-z0-9\ ._=-]+$ ]]; then
-              echo "args may contain only letters, digits, spaces, and . _ = -" >&2
-              exit 1
-            fi
+            case "$INPUT_BENCH" in
+              memory_pressure)
+                # Flags and values only; the runner validates the rest.
+                if ! [[ "$args" =~ ^[A-Za-z0-9\ ._=-]+$ ]]; then
+                  echo "args may contain only letters, digits, spaces, and . _ = -" >&2
+                  exit 1
+                fi
+                ;;
+              scale_density)
+                if ! jq -e --arg args "$args" \
+                  'any(.[]; .bench == "scale_density" and .args == $args)' \
+                  <<< "$BENCH_VARIANTS" > /dev/null; then
+                  presets="$(jq -r '[.[] | select(.bench == "scale_density" and .args != null) | .args] | join(", ")' <<< "$BENCH_VARIANTS")"
+                  echo "scale_density args must be one preset: ${presets}" >&2
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "args are only accepted for memory_pressure and scale_density, not ${INPUT_BENCH}" >&2
+                exit 1
+                ;;
+            esac
           fi
           # Release runs measure the dedicated host. Same shape as
           # bench-host.mjs's parseHostLabel.
@@ -193,22 +206,29 @@ jobs:
             esac
           fi
           runs="$(jq -cn --argjson benches "$benches" --argjson variants "$BENCH_VARIANTS" \
-            --argjson diagnostics "$DIAGNOSTIC_BENCHES" '
+            --argjson diagnostics "$DIAGNOSTIC_BENCHES" --arg args "$args" '
+            # A bench dispatched with the preset of a variant as its args
+            # runs as that variant, so its rows go to the same group.
             [$benches[] as $name |
-              if $variants[$name] then
-                {name: $name, bench: $variants[$name].bench,
-                 env: $variants[$name].env,
-                 publish: ($variants[$name].publish_group != null),
-                 group: ($variants[$name].publish_group // "")}
+              (if $variants[$name] then $name
+               else [$variants | to_entries[]
+                     | select(.value.bench == $name and .value.args == $args)
+                     | .key][0]
+               end) as $variant |
+              if $variant then
+                $variants[$variant] as $v |
+                {name: $variant, bench: $v.bench,
+                 env: ($v.env // {}), args: ($v.args // ""),
+                 publish: ($v.publish_group != null),
+                 group: ($v.publish_group // "")}
               else
-                {name: $name, bench: $name, env: {},
+                {name: $name, bench: $name, env: {}, args: $args,
                  publish: ($diagnostics | any(. == $name) | not), group: ""}
               end]')"
           {
             echo "runs=${runs}"
             echo "ref=${ref}"
             echo "checkout_ref=${checkout_ref}"
-            echo "args=${args}"
             echo "host=${host}"
           } >> "$GITHUB_OUTPUT"
 
@@ -240,7 +260,7 @@ jobs:
       host: ${{ needs.matrix.outputs.host }}
       ref: ${{ needs.matrix.outputs.ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}
-      args: ${{ needs.matrix.outputs.args }}
+      args: ${{ matrix.run.args }}
       artifact_id: ${{ format('{0}', strategy.job-index) }}
     secrets:
       aws_role_arn: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}

@@ -548,27 +548,48 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
 - Trigger: `workflow_dispatch` and published releases. Inputs:
   - `bench`: a bench or named variant from the workflow's choices.
   - `ref`: any branch/tag/sha or `#PR`; defaults to the workflow's ref.
-  - `args`: extra `bench-tools memory-pressure` flags, for `memory_pressure` only.
+  - `args`: extra `bench-tools memory-pressure` flags for `memory_pressure`,
+    or a preset that `BENCH_VARIANTS` names for `scale_density` (`max-scale`).
     Other benches refuse a non-empty value.
 - Published releases run `http_invoke`, `service_http`, `gungraun`, and
   `max_scale`. These run after publication, not as a pre-release gate.
 - Variants: a `bench` choice may name an entry in `BENCH_VARIANTS` (in
-  `bench.yml`) instead of a bench. It runs that entry's `bench` with its `env`
-  preset. Variants can run manually or in the release subset. Their results
-  remain in the workflow summary and artifact, and stay out of the public
-  benchmark history unless the entry names a `publish_group`. A density
-  variant with one publishes under that group instead of `density`
+  `bench.yml`) instead of a bench. It runs that entry's `bench` with either
+  its `args`, the name of a preset the bench defines and versions with its
+  code, or its `env`, variables the bench reads from its environment.
+  Dispatching the bench with a variant's preset as `args` runs that variant.
+  Variants can run manually or in the release subset. Their results remain
+  in the workflow summary and artifact, and stay out of the public benchmark
+  history unless the entry names a `publish_group`. A density variant with
+  one publishes under that group instead of `density`
   (`bench-tools jsonl --group`, or `WASMCLOUD_BENCH_GROUP`), so its rows form
   their own series; the publisher refuses a row in any other group.
-  - `million_warm`: published as `density-max`, the record run the density
-    page on arewefastyet draws.
-  - `max_scale`: `scale_density` with `WASH_SCALE_MEMORY_RESERVATION=256MiB`,
-    `WASH_SCALE_MEMORY_GUARD=64KiB`, `WASH_SCALE_GUEST_MEMORY_MODE=growth`,
-    and `WASH_SCALE_MEMORY_LIMIT=2GiB`.
+  - `million_warm`: an `env` preset, published as `density-max`, the record
+    run the density page on arewefastyet draws.
+  - `max_scale`: `scale_density -- max-scale`, which sets
+    `WASH_SCALE_MEMORY_RESERVATION=256MiB`, `WASH_SCALE_MEMORY_GUARD=64KiB`,
+    `WASH_SCALE_GUEST_MEMORY_MODE=growth` and `WASH_SCALE_MEMORY_LIMIT=2GiB`
+    (`crates/wash-runtime/benches/scale_density.rs`). Run it locally with
+    `cargo bench -p wash-runtime --bench scale_density -- max-scale`, or
+    `scripts/bench/run-bench.sh scale_density max-scale`.
     It produces only `warm-growth-layout256MiB+64KiB` and
     `scale-to-zero-growth-layout256MiB+64KiB`, with no default-layout runs.
     The terminal readout and workflow summary show `max-process-memory`
     for each run; the summary heading also includes that limit in GiB.
+    The reduced layout moves an isolation boundary (`THREAT_MODEL.md`), so
+    it runs only when named and is never part of the default sweep.
+  - `max_scale` results are published as group `density-max-scale`:
+    - Its rows form their own series, apart from the default sweep's
+      `density` rows and `million_warm`'s `density-max`.
+    - It cannot run under a different configuration. The preset refuses
+      its own variables when they are also set in the environment, so every
+      row under its labels measured the same layout, mode and 2 GiB limit.
+      Its variant sets no `env`.
+    - An older ref fails instead of running something else. A bench that
+      predates a preset rejects its name as a flavour filter it cannot
+      match, and `bench-run.yml` refuses to run a ref whose `run-bench.sh`
+      would drop the argument: it asks `run-bench.sh --takes-args <bench>`,
+      which an older script fails.
 - The single `[self-hosted, bench, hetzner]` runner serializes measurements
   (a dispatch's `host` input picks another; §6.2).
   Each entry measures the commit resolved before queuing and publishes as soon
@@ -585,7 +606,7 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
 
 1. **Pre-flight** ([`bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)) — see §10.
 2. **Run bench** ([`run-bench.sh`](./run-bench.sh)) — sources cargo,
-   runs `cargo bench -p wash-runtime --bench <name>`,
+   runs `cargo bench -p wash-runtime --bench <name> -- <args>`,
    tees output to a per-run log under `$CARGO_TARGET_DIR`.
 3. **Summary** (`cargo run -p bench-tools -- summary --bench <name>`) —
    emits a markdown table to `$GITHUB_STEP_SUMMARY` with one row per
