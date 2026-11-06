@@ -146,10 +146,41 @@ impl Load {
         indices: Vec<usize>,
         concurrency: usize,
     ) -> Answered {
-        let client = self.client.clone();
-        self.runtime
-            .spawn(async move { requests(&client, addr, indices.into_iter(), concurrency).await })
-            .await
-            .expect("the load generator should not panic")
+        // One task polling every request runs the whole client on one thread,
+        // which caps a sample at what one core can send and receive. Split
+        // it into one task per load worker instead, interleaved by stride so
+        // each still spreads across the whole set, sharing the same total
+        // concurrency.
+        let shards = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(concurrency.max(1))
+            .min(indices.len().max(1));
+        let per_shard = concurrency.div_ceil(shards).max(1);
+        let tasks: Vec<_> = (0..shards)
+            .map(|shard| {
+                let client = self.client.clone();
+                let mine: Vec<usize> = indices
+                    .iter()
+                    .skip(shard)
+                    .step_by(shards)
+                    .copied()
+                    .collect();
+                self.runtime.spawn(async move {
+                    requests(&client, addr, mine.into_iter(), per_shard).await
+                })
+            })
+            .collect();
+        let mut answered = Answered {
+            ok: 0,
+            failed: 0,
+            latencies: Vec::with_capacity(indices.len()),
+        };
+        for task in tasks {
+            let part = task.await.expect("the load generator should not panic");
+            answered.ok += part.ok;
+            answered.failed += part.failed;
+            answered.latencies.extend(part.latencies);
+        }
+        answered
     }
 }
