@@ -68,7 +68,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -731,42 +730,6 @@ struct Answered {
     failed: usize,
     /// Of each success, in milliseconds.
     latencies: Vec<f64>,
-}
-
-/// Send one GET to each workload index, from outside the host.
-async fn requests(
-    client: &reqwest::Client,
-    addr: SocketAddr,
-    indices: impl Iterator<Item = usize>,
-    concurrency: usize,
-) -> Answered {
-    let results: Vec<Option<f64>> = stream::iter(indices)
-        .map(|index| {
-            let client = client.clone();
-            async move {
-                let started = Instant::now();
-                let response = client
-                    .get(format!("http://{addr}/"))
-                    .header("HOST", host_header(index))
-                    .send()
-                    .await
-                    .ok()?;
-                if !response.status().is_success() {
-                    return None;
-                }
-                response.bytes().await.ok()?;
-                Some(started.elapsed().as_secs_f64() * 1000.0)
-            }
-        })
-        .buffer_unordered(concurrency.max(1))
-        .collect()
-        .await;
-    let latencies: Vec<f64> = results.iter().flatten().copied().collect();
-    Answered {
-        ok: latencies.len(),
-        failed: results.len() - latencies.len(),
-        latencies,
-    }
 }
 
 /// How long until the pool is back to the instances it held before the
