@@ -20,10 +20,10 @@ func TestServiceRoutesReturnMethodSpecificErrors(t *testing.T) {
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	for _, codec := range []string{"protobuf", "json"} {
+	for _, codec := range []string{codecProtobuf, codecJSON} {
 		t.Run(codec, func(t *testing.T) {
 			var options []connect.ClientOption
-			if codec == "json" {
+			if codec == codecJSON {
 				options = append(options, connect.WithProtoJSON())
 			}
 			workloads := v2connect.NewWorkloadServiceClient(server.Client(), server.URL, options...)
