@@ -99,7 +99,7 @@ Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator 
 | `--memory-reservation` below 4 GiB, `--memory-guard-size` below 32 MiB | 6 | Reduces hardware defense in depth. The default 4 GiB reservation covers a 32-bit dynamic index, and the 32 MiB guard covers many constant offsets; larger offsets still need bounds checks at the defaults. Smaller layouts rely more on software bounds checks for isolation, whose bugs could expose a sibling's memory. More explicit checks can slow guest memory access. |
 | `--deny-special-ranges=false` | 5 | Loopback, link-local and metadata addresses become reachable. |
 | `--http-local-routing` | 3 | Any workload can claim a hostname and receive its neighbors' requests, in plaintext. |
-| `--wasi-webgpu` | 1 | The GPU and its driver sit outside wasmtime's isolation. |
+| `--wasi-webgpu` | 1 | The GPU and its driver sit outside wasmtime's isolation. GPU work that outlives `WASH_WEBGPU_WAIT_TIMEOUT_SECS` from its submission loses its device but keeps the GPU busy, for every workload, until it ends or the driver resets it. |
 | `--allow-insecure-registries` | — | Pulls use plain HTTP, so registry credentials travel unencrypted. |
 
 The following are enforced in every mode:

@@ -1,0 +1,37 @@
+# wasi-webgpu-wasmtime 0.3.1, patched
+
+The crates.io release of [wasi-webgpu-wasmtime](https://crates.io/crates/wasi-webgpu-wasmtime)
+0.3.1 (Apache-2.0 WITH LLVM-exception, from
+[wasi-gfx/wasi-gfx-runtime](https://github.com/wasi-gfx/wasi-gfx-runtime)), with
+the fixes below. The workspace `Cargo.toml` swaps it in with `[patch.crates-io]`.
+Its own `Cargo.toml` adds an empty `[workspace]` and this directory has a
+`Cargo.lock`, only so the license check can resolve it alone; builds use the
+root lock.
+
+The fixes are the code of upstream
+[wasi-gfx/wasi-gfx-runtime#156](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/156)
+at 895488a, plus the commits stacked on it in
+[wasi-gfx/wasi-gfx-runtime#158](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/158). The only other change is that `WasiWebGpuCtx::table` is a
+`wasmtime_wasi::ResourceTable`, as in 0.3.1.
+
+- #156: `on_submitted_work_done` never returned to the guest, and `map_async`
+  blocked an executor thread on every device's GPU work. A new `DeviceHandle`
+  owns the device and queue ids, and runs at most one thread per device that
+  polls only that device and runs the wgpu callbacks.
+  `scripts/gpubench/repro/queue-wait/` has the repro.
+- Device loss: `GpuDevice.lost` and `GpuDeviceLostInfo` were `todo!()`, and a
+  lost device panicked `GpuQueue.submit` and the error conversion. A loss now
+  resolves `lost` and settles every waiting call, and `destroy()` aborts
+  pending maps. A map on a buffer that is mapped or has a map pending
+  rejects without touching that map, and reading the range of a buffer that
+  is not mapped returns `OperationError` instead of panicking.
+- Timeout: submitted work that outlives `WasiWebGpuOptions::wait_timeout`
+  loses the device, whether or not a call waits on it. The shader keeps the GPU busy until it ends or the driver resets
+  it.
+- Busy queue drop: dropping a queue with work in flight blocked for about 6s
+  and then panicked inside wgpu. A busy queue is now dropped from a thread
+  once its device is idle; if a lost device is still busy 60s later, its
+  queue and the wgpu instance are leaked rather than dropped.
+
+Drop this directory and the patch entry once a release with these fixes is in
+`Cargo.lock`.
