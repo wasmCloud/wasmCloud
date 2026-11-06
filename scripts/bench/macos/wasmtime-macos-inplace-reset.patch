@@ -1,0 +1,70 @@
+diff --git a/src/runtime/vm/cow.rs b/src/runtime/vm/cow.rs
+index 398d86f..55d66ff 100644
+--- a/src/runtime/vm/cow.rs
++++ b/src/runtime/vm/cow.rs
+@@ -565,6 +565,23 @@ impl MemoryImageSlot {
+     ) -> Result<usize> {
+         match vm::decommit_behavior() {
+             DecommitBehavior::Zero => {
++                // EXPERIMENT (macOS): with no image, a clean slot only needs
++                // `0..accessible` zeroed. Remapping it with `mmap(MAP_FIXED)`
++                // takes the process's vm_map lock exclusively, which
++                // serializes every instance teardown across threads. When the
++                // pages the guest ever touched fit in `keep_resident`, zero
++                // just those in place instead; `mincore` finds them under a
++                // shared lock. Any page state other than "never touched"
++                // (resident, compressed, paged out) is zeroed, so no data
++                // survives into the next instance.
++                #[cfg(target_os = "macos")]
++                if self.image.is_none()
++                    && keep_resident.byte_count() > 0
++                    && let Some(resident) = unsafe { self.zero_touched_pages(keep_resident) }
++                {
++                    return Ok(resident);
++                }
++
+                 // If we're not on Linux then there's no generic platform way to
+                 // reset memory back to its original state, so instead reset memory
+                 // back to entirely zeros with an anonymous backing.
+@@ -747,6 +764,41 @@ impl MemoryImageSlot {
+         self.dirty
+     }
+ 
++    /// Zero, in place, every page of `0..accessible` the process has ever
++    /// touched, if those total at most `keep_resident`. Returns the bytes left
++    /// resident, or `None` (having changed nothing) when `mincore` fails or
++    /// too much was touched, so the caller falls back to remapping.
++    #[cfg(target_os = "macos")]
++    unsafe fn zero_touched_pages(&mut self, keep_resident: HostAlignedByteCount) -> Option<usize> {
++        let len = self.accessible.byte_count();
++        if len == 0 {
++            return Some(0);
++        }
++        let page = crate::runtime::vm::host_page_size();
++        let pages = len / page;
++        let mut state: Vec<libc::c_char> = vec![0; pages];
++        let base = self.base.as_mut_ptr();
++        // SAFETY: `base..base+len` is this slot's accessible, mapped range.
++        if unsafe { libc::mincore(base.cast(), len, state.as_mut_ptr()) } != 0 {
++            return None;
++        }
++        // macOS sets MINCORE_ANONYMOUS (0x80) on every anonymous page, touched
++        // or not; any other bit (in core, modified, paged out, copied, ...)
++        // means the page may hold data.
++        let touched_page = |s: &libc::c_char| (*s as u8) & 0x7f != 0;
++        let touched = state.iter().filter(|s| touched_page(s)).count();
++        if touched * page > keep_resident.byte_count() {
++            return None;
++        }
++        for (i, s) in state.iter().enumerate() {
++            if touched_page(s) {
++                // SAFETY: page `i` lies inside the accessible R+W range.
++                unsafe { core::ptr::write_bytes(base.add(i * page), 0, page) };
++            }
++        }
++        Some(touched * page)
++    }
++
+     /// Map anonymous zeroed memory across the whole slot,
+     /// inaccessible. Used both during instantiate and during drop.
+     pub(crate) fn reset_with_anon_memory(&mut self) -> Result<()> {
