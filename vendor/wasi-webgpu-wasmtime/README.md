@@ -22,3 +22,10 @@ by `oneshot`.
 
 `scripts/gpubench/repro/queue-wait/` has the repro. Drop this directory and the
 patch entry once a release with the fix is in `Cargo.lock`.
+
+The resource table also owns its wgpu-core objects (`src/owned.rs`). Dropping a
+table entry releases the object, so a store torn down while the guest still
+holds handles frees them, and its device with them. Without it, every GPU
+workload that exits without dropping everything leaves its device and that
+device's memory in the host's shared wgpu instance, about 270 MiB per run on an
+NVIDIA L4.

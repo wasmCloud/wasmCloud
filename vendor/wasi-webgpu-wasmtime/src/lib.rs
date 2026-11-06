@@ -2,7 +2,6 @@
 // - Remove all calls to `Default::default()`. Instead, manually set them, and link to the spec stating what defaults should be used.
 // - Implement all todos.
 // - Remove all unwraps.
-// - Implement all the drop handlers.
 // - Remove clippy allows, and either fix the code, or add comments explaining why it's okay to leave it.
 
 #![allow(clippy::unwrap_or_default)]
@@ -19,8 +18,10 @@ mod flags_conversions;
 mod to_core_conversions;
 
 mod device_handle;
+mod owned;
 mod trait_impls;
 mod types;
+pub use owned::{Owned, Release};
 pub use types::*;
 
 /// Re-export of `wgpu_core` and `wgpu_types` so that runtime implementors don't need to keep track of what version of wgpu this crate is using.
@@ -60,22 +61,22 @@ wasmtime::component::bindgen!({
         "wasi:webgpu/webgpu.gpu-command-encoder": types::CommandEncoder,
         "wasi:webgpu/webgpu.gpu-render-pass-encoder": types::RenderPassEncoder,
         "wasi:webgpu/webgpu.gpu-compute-pass-encoder": types::ComputePassEncoder,
-        "wasi:webgpu/webgpu.gpu-shader-module": wgpu_core::id::ShaderModuleId,
+        "wasi:webgpu/webgpu.gpu-shader-module": types::ShaderModule,
         "wasi:webgpu/webgpu.gpu-render-pipeline": types::RenderPipeline,
         "wasi:webgpu/webgpu.gpu-render-bundle-encoder": types::RenderBundleEncoder,
-        "wasi:webgpu/webgpu.gpu-render-bundle": wgpu_core::id::RenderBundleId,
-        "wasi:webgpu/webgpu.gpu-command-buffer": wgpu_core::id::CommandBufferId,
+        "wasi:webgpu/webgpu.gpu-render-bundle": types::RenderBundle,
+        "wasi:webgpu/webgpu.gpu-command-buffer": types::CommandBuffer,
         "wasi:webgpu/webgpu.gpu-buffer": types::Buffer,
-        "wasi:webgpu/webgpu.gpu-pipeline-layout": wgpu_core::id::PipelineLayoutId,
-        "wasi:webgpu/webgpu.gpu-bind-group-layout": wgpu_core::id::BindGroupLayoutId,
-        "wasi:webgpu/webgpu.gpu-sampler": wgpu_core::id::SamplerId,
+        "wasi:webgpu/webgpu.gpu-pipeline-layout": types::PipelineLayout,
+        "wasi:webgpu/webgpu.gpu-bind-group-layout": types::BindGroupLayout,
+        "wasi:webgpu/webgpu.gpu-sampler": types::Sampler,
         "wasi:webgpu/webgpu.gpu-supported-features": wgpu_types::Features,
         "wasi:webgpu/webgpu.gpu-texture": types::Texture,
         "wasi:webgpu/webgpu.gpu-compute-pipeline": types::ComputePipeline,
-        "wasi:webgpu/webgpu.gpu-bind-group": wgpu_core::id::BindGroupId,
-        "wasi:webgpu/webgpu.gpu-texture-view": wgpu_core::id::TextureViewId,
+        "wasi:webgpu/webgpu.gpu-bind-group": types::BindGroup,
+        "wasi:webgpu/webgpu.gpu-texture-view": types::TextureView,
         "wasi:webgpu/webgpu.gpu-adapter-info": wgpu_types::AdapterInfo,
-        "wasi:webgpu/webgpu.gpu-query-set": wgpu_core::id::QuerySetId,
+        "wasi:webgpu/webgpu.gpu-query-set": types::QuerySet,
         "wasi:webgpu/webgpu.gpu-supported-limits": wgpu_types::Limits,
         "wasi:webgpu/webgpu.gpu-error": types::GpuError,
         "wasi:webgpu/webgpu.wgsl-language-features": types::WgslLanguageFeatures,
