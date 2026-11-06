@@ -56,6 +56,13 @@ export function meetsTarget({ covered, total }, target) {
   return total > 0 && covered * 100 >= total * target;
 }
 
+// Test code is a package under a test/ directory, or a helper named after its
+// parent the way net/http/httptest is.
+export function isTestCode(importPath) {
+  const segments = importPath.split('/');
+  return segments.includes('test') || (segments.length > 1 && segments.at(-1) === `${segments.at(-2)}test`);
+}
+
 function percentage({ covered, total }) {
   return total ? `${(covered * 100 / total).toFixed(2)}%` : 'N/A';
 }
@@ -117,14 +124,16 @@ async function run(module) {
     }
     return { name, dir, production: production === 'true' };
   }).filter(({ name }) => !/\/test\/e2e(?:\/|$)/.test(name));
-  if (!packages.length) throw new Error('No packages found');
-  const names = packages.map(({ name }) => name);
+  const measured = packages.filter(({ name }) => !isTestCode(name));
+  if (!measured.length) throw new Error('No packages found');
+  const names = measured.map(({ name }) => name);
+  const testPackages = packages.filter(({ name }) => isTestCode(name)).map(({ name }) => name);
   const provenance = {
     module, commit: commit.stdout.trim(), workingTree: status.stdout.trim(),
     collectedAt: new Date().toISOString(), go: go.stdout.trim(), gobco: tool.stdout.trim(),
     platform: `${process.platform}/${process.arch}`, node: process.version,
-    targets, targetsEnforced: false, packages: names,
-    scope: 'All module packages except test/e2e; generated code and test helpers included',
+    targets, targetsEnforced: false, packages: names, testPackages,
+    scope: 'Module packages except test code (test/ trees and helpers such as wasmbus/wasmbustest); generated code included; test/e2e does not run',
     branchScope: 'Per-package tests; gobco does not measure select statements or range loop outcomes',
     kubebuilderAssets: env.KUBEBUILDER_ASSETS ?? null,
     run: env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : null,
@@ -132,7 +141,7 @@ async function run(module) {
   writeFileSync(resolve(out, 'provenance.json'), JSON.stringify(provenance, null, 2) + '\n');
   const tests = await command('go', [
     'test', '-count=1', '-timeout=10m', '-v', '-covermode=atomic',
-    `-coverpkg=${names.join(',')}`, `-coverprofile=${out}/statements.out`, ...names,
+    `-coverpkg=${names.join(',')}`, `-coverprofile=${out}/statements.out`, ...names, ...testPackages,
   ], 'tests.txt');
   let statements = null;
   try {
@@ -145,8 +154,8 @@ async function run(module) {
 
   const branches = { covered: 0, total: 0 };
   const branchPackages = [];
-  const pending = packages.entries();
-  await Promise.all(Array.from({ length: Math.min(3, packages.length) }, async () => {
+  const pending = measured.entries();
+  await Promise.all(Array.from({ length: Math.min(3, measured.length) }, async () => {
     for (const [index, pkg] of pending) {
       const stats = `${out}/branches-${index}.json`;
       if (!pkg.production) {

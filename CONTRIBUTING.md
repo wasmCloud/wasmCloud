@@ -160,12 +160,14 @@ node .github/scripts/go-coverage.mjs runtime-operator
 `GOBCO` can override the branch tool's executable path. The collector sets
 `GOWORK=off` for both modules, so the gateway uses the operator dependency
 declared in its `go.mod`. Statement collection uses `go test -count=1
--covermode=atomic -coverpkg=<all selected packages>` across the module's unit
-and integration tests. The denominator includes packages without tests. Only
-the operator's `test/e2e` package is excluded; it requires a running cluster.
-Generated bindings, generated deepcopy code, entry points, and test helper
-packages are included. Test files and external dependencies are excluded by
-the tools. Platform-specific code is measured only where compiled on the runner.
+-covermode=atomic -coverpkg=<measured packages>` across the module's unit
+and integration tests. The denominator includes packages without tests. Test
+code is not measured: packages under a `test/` directory and helpers named
+after their parent package, such as `wasmbus/wasmbustest`. Their tests still
+run, except the operator's `test/e2e` package, which requires a running
+cluster. Generated bindings, generated deepcopy code, and entry points are
+included. Test files and external dependencies are excluded by the tools.
+Platform-specific code is measured only where compiled on the runner.
 
 Reports live in `target/go-coverage/<module>/`: `statements.out`,
 `statements.html`, function percentages in `statements.txt`, raw gobco JSON and

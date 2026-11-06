@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { branchCounts, meetsTarget, statementCounts } from './go-coverage.mjs';
+import { branchCounts, isTestCode, meetsTarget, statementCounts } from './go-coverage.mjs';
 
 test('statements are weighted by block size, including unexecuted packages', () => {
   assert.deepEqual(statementCounts([
@@ -52,6 +52,15 @@ test('branch data must contain valid counters', () => {
   }
 });
 
+test('test trees and parent-named test helpers are test code', () => {
+  for (const name of ['example.org/mod/test/utils', 'example.org/mod/test', 'example.org/mod/pkg/wasmbus/wasmbustest']) {
+    assert.equal(isTestCode(name), true, name);
+  }
+  for (const name of ['example.org/mod', 'example.org/mod/pkg/wasmbus', 'example.org/mod/testdata', 'example.org/mod/pkg/latest', 'example.org/mod/pkg/contest']) {
+    assert.equal(isTestCode(name), false, name);
+  }
+});
+
 test('target comparisons use exact counts instead of rounded percentages', () => {
   assert.equal(meetsTarget({ covered: 89999, total: 100000 }, 90), false);
   assert.equal(meetsTarget({ covered: 90, total: 100 }, 90), true);
@@ -80,13 +89,15 @@ if (tool === 'git') {
 } else if (tool === 'go') {
   if (args[0] === 'version') console.log('go fixture');
   else if (args[0] === 'list') {
-    for (const pkg of ['', '/untested', '/test/integration', '/test/e2e']) {
-      console.log('example.org/mod' + pkg + '\\t' + process.cwd() + pkg + '\\t' + !pkg.startsWith('/test/'));
+    for (const pkg of ['', '/untested', '/onlytests', '/fake/faketest', '/test/integration', '/test/e2e']) {
+      console.log('example.org/mod' + pkg + '\\t' + process.cwd() + pkg + '\\t' + !(pkg.startsWith('/test/') || pkg === '/onlytests'));
     }
   } else if (args[0] === 'test') {
     if (process.env.GOWORK !== 'off') throw new Error('workspace enabled');
     if (!args.includes('-covermode=atomic') || !args.includes('-count=1')) throw new Error('wrong coverage flags');
-    if (!args.includes('-coverpkg=example.org/mod,example.org/mod/untested,example.org/mod/test/integration')) throw new Error('wrong denominator');
+    if (!args.includes('-coverpkg=example.org/mod,example.org/mod/untested,example.org/mod/onlytests')) throw new Error('wrong denominator');
+    if (!args.includes('example.org/mod/test/integration') || !args.includes('example.org/mod/fake/faketest')) throw new Error('test packages not run');
+    if (args.includes('example.org/mod/test/e2e')) throw new Error('e2e run');
     fs.writeFileSync(args.find(a => a.startsWith('-coverprofile=')).split('=')[1],
       'mode: atomic\\nexample.org/mod/a.go:1.1,2.2 ' + (mode === 'below-statements' ? 8 : 9) + ' 1\\nexample.org/mod/a.go:1.1,2.2 ' + (mode === 'below-statements' ? 8 : 9) + ' 0\\nexample.org/mod/untested/b.go:1.1,2.2 1 0\\n');
     if (mode === 'empty-statements') fs.writeFileSync(args.find(a => a.startsWith('-coverprofile=')).split('=')[1], 'mode: atomic\\na.go:1.1,2.2 0 0\\n');
@@ -97,7 +108,7 @@ if (tool === 'git') {
 } else if (tool === 'gobco') {
   if (args[0] === '-version') console.log('gobco fixture');
   else {
-    if (args.at(-1).endsWith('/test/integration')) throw new Error('instrumented test-only package');
+    if (args.at(-1).endsWith('/onlytests') || args.at(-1).endsWith('/test/integration') || args.at(-1).endsWith('/fake/faketest')) throw new Error('instrumented test code');
     if (!args.includes('-branch')) throw new Error('condition coverage requested');
     if (mode !== 'missing-branches') {
       const count = mode === 'empty-branches' ? 0 : args.at(-1).endsWith('/untested') ? 1 : 5;
@@ -125,8 +136,10 @@ if (tool === 'git') {
       assert.equal(report.targetsMet, complete ? mode === 'passing' : null);
       assert.equal(report.targetsEnforced, false);
       assert.deepEqual(report.targets, { statements: 90, branches: 80 });
-      assert.deepEqual(report.packages, ['example.org/mod', 'example.org/mod/untested', 'example.org/mod/test/integration']);
-      assert.equal(report.branchPackages.find(pkg => pkg.package.endsWith('/test/integration')).skipped, 'No non-test Go files');
+      assert.deepEqual(report.packages, ['example.org/mod', 'example.org/mod/untested', 'example.org/mod/onlytests']);
+      assert.deepEqual(report.testPackages, ['example.org/mod/fake/faketest', 'example.org/mod/test/integration']);
+      assert.ok(report.branchPackages.every(pkg => report.packages.includes(pkg.package)), 'branch-measured test code');
+      assert.equal(report.branchPackages.find(pkg => pkg.package.endsWith('/onlytests')).skipped, 'No non-test Go files');
       assert.deepEqual(report.statements, mode === 'empty-statements' ? { covered: 0, total: 0 }
         : { covered: mode === 'below-statements' ? 8 : 9, total: mode === 'below-statements' ? 9 : 10 });
       assert.deepEqual(report.branches, ['missing-branches', 'empty-branches'].includes(mode) ? { covered: 0, total: 0 }
