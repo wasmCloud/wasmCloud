@@ -8,25 +8,29 @@ Its own `Cargo.toml` adds an empty `[workspace]` and this directory has a
 `Cargo.lock`, only so the license check can resolve it alone; builds use the
 root lock.
 
-- `on_submitted_work_done` never returned to the guest.
-  `scripts/gpubench/repro/queue-wait/` has the repro and the patch for this one.
-- `map_async` blocked an executor thread on every device's GPU work, with no
-  timeout, and panicked on a map error.
-- `GpuDevice.lost` and `GpuDeviceLostInfo` were `todo!()`, and `GpuQueue.submit`
-  panicked on a lost device.
-- Dropping a queue with work still in flight blocked for about 6s and then
-  panicked inside wgpu.
+The fixes are the code of upstream
+[wasi-gfx/wasi-gfx-runtime#156](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/156)
+at 895488a, plus three commits stacked on it (`device-loss`, not yet
+proposed upstream). The only other change is that `WasiWebGpuCtx::table` is a
+`wasmtime_wasi::ResourceTable`, as in 0.3.1.
 
-Each device now has one poller thread, started while a GPU callback is
-pending or a released queue waits for it to go idle; it polls only that
-device. Canceling a guest wait leaves polling active until its callback
-finishes or the device is abandoned. Duplicate maps preserve the buffer's
-existing map state. Work that outlives `WasiWebGpuOptions::wait_timeout` loses the
-device, which resolves `GpuDevice.lost`, fails pending maps and makes the
-device ignore new submissions. The shader keeps the GPU busy until it ends or
-the driver resets it. A busy queue is dropped once its device is idle; if a
-lost device is still busy 60s later, its queue and the wgpu instance are
-leaked rather than dropped, since wgpu panics on dropping a busy queue.
+- #156: `on_submitted_work_done` never returned to the guest, and `map_async`
+  blocked an executor thread on every device's GPU work. A new `DeviceHandle`
+  owns the device and queue ids, and runs at most one thread per device that
+  polls only that device and runs the wgpu callbacks.
+  `scripts/gpubench/repro/queue-wait/` has the repro.
+- Device loss: `GpuDevice.lost` and `GpuDeviceLostInfo` were `todo!()`, and a
+  lost device panicked `GpuQueue.submit` and the error conversion. A loss now
+  resolves `lost` and settles every waiting call, and `destroy()` aborts
+  pending maps. A map on a buffer that is mapped or has a map pending
+  rejects without touching that map.
+- Wait timeout: work that outlives `WasiWebGpuOptions::wait_timeout` loses the
+  device. The shader keeps the GPU busy until it ends or the driver resets
+  it.
+- Busy queue drop: dropping a queue with work in flight blocked for about 6s
+  and then panicked inside wgpu. A busy queue is now dropped from a thread
+  once its device is idle; if a lost device is still busy 60s later, its
+  queue and the wgpu instance are leaked rather than dropped.
 
 Drop this directory and the patch entry once a release with these fixes is in
 `Cargo.lock`.

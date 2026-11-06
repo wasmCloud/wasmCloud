@@ -6,17 +6,16 @@ use std::{
     num::NonZeroU64,
     sync::{Arc, Mutex},
 };
-use tokio::sync::oneshot;
 use wasmtime::component::{Access, Accessor, FutureReader, Resource, StreamReader};
 
 use crate::{
+    device_handle::{aborted, DeviceHandle},
     lost::{DeviceLostFuture, LostWait},
-    poller::Poller,
     to_core_conversions::ToCore,
     types::{
-        release_device, release_queue, Buffer, CommandEncoder, ComputePassEncoder, ComputePipeline,
-        Device, ErrorHandler, Queue, RenderBundleEncoder, RenderBundleEncoderInner,
-        RenderPassEncoder, RenderPipeline, Texture, WgslLanguageFeatures,
+        Buffer, CommandEncoder, ComputePassEncoder, ComputePipeline, Device, ErrorHandler, Queue,
+        RenderBundleEncoder, RenderBundleEncoderInner, RenderPassEncoder, RenderPipeline, Texture,
+        WgslLanguageFeatures,
     },
     wasi::webgpu::webgpu,
     WasiWebGpuCtx, WasiWebGpuCtxView, PREFERRED_CANVAS_FORMAT,
@@ -193,7 +192,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: Option<webgpu::GpuCommandEncoderDescriptor>,
     ) -> wasmtime::Result<Resource<CommandEncoder>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let (command_encoder_id, err) = self.instance.device_create_command_encoder(
@@ -219,7 +218,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuShaderModuleDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuShaderModule>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let code =
@@ -242,7 +241,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuRenderPipelineDescriptor,
     ) -> wasmtime::Result<Resource<RenderPipeline>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let (render_pipeline_id, err) = self.instance.device_create_render_pipeline(
@@ -263,9 +262,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
     fn queue(&mut self, device: Resource<Device>) -> wasmtime::Result<Resource<webgpu::GpuQueue>> {
         let device = self.table.get(&device)?;
         let queue = Queue {
-            queue: Arc::clone(&device.queue),
-            device: Arc::clone(&device.device),
-            poller: Arc::clone(&device.poller),
+            handle: Arc::clone(&device.handle),
             error_handler: Arc::clone(&device.error_handler),
         };
         Ok(self.table.push(queue)?)
@@ -275,7 +272,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         &mut self,
         device: Resource<webgpu::GpuDevice>,
     ) -> wasmtime::Result<Resource<webgpu::GpuSupportedFeatures>> {
-        let device = *self.table.get(&device)?.device;
+        let device = *self.table.get(&device)?.device_id();
         let features = self.instance.device_features(device);
         Ok(self.table.push(features)?)
     }
@@ -284,20 +281,13 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         &mut self,
         device: Resource<webgpu::GpuDevice>,
     ) -> wasmtime::Result<Resource<webgpu::GpuSupportedLimits>> {
-        let device = *self.table.get(&device)?.device;
+        let device = *self.table.get(&device)?.device_id();
         let limits = self.instance.device_limits(device);
         Ok(self.table.push(limits)?)
     }
 
     fn destroy(&mut self, device: Resource<webgpu::GpuDevice>) -> wasmtime::Result<()> {
-        let device = self.table.get(&device)?;
-        // wgpu reports the loss only once the queue drains, and only to a
-        // poll; the spec resolves `lost` at once.
-        device.poller.lost.lose(
-            webgpu::GpuDeviceLostReason::Destroyed,
-            "device destroyed".into(),
-        );
-        self.instance.device_destroy(*device.device);
+        self.table.get(&device)?.handle.destroy();
         Ok(())
     }
 
@@ -307,7 +297,8 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuBufferDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuBuffer>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
+        let device_handle = Arc::clone(&device.handle);
         let error_handler = Arc::clone(&device.error_handler);
         let descriptor = descriptor.to_core(self.table);
 
@@ -326,11 +317,10 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
 
         let buffer = Buffer {
             buffer_id,
+            device: device_handle,
             size,
             usage,
             map_state,
-            device: Arc::clone(&device.device),
-            poller: Arc::clone(&device.poller),
         };
 
         Ok(self.table.push(buffer)?)
@@ -342,7 +332,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuTextureDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuTexture>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let (texture_id, err) =
@@ -363,7 +353,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: Option<webgpu::GpuSamplerDescriptor>,
     ) -> wasmtime::Result<Resource<webgpu::GpuSampler>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let descriptor = descriptor
@@ -399,7 +389,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuBindGroupLayoutDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuBindGroupLayout>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let (bind_group_layout, err) = self.instance.device_create_bind_group_layout(
@@ -419,7 +409,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuPipelineLayoutDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuPipelineLayout>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let (pipeline_layout, err) = self.instance.device_create_pipeline_layout(
@@ -439,7 +429,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuBindGroupDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuBindGroup>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         // not using to_core for conversion since we need instance or self for `GpuBindingResource::GpuTexture`
@@ -503,7 +493,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuComputePipelineDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuComputePipeline>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let (compute_pipeline_id, err) = self.instance.device_create_compute_pipeline(
@@ -526,7 +516,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuRenderBundleEncoderDescriptor,
     ) -> wasmtime::Result<Resource<webgpu::GpuRenderBundleEncoder>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
         let render_bundle_encoder = wgpu_core::command::RenderBundleEncoder::new(
             &descriptor.to_core(self.table),
@@ -547,7 +537,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         descriptor: webgpu::GpuQuerySetDescriptor,
     ) -> wasmtime::Result<Result<Resource<webgpu::GpuQuerySet>, webgpu::CreateQuerySetError>> {
         let device = self.table.get(&device)?;
-        let device_id = *device.device;
+        let device_id = *device.device_id();
         let error_handler = Arc::clone(&device.error_handler);
 
         let (query_set, err) =
@@ -583,8 +573,6 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
 
     fn drop(&mut self, device: Resource<webgpu::GpuDevice>) -> wasmtime::Result<()> {
         let device = self.table.delete(device)?;
-        release_queue(self.instance, device.queue, &device.device, &device.poller);
-        release_device(self.instance, device.device);
         if let Some(adapter_id) = Arc::into_inner(device.adapter) {
             self.instance.adapter_drop(adapter_id);
         }
@@ -602,7 +590,7 @@ impl<T: Send + WasiWebGpuCtxView> webgpu::HostGpuDeviceWithStore<T> for crate::H
         accessor.with(|mut access| {
             let ctx = access.get();
             let device = ctx.table.get(&device)?;
-            let device_id = *device.device;
+            let device_id = *device.device_id();
             let error_handler = Arc::clone(&device.error_handler);
 
             let (compute_pipeline_id, err) = ctx.instance.device_create_compute_pipeline(
@@ -629,7 +617,7 @@ impl<T: Send + WasiWebGpuCtxView> webgpu::HostGpuDeviceWithStore<T> for crate::H
         accessor.with(|mut access| {
             let ctx = access.get();
             let device = ctx.table.get(&device)?;
-            let device_id = *device.device;
+            let device_id = *device.device_id();
             let error_handler = Arc::clone(&device.error_handler);
 
             let (render_pipeline_id, err) = ctx.instance.device_create_render_pipeline(
@@ -686,7 +674,7 @@ impl<T: Send + WasiWebGpuCtxView> webgpu::HostGpuDeviceWithStore<T> for crate::H
         mut access: Access<T, Self>,
         device: Resource<webgpu::GpuDevice>,
     ) -> wasmtime::Result<FutureReader<Resource<webgpu::GpuDeviceLostInfo>>> {
-        let lost = Arc::clone(&access.get().table.get(&device)?.poller.lost);
+        let lost = Arc::clone(access.get().table.get(&device)?.handle.lost());
         FutureReader::new(access, DeviceLostFuture(LostWait::new(lost)))
     }
 }
@@ -983,18 +971,15 @@ impl<T: Send> webgpu::HostGpuAdapterWithStore<T> for crate::HasWasiWebGpuCtx {
 
             Ok(match device_queue_result {
                 Ok((device_id, queue_id)) => {
-                    let poller = Arc::new(Poller::new(ctx.options.wait_timeout));
-                    let reported = Arc::clone(&poller.lost);
-                    ctx.instance.device_set_device_lost_closure(
-                        device_id,
-                        Box::new(move |reason, message| reported.lose(reason.into(), message)),
-                    );
                     let device = table.push(Device {
-                        device: Arc::new(device_id),
-                        queue: Arc::new(queue_id),
+                        handle: Arc::new(DeviceHandle::new(
+                            Arc::clone(ctx.instance),
+                            device_id,
+                            queue_id,
+                            ctx.options.wait_timeout,
+                        )),
                         adapter,
                         error_handler: Arc::new(ErrorHandler::default()),
-                        poller,
                     })?;
                     Ok(device)
                 }
@@ -1047,9 +1032,11 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
             .map(|buffer| Ok(*self.table.get(&buffer)?))
             .collect::<wasmtime::Result<Vec<_>>>()?;
         let queue = self.table.get(&queue)?;
-        // A lost device refuses the submission without trapping, and
-        // without an error: none are generated once a device is lost.
-        if let Err((_, err)) = self.instance.queue_submit(*queue.queue, &command_buffers) {
+        // A lost device refuses the submission, and generates no error for it.
+        if let Err((_, err)) = self
+            .instance
+            .queue_submit(*queue.queue_id(), &command_buffers)
+        {
             queue.error_handler.handle_possible_error(Some(err));
         }
         Ok(())
@@ -1064,7 +1051,7 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
         data_offset: Option<webgpu::GpuSize64>,
         size: Option<webgpu::GpuSize64>,
     ) -> wasmtime::Result<Result<(), webgpu::WriteBufferError>> {
-        let queue = *self.table.get(&queue)?.queue;
+        let queue = *self.table.get(&queue)?.queue_id();
         let buffer_id = self.table.get(&buffer)?.buffer_id;
         let mut data = &data[..];
         if let Some(data_offset) = data_offset {
@@ -1088,7 +1075,7 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
         data_layout: webgpu::GpuTexelCopyBufferLayout,
         size: webgpu::GpuExtent3D,
     ) -> wasmtime::Result<()> {
-        let queue = *self.table.get(&queue)?.queue;
+        let queue = *self.table.get(&queue)?.queue_id();
         self.instance.queue_write_texture(
             queue,
             &destination.to_core(self.table),
@@ -1112,9 +1099,7 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
     }
 
     fn drop(&mut self, queue: Resource<webgpu::GpuQueue>) -> wasmtime::Result<()> {
-        let queue = self.table.delete(queue)?;
-        release_queue(self.instance, queue.queue, &queue.device, &queue.poller);
-        release_device(self.instance, queue.device);
+        self.table.delete(queue)?;
         Ok(())
     }
 }
@@ -1124,32 +1109,12 @@ impl<T: Send> webgpu::HostGpuQueueWithStore<T> for crate::HasWasiWebGpuCtx {
         accessor: &Accessor<T, Self>,
         queue: Resource<webgpu::GpuQueue>,
     ) -> wasmtime::Result<()> {
-        let (instance, queue_id, device, poller) =
-            accessor.with(|mut access| -> wasmtime::Result<_> {
-                let ctx = access.get();
-                let queue = ctx.table.get(&queue)?;
-                Ok((
-                    Arc::clone(ctx.instance),
-                    *queue.queue,
-                    Arc::clone(&queue.device),
-                    Arc::clone(&queue.poller),
-                ))
-            })?;
-
-        let mut waiter = poller.waiter(&instance, device);
-        let done = waiter.on_done();
-        let (send, result) = oneshot::channel();
-        instance.queue_on_submitted_work_done(
-            queue_id,
-            Box::new(move || {
-                done();
-                let _ = send.send(());
-            }),
-        );
-        // Losing the device completes outstanding onSubmittedWorkDone() steps;
-        // the guest learns of the loss from `GpuDevice.lost`.
-        // https://www.w3.org/TR/webgpu/#lose-the-device
-        let _ = waiter.wait(result).await;
+        let handle = accessor.with(|mut access| -> wasmtime::Result<_> {
+            Ok(Arc::clone(&access.get().table.get(&queue)?.handle))
+        })?;
+        if handle.on_submitted_work_done().await.is_err() {
+            log::warn!("work-done callback dropped without running");
+        }
         Ok(())
     }
 }
@@ -2636,7 +2601,6 @@ impl<'a> webgpu::HostGpuBuffer for WasiWebGpuCtx<'a> {
     fn drop(&mut self, buffer: Resource<webgpu::GpuBuffer>) -> wasmtime::Result<()> {
         let buffer = self.table.delete(buffer)?;
         self.instance.buffer_drop(buffer.buffer_id);
-        release_device(self.instance, buffer.device);
         Ok(())
     }
 }
@@ -2672,81 +2636,39 @@ impl<T: Send> webgpu::HostGpuBufferWithStore<T> for crate::HasWasiWebGpuCtx {
         let offset = offset.unwrap_or(0);
 
         let mapping = accessor.with(|mut access| -> wasmtime::Result<_> {
-            let ctx = access.get();
-            let buffer = ctx.table.get(&buffer)?;
-            let mut state = buffer.map_state.lock().unwrap();
-            if *state != webgpu::GpuBufferMapState::Unmapped {
+            let buffer = access.get().table.get(&buffer)?;
+            let mut map_state = buffer.map_state.lock().unwrap();
+            // > If this.[[mapping]] is not null or this.[[pending_map]] is not
+            // > null, reject promise with an OperationError.
+            // A rejected map leaves the earlier map's state alone.
+            if *map_state != webgpu::GpuBufferMapState::Unmapped {
                 return Ok(Err(webgpu::MapAsyncError {
                     kind: webgpu::MapAsyncErrorKind::OperationError,
                     message: "buffer is already mapped or has a pending map".into(),
                 }));
             }
-            *state = webgpu::GpuBufferMapState::Pending;
+            *map_state = webgpu::GpuBufferMapState::Pending;
             Ok(Ok((
-                Arc::clone(ctx.instance),
-                buffer.buffer_id,
                 Arc::clone(&buffer.device),
-                Arc::clone(&buffer.poller),
+                buffer.buffer_id,
                 Arc::clone(&buffer.map_state),
             )))
         })?;
-        let (instance, buffer_id, device, poller, map_state) = match mapping {
+        let (handle, buffer_id, state) = match mapping {
             Ok(mapping) => mapping,
             Err(err) => return Ok(Err(err)),
         };
 
-        let mut waiter = poller.waiter(&instance, device);
-        let done = waiter.on_done();
-        let (send, result) = oneshot::channel();
-        let state = Arc::clone(&map_state);
-        let op = wgpu_core::resource::BufferMapOperation {
-            host: mode,
-            callback: Some(Box::new(move |mapped| {
-                done();
-                *state.lock().unwrap() = match mapped {
-                    Ok(()) => webgpu::GpuBufferMapState::Mapped,
-                    Err(_) => webgpu::GpuBufferMapState::Unmapped,
-                };
-                let _ = send.send(mapped);
-            })),
-        };
-        // On error wgpu has already answered the callback with it.
-        let mapped = match instance.buffer_map_async(buffer_id, offset, size, op) {
-            Ok(_) => waiter.wait(result).await,
-            Err(err) => Ok(Some(Err(err))),
-        };
-
-        let abort = |message: String| webgpu::MapAsyncError {
-            kind: webgpu::MapAsyncErrorKind::AbortError,
-            message,
-        };
-        let operation = |message: String| webgpu::MapAsyncError {
-            kind: webgpu::MapAsyncErrorKind::OperationError,
-            message,
-        };
-        // Destroying the device unmaps its buffers, which aborts their maps.
-        // https://www.w3.org/TR/webgpu/#dom-gpudevice-destroy
-        // A map the loss cut short has no callback answer to set its state.
-        let cut_short = mapped.is_err();
-        let mapped = match (mapped, poller.lost.info()) {
-            (Ok(Some(Ok(()))), _) => Ok(()),
-            (Ok(Some(Err(wgpu_core::resource::BufferAccessError::MapAborted))), _) => Err(abort(
-                "buffer unmapped or destroyed before the map finished".into(),
-            )),
-            (Ok(_), Some(info)) | (Err(info), _)
-                if info.reason == webgpu::GpuDeviceLostReason::Destroyed =>
-            {
-                Err(abort(info.message))
+        // The map settles the buffer's state, so it stays right if the guest
+        // stops waiting.
+        let mapped = handle.map_async(buffer_id, mode, offset, size, Arc::clone(&state));
+        match mapped.await {
+            Ok(mapped) => Ok(mapped),
+            Err(_) => {
+                *state.lock().unwrap() = webgpu::GpuBufferMapState::Unmapped;
+                Ok(Err(aborted("the map callback was dropped")))
             }
-            (Ok(Some(Err(err))), _) => Err(operation(err.to_string())),
-            (Ok(None), _) => Err(operation("map callback dropped unanswered".into())),
-            (Err(info), _) => Err(operation(info.message)),
-        };
-        if cut_short {
-            *map_state.lock().unwrap() = webgpu::GpuBufferMapState::Unmapped;
         }
-
-        Ok(mapped)
     }
 }
 

@@ -18,8 +18,8 @@ mod enum_conversions;
 mod flags_conversions;
 mod to_core_conversions;
 
+mod device_handle;
 mod lost;
-mod poller;
 mod trait_impls;
 mod types;
 pub use lost::DeviceLostInfo;
@@ -58,7 +58,6 @@ wasmtime::component::bindgen!({
     with: {
         "wasi:webgpu/webgpu.gpu-adapter": types::Adapter,
         "wasi:webgpu/webgpu.gpu-device": types::Device,
-        "wasi:webgpu/webgpu.gpu-device-lost-info": lost::DeviceLostInfo,
         "wasi:webgpu/webgpu.gpu-queue": types::Queue,
         "wasi:webgpu/webgpu.gpu-command-encoder": types::CommandEncoder,
         "wasi:webgpu/webgpu.gpu-render-pass-encoder": types::RenderPassEncoder,
@@ -81,6 +80,7 @@ wasmtime::component::bindgen!({
         "wasi:webgpu/webgpu.gpu-query-set": wgpu_core::id::QuerySetId,
         "wasi:webgpu/webgpu.gpu-supported-limits": wgpu_types::Limits,
         "wasi:webgpu/webgpu.gpu-error": types::GpuError,
+        "wasi:webgpu/webgpu.gpu-device-lost-info": lost::DeviceLostInfo,
         "wasi:webgpu/webgpu.wgsl-language-features": types::WgslLanguageFeatures,
         "wasi:webgpu/webgpu.record-gpu-pipeline-constant-value": types::RecordGpuPipelineConstantValue,
         "wasi:webgpu/webgpu.record-option-gpu-size64": types::RecordOptionGpuSize64,

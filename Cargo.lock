@@ -3616,6 +3616,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "oneshot"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "269bca4c2591a28585d6bf10d9ed0332b7d76900a1b02bec41bdc3a2cdcda107"
+
+[[package]]
 name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6459,7 +6465,7 @@ version = "0.3.1"
 dependencies = [
  "async-broadcast",
  "log",
- "tokio",
+ "oneshot",
  "wasi-gfx-runtime-shared",
  "wasmtime",
  "wasmtime-wasi",

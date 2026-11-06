@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{poller::Poller, wasi::webgpu::webgpu};
+use crate::{device_handle::DeviceHandle, wasi::webgpu::webgpu};
 
 pub struct WgslLanguageFeatures;
 impl WgslLanguageFeatures {
@@ -54,16 +54,13 @@ where
 
 // size needed in `GpuBuffer.size`, `RenderPass.set_index_buffer`, `RenderPass.set_vertex_buffer`.
 // usage needed in `GpuBuffer.usage`
-// device and poller needed to wait in `GpuBuffer.map_async`.
-// map_state is shared with the map callback, which may land after the guest
-// stops waiting.
 pub struct Buffer {
     pub(crate) buffer_id: wgpu_core::id::BufferId,
+    pub(crate) device: Arc<DeviceHandle>,
     pub(crate) size: u64,
     pub(crate) usage: wgpu_types::BufferUsages,
+    /// Shared with a pending map, which settles it.
     pub(crate) map_state: Arc<Mutex<webgpu::GpuBufferMapState>>,
-    pub(crate) device: Arc<wgpu_core::id::DeviceId>,
-    pub(crate) poller: Arc<Poller>,
 }
 
 impl Buffer {
@@ -76,67 +73,38 @@ impl Buffer {
     }
 }
 
-// references to queue and adapter are also saved in device.
+// references to adapter are also saved in device.
 // TODO: these should be unit-structs instead of `types` so that the internals are private to the crate
 pub type Adapter = Arc<wgpu_core::id::AdapterId>;
 
-// queue needed for Device.queue
 // adapter needed for surface_get_capabilities in connect_graphics_context
-// keeping queue and adapter as Arc for reference counting while dropping.
+// keeping adapter as Arc for reference counting while dropping.
 #[derive(Clone)]
 pub struct Device {
-    pub(crate) device: Arc<wgpu_core::id::DeviceId>,
-    pub(crate) queue: Arc<wgpu_core::id::QueueId>,
+    pub(crate) handle: Arc<DeviceHandle>,
     pub(crate) adapter: Arc<wgpu_core::id::AdapterId>,
     pub(crate) error_handler: Arc<ErrorHandler>,
-    pub(crate) poller: Arc<Poller>,
 }
-// device needed to poll in `GpuQueue.on_submitted_work_done`; it is
-// dropped when the device and everything holding it are.
-// error_handler needed to report `GpuQueue.submit` errors.
+
+/// A device's queue. It keeps the device alive, so the queue can poll it.
 pub struct Queue {
-    pub(crate) queue: Arc<wgpu_core::id::QueueId>,
-    pub(crate) device: Arc<wgpu_core::id::DeviceId>,
-    pub(crate) poller: Arc<Poller>,
+    pub(crate) handle: Arc<DeviceHandle>,
     pub(crate) error_handler: Arc<ErrorHandler>,
 }
 
-/// Drops a queue id once nothing else holds it. wgpu blocks while it drops a
-/// queue with work in flight and panics if the work outlasts about 6s, so the
-/// poller drops a busy queue once its device is idle.
-pub(crate) fn release_queue(
-    instance: &Arc<wgpu_core::global::Global>,
-    queue: Arc<wgpu_core::id::QueueId>,
-    device: &Arc<wgpu_core::id::DeviceId>,
-    poller: &Arc<Poller>,
-) {
-    let Some(queue_id) = Arc::into_inner(queue) else {
-        return;
-    };
-    if let Ok(wgpu_types::PollStatus::QueueEmpty) =
-        instance.device_poll(**device, wgpu_types::PollType::Poll)
-    {
-        instance.queue_drop(queue_id);
-        return;
+impl Queue {
+    pub fn queue_id(&self) -> &wgpu_core::id::QueueId {
+        self.handle.queue_id()
     }
-    poller.when_idle(instance, device, move |instance| {
-        instance.queue_drop(queue_id)
-    });
-}
 
-/// Drops a device id once nothing else holds it.
-pub(crate) fn release_device(
-    instance: &wgpu_core::global::Global,
-    device: Arc<wgpu_core::id::DeviceId>,
-) {
-    if let Some(device_id) = Arc::into_inner(device) {
-        instance.device_drop(device_id);
+    pub fn device_id(&self) -> &wgpu_core::id::DeviceId {
+        self.handle.device_id()
     }
 }
 
 impl Device {
     pub fn device_id(&self) -> &wgpu_core::id::DeviceId {
-        self.device.as_ref()
+        self.handle.device_id()
     }
 
     /// Create a `Texture` from a `TextureId` that is connected to this device.

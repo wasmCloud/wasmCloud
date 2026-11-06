@@ -34,13 +34,12 @@ version = "0.7"
 [dependencies.log]
 version = "0.4"
 
+[dependencies.oneshot]
+version = "0.1"
+
 [dependencies.shared]
 version = "0.3.1"
 package = "wasi-gfx-runtime-shared"
-
-[dependencies.tokio]
-version = "1"
-features = ["sync"]
 
 [dependencies.wasmtime]
 version = "48"
