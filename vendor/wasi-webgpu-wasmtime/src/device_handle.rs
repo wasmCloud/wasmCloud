@@ -1,9 +1,10 @@
 //! Shared ownership of a device and its queue, and the thread that polls them.
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use wgpu_core::{
-    device::queue::SubmittedWorkDoneClosure,
+    device::{queue::SubmittedWorkDoneClosure, WaitIdleError},
     global::Global,
     id::{BufferId, DeviceId, QueueId},
     resource::{BufferAccessError, BufferMapOperation},
@@ -13,6 +14,10 @@ use wgpu_core::{
 use crate::wasi::webgpu::webgpu;
 
 type Abort = Box<dyn FnOnce() + Send>;
+
+/// Longest one poll waits. A waiting poll holds wgpu-core's fence lock, which
+/// `queue_submit` needs, so a long wait would stall the guest's submits.
+const WAIT_SLICE: Duration = Duration::from_millis(10);
 
 /// A device and its queue. They leave the hub when the last holder drops.
 ///
@@ -141,13 +146,17 @@ impl DeviceHandle {
                 0 => wgpu_types::PollType::Poll,
                 index => wgpu_types::PollType::Wait {
                     submission_index: Some(index),
-                    timeout: None,
+                    timeout: Some(WAIT_SLICE),
                 },
             };
-            if let Err(err) = self.instance.device_poll(self.device, poll_type) {
-                log::warn!("device poll failed: {err}");
-                self.abort_waiting();
-                return;
+            match self.instance.device_poll(self.device, poll_type) {
+                Ok(_) => {}
+                Err(WaitIdleError::Timeout) => continue,
+                Err(err) => {
+                    log::warn!("device poll failed: {err}");
+                    self.abort_waiting();
+                    return;
+                }
             }
             let mut poller = self.lock_poller();
             poller
