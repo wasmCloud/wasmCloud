@@ -1,0 +1,204 @@
+name: gpubench run
+
+# One box's run of scripts/gpubench, called by gpubench.yml.
+on:
+  workflow_call:
+    inputs:
+      # The runner label, e.g. cuda-l4; validated by gpubench-matrix.mjs.
+      box:
+        required: true
+        type: string
+      ref:
+        required: true
+        type: string
+      commit_sha:
+        required: true
+        type: string
+      artifact_id:
+        required: true
+        type: string
+      smoke:
+        required: true
+        type: boolean
+      # Whether results may enter the public history (smoke runs never do;
+      # pull-request refs only with gpubench.yml's publish_pr).
+      publish:
+        required: true
+        type: boolean
+    secrets:
+      aws_role_arn:
+        required: true
+      aws_region:
+        required: true
+      s3_bucket:
+        required: true
+      cf_distribution_id:
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions: {}
+
+jobs:
+  gpubench:
+    name: ${{ inputs.box }}${{ inputs.smoke && ' (smoke)' || '' }}
+    runs-on: [self-hosted, gpubench, "${{ inputs.box }}"]
+    # A first run builds llama.cpp three ways, wgpu-native and bench-gpu, and
+    # downloads 6 GB of models: about an hour before the benches start.
+    timeout-minutes: ${{ inputs.smoke && 150 || 360 }}
+    permissions:
+      contents: read
+    env:
+      # run.sh honors it; set explicitly so a box that would detect as
+      # something else fails pre-flight instead of benching the wrong backend.
+      GPUBENCH_BOX: ${{ inputs.box }}
+      GPUBENCH_SMOKE: ${{ inputs.smoke && '1' || '0' }}
+      CARGO_INCREMENTAL: "0"
+      # The ref recorded on each data row (bench-tools/meta.rs).
+      WASMCLOUD_BENCH_REF: ${{ inputs.ref }}
+      # The box label is its bench host label (bench-host.mjs): it goes on
+      # every row and in the publish dedup key.
+      WASMCLOUD_BENCH_HOST_LABEL: ${{ inputs.box }}
+    steps:
+      # No CARGO_TARGET_DIR: run.sh runs bench-gpu from the workspace's
+      # target/, and build/wgpu-native.sh reads its own crate's target/. The
+      # checkout keeps target/ (clean: false), so bench-gpu builds incrementally.
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          clean: false
+          # The job runs the checked-out commit's code; keep the token out of it.
+          persist-credentials: false
+
+      # What actions/checkout's clean would do, minus the cargo target.
+      - name: remove untracked files
+        run: git clean -ffdxq -e /target/
+
+      - name: verify commit
+        env:
+          EXPECTED_SHA: ${{ inputs.commit_sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      # The expected hostname is the repo variable the box label names
+      # (bench-host.mjs hostnameVar), so a new box needs no edit here.
+      - name: pre-flight box checks
+        env:
+          GPUBENCH_REPO_VARS: ${{ toJSON(vars) }}
+        run: node .github/scripts/gpubench-preflight.mjs
+
+      - name: run gpubench
+        id: run
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . "$HOME/.cargo/env"
+          out="${RUNNER_TEMP}/gpubench-${GPUBENCH_BOX}"
+          echo "dir=${out}" >> "$GITHUB_OUTPUT"
+          if [ "$GPUBENCH_SMOKE" = 1 ]; then
+            ./scripts/gpubench/run.sh --smoke "$out"
+          else
+            ./scripts/gpubench/run.sh "$out"
+          fi
+
+      # Also after a failed step: run.sh keeps going and the summary shows
+      # what did run. Publishing still needs every step to pass.
+      - name: render markdown summary
+        if: ${{ !cancelled() && steps.run.outputs.dir != '' }}
+        env:
+          RESULTS_DIR: ${{ steps.run.outputs.dir }}
+        run: |
+          # shellcheck disable=SC1091
+          . "$HOME/.cargo/env"
+          cargo run -p bench-tools --quiet -- gpu report --markdown "$RESULTS_DIR" \
+            >> "${GITHUB_STEP_SUMMARY}"
+
+      # Raw results and every step's log, also when the run failed partway.
+      - name: upload gpubench artifact
+        if: ${{ !cancelled() && steps.run.outputs.dir != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gpubench-${{ inputs.box }}-${{ github.run_id }}
+          path: ${{ steps.run.outputs.dir }}
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: checkout workflow tools
+        if: ${{ success() && inputs.publish }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .bench-publish-tools
+          persist-credentials: false
+
+      - name: prepare publish artifact
+        if: ${{ success() && inputs.publish }}
+        env:
+          WASMCLOUD_BENCH_NAME: gpubench-${{ inputs.box }}
+          WASMCLOUD_BENCH_GPU_DIR: ${{ steps.run.outputs.dir }}
+          BUNDLE_DIR: ${{ runner.temp }}/bench-publish
+        run: node .bench-publish-tools/.github/scripts/bench-push-results.mjs prepare "$BUNDLE_DIR"
+
+      - name: upload publish artifact
+        if: ${{ success() && inputs.publish }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-publish-gpubench-${{ inputs.artifact_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-publish/
+          retention-days: 7
+          if-no-files-found: error
+
+      # run.sh stops its own samplers; this covers a job that failed
+      # or was cancelled first, so the next pre-flight finds an idle GPU.
+      - name: stop leftover bench processes
+        if: ${{ always() }}
+        run: pkill -u "$(id -u)" -f 'bench-gpu|llama-bench|llama-simple|sample-gpu\.sh' || true
+
+  publish:
+    needs: gpubench
+    if: ${{ inputs.publish }}
+    name: publish ${{ inputs.box }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      WASMCLOUD_BENCH_NAME: gpubench-${{ inputs.box }}
+      WASMCLOUD_BENCH_ROW_NAME: gpubench
+      WASMCLOUD_BENCH_REF: ${{ inputs.ref }}
+      WASMCLOUD_BENCH_SHA: ${{ inputs.commit_sha }}
+      WASMCLOUD_BENCH_HOST_LABEL: ${{ inputs.box }}
+    steps:
+      - name: checkout workflow tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: download publish artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bench-publish-gpubench-${{ inputs.artifact_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/bench-publish
+
+      - name: validate publish artifact
+        env:
+          BUNDLE_DIR: ${{ runner.temp }}/bench-publish
+        run: node .github/scripts/bench-push-results.mjs validate "$BUNDLE_DIR"
+
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.aws_role_arn }}
+          aws-region: ${{ secrets.aws_region }}
+
+      - name: push results to s3 + invalidate CloudFront
+        env:
+          WASMCLOUD_BENCH_S3_BUCKET: ${{ secrets.s3_bucket }}
+          WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: ${{ secrets.cf_distribution_id }}
+          BUNDLE_DIR: ${{ runner.temp }}/bench-publish
+        run: node .github/scripts/bench-push-results.mjs publish "$BUNDLE_DIR"

@@ -567,6 +567,16 @@ and `history.json` through a separate GitHub-hosted job. It has no workflow
 concurrency group; the single bench runner serializes measurements. Publishers
 use conditional S3 writes so overlapping bench and k6 runs cannot lose rows.
 
+**GPU pipeline:** [`gpubench.yml`](../../.github/workflows/gpubench.yml) runs
+the benched ref's `scripts/gpubench/run.sh` on other self-hosted boxes,
+`[self-hosted, gpubench, <kind>-<class>]` (e.g. `cuda-l4`), never on this host,
+and publishes through the same GitHub-hosted publisher with the box label as
+the rows' `host_label`. Smoke runs are never published. A pull-request ref is
+published only with `publish_pr`, and its rows keep the `pull/N` ref, so they
+stay out of the GPU view's `main` history. The workflow, matrix and publisher
+always come from the dispatch ref, so a PR can be benched and published from
+`main` without its own copy of them.
+
 **Why no `pull_request_target` trigger:** see §9.4. Self-hosted runners
 on a public repo are a foot-gun if exposed to fork PRs (a fork can
 ship a malicious workflow file or build script to your bench host).
@@ -575,7 +585,8 @@ Comparison runs use `workflow_dispatch` only.
 ### Restrict bench dispatch to maintainers
 
 Apply a repository Actions policy for `bench.yml`, `bench-run.yml`,
-`bench-compare.yml`, `k6bench.yml`, and `k6bench-run.yml` that allows the `@wasmCloud/ci-maintainers` and
+`bench-compare.yml`, `k6bench.yml`, `k6bench-run.yml`, `gpubench.yml`, and
+`gpubench-run.yml` that allows the `@wasmCloud/ci-maintainers` and
 `@wasmCloud/org-maintainers` teams to trigger them. It also allows
 `@automation-wasmcloud`, which publishes releases and triggers the automatic
 release benchmarks. The policy lives in GitHub settings, not in a workflow
@@ -589,7 +600,7 @@ the policy with:
 ```
 
 The script prints the stored policy. Check that `enforcement` is `active`, the
-five workflow paths are included, and the allowed actors match the two teams
+seven workflow paths are included, and the allowed actors match the two teams
 and release account. Changes to those GitHub teams then take effect without
 editing workflow YAML.
 

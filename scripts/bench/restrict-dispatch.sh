@@ -39,7 +39,9 @@ jq -n \
           ".github/workflows/bench-run.yml",
           ".github/workflows/bench-compare.yml",
           ".github/workflows/k6bench.yml",
-          ".github/workflows/k6bench-run.yml"
+          ".github/workflows/k6bench-run.yml",
+          ".github/workflows/gpubench.yml",
+          ".github/workflows/gpubench-run.yml"
         ],
         exclude: []
       }

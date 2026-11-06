@@ -8,6 +8,8 @@ import { basename, join } from 'node:path';
 
 import { DEFAULT_HOST_LABEL, labelRows, parseHostLabel, rowHostLabel } from './bench-host.mjs';
 
+const ARCHIVES = ['criterion.tar.zst', 'gungraun.tar.zst', 'k6.tar.zst', 'gpubench.tar.zst'];
+
 const [mode, bundle] = process.argv.slice(2);
 if (!bundle || !['prepare', 'validate', 'publish'].includes(mode)) {
   throw new Error('usage: bench-push-results.mjs <prepare|validate|publish> <bundle-dir>');
@@ -25,6 +27,9 @@ function prepare(out) {
   process.env.PATH = `${process.env.HOME}/.cargo/bin:${process.env.PATH ?? ''}`;
   const bench = required('WASMCLOUD_BENCH_NAME');
   const k6Dir = process.env.WASMCLOUD_BENCH_K6_DIR;
+  const gpuDir = process.env.WASMCLOUD_BENCH_GPU_DIR;
+  if (k6Dir && gpuDir) throw new Error('set WASMCLOUD_BENCH_K6_DIR or WASMCLOUD_BENCH_GPU_DIR, not both');
+  const runDir = k6Dir || gpuDir;
   const targetDir = process.env.CARGO_TARGET_DIR ?? '/var/lib/bench/target';
   const runId = process.env.GITHUB_RUN_ID ?? 'local';
   const hostLabel = expectedHostLabel();
@@ -33,16 +38,21 @@ function prepare(out) {
   mkdirSync(out, { recursive: true });
 
   let archived = 0;
+  // --use-compress-program is -I's long form in GNU tar, and the only
+  // spelling macOS's bsdtar accepts.
+  const archive = (name, dir) => {
+    run('tar', ['-cf', join(out, name), '--use-compress-program', 'zstd -19 -T0', '-C', dir, '.']);
+    archived++;
+  };
   if (k6Dir) {
-    run('tar', ['-cf', join(out, 'k6.tar.zst'), '-I', 'zstd -19 -T0', '-C', k6Dir, '.']);
-    archived++;
+    archive('k6.tar.zst', k6Dir);
+  } else if (gpuDir) {
+    archive('gpubench.tar.zst', gpuDir);
   } else if (existsSync(join(targetDir, 'criterion'))) {
-    run('tar', ['-cf', join(out, 'criterion.tar.zst'), '-I', 'zstd -19 -T0', '-C', join(targetDir, 'criterion'), '.']);
-    archived++;
+    archive('criterion.tar.zst', join(targetDir, 'criterion'));
   }
-  if (!k6Dir && existsSync(join(targetDir, 'gungraun'))) {
-    run('tar', ['-cf', join(out, 'gungraun.tar.zst'), '-I', 'zstd -19 -T0', '-C', join(targetDir, 'gungraun'), '.']);
-    archived++;
+  if (!runDir && existsSync(join(targetDir, 'gungraun'))) {
+    archive('gungraun.tar.zst', join(targetDir, 'gungraun'));
   }
   if (archived === 0) {
     console.log(`::warning::no bench output at ${targetDir}; uploading metadata only`);
@@ -50,7 +60,9 @@ function prepare(out) {
 
   const jsonl = k6Dir
     ? run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'k6', 'jsonl', k6Dir])
-    : run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'jsonl', '--bench', bench]);
+    : gpuDir
+      ? run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'gpu', 'jsonl', gpuDir])
+      : run('cargo', ['run', '-p', 'bench-tools', '--quiet', '--', 'jsonl', '--bench', bench]);
   writeFileSync(join(out, 'results.jsonl'), labelRows(jsonl, hostLabel));
 
   const sha = run('git', ['rev-parse', 'HEAD']);
@@ -71,14 +83,16 @@ function prepare(out) {
     host: hostname(),
     host_label: hostLabel,
     kernel: run('uname', ['-r']),
-    cpu: readFirstModelName('/proc/cpuinfo'),
-    cpus_online: parseInt(run('nproc'), 10),
+    cpu: cpuModel(),
+    cpus_online: cpusOnline(),
     ...(k6Dir ? { k6: JSON.parse(readFileSync(join(k6Dir, 'metadata.json'), 'utf8')) } : {}),
+    ...(gpuDir ? { gpubench: JSON.parse(readFileSync(join(gpuDir, 'metadata.json'), 'utf8')) } : {}),
   };
   writeFileSync(join(out, 'metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`);
 
-  const logSrc = k6Dir ? join(k6Dir, 'run.log') : join(targetDir, `run-${bench}-${runId}.log`);
-  if (existsSync(logSrc)) {
+  // A gpubench run keeps one log per step inside its archive.
+  const logSrc = k6Dir ? join(k6Dir, 'run.log') : gpuDir ? null : join(targetDir, `run-${bench}-${runId}.log`);
+  if (logSrc && existsSync(logSrc)) {
     writeFileSync(join(out, 'run.log'), readFileSync(logSrc));
   }
 }
@@ -92,7 +106,7 @@ function publish(bundle) {
   mkdirSync(work, { recursive: true });
   try {
     console.log(`uploading per-run artifacts to s3://${bucket}/${prefix}/`);
-    for (const file of ['criterion.tar.zst', 'gungraun.tar.zst', 'k6.tar.zst', 'results.jsonl', 'metadata.json', 'run.log']) {
+    for (const file of [...ARCHIVES, 'results.jsonl', 'metadata.json', 'run.log']) {
       const path = join(bundle, file);
       if (existsSync(path)) {
         run('aws', ['s3', 'cp', '--no-progress', path, `s3://${bucket}/${prefix}/${basename(path)}`]);
@@ -139,7 +153,7 @@ function validate(bundle) {
   for (const file of ['metadata.json', 'results.jsonl']) {
     if (!lstatSync(join(bundle, file)).isFile()) throw new Error(`invalid artifact file: ${file}`);
   }
-  for (const file of ['criterion.tar.zst', 'gungraun.tar.zst', 'k6.tar.zst', 'run.log']) {
+  for (const file of [...ARCHIVES, 'run.log']) {
     if (existsSync(join(bundle, file)) && !lstatSync(join(bundle, file)).isFile()) {
       throw new Error(`invalid artifact file: ${file}`);
     }
@@ -216,10 +230,26 @@ function run(cmd, args = []) {
   return execFileSync(cmd, args, { encoding: 'utf8' }).trim();
 }
 
-function readFirstModelName(path) {
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const match = line.match(/^model name\s*:\s*(.+)$/);
-    if (match) return match[1].trim();
+function cpuModel() {
+  if (existsSync('/proc/cpuinfo')) {
+    for (const line of readFileSync('/proc/cpuinfo', 'utf8').split('\n')) {
+      const match = line.match(/^model name\s*:\s*(.+)$/);
+      if (match) return match[1].trim();
+    }
+    return '';
   }
-  return '';
+  try {
+    return run('sysctl', ['-n', 'machdep.cpu.brand_string']);
+  } catch {
+    return '';
+  }
+}
+
+// nproc honors the runner's CPU affinity on Linux; macOS has no nproc.
+function cpusOnline() {
+  try {
+    return parseInt(run('nproc'), 10);
+  } catch {
+    return parseInt(run('getconf', ['_NPROCESSORS_ONLN']), 10);
+  }
 }

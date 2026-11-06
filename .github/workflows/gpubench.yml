@@ -1,0 +1,103 @@
+name: gpubench
+
+# GPU benchmarks (scripts/gpubench) on the self-hosted gpubench boxes, named by
+# runner label: cuda-<class> (Linux, NVIDIA GPU) or metal-<class> (macOS,
+# Apple GPU); see .github/scripts/gpubench-boxes.mjs. Boxes may be short-lived:
+# one is added by registering its runner, with no change here. Each box job
+# goes through gpubench-run.yml; provisioning is in scripts/gpubench/provision/.
+#
+# Dispatch only. Never on push or PR: the boxes are self-hosted runners and the
+# job runs the checked-out ref's code on them (scripts/bench/README.md §9.4).
+# This file, the matrix and the publisher run from the dispatch ref; everything
+# on the box (scripts/gpubench, bench-gpu, bench-tools) runs from `ref`.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "git ref to bench (branch, tag, sha, or #PR; default = the workflow ref)"
+        type: string
+        default: ""
+      box:
+        description: "box label(s) to run on, comma-separated (e.g. cuda-l4 or cuda-l4,metal-m4pro)"
+        type: string
+        required: true
+      smoke:
+        description: 0.5B model and short tests; proves the pipeline, never published
+        type: boolean
+        default: false
+      publish_pr:
+        description: publish a pull-request ref's results; rows keep its pull/N ref
+        type: boolean
+        default: false
+
+defaults:
+  run:
+    shell: bash
+
+# No concurrency group, as for bench.yml and k6bench.yml: GitHub keeps only one
+# pending run per group and would cancel a queued dispatch. Each box has one
+# runner, which already serializes its jobs.
+
+permissions: {}
+
+jobs:
+  matrix:
+    name: build matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      boxes: ${{ steps.set.outputs.boxes }}
+      ref: ${{ steps.set.outputs.ref }}
+      publish: ${{ steps.set.outputs.publish }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: checkout workflow tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - id: set
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_BOX: ${{ inputs.box }}
+          INPUT_SMOKE: ${{ inputs.smoke }}
+          INPUT_PUBLISH_PR: ${{ inputs.publish_pr }}
+          DEFAULT_REF: ${{ github.ref }}
+        run: node .github/scripts/gpubench-matrix.mjs
+
+      - name: resolve commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.set.outputs.checkout_ref }}
+          path: bench-ref
+          persist-credentials: false
+
+      - id: commit
+        run: echo "sha=$(git -C bench-ref rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  gpubench:
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        box: ${{ fromJSON(needs.matrix.outputs.boxes) }}
+    uses: $/.github/workflows/gpubench-run.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      box: ${{ matrix.box }}
+      ref: ${{ needs.matrix.outputs.ref }}
+      commit_sha: ${{ needs.matrix.outputs.sha }}
+      artifact_id: ${{ format('{0}', strategy.job-index) }}
+      smoke: ${{ inputs.smoke }}
+      publish: ${{ needs.matrix.outputs.publish == 'true' }}
+    secrets:
+      aws_role_arn: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
+      aws_region: ${{ secrets.WASMCLOUD_BENCH_S3_REGION }}
+      s3_bucket: ${{ secrets.WASMCLOUD_BENCH_S3_BUCKET }}
+      cf_distribution_id: ${{ secrets.WASMCLOUD_BENCH_CF_DISTRIBUTION_ID }}
