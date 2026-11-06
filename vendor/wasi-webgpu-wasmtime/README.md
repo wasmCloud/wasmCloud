@@ -11,7 +11,10 @@ only so the license check can resolve it alone; builds use the root lock.
 The patch fixes `on_submitted_work_done`, which never returns to the guest.
 It is the code of upstream
 [wasi-gfx/wasi-gfx-runtime#156](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/156)
-at 7f0b6af. A new `DeviceHandle` owns the device and queue ids, and runs at
+at 895488a, plus
+[#157](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/157) at d4bb0a2, which
+reports the adapter strings wgpu-native does, so the guest and the
+`webgpu-native` step take the same vendor-gated paths in llama.cpp. A new `DeviceHandle` owns the device and queue ids, and runs at
 most one thread per device that polls only that device and runs the wgpu
 callbacks. `on_submitted_work_done` and `map_async` both wait on it, and
 neither traps the guest if the device is lost. `callback-future` is replaced

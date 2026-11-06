@@ -2700,15 +2700,15 @@ impl<T: Send> webgpu::HostGpuWithStore<T> for crate::HasWasiWebGpuCtx {
 }
 
 impl<'a> webgpu::HostGpuAdapterInfo for WasiWebGpuCtx<'a> {
-    // TODO: more real values here
-    // take ideas from https://bugzilla.mozilla.org/show_bug.cgi?id=1831994
+    // The strings match what wgpu-native's wgpuAdapterGetInfo reports, so a
+    // guest sees the same adapter a native webgpu.h program does.
     // keep an eye on https://github.com/gfx-rs/wgpu/issues/8649
     fn vendor(
         &mut self,
         adapter_info: Resource<webgpu::GpuAdapterInfo>,
     ) -> wasmtime::Result<String> {
         let adapter_info = self.table.get(&adapter_info)?;
-        Ok(adapter_info.vendor.to_string())
+        Ok(adapter_info.driver.clone())
     }
 
     fn architecture(
@@ -2724,15 +2724,15 @@ impl<'a> webgpu::HostGpuAdapterInfo for WasiWebGpuCtx<'a> {
         adapter_info: Resource<webgpu::GpuAdapterInfo>,
     ) -> wasmtime::Result<String> {
         let adapter_info = self.table.get(&adapter_info)?;
-        Ok(adapter_info.device.to_string())
+        Ok(adapter_info.name.clone())
     }
 
     fn description(
         &mut self,
-        _adapter_info: Resource<webgpu::GpuAdapterInfo>,
+        adapter_info: Resource<webgpu::GpuAdapterInfo>,
     ) -> wasmtime::Result<String> {
-        // TODO: implement real description
-        Ok(String::new())
+        let adapter_info = self.table.get(&adapter_info)?;
+        Ok(adapter_info.driver_info.clone())
     }
 
     fn subgroup_min_size(
