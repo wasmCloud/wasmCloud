@@ -56,6 +56,16 @@ export function meetsTarget({ covered, total }, target) {
   return total > 0 && covered * 100 >= total * target;
 }
 
+// Test code is a package under a test/ directory of the module, or a helper
+// named after its parent the way net/http/httptest is.
+export function isTestCode(importPath, modulePath) {
+  if (importPath !== modulePath && !importPath.startsWith(`${modulePath}/`)) {
+    throw new Error(`Package ${importPath} is outside module ${modulePath}`);
+  }
+  const inner = importPath.slice(modulePath.length).split('/').filter(Boolean);
+  return inner.includes('test') || (inner.length > 0 && inner.at(-1) === `${importPath.split('/').at(-2)}test`);
+}
+
 function percentage({ covered, total }) {
   return total ? `${(covered * 100 / total).toFixed(2)}%` : 'N/A';
 }
@@ -106,25 +116,29 @@ async function run(module) {
   const commit = await command('git', ['rev-parse', 'HEAD'], 'commit.txt');
   const status = await command('git', ['status', '--short'], 'working-tree.txt');
   const listed = await command('go', [
-    'list', '-f', '{{.ImportPath}}\t{{.Dir}}\t{{if or .GoFiles .CgoFiles}}true{{else}}false{{end}}', './...',
+    'list', '-f', '{{.ImportPath}}\t{{.Dir}}\t{{if or .GoFiles .CgoFiles}}true{{else}}false{{end}}\t{{.Module.Path}}', './...',
   ], 'packages.txt');
   if (failures.length) throw new Error(failures.join('\n'));
   const packages = listed.stdout.trim().split('\n').map((line) => {
     const fields = line.split('\t');
-    const [name, dir, production] = fields;
-    if (fields.length !== 3 || !name || !dir || !['true', 'false'].includes(production)) {
+    const [name, dir, production, modulePath] = fields;
+    if (fields.length !== 4 || !name || !dir || !['true', 'false'].includes(production) || !modulePath) {
       throw new Error(`Invalid package: ${line}`);
     }
-    return { name, dir, production: production === 'true' };
-  }).filter(({ name }) => !/\/test\/e2e(?:\/|$)/.test(name));
-  if (!packages.length) throw new Error('No packages found');
-  const names = packages.map(({ name }) => name);
+    const testCode = isTestCode(name, modulePath);
+    const e2e = /(?:^|\/)test\/e2e(?:\/|$)/.test(name.slice(modulePath.length));
+    return { name, dir, production: production === 'true', testCode, e2e };
+  }).filter(({ e2e }) => !e2e);
+  const measured = packages.filter(({ testCode }) => !testCode);
+  if (!measured.length) throw new Error('No packages found');
+  const names = measured.map(({ name }) => name);
+  const testPackages = packages.filter(({ testCode }) => testCode).map(({ name }) => name);
   const provenance = {
     module, commit: commit.stdout.trim(), workingTree: status.stdout.trim(),
     collectedAt: new Date().toISOString(), go: go.stdout.trim(), gobco: tool.stdout.trim(),
     platform: `${process.platform}/${process.arch}`, node: process.version,
-    targets, targetsEnforced: false, packages: names,
-    scope: 'All module packages except test/e2e; generated code and test helpers included',
+    targets, targetsEnforced: false, packages: names, testPackages,
+    scope: 'Module packages except test code (test/ trees and helpers such as wasmbus/wasmbustest); generated code included; test/e2e does not run',
     branchScope: 'Per-package tests; gobco does not measure select statements or range loop outcomes',
     kubebuilderAssets: env.KUBEBUILDER_ASSETS ?? null,
     run: env.GITHUB_RUN_ID ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : null,
@@ -132,7 +146,7 @@ async function run(module) {
   writeFileSync(resolve(out, 'provenance.json'), JSON.stringify(provenance, null, 2) + '\n');
   const tests = await command('go', [
     'test', '-count=1', '-timeout=10m', '-v', '-covermode=atomic',
-    `-coverpkg=${names.join(',')}`, `-coverprofile=${out}/statements.out`, ...names,
+    `-coverpkg=${names.join(',')}`, `-coverprofile=${out}/statements.out`, ...names, ...testPackages,
   ], 'tests.txt');
   let statements = null;
   try {
@@ -145,8 +159,8 @@ async function run(module) {
 
   const branches = { covered: 0, total: 0 };
   const branchPackages = [];
-  const pending = packages.entries();
-  await Promise.all(Array.from({ length: Math.min(3, packages.length) }, async () => {
+  const pending = measured.entries();
+  await Promise.all(Array.from({ length: Math.min(3, measured.length) }, async () => {
     for (const [index, pkg] of pending) {
       const stats = `${out}/branches-${index}.json`;
       if (!pkg.production) {
