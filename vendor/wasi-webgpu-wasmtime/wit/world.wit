@@ -1,0 +1,6 @@
+// Not bound by bindgen! directly; the includes are the manifest that tells `wkg wit fetch` (wit-fetch.sh) what to vendor into wit/deps.
+package wasi-gfx-runtime:wasi-webgpu;
+
+world bindings {
+    include wasi:webgpu/imports@0.3.0-rc.2;
+}
