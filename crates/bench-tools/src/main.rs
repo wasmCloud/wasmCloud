@@ -1,7 +1,8 @@
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 #![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
-//! Internal CLI for processing wasmCloud bench output (criterion, gungraun
-//! and the k6 load tests in `scripts/k6bench/`).
+//! Internal CLI for processing wasmCloud bench output (criterion, gungraun,
+//! the k6 load tests in `scripts/k6bench/` and the GPU benches in
+//! `scripts/gpubench/`).
 //!
 //! Run via `cargo run -p bench-tools -- <subcommand>` from CI or from any
 //! script in `scripts/bench/`. The output schemas match what the trend
@@ -13,6 +14,7 @@ use clap::{Parser, Subcommand};
 mod callgrind;
 mod commands;
 mod criterion;
+mod gpu;
 mod k6;
 mod markdown;
 mod meta;
@@ -45,6 +47,10 @@ enum Cmd {
     /// Report, export or compare scripts/k6bench load-test runs.
     #[command(subcommand)]
     K6(commands::k6::Cmd),
+
+    /// Report or export scripts/gpubench runs.
+    #[command(subcommand)]
+    Gpu(commands::gpu::Cmd),
 }
 
 fn main() -> Result<()> {
@@ -55,5 +61,6 @@ fn main() -> Result<()> {
         Cmd::Delta(args) => commands::delta::run(args),
         Cmd::MemoryPressure(args) => commands::memory_pressure::run(args),
         Cmd::K6(cmd) => commands::k6::run(cmd),
+        Cmd::Gpu(cmd) => commands::gpu::run(cmd),
     }
 }

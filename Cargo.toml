@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
-exclude = ["fuzz"]
+exclude = ["fuzz", "vendor"]
 default-members = ["crates/wash"]
 members = [
+    "crates/bench-gpu",
     "crates/bench-scale",
     "crates/bench-tools",
     "crates/wash-runtime",
@@ -176,3 +177,8 @@ ignored = [
     "tonic",
     "tonic-prost",
 ]
+
+# wasi-webgpu-wasmtime's on_submitted_work_done never returns to the guest;
+# see vendor/wasi-webgpu-wasmtime/README.md. Remove once a fixed release ships.
+[patch.crates-io]
+wasi-webgpu-wasmtime = { path = "vendor/wasi-webgpu-wasmtime" }
