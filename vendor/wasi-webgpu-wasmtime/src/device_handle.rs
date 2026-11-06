@@ -55,6 +55,10 @@ impl DeviceHandle {
         }
     }
 
+    pub(crate) fn instance(&self) -> &Arc<Global> {
+        &self.instance
+    }
+
     pub(crate) fn device_id(&self) -> &DeviceId {
         &self.device
     }
@@ -232,13 +236,13 @@ pub(crate) fn aborted(message: &str) -> webgpu::MapAsyncError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::time::Duration;
 
     const TIMEOUT: Duration = Duration::from_secs(10);
 
-    fn noop_device() -> Arc<DeviceHandle> {
+    pub(crate) fn noop_device() -> Arc<DeviceHandle> {
         let instance = Arc::new(Global::new(
             "test",
             wgpu_types::InstanceDescriptor {
