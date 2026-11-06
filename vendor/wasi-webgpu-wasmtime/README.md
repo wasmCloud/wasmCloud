@@ -10,8 +10,8 @@ root lock.
 
 The fixes are the code of upstream
 [wasi-gfx/wasi-gfx-runtime#156](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/156)
-at 895488a, plus three commits stacked on it (`device-loss`, not yet
-proposed upstream). The only other change is that `WasiWebGpuCtx::table` is a
+at 895488a, plus the commits stacked on it in
+[wasi-gfx/wasi-gfx-runtime#158](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/158). The only other change is that `WasiWebGpuCtx::table` is a
 `wasmtime_wasi::ResourceTable`, as in 0.3.1.
 
 - #156: `on_submitted_work_done` never returned to the guest, and `map_async`
@@ -23,9 +23,10 @@ proposed upstream). The only other change is that `WasiWebGpuCtx::table` is a
   lost device panicked `GpuQueue.submit` and the error conversion. A loss now
   resolves `lost` and settles every waiting call, and `destroy()` aborts
   pending maps. A map on a buffer that is mapped or has a map pending
-  rejects without touching that map.
-- Wait timeout: work that outlives `WasiWebGpuOptions::wait_timeout` loses the
-  device. The shader keeps the GPU busy until it ends or the driver resets
+  rejects without touching that map, and reading the range of a buffer that
+  is not mapped returns `OperationError` instead of panicking.
+- Timeout: submitted work that outlives `WasiWebGpuOptions::wait_timeout`
+  loses the device, whether or not a call waits on it. The shader keeps the GPU busy until it ends or the driver resets
   it.
 - Busy queue drop: dropping a queue with work in flight blocked for about 6s
   and then panicked inside wgpu. A busy queue is now dropped from a thread

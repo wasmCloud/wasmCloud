@@ -272,3 +272,23 @@ fn cancelled_map_still_settles_its_buffer() {
         webgpu::GpuBufferMapState::Mapped
     );
 }
+
+#[test]
+fn reading_an_unmapped_range_is_an_operation_error() {
+    let (mut state, rep) = State::new(false);
+    let mut ctx = state.webgpu_ctx();
+    let read = ctx
+        .get_mapped_range_get_with_copy(Resource::new_borrow(rep), None, None)
+        .unwrap();
+    assert!(matches!(
+        read.unwrap_err().kind,
+        webgpu::GetMappedRangeErrorKind::OperationError
+    ));
+    let write = ctx
+        .get_mapped_range_set_with_copy(Resource::new_borrow(rep), vec![0; 16], None, None)
+        .unwrap();
+    assert!(matches!(
+        write.unwrap_err().kind,
+        webgpu::GetMappedRangeErrorKind::OperationError
+    ));
+}

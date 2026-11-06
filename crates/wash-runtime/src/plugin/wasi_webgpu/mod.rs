@@ -66,9 +66,9 @@ impl WebGpu {
         }
     }
 
-    /// Sets how long a call waits on GPU work before losing its device,
-    /// overriding `WASH_WEBGPU_WAIT_TIMEOUT_SECS`. `None` or zero waits for
-    /// as long as the work runs.
+    /// Sets how long submitted GPU work may run before its device is lost,
+    /// overriding `WASH_WEBGPU_WAIT_TIMEOUT_SECS`. `None` or zero lets work
+    /// run for as long as it takes.
     pub fn with_wait_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
         self.options.wait_timeout = timeout;
         self

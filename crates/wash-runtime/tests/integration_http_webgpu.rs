@@ -15,7 +15,7 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::time::timeout;
 
@@ -178,10 +178,10 @@ async fn test_http_webgpu_runaway_shader_loses_device() -> Result<()> {
     let webgpu = WebGpu::new(WebGpuBackend::All).with_wait_timeout(Some(wait));
     let (_host, addr) = start(webgpu).await?;
 
-    let started = Instant::now();
     // Seconds of GPU time, so the shader ends on its own after the test.
+    // The message shows the timeout cut the map short; the request limit
+    // bounds the rest, including device and shader setup.
     let body = get(addr, "/runaway/2000000000", Duration::from_secs(10)).await?;
-    let elapsed = started.elapsed();
 
     let mut lines = body.lines();
     assert_eq!(
@@ -195,7 +195,6 @@ async fn test_http_webgpu_runaway_shader_loses_device() -> Result<()> {
         "{body}"
     );
     assert_eq!(lines.next(), Some("after: ok"), "{body}");
-    assert!(elapsed < wait * 4, "took {elapsed:?}");
     Ok(())
 }
 
@@ -208,7 +207,8 @@ async fn test_http_webgpu_destroy_aborts_pending_map() -> Result<()> {
     let webgpu = WebGpu::new(WebGpuBackend::All).with_wait_timeout(Some(Duration::from_secs(5)));
     let (_host, addr) = start(webgpu).await?;
 
-    let started = Instant::now();
+    // Only `destroy` aborts the map this way; the 5s timeout would report
+    // an OperationError instead.
     let body = get(
         addr,
         "/destroy-during-map/2000000000",
@@ -216,10 +216,5 @@ async fn test_http_webgpu_destroy_aborts_pending_map() -> Result<()> {
     )
     .await?;
     assert_eq!(body, "map: AbortError: device destroyed");
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "took {:?}",
-        started.elapsed()
-    );
     Ok(())
 }
