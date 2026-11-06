@@ -36,6 +36,7 @@
 //! cargo bench -p wash-runtime --bench scale_density                # both
 //! cargo bench -p wash-runtime --bench scale_density -- warm         # one
 //! cargo bench -p wash-runtime --bench scale_density -- scale-to-zero
+//! cargo xtask scale-density density     # a preset; see scale_density.md
 //! ```
 //!
 //! | Variable | Meaning | Default |
@@ -52,6 +53,7 @@
 //! | `WASH_SCALE_START_CONCURRENCY` | concurrent starts | available parallelism |
 //! | `WASH_SCALE_SAMPLE` | requests per step, spread across the set | `200` |
 //! | `WASH_SCALE_MAX_MEMORIES` | pool linear memories, the count that sizes the pool (`WASH_SCALE_CORE_INSTANCES` is an older name for it) | what the runtime derives from address space and `vm.max_map_count` |
+//! | `WASH_SCALE_MAX_MEMORIES_CAP` | the most memories a derived count may reach; small slots otherwise derive millions from address space | none |
 //! | `WASH_SCALE_FIXTURE` | `p3` or `p2` HTTP handler | `p3` |
 //! | `WASH_SCALE_CPUS` | cores the host may use; a list (`1,2,4`) runs each flavour at each | all |
 //! | `WASH_SCALE_REPORT_JSON` | also write every flavour's results as JSON here | unset |
@@ -929,6 +931,31 @@ mod tests {
             "a child is told its reservation in bytes"
         );
         assert!(settings(Some("default,lots"), None).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_cap_bounds_only_a_derived_pool_count() -> Result<()> {
+        let settings = |max: Option<&str>, cap: Option<&str>| {
+            Settings::from_values(|key| match key {
+                "WASH_SCALE_MEMORY_LIMIT" | "WASH_SCALE_GUEST_MEMORY" => Some("1GiB".into()),
+                MEMORY_RESERVATION => Some("2MiB".into()),
+                "WASH_SCALE_MEMORY_GUARD" => Some("0".into()),
+                "WASH_SCALE_MAX_MEMORIES" => max.map(Into::into),
+                MAX_MEMORIES_CAP => cap.map(Into::into),
+                _ => None,
+            })
+        };
+        let derived = settings(None, None)?.max_memories;
+        let capped = settings(None, Some("1500"))?.max_memories;
+        assert_eq!(capped, derived.min(1500));
+        assert_eq!(
+            settings(None, Some("4294967296"))?.max_memories,
+            derived,
+            "a cap past u32 leaves the derived count"
+        );
+        assert_eq!(settings(Some("5000"), Some("1500"))?.max_memories, 5000);
+        assert!(settings(None, Some("0")).is_err());
         Ok(())
     }
 

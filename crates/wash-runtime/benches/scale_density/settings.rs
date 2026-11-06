@@ -29,6 +29,9 @@ pub(super) const GUEST_MEMORY_MODE: &str = "WASH_SCALE_GUEST_MEMORY_MODE";
 /// `default` is wasmtime's own layout.
 pub(super) const MEMORY_RESERVATION: &str = "WASH_SCALE_MEMORY_RESERVATION";
 
+/// The most linear memories a derived pool count may reach.
+pub(super) const MAX_MEMORIES_CAP: &str = "WASH_SCALE_MAX_MEMORIES_CAP";
+
 /// What a run was told, from the environment.
 #[derive(Debug, Clone)]
 pub(super) struct Settings {
@@ -166,12 +169,22 @@ impl Settings {
             Some(n) => u32::try_from(n).context("WASH_SCALE_MAX_MEMORIES")?,
             None => match number("WASH_SCALE_CORE_INSTANCES")? {
                 Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-                None => match memory_layout {
-                    Some(layout) => host_memory::derive_max_memories_with(
-                        host_memory::MaxMemoriesDerivation::default().with_memory_layout(layout),
-                    ),
-                    None => host_memory::derive_max_memories(),
-                },
+                None => {
+                    let derived = match memory_layout {
+                        Some(layout) => host_memory::derive_max_memories_with(
+                            host_memory::MaxMemoriesDerivation::default()
+                                .with_memory_layout(layout),
+                        ),
+                        None => host_memory::derive_max_memories(),
+                    };
+                    // Where address space binds, small slots derive millions;
+                    // a cap keeps the pool's per-slot bookkeeping in proportion.
+                    match number(MAX_MEMORIES_CAP)? {
+                        None => derived,
+                        Some(0) => bail!("{MAX_MEMORIES_CAP} must be at least 1"),
+                        Some(cap) => derived.min(u32::try_from(cap).unwrap_or(u32::MAX)),
+                    }
+                }
             },
         };
         let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
