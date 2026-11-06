@@ -722,9 +722,15 @@ under real Linux cgroup v2 limits,
 with copy-on-write (CoW) both enabled and disabled.
 It is a pass/fail diagnostic, not a trend benchmark:
 
-- Most admission counts follow from the budgets alone
-  (`G / declared bytes` in `enforce`, `I / min(declared, 2 MiB)` in `growth`).
-  The bench checks that the runtime's accounting matches them exactly.
+- Most admission counts follow from the budgets alone.
+  Per store, `enforce` charges all declared bytes to `G`.
+  `growth` leaves `min(declared, 2 MiB)` per memory uncharged against `I`
+  and charges the rest to `G`, so the bound is the smaller of the two quotients:
+  `I / 2 MiB` for a sparse 2 MiB memory, but `G / 6 MiB` for an 8 MiB one.
+- The bench records that bound with every case;
+  summaries show `admitted / budget`.
+  It checks that the reservations match the stores it admitted,
+  not that admission reached the bound.
 - What only a container shows is where the process guard,
   CoW, and transparent huge pages (THP) stop admission earlier,
   whether late writes OOM the container,
@@ -760,7 +766,9 @@ The engine uses the runtime's budget defaults
 (`G = 75%` of the limit, `I = 4 × G`, the process guard at 90%)
 unless `--guest-memory-mib` or `--initial-cap-mib` overrides them.
 Pool settings are not production defaults:
-a 64 MiB slot per memory and 8192 memories, so `4 × G` of 1 MiB memories fits the pool.
+a 64 MiB heap ceiling per memory and 8192 memories, so `4 × G` of 1 MiB memories fits the pool.
+Each slot still reserves wasmtime's default address space plus guard.
+The bench refuses a case whose budgets would admit more memories than the pool holds.
 Fuel is off, and the build uses `--no-default-features`.
 
 Admission runs without pauses, as a burst of real starts would.
@@ -833,7 +841,8 @@ A case passes as either of these:
   with exit 137, after the `ready` sample and before `touched`.
   This is the overcommit risk the test demonstrates.
   The writes must also be unable to fit:
-  cgroup usage at `ready` plus the admitted stores' declared bytes exceeds the limit.
+  cgroup usage at `ready`, plus the declared bytes that admission had not already written,
+  exceeds the limit.
   That counts host overhead without accepting an OOM a small initial cap should prevent.
 
 Anything else fails the run:
@@ -844,7 +853,10 @@ Anything else fails the run:
 - a timeout, or a failed accounting check
 - a `dirty` case that completed although its full writes exceed the limit
 
-A failed case's report carries the last lines of the bench's stderr.
+A failed case's report carries the last lines of the bench's stderr,
+including the runtime's own guard and budget warnings.
+A runner error, such as a stalled Docker command, fails that case and the run continues;
+only SIGINT or SIGTERM stops the remaining cases.
 A guard or eager allocation can bound admission early enough that `growth` survives,
 so OOM is not required on every kernel.
 This test demonstrates overcommit behavior;
