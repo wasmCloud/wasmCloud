@@ -21,6 +21,8 @@ pub const REPORT_ENV: &str = "WASH_PRESSURE_REPORT";
 pub const MEMORY_MIB: RangeInclusive<u64> = 384..=2048;
 /// Initial memory sizes the `dirty` shape may request, in MiB.
 pub const DIRTY_MIB: RangeInclusive<u64> = 1..=2;
+/// Bytes the bench's `warm` export writes at the start of each memory during admission.
+pub const WARM_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -161,7 +163,11 @@ pub struct Host {
     pub cpus: Option<f64>,
     pub memory_limit: u64,
     pub guest_limit: u64,
-    pub initial_limit: u64,
+    /// The cap on uncharged initial memory; `None` in `enforce`, which ignores it.
+    pub initial_limit: Option<u64>,
+    /// Stores the budgets alone admit. Fewer at `ready` means the guard,
+    /// the pool, or an unrelated failure stopped admission first.
+    pub budget_stores: u64,
     pub process_limit: u64,
 }
 
@@ -214,6 +220,15 @@ impl Report {
     /// Stores alive when admission stopped.
     pub fn admitted(&self) -> usize {
         self.sample(Phase::Ready).map_or(0, |s| s.stores)
+    }
+
+    /// `admitted / budget bound`; fewer than the bound means something
+    /// other than the budgets stopped admission.
+    pub fn admissions(&self) -> String {
+        match &self.host {
+            Some(host) => format!("{} / {}", self.admitted(), host.budget_stores),
+            None => self.admitted().to_string(),
+        }
     }
 
     /// Stores that finished their writes.
@@ -321,8 +336,11 @@ pub fn classify(report: &Report, exit: &Exit) -> Result<Outcome, String> {
         {
             return Err("unexpected OOM (admission or control case)".into());
         }
-        // Writes add at most `writes` to what the cgroup already held.
-        if ready.cgroup_current.unwrap_or(0) + writes <= host.memory_limit {
+        // Late writes add at most the pages `warm` has not already made resident.
+        let (memories, _, _) = case.dimensions();
+        let warmed = ready.stores as u64 * memories * WARM_BYTES;
+        let late = writes.saturating_sub(warmed);
+        if ready.cgroup_current.unwrap_or(0) + late <= host.memory_limit {
             return Err("late writes fit the cgroup limit but still OOMed".into());
         }
         return Ok(Outcome::ExpectedOom);
@@ -372,16 +390,16 @@ pub fn print_sample(header: bool, sample: &Sample) {
 /// One line per case, on stderr.
 pub fn print_summary(reports: &[Report]) {
     eprintln!(
-        "{:<40} {:>24} {:>9} {:>9} {:>10} {:>10} {:>10}",
-        "case", "outcome", "admitted", "completed", "charged", "initial", "peak"
+        "{:<40} {:>24} {:>11} {:>9} {:>10} {:>10} {:>10}",
+        "case", "outcome", "adm/budget", "completed", "charged", "initial", "peak"
     );
     for report in reports {
         let ready = report.sample(Phase::Ready);
         eprintln!(
-            "{:<40} {:>24} {:>9} {:>9} {:>10} {:>10} {:>10}",
+            "{:<40} {:>24} {:>11} {:>9} {:>10} {:>10} {:>10}",
             report.case.label(),
             report.outcome.map_or("-", Outcome::name),
-            report.admitted(),
+            report.admissions(),
             report.completed(),
             or_dash(ready.map(|s| s.guest_memory_bytes)),
             or_dash(ready.map(|s| s.initial_memory_bytes)),
@@ -434,7 +452,8 @@ mod tests {
             cpus: Some(2.0),
             memory_limit: 768 * MIB,
             guest_limit: 576 * MIB,
-            initial_limit: 2304 * MIB,
+            initial_limit: Some(2304 * MIB),
+            budget_stores: 2304,
             process_limit: 691 * MIB,
         });
         report.samples = vec![sample(Phase::Baseline, 0), sample(Phase::Ready, 2304)];
@@ -471,7 +490,7 @@ mod tests {
     fn oom_near_the_limit_is_still_expected() {
         // Host overhead can push a just-fitting write set over the limit.
         let (mut report, exit) = oom();
-        report.samples = vec![sample(Phase::Baseline, 0), sample(Phase::Ready, 700)];
+        report.samples = vec![sample(Phase::Baseline, 0), sample(Phase::Ready, 720)];
         assert_eq!(classify(&report, &exit), Ok(Outcome::ExpectedOom));
     }
 

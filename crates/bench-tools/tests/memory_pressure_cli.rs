@@ -106,7 +106,8 @@ impl Fixture {
             cpus: Some(2.0),
             memory_limit: 768 * MIB,
             guest_limit: 576 * MIB,
-            initial_limit: 2304 * MIB,
+            initial_limit: Some(2304 * MIB),
+            budget_stores: 2304,
             process_limit: 691 * MIB,
         });
         report.stop = "fixture admission refusal".into();
@@ -323,7 +324,7 @@ fn completed_case_applies_limits_cleans_up_and_feeds_shared_reports() -> Result<
         ("jsonl", r#""metric":"admitted_stores","value":2304.0"#),
         (
             "summary",
-            "| 768m-sparse-growth-cow-on-1 | completed | 2304 | 2304 |",
+            "| 768m-sparse-growth-cow-on-1 | completed | 2304 / 2304 | 2304 |",
         ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
