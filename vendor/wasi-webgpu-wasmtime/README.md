@@ -17,9 +17,11 @@ root lock.
 - Dropping a queue with work still in flight blocked for about 6s and then
   panicked inside wgpu.
 
-Each device now has one poller thread, started while a call waits on the
-device or a released queue waits for it to go idle; it polls only that
-device. Work that outlives `WasiWebGpuOptions::wait_timeout` loses the
+Each device now has one poller thread, started while a GPU callback is
+pending or a released queue waits for it to go idle; it polls only that
+device. Canceling a guest wait leaves polling active until its callback
+finishes or the device is abandoned. Duplicate maps preserve the buffer's
+existing map state. Work that outlives `WasiWebGpuOptions::wait_timeout` loses the
 device, which resolves `GpuDevice.lost`, fails pending maps and makes the
 device ignore new submissions. The shader keeps the GPU busy until it ends or
 the driver resets it. A busy queue is dropped once its device is idle; if a

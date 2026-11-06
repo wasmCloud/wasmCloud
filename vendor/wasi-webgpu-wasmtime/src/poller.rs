@@ -1,4 +1,4 @@
-// One thread per device polls wgpu for every call waiting on that device.
+// One thread per device polls wgpu for pending callbacks.
 
 use std::{
     collections::BTreeMap,
@@ -29,7 +29,7 @@ const ABANDON_AFTER: Duration = Duration::from_secs(60);
 
 type Release = Box<dyn FnOnce(&Global) + Send>;
 
-/// Polls one device while calls wait on it or a release waits for it to go
+/// Polls one device while callbacks are pending or a release waits for it to go
 /// idle, and loses the device when either outlives its timeout.
 pub(crate) struct Poller {
     pub(crate) lost: Arc<DeviceLost>,
@@ -72,7 +72,10 @@ impl Poller {
         self.start(&mut state, instance, &device);
         Waiter {
             poller: Arc::clone(self),
-            id,
+            registration: Some(Registration {
+                poller: Arc::clone(self),
+                id,
+            }),
             instance: Arc::clone(instance),
             device: Some(device),
         }
@@ -162,6 +165,7 @@ impl Poller {
             let mut state = self.state.lock().unwrap();
             if !idle && lost_at.is_some_and(|at| now - at >= ABANDON_AFTER) {
                 state.abandoned = true;
+                state.waiters.clear();
                 state.releases.clear();
                 std::mem::forget(Arc::clone(&instance));
             }
@@ -192,10 +196,22 @@ impl Poller {
     }
 }
 
-/// A call waiting on a device. Dropping it stops the wait.
-pub(crate) struct Waiter {
+/// Keeps polling until the callback runs or is dropped.
+struct Registration {
     poller: Arc<Poller>,
     id: u64,
+}
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        self.poller.finish(self.id);
+    }
+}
+
+/// A call waiting on a device. Its callback owns the poll registration.
+pub(crate) struct Waiter {
+    poller: Arc<Poller>,
+    registration: Option<Registration>,
     instance: Arc<Global>,
     device: Option<Arc<DeviceId>>,
 }
@@ -203,10 +219,12 @@ pub(crate) struct Waiter {
 impl Waiter {
     /// For the wgpu callback that ends this wait: it stops the deadline before
     /// the callback's result can be seen as late.
-    pub(crate) fn on_done(&self) -> impl FnOnce() + Send + 'static {
-        let poller = Arc::clone(&self.poller);
-        let id = self.id;
-        move || poller.finish(id)
+    pub(crate) fn on_done(&mut self) -> impl FnOnce() + Send + 'static {
+        let registration = self
+            .registration
+            .take()
+            .expect("callback already registered");
+        move || drop(registration)
     }
 
     /// Waits for `result`, or for the device's loss. `Ok(None)` means the
@@ -228,7 +246,7 @@ impl Waiter {
 
 impl Drop for Waiter {
     fn drop(&mut self) {
-        self.poller.finish(self.id);
+        drop(self.registration.take());
         if let Some(device) = self.device.take() {
             release_device(&self.instance, device);
         }

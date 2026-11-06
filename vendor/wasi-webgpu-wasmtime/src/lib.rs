@@ -126,3 +126,6 @@ struct HasWasiWebGpuCtx;
 impl HasData for HasWasiWebGpuCtx {
     type Data<'a> = WasiWebGpuCtx<'a>;
 }
+
+#[cfg(test)]
+mod tests;

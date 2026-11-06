@@ -1136,7 +1136,7 @@ impl<T: Send> webgpu::HostGpuQueueWithStore<T> for crate::HasWasiWebGpuCtx {
                 ))
             })?;
 
-        let waiter = poller.waiter(&instance, device);
+        let mut waiter = poller.waiter(&instance, device);
         let done = waiter.on_done();
         let (send, result) = oneshot::channel();
         instance.queue_on_submitted_work_done(
@@ -2671,21 +2671,31 @@ impl<T: Send> webgpu::HostGpuBufferWithStore<T> for crate::HasWasiWebGpuCtx {
         // https://www.w3.org/TR/webgpu/#gpubuffer
         let offset = offset.unwrap_or(0);
 
-        let (instance, buffer_id, device, poller, map_state) =
-            accessor.with(|mut access| -> wasmtime::Result<_> {
-                let ctx = access.get();
-                let buffer = ctx.table.get(&buffer)?;
-                buffer.set_map_state(webgpu::GpuBufferMapState::Pending);
-                Ok((
-                    Arc::clone(ctx.instance),
-                    buffer.buffer_id,
-                    Arc::clone(&buffer.device),
-                    Arc::clone(&buffer.poller),
-                    Arc::clone(&buffer.map_state),
-                ))
-            })?;
+        let mapping = accessor.with(|mut access| -> wasmtime::Result<_> {
+            let ctx = access.get();
+            let buffer = ctx.table.get(&buffer)?;
+            let mut state = buffer.map_state.lock().unwrap();
+            if *state != webgpu::GpuBufferMapState::Unmapped {
+                return Ok(Err(webgpu::MapAsyncError {
+                    kind: webgpu::MapAsyncErrorKind::OperationError,
+                    message: "buffer is already mapped or has a pending map".into(),
+                }));
+            }
+            *state = webgpu::GpuBufferMapState::Pending;
+            Ok(Ok((
+                Arc::clone(ctx.instance),
+                buffer.buffer_id,
+                Arc::clone(&buffer.device),
+                Arc::clone(&buffer.poller),
+                Arc::clone(&buffer.map_state),
+            )))
+        })?;
+        let (instance, buffer_id, device, poller, map_state) = match mapping {
+            Ok(mapping) => mapping,
+            Err(err) => return Ok(Err(err)),
+        };
 
-        let waiter = poller.waiter(&instance, device);
+        let mut waiter = poller.waiter(&instance, device);
         let done = waiter.on_done();
         let (send, result) = oneshot::channel();
         let state = Arc::clone(&map_state);
