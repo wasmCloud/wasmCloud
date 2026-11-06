@@ -43,6 +43,9 @@ pub fn run(args: Args) -> Result<()> {
     if crate::callgrind::is_instruction_bench(&args.bench) {
         return render_gungraun_stub(&mut out, &args.bench, &meta, &target_dir, &run_id);
     }
+    if let Some(reports) = crate::commands::jsonl::pressure_reports(&target_dir, &args.bench)? {
+        return render_pressure(&mut out, &args.bench, &meta, &reports);
+    }
     if let Some(reports) = crate::commands::jsonl::density_reports(&target_dir, &args.bench)? {
         return render_density(&mut out, &args.bench, &meta, &reports);
     }
@@ -203,14 +206,6 @@ fn render_density<W: Write>(
     )?;
     writeln!(out, "|---|---|---:|---|---|---|")?;
     for report in reports {
-        let stop = report
-            .pressure
-            .as_ref()
-            .and_then(|p| p.outcome)
-            .map_or_else(
-                || report.stop.clone(),
-                |outcome| format!("{}; {}", outcome.name(), report.stop),
-            );
         for metric in report.metrics() {
             writeln!(
                 out,
@@ -220,9 +215,55 @@ fn render_density<W: Write>(
                 metric.value,
                 metric.unit,
                 metric.better.as_str(),
-                stop,
+                report.stop,
             )?;
         }
+    }
+    Ok(())
+}
+
+fn render_pressure<W: Write>(
+    out: &mut W,
+    bench: &str,
+    meta: &Meta,
+    reports: &[bench_tools::pressure::Report],
+) -> Result<()> {
+    use bench_tools::density::render_bytes;
+    use bench_tools::pressure::Phase;
+    let bytes = |n: Option<u64>| n.map_or_else(|| "-".into(), render_bytes);
+    writeln!(out, "## bench: `{bench}` (pressure)")?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "_commit_ `{}` &middot; _ref_ `{}` &middot; _host_ `{}` &middot; _cpus_ {}",
+        meta.short_sha, meta.ref_name, meta.host, meta.cpus_online,
+    )?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "| case | outcome | admitted | completed | charged | uncharged | cgroup peak | THP | stopped by |"
+    )?;
+    writeln!(out, "|---|---|---:|---:|---:|---:|---:|---|---|")?;
+    for report in reports {
+        let ready = report.sample(Phase::Ready);
+        let thp = report
+            .host
+            .as_ref()
+            .and_then(|h| h.transparent_hugepage.as_deref())
+            .unwrap_or("-");
+        writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            report.case.label(),
+            report.outcome.map_or("-", |o| o.name()),
+            report.admitted(),
+            report.completed(),
+            bytes(ready.map(|s| s.guest_memory_bytes)),
+            bytes(ready.map(|s| s.initial_memory_bytes)),
+            bytes(report.cgroup_peak()),
+            thp,
+            report.stop.replace('|', "\\|"),
+        )?;
     }
     Ok(())
 }

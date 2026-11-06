@@ -3,25 +3,34 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, ensure};
-use bench_tools::density::pressure::{Case, Exit, Outcome, Shape, classify};
-use bench_tools::density::{Report, print_comparison};
+use bench_tools::pressure::{
+    CASE_ENV, Case, DIRTY_MIB, Exit, MEMORY_MIB, Mode, Outcome, REPORT_ENV, Report, Shape,
+    classify, print_summary,
+};
 use serde_json::{Value, json};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Cow {
+    On,
+    Off,
+}
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    #[arg(long, num_args = 1.., default_values = ["768"], value_parser = clap::value_parser!(u64).range(384..=2048))]
+    #[arg(long, num_args = 1.., default_values = ["768"], value_parser = clap::value_parser!(u64).range(MEMORY_MIB))]
     memory_mib: Vec<u64>,
     #[arg(long, num_args = 1.., value_enum, default_values = ["sparse", "data-heavy", "multiple", "dirty"])]
     shapes: Vec<Shape>,
-    #[arg(long, num_args = 1.., value_parser = ["enforce", "growth"], default_values = ["enforce", "growth"])]
-    modes: Vec<String>,
-    #[arg(long, num_args = 1.., value_parser = ["on", "off"], default_values = ["on", "off"])]
-    cow: Vec<String>,
-    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..=2))]
+    #[arg(long, num_args = 1.., value_enum, default_values = ["enforce", "growth"])]
+    modes: Vec<Mode>,
+    #[arg(long, num_args = 1.., value_enum, default_values = ["on", "off"])]
+    cow: Vec<Cow>,
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u64).range(DIRTY_MIB))]
     dirty_mib: u64,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     initial_cap_mib: Option<u64>,
@@ -38,24 +47,35 @@ pub struct Args {
     target_volume: String,
     #[arg(long, default_value = "wash-pressure-registry")]
     registry_volume: String,
-    /// Shared benchmark target directory; results go under density/.
+    /// Shared benchmark target directory; results go under pressure/.
     #[arg(long, env = "CARGO_TARGET_DIR", default_value = "target")]
     target_dir: PathBuf,
 }
 
-struct Commands<'a> {
+/// Set once by SIGINT or SIGTERM; every later check sees it.
+#[derive(Clone)]
+struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    fn check(&self) -> Result<()> {
+        ensure!(!self.0.load(Ordering::Relaxed), "pressure run interrupted");
+        Ok(())
+    }
+}
+
+struct Commands {
     directory: PathBuf,
-    interrupted: &'a Receiver<()>,
+    cancel: Cancel,
     timeout: Duration,
 }
 
-impl<'a> Commands<'a> {
-    fn new(directory: &Path, interrupted: &'a Receiver<()>, timeout: Duration) -> Result<Self> {
+impl Commands {
+    fn new(directory: &Path, cancel: &Cancel, timeout: Duration) -> Result<Self> {
         let directory = directory.join("commands");
         fs::create_dir(&directory)?;
         Ok(Self {
             directory,
-            interrupted,
+            cancel: cancel.clone(),
             timeout,
         })
     }
@@ -67,10 +87,7 @@ impl<'a> Commands<'a> {
     }
 
     fn bytes(&self, name: &str, command: &mut Command) -> Result<Vec<u8>> {
-        ensure!(
-            self.interrupted.try_recv().is_err(),
-            "pressure run interrupted"
-        );
+        self.cancel.check()?;
         let stdout = self.directory.join(format!("{name}.stdout.log"));
         let stderr = self.directory.join(format!("{name}.stderr.log"));
         let mut process = Process(
@@ -80,8 +97,7 @@ impl<'a> Commands<'a> {
                 .stderr(File::create(&stderr)?)
                 .spawn()?,
         );
-        let Completion::Exited(status) =
-            process.wait(Some(self.interrupted), Some(self.timeout))?
+        let Completion::Exited(status) = process.wait(Some(&self.cancel), Some(self.timeout))?
         else {
             anyhow::bail!("{name} timed out");
         };
@@ -102,7 +118,7 @@ fn build(
     args: &Args,
     root: &Path,
     artifacts: &Path,
-    commands: &Commands<'_>,
+    commands: &Commands,
 ) -> Result<(String, String)> {
     let toolchain = fs::read_to_string(root.join("rust-toolchain.toml"))?;
     let version = toolchain
@@ -111,7 +127,6 @@ fn build(
         .context("missing pinned Rust channel")?;
     let image = format!("rust:{version}-bookworm");
     eprintln!("building memory_pressure in {image}; the first build can take several minutes");
-    let cid = artifacts.join("build.cid");
     let container = Container::new(
         format!(
             "wash-pressure-build-{}-{}",
@@ -129,7 +144,6 @@ fn build(
                 "run",
                 "--name",
                 &container.name,
-                &format!("--cidfile={}", cid.display()),
                 "--label=wasmcloud.bench=memory_pressure",
                 "--memory=8g",
                 "--memory-swap=8g",
@@ -161,7 +175,7 @@ fn build(
             .stdout(File::create(artifacts.join("build.jsonl"))?)
             .spawn()?,
     );
-    let Completion::Exited(status) = process.wait(Some(commands.interrupted), None)? else {
+    let Completion::Exited(status) = process.wait(Some(&commands.cancel), None)? else {
         anyhow::bail!("build timed out");
     };
     ensure!(status.success(), "pressure benchmark build failed");
@@ -188,6 +202,7 @@ fn build(
     ))
 }
 
+/// Removes the named container when dropped, even after cancellation.
 struct Container {
     name: String,
     timeout: Duration,
@@ -204,7 +219,6 @@ impl Container {
 
 impl Drop for Container {
     fn drop(&mut self) {
-        // Cleanup ignores cancellation but has its own deadline.
         let result = (|| -> Result<()> {
             let mut process = Process(
                 Command::new("docker")
@@ -234,20 +248,16 @@ enum Completion {
     TimedOut,
 }
 
+/// Kills and reaps the child when dropped.
 struct Process(Child);
 
 impl Process {
-    fn wait(
-        &mut self,
-        interrupted: Option<&Receiver<()>>,
-        timeout: Option<Duration>,
-    ) -> Result<Completion> {
+    fn wait(&mut self, cancel: Option<&Cancel>, timeout: Option<Duration>) -> Result<Completion> {
         let started = Instant::now();
         loop {
-            ensure!(
-                interrupted.is_none_or(|receiver| receiver.try_recv().is_err()),
-                "pressure run interrupted"
-            );
+            if let Some(cancel) = cancel {
+                cancel.check()?;
+            }
             if let Some(status) = self.0.try_wait()? {
                 return Ok(Completion::Exited(status));
             }
@@ -266,22 +276,27 @@ impl Drop for Process {
     }
 }
 
+/// The last lines of a log, for a failure message.
+fn tail(path: &Path, lines: usize) -> String {
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let all: Vec<&str> = text.lines().collect();
+    all.get(all.len().saturating_sub(lines)..)
+        .unwrap_or_default()
+        .join(" | ")
+}
+
 fn run_case(
     args: &Args,
     artifacts: &Path,
     image: &str,
     binary: &str,
     case: &Case,
-    interrupted: &Receiver<()>,
-) -> Result<(Report, bool)> {
+    cancel: &Cancel,
+) -> Result<Report> {
     let label = case.label();
     let directory = artifacts.join(&label);
     fs::create_dir(&directory)?;
-    let commands = Commands::new(
-        &directory,
-        interrupted,
-        Duration::from_secs(args.docker_timeout),
-    )?;
+    let commands = Commands::new(&directory, cancel, Duration::from_secs(args.docker_timeout))?;
     let name = format!(
         "wash-pressure-{}-{}-{label}",
         std::process::id(),
@@ -308,21 +323,12 @@ fn run_case(
         ),
         "--mount",
         &format!("type=bind,src={},dst=/results", directory.display()),
-        "--env=WASH_PRESSURE_RUN=1",
-        "--env=WASH_PRESSURE_REPORT=/results/report.json",
-        &format!("--env=WASH_PRESSURE_MODE={}", case.mode),
-        &format!("--env=WASH_PRESSURE_COW={}", case.cow),
-        &format!("--env=WASH_PRESSURE_SHAPE={}", case.shape.name()),
-        &format!("--env=WASH_PRESSURE_INITIAL={}MiB", case.dirty_mib),
-        &format!("--env=WASH_PRESSURE_LABEL={label}"),
+        &format!("--env={REPORT_ENV}=/results/report.json"),
+        &format!("--env={CASE_ENV}={}", serde_json::to_string(case)?),
+        image,
+        binary,
+        "--bench",
     ]);
-    if let Some(cap) = case.initial_cap_mib {
-        create.arg(format!("--env=WASH_PRESSURE_INITIAL_CAP={cap}MiB"));
-    }
-    if let Some(cap) = case.guest_memory_mib {
-        create.arg(format!("--env=WASH_PRESSURE_GUEST_CAP={cap}MiB"));
-    }
-    create.args([image, binary, "--bench"]);
     commands.output("create", &mut create)?;
     let mut attached = Process(
         Command::new("docker")
@@ -332,14 +338,14 @@ fn run_case(
             .spawn()?,
     );
     let timed_out = matches!(
-        attached.wait(Some(interrupted), Some(Duration::from_secs(args.timeout)))?,
+        attached.wait(Some(cancel), Some(Duration::from_secs(args.timeout)))?,
         Completion::TimedOut
     );
     if timed_out {
         commands.docker("kill", &["kill", &container.name])?;
         ensure!(
             matches!(
-                attached.wait(Some(interrupted), Some(commands.timeout))?,
+                attached.wait(Some(cancel), Some(commands.timeout))?,
                 Completion::Exited(_)
             ),
             "Docker attachment did not exit after kill"
@@ -347,68 +353,52 @@ fn run_case(
     }
     let inspected: Value =
         serde_json::from_str(&commands.docker("inspect", &["inspect", &container.name])?)?;
-    let state = inspected
-        .pointer("/0/State")
-        .context("missing Docker state")?;
     fs::write(
         directory.join("docker.json"),
         serde_json::to_vec_pretty(&inspected)?,
     )?;
-    fs::write(
-        directory.join("case.json"),
-        serde_json::to_vec_pretty(case)?,
+    let exit: Exit = serde_json::from_value(
+        inspected
+            .pointer("/0/State")
+            .context("missing Docker state")?
+            .clone(),
     )?;
-    let exit: Exit = serde_json::from_value(state.clone())?;
-    let mut report = if directory.join("report.json").exists() {
-        let reports: Vec<Report> =
-            serde_json::from_slice(&fs::read(directory.join("report.json"))?)?;
-        reports
-            .into_iter()
-            .next()
-            .context("empty pressure report")?
-    } else {
-        Report {
-            bench: "memory_pressure".into(),
-            label: label.clone(),
-            stop: "no report before exit".into(),
-            ..Default::default()
-        }
+    let mut report = match fs::read(directory.join("report.json")) {
+        Ok(bytes) => serde_json::from_slice::<Report>(&bytes)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Report::new(case.clone()),
+        Err(error) => return Err(error.into()),
     };
+    ensure!(&report.case == case, "report describes a different case");
     let result = if timed_out {
         Err("timed out".into())
     } else {
-        classify(case, &exit, &report)
+        classify(&report, &exit)
     };
-    let passed = result.is_ok();
-    let outcome = match result {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            report.stop = format!("{error}; admission: {}", report.stop);
-            for step in &mut report.steps {
-                step.clean = false;
-            }
-            Outcome::Failed
-        }
-    };
-    if let Some(config) = &mut report.pressure {
-        config.outcome = Some(outcome);
-    }
+    let outcome = result.unwrap_or_else(|error| {
+        let stderr = tail(&directory.join("stderr.log"), 3);
+        report.stop = format!("{error}; admission: {}; stderr: {stderr}", report.stop);
+        Outcome::Failed
+    });
+    report.outcome = Some(outcome);
     eprintln!(
         "{} {label}: {}; admitted={}",
-        if passed { "PASS" } else { "FAIL" },
+        if outcome == Outcome::Failed {
+            "FAIL"
+        } else {
+            "PASS"
+        },
         outcome.name(),
-        report.achieved()
+        report.admitted()
     );
     fs::write(
         directory.join("validated.json"),
-        serde_json::to_vec_pretty(&[&report])?,
+        serde_json::to_vec_pretty(&report)?,
     )?;
-    print_comparison(std::slice::from_ref(&report));
-    Ok((report, passed))
+    Ok(report)
 }
 
 pub fn run(args: Args) -> Result<()> {
-    let (cancel, interrupted) = mpsc::channel();
+    let cancel = Cancel(Arc::new(AtomicBool::new(false)));
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -416,18 +406,20 @@ pub fn run(args: Args) -> Result<()> {
         let _entered = runtime.enter();
         termination()?
     };
-    std::thread::spawn(move || {
-        runtime.block_on(shutdown);
-        let _ = cancel.send(());
-    });
+    {
+        let cancel = Arc::clone(&cancel.0);
+        std::thread::spawn(move || {
+            runtime.block_on(shutdown);
+            cancel.store(true, Ordering::Relaxed);
+        });
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()?;
     fs::create_dir_all(&args.target_dir)?;
-    let target = args.target_dir.canonicalize()?;
-    let density = target.join("density");
-    fs::create_dir_all(&density)?;
-    let aggregate = density.join("memory_pressure.json");
+    let output = args.target_dir.canonicalize()?.join("pressure");
+    fs::create_dir_all(&output)?;
+    let aggregate = output.join("memory_pressure.json");
     match fs::remove_file(&aggregate) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -436,14 +428,10 @@ pub fn run(args: Args) -> Result<()> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
-    let artifacts = density.join(format!("memory_pressure-{stamp}"));
+    let artifacts = output.join(format!("memory_pressure-{stamp}"));
     fs::create_dir(&artifacts)?;
     eprintln!("pressure artifacts: {}", artifacts.display());
-    let commands = Commands::new(
-        &artifacts,
-        &interrupted,
-        Duration::from_secs(args.docker_timeout),
-    )?;
+    let commands = Commands::new(&artifacts, &cancel, Duration::from_secs(args.docker_timeout))?;
     let (image, binary) = build(&args, &root, &artifacts, &commands)?;
     fs::write(
         artifacts.join("source.patch"),
@@ -454,44 +442,49 @@ pub fn run(args: Args) -> Result<()> {
                 .current_dir(&root),
         )?,
     )?;
+    let git = |name, args: &[&str]| {
+        commands.output(name, Command::new("git").args(args).current_dir(&root))
+    };
     fs::write(
         artifacts.join("manifest.json"),
         serde_json::to_vec_pretty(&json!({
-            "revision": commands.output("git-revision", Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&root))?,
-            "dirty": !commands.output("git-status", Command::new("git").args(["status", "--porcelain"]).current_dir(&root))?.is_empty(),
+            "revision": git("git-revision", &["rev-parse", "HEAD"])?,
+            "dirty": !git("git-status", &["status", "--porcelain"])?.is_empty(),
             "image": image, "binary": binary,
             "build": {"cpus": 4, "memory_mib": 8192}, "measured": {"cpus": 2, "swap_mib": 0},
         }))?,
     )?;
     let mut reports = Vec::new();
-    let mut failed = 0;
-    for &memory_mib in &args.memory_mib {
-        for &shape in &args.shapes {
-            for repeat in 1..=args.repeats {
-                for cow in &args.cow {
-                    for mode in &args.modes {
+    // Repeats run outermost, so a drifting host spreads across every case.
+    for repeat in 1..=args.repeats {
+        for &memory_mib in &args.memory_mib {
+            for &shape in &args.shapes {
+                for &cow in &args.cow {
+                    for &mode in &args.modes {
                         let case = Case {
                             memory_mib,
                             shape,
-                            repeat: repeat as usize,
-                            cow: cow == "on",
-                            mode: mode.clone(),
+                            mode,
+                            cow: cow == Cow::On,
                             dirty_mib: args.dirty_mib,
                             guest_memory_mib: args.guest_memory_mib,
                             initial_cap_mib: args.initial_cap_mib,
+                            repeat,
                         };
-                        ensure!(interrupted.try_recv().is_err(), "pressure run interrupted");
-                        let (report, passed) =
-                            run_case(&args, &artifacts, &image, &binary, &case, &interrupted)?;
-                        failed += usize::from(!passed);
-                        reports.push(report);
+                        cancel.check()?;
+                        reports.push(run_case(&args, &artifacts, &image, &binary, &case, &cancel)?);
                         fs::write(&aggregate, serde_json::to_vec_pretty(&reports)?)?;
                     }
                 }
             }
         }
     }
-    ensure!(interrupted.try_recv().is_err(), "pressure run interrupted");
+    cancel.check()?;
+    print_summary(&reports);
+    let failed = reports
+        .iter()
+        .filter(|r| r.outcome == Some(Outcome::Failed))
+        .count();
     eprintln!(
         "{}/{} pressure cases passed",
         reports.len() - failed,

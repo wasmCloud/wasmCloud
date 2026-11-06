@@ -1,77 +1,57 @@
 //! Container pressure scenarios, run by `bench-tools memory-pressure`.
+//!
+//! Each sample after `baseline` is written only after the guest accounting
+//! it implies has been checked, so a missing sample means a failed check.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Barrier, Mutex};
-use std::time::Duration;
+use std::sync::Barrier;
 
 use anyhow::{Context as _, Result, ensure};
-use bench_tools::density::pressure::{Config, Phase, Sample, Shape};
-use bench_tools::density::{Report, Step, print_step};
+use bench_tools::pressure::{
+    CASE_ENV, Case, Host, MIB, Mode, Phase, REPORT_ENV, Report, Sample, print_sample,
+};
 use wash_runtime::engine::{
     Engine,
     ctx::{Ctx, SharedCtx},
-    guest_memory::{GuestMemoryMode, install_memory_limiter},
-    host_memory::{HostMemoryBudgets, detected_memory_limit, parse_bytes},
-    process_memory::{REFRESH_INTERVAL, process_footprint},
+    guest_memory::{FIRST_ALLOCATION_UNCHARGED, GuestMemoryMode, install_memory_limiter},
+    host_memory::{HostMemoryBudgets, detected_memory_limit},
+    process_memory::process_footprint,
 };
 use wasmtime::component::{Component, Linker, TypedFunc};
 
-const MIB: u64 = 1 << 20;
+/// Pool slot per memory. Each synthetic memory's maximum is 1024 pages,
+/// so this is the smallest slot that holds it.
+const HEAP_BYTES: u64 = 64 * MIB;
+/// Pool memories: room for `4 × G` of 1 MiB memories at the largest limit.
+const MAX_MEMORIES: u32 = 8192;
 
-struct Experiment {
-    engine: Engine,
-    report: Mutex<Report>,
+struct Recorder {
+    report: Report,
     path: PathBuf,
 }
 
-impl Experiment {
-    fn report(&self, phase: Phase, admitted: usize, stop: Option<&str>) -> Result<()> {
-        let budget = self.engine.guest_memory();
-        let guard = self
-            .engine
-            .process_memory()
-            .context("missing process guard")?;
+impl Recorder {
+    /// Append a sample and replace the report file atomically.
+    fn record(&mut self, engine: &Engine, phase: Phase, stores: usize) -> Result<()> {
+        let budget = engine.guest_memory();
+        let guard = engine.process_memory().context("missing process guard")?;
         let sample = Sample {
             phase,
+            stores,
+            footprint_bytes: process_footprint(),
+            guest_memory_bytes: budget.in_use(),
+            initial_memory_bytes: budget.initial_uncharged(),
+            cgroup_current: cgroup_bytes("memory.current").ok(),
+            cgroup_peak: cgroup_bytes("memory.peak").ok(),
             guest_refused: budget.refused(),
             initial_refused: budget.initial_refused(),
             process_refused: budget.process_refused(),
-            cgroup_current: cgroup_bytes("memory.current").ok(),
-            cgroup_peak: cgroup_bytes("memory.peak").ok(),
             process_over: guard.is_over(),
         };
-        let mut report = self
-            .report
-            .lock()
-            .map_err(|_| anyhow::anyhow!("pressure report poisoned"))?;
-        let refused = sample.guest_refused + sample.initial_refused + sample.process_refused;
-        let before = report
-            .steps
-            .last()
-            .and_then(|step| step.pressure.as_ref())
-            .map_or(0, |sample| {
-                sample.guest_refused + sample.initial_refused + sample.process_refused
-            });
-        let step = Step {
-            pressure: Some(sample),
-            workloads: admitted,
-            footprint_bytes: process_footprint(),
-            guest_memory_bytes: Some(budget.in_use()),
-            initial_memory_bytes: Some(budget.initial_uncharged()),
-            refused: refused.saturating_sub(before),
-            clean: phase == Phase::Touched,
-            ..Default::default()
-        };
-        if phase == Phase::Baseline {
-            report.baseline_footprint_bytes = step.footprint_bytes;
-        }
-        if let Some(stop) = stop {
-            report.stop = stop.into();
-        }
-        print_step(report.steps.is_empty(), &step);
-        report.steps.push(step);
+        print_sample(self.report.samples.is_empty(), &sample);
+        self.report.samples.push(sample);
         let temporary = self.path.with_extension("tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&[&*report])?)?;
+        std::fs::write(&temporary, serde_json::to_vec(&self.report)?)?;
         std::fs::rename(temporary, &self.path)?;
         Ok(())
     }
@@ -84,34 +64,44 @@ fn cgroup_bytes(name: &str) -> Result<u64> {
         .with_context(|| format!("{name} must be a finite cgroup v2 byte count"))
 }
 
+/// CPUs granted by `cpu.max` (`<quota> <period>`); `None` when unlimited.
+fn cgroup_cpus() -> Option<f64> {
+    let raw = std::fs::read_to_string("/sys/fs/cgroup/cpu.max").ok()?;
+    let (quota, period) = raw.trim().split_once(' ')?;
+    Some(quota.parse::<f64>().ok()? / period.parse::<f64>().ok()?)
+}
+
+fn read_trimmed(path: &str) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_owned())
+}
+
 struct Guest {
     store: wasmtime::Store<SharedCtx>,
     touch: Vec<TypedFunc<(), ()>>,
 }
 
-fn touch_all(experiment: &Experiment, guests: Vec<Guest>) -> Result<()> {
-    let workers = guests.len().min(4);
-    ensure!(workers > 0, "no guests were admitted");
-    let mut chunks: Vec<Vec<Guest>> = (0..workers).map(|_| Vec::new()).collect();
-    for (index, guest) in guests.into_iter().enumerate() {
-        chunks
-            .get_mut(index % workers)
-            .context("missing guest worker")?
-            .push(guest);
+/// Write from up to four threads at once, then hand every store back alive.
+fn touch_all(guests: Vec<Guest>) -> Result<Vec<Guest>> {
+    let size = guests.len().div_ceil(4).max(1);
+    let mut chunks = Vec::new();
+    let mut remaining = guests.into_iter();
+    loop {
+        let chunk: Vec<Guest> = remaining.by_ref().take(size).collect();
+        if chunk.is_empty() {
+            break;
+        }
+        chunks.push(chunk);
     }
-    let admitted = chunks.iter().map(Vec::len).sum();
-    let start = Arc::new(Barrier::new(workers + 1));
-    let finished = Arc::new(Barrier::new(workers + 1));
-    let release = Arc::new(Barrier::new(workers + 1));
-    std::thread::scope(|scope| -> Result<()> {
-        let mut threads = Vec::new();
-        for mut chunk in chunks {
-            let start = Arc::clone(&start);
-            let finished = Arc::clone(&finished);
-            let release = Arc::clone(&release);
-            threads.push(scope.spawn(move || -> Result<()> {
-                start.wait();
-                let result = (|| -> Result<()> {
+    let start = Barrier::new(chunks.len());
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = chunks
+            .into_iter()
+            .map(|mut chunk| {
+                let start = &start;
+                scope.spawn(move || -> Result<Vec<Guest>> {
+                    start.wait();
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()?;
@@ -120,25 +110,19 @@ fn touch_all(experiment: &Experiment, guests: Vec<Guest>) -> Result<()> {
                             runtime.block_on(function.call_async(&mut guest.store, ()))?;
                         }
                     }
-                    Ok(())
-                })();
-                finished.wait();
-                // Keep every store alive until the final sample is written.
-                release.wait();
-                result
-            }));
+                    Ok(chunk)
+                })
+            })
+            .collect();
+        let mut guests = Vec::new();
+        for worker in workers {
+            guests.extend(
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("guest worker panicked"))??,
+            );
         }
-        let writing = experiment.report(Phase::Writing, admitted, None);
-        start.wait();
-        finished.wait();
-        let report = experiment.report(Phase::Touched, admitted, None);
-        release.wait();
-        for thread in threads {
-            thread
-                .join()
-                .map_err(|_| anyhow::anyhow!("guest worker panicked"))??;
-        }
-        writing.and(report)
+        Ok(guests)
     })
 }
 
@@ -155,15 +139,18 @@ fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    ensure!(
-        std::env::var("WASH_PRESSURE_RUN").as_deref() == Ok("1"),
-        "run with cargo run -p bench-tools -- memory-pressure"
-    );
+    let case: Case = serde_json::from_str(&std::env::var(CASE_ENV).with_context(|| {
+        format!("{CASE_ENV} is unset; run with cargo run -p bench-tools -- memory-pressure")
+    })?)?;
+    let path: PathBuf = std::env::var_os(REPORT_ENV)
+        .with_context(|| format!("{REPORT_ENV} is unset"))?
+        .into();
     ensure!(cfg!(target_os = "linux"), "requires Linux cgroup v2");
     let limit = cgroup_bytes("memory.max")?;
     ensure!(
-        (384 * MIB..=2048 * MIB).contains(&limit),
-        "requires a container limit between 384 MiB and 2 GiB"
+        limit == case.memory_mib * MIB,
+        "cgroup limit {limit} differs from the requested {} MiB",
+        case.memory_mib
     );
     ensure!(
         cgroup_bytes("memory.swap.max")? == 0,
@@ -177,82 +164,60 @@ async fn run() -> Result<()> {
         process_footprint().is_some(),
         "process footprint is unavailable"
     );
-    let mode: GuestMemoryMode = std::env::var("WASH_PRESSURE_MODE")?
-        .parse()
-        .map_err(anyhow::Error::msg)?;
-    ensure!(
-        matches!(mode, GuestMemoryMode::Enforce | GuestMemoryMode::Growth),
-        "choose enforce or growth"
-    );
-    let cow: bool = std::env::var("WASH_PRESSURE_COW")?.parse()?;
-    let dirty_bytes = std::env::var("WASH_PRESSURE_INITIAL").map_or_else(
-        |_| Ok(MIB),
-        |raw| parse_bytes(&raw).map_err(anyhow::Error::msg),
-    )?;
-    ensure!(
-        dirty_bytes == MIB || dirty_bytes == 2 * MIB,
-        "initial memory must be 1 MiB or 2 MiB"
-    );
-    let shape: Shape = std::env::var("WASH_PRESSURE_SHAPE")?
-        .parse()
-        .map_err(anyhow::Error::msg)?;
-    let (memories, bytes_per_memory, data_bytes) = shape.dimensions(dirty_bytes / MIB);
-    let initial_bytes = memories * bytes_per_memory;
-    let guest_cap = std::env::var("WASH_PRESSURE_GUEST_CAP")
-        .ok()
-        .map(|raw| parse_bytes(&raw).map_err(anyhow::Error::msg))
-        .transpose()?;
+    let mode = match case.mode {
+        Mode::Enforce => GuestMemoryMode::Enforce,
+        Mode::Growth => GuestMemoryMode::Growth,
+    };
+    let (memories, bytes_per_memory, data_bytes) = case.dimensions();
     let mut builder = Engine::builder()
         .with_host_memory(
-            HostMemoryBudgets::resolve(guest_cap, Some(64 * MIB), Some(8192), None)
-                .map_err(anyhow::Error::msg)?,
+            HostMemoryBudgets::resolve(
+                case.guest_memory_mib.map(|mib| mib * MIB),
+                Some(HEAP_BYTES),
+                Some(MAX_MEMORIES),
+                None,
+            )
+            .map_err(anyhow::Error::msg)?,
         )
         .with_guest_memory_mode(mode)
-        .with_memory_init_cow(cow)
+        .with_memory_init_cow(case.cow)
         .with_fuel_consumption(false);
-    if mode == GuestMemoryMode::Growth
-        && let Ok(raw) = std::env::var("WASH_PRESSURE_INITIAL_CAP")
-    {
-        builder = builder
-            .with_max_initial_guest_memory_bytes(parse_bytes(&raw).map_err(anyhow::Error::msg)?);
+    let initial_cap = case.initial_cap_mib.filter(|_| case.mode == Mode::Growth);
+    if let Some(cap) = initial_cap {
+        builder = builder.with_max_initial_guest_memory_bytes(cap * MIB);
     }
     let engine = builder.build()?;
-    let guard = engine.process_memory().context("missing guard")?;
-    let config = Config {
-        shape,
-        cow: engine.inner().get_memory_init_cow(),
-        initial_bytes,
-        memories,
-        swap_limit: cgroup_bytes("memory.swap.max")?,
-        guest_limit: engine.guest_memory().cap(),
-        initial_limit: engine.guest_memory().initial_cap(),
-        process_limit: guard.limit_bytes(),
+    let budget = engine.guest_memory();
+    ensure!(
+        engine.inner().get_memory_init_cow() == case.cow,
+        "copy-on-write setting was not applied"
+    );
+    if let Some(mib) = case.guest_memory_mib {
+        ensure!(budget.cap() == mib * MIB, "guest memory cap was not applied");
+    }
+    if let Some(mib) = initial_cap {
+        ensure!(
+            budget.initial_cap() == mib * MIB,
+            "initial cap was not applied"
+        );
+    }
+    let mut report = Report::new(case.clone());
+    report.host = Some(Host {
         architecture: std::env::consts::ARCH.into(),
-        kernel: std::fs::read_to_string("/proc/sys/kernel/osrelease").ok(),
-        transparent_hugepage: std::fs::read_to_string(
-            "/sys/kernel/mm/transparent_hugepage/enabled",
-        )
-        .ok(),
-        outcome: None,
-    };
-    let report = Report {
-        bench: "memory_pressure".into(),
-        label: std::env::var("WASH_PRESSURE_LABEL")?,
-        subject: shape.name().into(),
-        guest_memory_mode: Some(mode.as_str().into()),
-        cores: 2,
-        memory_limit_bytes: limit,
-        pressure: Some(config),
-        ..Default::default()
-    };
-    let experiment = Experiment {
-        engine,
-        report: Mutex::new(report),
-        path: std::env::var_os("WASH_PRESSURE_REPORT")
-            .context("missing report path")?
-            .into(),
-    };
-    let engine = &experiment.engine;
+        kernel: read_trimmed("/proc/sys/kernel/osrelease"),
+        transparent_hugepage: read_trimmed("/sys/kernel/mm/transparent_hugepage/enabled"),
+        shmem_hugepage: read_trimmed("/sys/kernel/mm/transparent_hugepage/shmem_enabled"),
+        cpus: cgroup_cpus(),
+        memory_limit: limit,
+        guest_limit: budget.cap(),
+        initial_limit: budget.initial_cap(),
+        process_limit: engine
+            .process_memory()
+            .context("missing process guard")?
+            .limit_bytes(),
+    });
+    let mut recorder = Recorder { report, path };
+
     let mut source = String::from("(component");
     for index in 0..memories {
         let suffix = char::from(b'a' + u8::try_from(index)?);
@@ -270,7 +235,7 @@ async fn run() -> Result<()> {
             (func (export "touch-{suffix}") (canon lift (core func $i{index} "touch")))"#,
             bytes_per_memory / 65536,
             "\\ab".repeat(usize::try_from(data_bytes)?),
-            if shape == Shape::Dirty {
+            if case.shape == bench_tools::pressure::Shape::Dirty {
                 bytes_per_memory
             } else {
                 65536
@@ -278,18 +243,17 @@ async fn run() -> Result<()> {
         ));
     }
     source.push(')');
-    let wasm = wat::parse_str(&source)?;
+    let component = Component::new(engine.inner(), wat::parse_str(&source)?)?;
     drop(source);
-    let component = Component::new(engine.inner(), wasm)?;
     let pre = Linker::<SharedCtx>::new(engine.inner()).instantiate_pre(&component)?;
-    experiment.report(Phase::Baseline, 0, None)?;
+    recorder.record(&engine, Phase::Baseline, 0)?;
+
+    // Admit without pauses, as a burst of real starts would; the guard
+    // refreshes its own reading at most every `REFRESH_INTERVAL`.
+    let guard = engine.process_memory().context("missing process guard")?;
     let mut guests = Vec::new();
     let stop = loop {
-        if let Err(error) = engine
-            .process_memory()
-            .context("missing guard")?
-            .admit_start()
-        {
+        if let Err(error) = guard.admit_start() {
             break error;
         }
         let ctx = SharedCtx::new(Ctx::builder("pressure", "memory").build())
@@ -311,17 +275,38 @@ async fn run() -> Result<()> {
             touch.push(instance.get_typed_func::<(), ()>(&mut store, &format!("touch-{suffix}"))?);
         }
         guests.push(Guest { store, touch });
-        if (guests.len() as u64).is_multiple_of(16 * MIB / initial_bytes) {
-            // Allow a fresh guard sample between bounded admission batches.
-            tokio::time::sleep(REFRESH_INTERVAL + Duration::from_millis(5)).await;
-        }
     };
-    experiment.report(Phase::Ready, guests.len(), Some(&stop))?;
-    touch_all(&experiment, guests)?;
-    ensure!(engine.guest_memory().in_use() == 0, "charged bytes leaked");
+    recorder.report.stop = stop;
+    recorder.record(&engine, Phase::Ready, guests.len())?;
+
+    let admitted = guests.len() as u64;
+    let uncharged = match case.mode {
+        Mode::Enforce => 0,
+        Mode::Growth => memories * bytes_per_memory.min(FIRST_ALLOCATION_UNCHARGED),
+    };
+    let charged = admitted * (case.initial_bytes() - uncharged);
+    let uncharged = admitted * uncharged;
     ensure!(
-        engine.guest_memory().initial_uncharged() == 0,
-        "initial bytes leaked"
+        budget.in_use() == charged && budget.initial_uncharged() == uncharged,
+        "guest reservations ({} charged, {} uncharged) differ from the retained memories \
+         ({charged} charged, {uncharged} uncharged)",
+        budget.in_use(),
+        budget.initial_uncharged()
     );
-    experiment.report(Phase::Released, 0, None)
+    ensure!(
+        charged <= budget.cap() && uncharged <= budget.initial_cap(),
+        "guest reservations exceeded their budgets"
+    );
+
+    let guests = touch_all(guests)?;
+    ensure!(
+        budget.in_use() == charged && budget.initial_uncharged() == uncharged,
+        "guest reservations changed during writes"
+    );
+    recorder.record(&engine, Phase::Touched, guests.len())?;
+
+    drop(guests);
+    ensure!(budget.in_use() == 0, "charged bytes leaked");
+    ensure!(budget.initial_uncharged() == 0, "initial bytes leaked");
+    recorder.record(&engine, Phase::Released, 0)
 }
