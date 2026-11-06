@@ -28,4 +28,6 @@ table entry releases the object, so a store torn down while the guest still
 holds handles frees them, and its device with them. Without it, every GPU
 workload that exits without dropping everything leaves its device and that
 device's memory in the host's shared wgpu instance, about 270 MiB per run on an
-NVIDIA L4.
+NVIDIA L4. Upstream, this is
+[wasi-gfx/wasi-gfx-runtime#159](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/159),
+against `main` without #156.
