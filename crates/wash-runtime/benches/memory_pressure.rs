@@ -92,6 +92,16 @@ fn read_trimmed(path: &str) -> Option<String> {
         .map(|s| s.trim().to_owned())
 }
 
+/// The bracketed choice of a sysfs policy file such as `always [madvise] never`.
+fn selected_mode(path: &str) -> Option<String> {
+    let raw = read_trimmed(path)?;
+    let chosen = raw
+        .split_once('[')
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(mode, _)| mode.to_owned());
+    Some(chosen.unwrap_or(raw))
+}
+
 struct Guest {
     store: wasmtime::Store<SharedCtx>,
     touch: Vec<TypedFunc<(), ()>>,
@@ -153,6 +163,8 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .with_writer(std::io::stderr)
+        // stderr.log is a file, and its tail can land in a markdown summary.
+        .with_ansi(false)
         .init();
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -240,8 +252,8 @@ async fn run() -> Result<()> {
     report.host = Some(Host {
         architecture: std::env::consts::ARCH.into(),
         kernel: read_trimmed("/proc/sys/kernel/osrelease"),
-        transparent_hugepage: read_trimmed("/sys/kernel/mm/transparent_hugepage/enabled"),
-        shmem_hugepage: read_trimmed("/sys/kernel/mm/transparent_hugepage/shmem_enabled"),
+        transparent_hugepage: selected_mode("/sys/kernel/mm/transparent_hugepage/enabled"),
+        shmem_hugepage: selected_mode("/sys/kernel/mm/transparent_hugepage/shmem_enabled"),
         cpus: cgroup_cpus(),
         memory_limit: limit,
         guest_limit: budget.cap(),
@@ -297,9 +309,20 @@ async fn run() -> Result<()> {
         let mut store = wasmtime::Store::new(engine.inner(), ctx);
         install_memory_limiter(&mut store);
         store.set_epoch_deadline(1_000_000_000);
+        let refused = (budget.refused(), budget.initial_refused());
         let instance = match pre.instantiate_async(&mut store).await {
             Ok(instance) => instance,
-            Err(error) => break format!("{error:#}"),
+            // wasmtime reports every limiter refusal the same way; name the budget.
+            Err(error) => {
+                let by = if budget.refused() > refused.0 {
+                    "guest memory budget (G) refused a store: "
+                } else if budget.initial_refused() > refused.1 {
+                    "initial cap (I) refused a store: "
+                } else {
+                    ""
+                };
+                break format!("{by}{error:#}");
+            }
         };
         let mut touch = Vec::new();
         for index in 0..memories {
