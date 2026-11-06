@@ -150,12 +150,14 @@ jq -n \
   --arg os "$(uname -sr)" \
   --arg sha "$(git -C "$repo_root" rev-parse HEAD)" \
   --arg llama "$LLAMA_CPP_COMMIT" \
+  --arg llama_wit "$LLAMA_WIT_COMMIT" \
   --arg wgpu "$(host_wgpu_versions "$repo_root/Cargo.lock" | tr '\n' ' ')" \
   --arg smoke "$smoke" \
   --arg gap_model "$gap_model" \
   --argjson reps "$reps" \
   --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  '{box: $box, gpu: $gpu, os: $os, sha: $sha, llama_cpp: $llama, wgpu: $wgpu,
+  '{box: $box, gpu: $gpu, os: $os, sha: $sha, llama_cpp: $llama,
+    llama_wit: $llama_wit, wgpu: $wgpu,
     smoke: ($smoke == "yes"), gap_model: $gap_model, reps: $reps,
     gpu_state: [], page_cache: [], started: $started}' >"$out/metadata.json"
 lock_clocks

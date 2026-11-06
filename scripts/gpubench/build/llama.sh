@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build llama-bench for one step of the gap bench, from the llama.cpp commit in
-# pins.env. All three steps build the same source with the same patches:
+# pins.env with llama.wit's patches (llama.wit also supplies the wasip3
+# toolchain). All three steps build the same source with the same patches:
 #
 #   vendor         the vendor backend: Metal on macOS, CUDA on Linux
 #   webgpu-native  ggml-webgpu on wgpu-native (built by build/wgpu-native.sh)
@@ -26,8 +27,13 @@ kind="$(gpubench_kind)"
 src="$src_dir/llama.cpp"
 out="$build_root/llama-$step"
 
+wit="$src_dir/llama.wit"
+fetch_git "$LLAMA_WIT_REPO" "$LLAMA_WIT_COMMIT" "$wit"
+# llama.wit's patches apply to exactly the tag its build fetches.
+grep -q "set(LLAMA_GIT_TAG $LLAMA_CPP_TAG " "$wit/CMakeLists.txt" ||
+  die "llama.wit at $LLAMA_WIT_COMMIT does not build llama.cpp $LLAMA_CPP_TAG: move the pins together"
 fetch_git "$LLAMA_CPP_REPO" "$LLAMA_CPP_COMMIT" "$src"
-apply_patches "$src" "$gpubench_dir/llama-patches"
+apply_patches "$src" "$wit/patches"
 
 # No server and no network. Examples are configured so llama-simple can be
 # built; only the two targets below are.
@@ -59,9 +65,16 @@ case "$step" in
     WASI_SDK_PATH="$(wasi_sdk_path)"
     export WASI_SDK_PATH
     fetch_git "$WASI_WEBGPU_HEADERS_REPO" "$WASI_WEBGPU_HEADERS_COMMIT" "$src_dir/wasi-webgpu-headers" --submodules
-    cmake -S "$src" -B "$out" "${common[@]}" \
-      -DCMAKE_TOOLCHAIN_FILE="$gpubench_dir/llama-wasip3/wasip3.toolchain.cmake" \
-      -DCMAKE_HAVE_LIBC_PTHREAD=1 -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=OFF \
+    toolchain="$wit/cmake/wasip3.toolchain.cmake"
+    # A build tree keeps the toolchain it was first configured with.
+    fresh=()
+    if [[ -f "$out/CMakeCache.txt" ]] &&
+      ! grep -qsF "include(\"$toolchain\")" "$out"/CMakeFiles/*/CMakeSystem.cmake; then
+      fresh=(--fresh)
+    fi
+    cmake ${fresh[@]+"${fresh[@]}"} -S "$src" -B "$out" "${common[@]}" \
+      -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
+      -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=OFF \
       -DGGML_WEBGPU=ON \
       -DDawn_DIR="$gpubench_dir/cmake/wasi-webgpu" \
       -DGPUBENCH_DAWN_HEADERS="$(dawn_headers_path)/dawn-headers" \
