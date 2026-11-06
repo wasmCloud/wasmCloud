@@ -8,8 +8,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, ensure};
-use bench_tools::density::pressure::{Config, MIB, Outcome, Phase, Sample, Shape};
-use bench_tools::density::{Report, Step};
+use bench_tools::pressure::{Case, Host, MIB, Mode, Outcome, Phase, Report, Sample, Shape};
 use serde_json::json;
 
 const DOCKER: &str = r#"#!/bin/sh
@@ -28,7 +27,6 @@ case "$1" in
   run)
     previous=
     for arg in "$@"; do
-      case "$arg" in --cidfile=*) if [ "${OMIT_BUILD_CID:-0}" != 1 ]; then printf '%064d\n' 1 > "${arg#--cidfile=}"; fi;; esac
       if [ "$previous" = --name ]; then printf '%s\n' "$arg" > "$PRESSURE_FIXTURE/build-name"; fi
       previous=$arg
     done
@@ -76,80 +74,69 @@ impl Fixture {
             fixture.path().join("docker"),
             fs::Permissions::from_mode(0o755),
         )?;
-        let admitted = if mode == "growth" { 2304 } else { 576 };
+        let mode = <Mode as clap::ValueEnum>::from_str(mode, false).map_err(anyhow::Error::msg)?;
+        let growth = mode == Mode::Growth;
+        let admitted = if growth { 2304 } else { 576 };
         let phases = if oom {
-            vec![Phase::Baseline, Phase::Ready, Phase::Writing]
+            vec![Phase::Baseline, Phase::Ready]
         } else {
             vec![
                 Phase::Baseline,
                 Phase::Ready,
-                Phase::Writing,
                 Phase::Touched,
                 Phase::Released,
             ]
         };
-        let config = Config {
+        // Matches what `command` asks the runner for.
+        let mut report = Report::new(Case {
+            memory_mib: 768,
             shape,
+            mode,
             cow: true,
-            memories: 1,
-            initial_bytes: MIB,
-            swap_limit: 0,
-            guest_limit: 576 * MIB,
-            initial_limit: 2304 * MIB,
-            process_limit: 691 * MIB,
+            dirty_mib: 1,
+            guest_memory_mib: None,
+            initial_cap_mib: None,
+            repeat: 1,
+        });
+        report.host = Some(Host {
             architecture: "fixture".into(),
             kernel: None,
             transparent_hugepage: None,
-            outcome: None,
-        };
-        let steps = phases
+            shmem_hugepage: None,
+            cpus: Some(2.0),
+            memory_limit: 768 * MIB,
+            guest_limit: 576 * MIB,
+            initial_limit: 2304 * MIB,
+            process_limit: 691 * MIB,
+        });
+        report.stop = "fixture admission refusal".into();
+        report.samples = phases
             .into_iter()
             .map(|phase| {
-                let count = if matches!(phase, Phase::Baseline | Phase::Released) {
+                let stores = if matches!(phase, Phase::Baseline | Phase::Released) {
                     0
                 } else {
                     admitted
                 };
-                Step {
-                    workloads: count,
-                    guest_memory_bytes: Some(if mode == "enforce" {
-                        count as u64 * MIB
-                    } else {
-                        0
-                    }),
-                    initial_memory_bytes: Some(if mode == "growth" {
-                        count as u64 * MIB
-                    } else {
-                        0
-                    }),
-                    clean: phase == Phase::Touched,
-                    pressure: Some(Sample {
-                        phase,
-                        cgroup_current: Some(256 * MIB),
-                        cgroup_peak: Some(300 * MIB),
-                        guest_refused: u64::from(mode == "enforce"),
-                        initial_refused: u64::from(mode == "growth"),
-                        process_refused: 0,
-                        process_over: false,
-                    }),
-                    ..Default::default()
+                let reserved = stores as u64 * MIB;
+                Sample {
+                    phase,
+                    stores,
+                    footprint_bytes: None,
+                    guest_memory_bytes: if growth { 0 } else { reserved },
+                    initial_memory_bytes: if growth { reserved } else { 0 },
+                    cgroup_current: Some(256 * MIB),
+                    cgroup_peak: Some(300 * MIB),
+                    guest_refused: u64::from(!growth),
+                    initial_refused: u64::from(growth),
+                    process_refused: 0,
+                    process_over: false,
                 }
             })
             .collect();
-        let report = Report {
-            bench: "memory_pressure".into(),
-            label: format!("768m-{}-{mode}-cow-true-1", shape.name()),
-            subject: shape.name().into(),
-            guest_memory_mode: Some(mode.into()),
-            memory_limit_bytes: 768 * MIB,
-            pressure: Some(config),
-            stop: "fixture admission refusal".into(),
-            steps,
-            ..Default::default()
-        };
         fs::write(
             fixture.path().join("input.json"),
-            serde_json::to_vec(&[report])?,
+            serde_json::to_vec(&report)?,
         )?;
         fixture.exit(if oom { 137 } else { 0 }, oom)?;
         Ok(fixture)
@@ -195,7 +182,7 @@ impl Fixture {
 
     fn report(&self) -> Result<Report> {
         let reports: Vec<Report> = serde_json::from_slice(&fs::read(
-            self.target().join("density/memory_pressure.json"),
+            self.target().join("pressure/memory_pressure.json"),
         )?)?;
         reports
             .into_iter()
@@ -311,18 +298,14 @@ fn completed_case_applies_limits_cleans_up_and_feeds_shared_reports() -> Result<
     let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
     passed(&fixture.command(Shape::Sparse, "growth")?.output()?)?;
     let report = fixture.report()?;
-    assert_eq!(
-        report.pressure.as_ref().and_then(|p| p.outcome),
-        Some(Outcome::Completed)
-    );
-    assert_eq!(report.achieved(), 2304);
+    assert_eq!(report.outcome, Some(Outcome::Completed));
+    assert_eq!(report.admitted(), 2304);
     let args = fs::read_to_string(fixture.path().join("create-args"))?;
     for setting in [
         "--memory=768m",
         "--memory-swap=768m",
         "--cpus=2",
         "--network=none",
-        "--env=WASH_PRESSURE_COW=true",
         "--bench",
     ] {
         assert!(
@@ -330,6 +313,11 @@ fn completed_case_applies_limits_cleans_up_and_feeds_shared_reports() -> Result<
             "missing {setting}"
         );
     }
+    let case = args
+        .lines()
+        .find_map(|line| line.strip_prefix("--env=WASH_PRESSURE_CASE="))
+        .context("missing case")?;
+    assert_eq!(serde_json::from_str::<Case>(case)?, report.case);
     assert!(fixture.removed("case")?);
     for subcommand in ["jsonl", "summary"] {
         let output = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
@@ -350,7 +338,7 @@ fn verified_oom_passes_and_unverified_exit_137_fails() -> Result<()> {
         let output = fixture.command(Shape::Dirty, "growth")?.output()?;
         assert_eq!(output.status.success(), verified);
         assert_eq!(
-            fixture.report()?.pressure.and_then(|p| p.outcome),
+            fixture.report()?.outcome,
             Some(if verified {
                 Outcome::ExpectedOom
             } else {
@@ -407,18 +395,15 @@ fn sigterm_during_measurement_removes_the_container() -> Result<()> {
 
 #[test]
 fn sigterm_during_build_stops_the_build_and_cleans_up() -> Result<()> {
-    for omit_cid in ["0", "1"] {
-        let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
-        let mut child = fixture.spawn(
-            fixture
-                .command(Shape::Sparse, "growth")?
-                .env("HANG_COMMANDS", "build")
-                .env("OMIT_BUILD_CID", omit_cid),
-        )?;
-        fixture.signal(&mut child, "build-started")?;
-        assert!(fixture.removed("build")?);
-        fixture.no_stalled_processes()?;
-    }
+    let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
+    let mut child = fixture.spawn(
+        fixture
+            .command(Shape::Sparse, "growth")?
+            .env("HANG_COMMANDS", "build"),
+    )?;
+    fixture.signal(&mut child, "build-started")?;
+    assert!(fixture.removed("build")?);
+    fixture.no_stalled_processes()?;
     Ok(())
 }
 
@@ -520,7 +505,7 @@ fn sigterm_during_stalled_removal_is_bounded() -> Result<()> {
 #[test]
 fn a_failed_new_build_cannot_leave_the_previous_aggregate_as_current() -> Result<()> {
     let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
-    let aggregate = fixture.target().join("density/memory_pressure.json");
+    let aggregate = fixture.target().join("pressure/memory_pressure.json");
     fs::create_dir_all(aggregate.parent().context("missing report directory")?)?;
     fs::copy(fixture.path().join("input.json"), &aggregate)?;
     let output = fixture
@@ -532,41 +517,5 @@ fn a_failed_new_build_cannot_leave_the_previous_aggregate_as_current() -> Result
         !aggregate.exists(),
         "previous run is still advertised as the current report"
     );
-    Ok(())
-}
-
-#[test]
-fn saved_source_patch_keeps_exact_bytes_and_is_parseable() -> Result<()> {
-    let fixture = Fixture::new(Shape::Sparse, "growth", false)?;
-    let patch = b"diff --git a/pressure-fixture.txt b/pressure-fixture.txt\nnew file mode 100644\n--- /dev/null\n+++ b/pressure-fixture.txt\n@@ -0,0 +1 @@\n+fixture content\n";
-    fs::write(fixture.path().join("source.diff"), patch)?;
-    let real_git = Command::new("sh").args(["-c", "command -v git"]).output()?;
-    passed(&real_git)?;
-    let real_git = String::from_utf8(real_git.stdout)?;
-    let git = fixture.path().join("git");
-    fs::write(
-        &git,
-        "#!/bin/sh\nif [ \"$1\" = diff ]; then cat \"$PRESSURE_FIXTURE/source.diff\"; else exec \"$PRESSURE_REAL_GIT\" \"$@\"; fi\n",
-    )?;
-    fs::set_permissions(&git, fs::Permissions::from_mode(0o755))?;
-    passed(
-        &fixture
-            .command(Shape::Sparse, "growth")?
-            .env("PRESSURE_REAL_GIT", real_git.trim())
-            .output()?,
-    )?;
-    let artifacts = fs::read_dir(fixture.target().join("density"))?
-        .filter_map(Result::ok)
-        .find(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .context("missing artifacts")?
-        .path();
-    let saved = artifacts.join("source.patch");
-    assert_eq!(fs::read(&saved)?, patch);
-    passed(
-        &Command::new(real_git.trim())
-            .args(["apply", "--numstat"])
-            .arg(saved)
-            .output()?,
-    )?;
     Ok(())
 }

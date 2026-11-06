@@ -13,6 +13,9 @@
 //!   `better`, as k6 rows do: group `density`, one `param` per flavour
 //!   label (`warm`, `scale-to-zero@2cpu`), one row per figure. The label is
 //!   stable across machines; what ran is in the bench's own report.
+//! - Pressure rows (from `<target>/pressure/<bench>.json`, a list of
+//!   [`bench_tools::pressure::Report`]) have the same shape, with group
+//!   `pressure` and one `param` per case label.
 //!
 //! The dedup key in `push-s3.sh` is widened to include `.metric`, which
 //! lets `(bench, group, param)` map to multiple rows, one per metric,
@@ -104,8 +107,13 @@ pub fn run(args: Args) -> Result<()> {
     if crate::callgrind::is_instruction_bench(&args.bench) {
         return emit_gungraun(&mut out, &args.bench, &meta, &target_dir);
     }
+    if let Some(reports) = pressure_reports(&target_dir, &args.bench)? {
+        let rows = reports.iter().map(|r| (r.case.label(), r.metrics()));
+        return emit_metrics(&mut out, &args.bench, "pressure", &meta, rows);
+    }
     if let Some(reports) = density_reports(&target_dir, &args.bench)? {
-        return emit_density(&mut out, &args.bench, &meta, &reports);
+        let rows = reports.iter().map(|r| (r.label.clone(), r.metrics()));
+        return emit_metrics(&mut out, &args.bench, "density", &meta, rows);
     }
 
     emit_criterion(
@@ -186,28 +194,42 @@ pub fn density_reports(
     target_dir: &Path,
     bench: &str,
 ) -> Result<Option<Vec<bench_tools::density::Report>>> {
-    let path = target_dir.join("density").join(format!("{bench}.json"));
+    read_reports(&target_dir.join("density").join(format!("{bench}.json")))
+}
+
+/// The pressure reports a run wrote to `<target>/pressure/<bench>.json`, if
+/// this bench is one that writes them.
+pub fn pressure_reports(
+    target_dir: &Path,
+    bench: &str,
+) -> Result<Option<Vec<bench_tools::pressure::Report>>> {
+    read_reports(&target_dir.join("pressure").join(format!("{bench}.json")))
+}
+
+fn read_reports<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<Vec<T>>> {
     if !path.exists() {
         return Ok(None);
     }
-    let bytes = std::fs::read(&path)?;
+    let bytes = std::fs::read(path)?;
     let reports = serde_json::from_slice(&bytes)
         .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
     Ok(Some(reports))
 }
 
-fn emit_density<W: Write>(
+/// One row per `(label, metric)`, in the density row shape.
+fn emit_metrics<W: Write>(
     out: &mut W,
     bench: &str,
+    group: &str,
     meta: &Meta,
-    reports: &[bench_tools::density::Report],
+    reports: impl Iterator<Item = (String, Vec<bench_tools::density::Metric>)>,
 ) -> Result<()> {
-    for report in reports {
-        for metric in report.metrics() {
+    for (label, metrics) in reports {
+        for metric in metrics {
             let row = DensityRow {
                 bench,
-                group: "density",
-                param: &report.label,
+                group,
+                param: &label,
                 meta,
                 metric: metric.name,
                 value: metric.value,
