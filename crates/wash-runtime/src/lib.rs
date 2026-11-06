@@ -9,6 +9,7 @@ pub mod engine;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod env_guard;
 pub mod host;
+mod ids;
 #[cfg(any(feature = "washlet", feature = "wasmcloud-nats"))]
 mod nats_credentials;
 #[cfg(all(

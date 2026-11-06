@@ -616,8 +616,8 @@ pub struct CtxBuilder {
 impl CtxBuilder {
     pub fn new(workload_id: impl Into<Arc<str>>, component_id: impl Into<Arc<str>>) -> Self {
         Self {
-            id: uuid::Uuid::now_v7().to_string().into(),
-            store_id: uuid::Uuid::now_v7().to_string().into(),
+            id: crate::ids::now_v7().to_string().into(),
+            store_id: crate::ids::now_v7().to_string().into(),
             component_id: component_id.into(),
             workload_id: workload_id.into(),
             ctx: None,
