@@ -373,7 +373,7 @@ pub(crate) async fn new_store_from_templates(
     linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
     is_service: bool,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    let store_id = uuid::Uuid::now_v7().to_string();
+    let store_id = crate::ids::now_v7().to_string();
     let all_volume_mounts = std::iter::once(active)
         .chain(linked.iter())
         .flat_map(|template| template.volume_mounts.clone())

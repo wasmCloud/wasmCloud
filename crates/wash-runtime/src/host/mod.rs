@@ -1747,7 +1747,7 @@ pub struct HostBuilder {
 impl Default for HostBuilder {
     fn default() -> Self {
         Self {
-            id: uuid::Uuid::now_v7().to_string(),
+            id: crate::ids::now_v7().to_string(),
             engine: Default::default(),
             plugins: Default::default(),
             plugin_bindings: Default::default(),
