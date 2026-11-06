@@ -81,12 +81,14 @@ jobs:
       # 4 GiB + 32 MiB (WASH_SCALE_MEMORY_RESERVATION and
       # WASH_SCALE_MEMORY_GUARD; a ref without them runs plain scale_density).
       BENCH_VARIANTS: >-
-        {"memory_pressure": {"bench": "memory_pressure", "env": {}},
-         "max_scale": {"bench": "scale_density",
+        {"max_scale": {"bench": "scale_density",
                        "env": {"WASH_SCALE_MEMORY_RESERVATION": "256MiB",
                                "WASH_SCALE_MEMORY_GUARD": "64KiB",
                                "WASH_SCALE_GUEST_MEMORY_MODE": "growth",
                                "WASH_SCALE_MEMORY_LIMIT": "2GiB"}}}
+      # Dispatch-only diagnostics whose results never enter the public
+      # history. memory_pressure checks pass/fail outcomes; it has no trend.
+      DIAGNOSTIC_BENCHES: '["memory_pressure"]'
     steps:
       - id: set
         env:
@@ -129,13 +131,15 @@ jobs:
                 ;;
             esac
           fi
-          runs="$(jq -cn --argjson benches "$benches" --argjson variants "$BENCH_VARIANTS" '
+          runs="$(jq -cn --argjson benches "$benches" --argjson variants "$BENCH_VARIANTS" \
+            --argjson diagnostics "$DIAGNOSTIC_BENCHES" '
             [$benches[] as $name |
               if $variants[$name] then
                 {name: $name, bench: $variants[$name].bench,
                  env: $variants[$name].env, publish: false}
               else
-                {name: $name, bench: $name, env: {}, publish: true}
+                {name: $name, bench: $name, env: {},
+                 publish: ($diagnostics | any(. == $name) | not)}
               end]')"
           {
             echo "runs=${runs}"
