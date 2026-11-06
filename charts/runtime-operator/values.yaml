@@ -510,7 +510,9 @@ runtime:
     # so instances that come to write all their initial memory
     # can take the host past its limit.
     # `WASH_HOST_MAX_INITIAL_GUEST_MEMORY` bounds the overcommit:
-    # four times the budget, unless set in `runtime.env`.
+    # sixteen times max-process-memory, unless set in `runtime.env`.
+    # That limit is 90% of `limits.memory` here,
+    # so the default bound is about 14 times `limits.memory`.
     #
     # The host derives the budget: three quarters of `limits.memory`, and
     # never less than 256MiB — so keep `limits.memory` above 342Mi, or the

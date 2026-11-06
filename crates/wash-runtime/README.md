@@ -173,27 +173,37 @@ The two guest-memory modes charge memory differently:
   Memories that start at zero receive the allowance on their first successful allocation.
 - In both modes, dropping a store releases its reservations.
 
-Let `C` be the container memory limit, `G` the charged guest budget, and `I` the
-initial allowance. The defaults are:
+Let `C` be the container memory limit, `G` the charged guest budget, `P` the
+process limit (`--max-process-memory`), and `I` the initial allowance.
+The defaults are:
 
 - `G` is 75% of `C`, clamped between 256 MiB and 1 TiB.
-- **`I = 4 × G`**, so an explicit `G` also changes the default `I`.
-- When the clamp does not apply, that permits `3 × C` in uncharged initial memory,
+- `P` is 90% of `C`.
+- **`I = 16 × P`**, so an explicit `P` also changes the default `I`, and an
+  explicit `G` does not. Set `--max-initial-guest-memory` to bound `I` on its own.
+  Where no process limit is enforced (`--max-process-memory off`, no memory
+  limit can be detected, or `P` is past it), `I = 4 × G` instead.
+- That permits `14.4 × C` in uncharged initial memory,
   plus `0.75 × C` in charged memory.
 
 These are declared byte reservations, not resident-memory measurements.
-The factor of four is a density policy for sparse guests;
-it does not guarantee that the container can back every admitted page.
+The factor of sixteen is a density policy for sparse guests: a warm
+`http-handler-p3` declares about fifteen times what it touches, so the process
+guard stops admitting such guests before `I` does, as far as it sees their pages.
+It counts anonymous memory, so shared and file-backed pages (such as CoW images)
+can grow the cgroup's usage without moving it; see below.
+It does not guarantee that the container can back every admitted page.
 
 For one component, compute `e = sum(min(initial_bytes_per_memory, 2 MiB))`.
 If `e > 0`, the initial allowance permits at most `floor(I / e)` such live instances.
 Charged memory, pool limits, and the process guard can stop admission earlier.
-For a 768 MiB container with default `G = 576 MiB` and `I = 2304 MiB`:
+For a 768 MiB container with default `G = 576 MiB`, `P ≈ 691 MiB`, and
+`I = 16 × P ≈ 10.8 GiB`:
 
 | Initial memory per component | Initial reservation | Charged initial memory | Budget-only instance bound |
 | --- | ---: | ---: | ---: |
-| One 1 MiB memory | 1 MiB | 0 | 2304 |
-| Four 1 MiB memories | 4 MiB | 0 | 576 |
+| One 1 MiB memory | 1 MiB | 0 | 11059 |
+| Four 1 MiB memories | 4 MiB | 0 | 2764 |
 | One 8 MiB memory | 2 MiB | 6 MiB | 96 |
 
 Touching only 64 KiB during a request does not constrain later writes. Several
@@ -231,12 +241,11 @@ I <= (C - H - B - R) / p       (p > 0)
   with allocation rounding included in `H`. A steady-state average is insufficient.
 - `R`: additional headroom for transient allocations and measurement uncertainty.
 
-For the default `I = 4G` and `B = G`, this becomes
-`G <= (C - H - R) / (1 + 4p)`. Even with no host overhead or reserve, the default
-`G = 0.75C` leaves room for only `p <= 1/12` (about 8.3%) if all charged memory
-also becomes resident. If all initial pages may be written, use `G + I + H + R
-<= C`, lower the initial allowance, or use `enforce`. A workload-specific lower
-`B` requires its own defensible bound.
+For the defaults `I = 16P = 14.4C` and `B = G = 0.75C`, even with no host
+overhead or reserve, this leaves room for only `p <= 0.25 / 14.4` (about 1.7%)
+if all charged memory also becomes resident. If all initial pages may be
+written, use `G + I + H + R <= C`, lower the initial allowance, or use `enforce`.
+A workload-specific lower `B` requires its own defensible bound.
 
 For example, suppose a 768 MiB container needs `H = 96 MiB`, `B = G = 256 MiB`,
 and `R = 128 MiB`. It has 288 MiB left for initial resident pages. A validated
