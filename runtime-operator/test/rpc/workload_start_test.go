@@ -1,4 +1,4 @@
-package v2
+package rpc
 
 import (
 	"slices"
@@ -6,6 +6,8 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
+	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
 )
 
 const startRequestJSON = `{
@@ -107,13 +109,13 @@ const startRequestJSON = `{
 func TestWorkloadStartRoundTrip(t *testing.T) {
 	for _, codec := range []string{"json", "protobuf"} {
 		t.Run(codec, func(t *testing.T) {
-			request := &WorkloadStartRequest{}
+			request := &runtimev2.WorkloadStartRequest{}
 			if err := protojson.Unmarshal([]byte(startRequestJSON), request); err != nil {
 				t.Fatal(err)
 			}
 			var data []byte
 			var err error
-			decoded := &WorkloadStartRequest{}
+			decoded := &runtimev2.WorkloadStartRequest{}
 			if codec == "json" {
 				data, err = protojson.Marshal(request)
 				if err == nil {
@@ -142,7 +144,7 @@ func TestWorkloadStartRoundTrip(t *testing.T) {
 	}
 }
 
-func assertStartComponent(t *testing.T, world *WitWorld) {
+func assertStartComponent(t *testing.T, world *runtimev2.WitWorld) {
 	t.Helper()
 	components := world.GetComponents()
 	if len(components) != 1 {
@@ -156,7 +158,7 @@ func assertStartComponent(t *testing.T, world *WitWorld) {
 		c.GetMaxConcurrency() != 2 ||
 		c.GetReclaimWindowSeconds() != 30 ||
 		c.GetReclaimMinInstances() != 1 ||
-		c.GetImagePullPolicy() != ImagePullPolicy_IMAGE_PULL_POLICY_IF_NOT_PRESENT {
+		c.GetImagePullPolicy() != runtimev2.ImagePullPolicy_IMAGE_PULL_POLICY_IF_NOT_PRESENT {
 		t.Fatalf("component image or signed instance limits changed: %v", c)
 	}
 	if c.GetImagePullSecret().GetUsername() != "app-user" ||
@@ -184,7 +186,7 @@ func assertStartComponent(t *testing.T, world *WitWorld) {
 	}
 }
 
-func assertStartVolumesAndService(t *testing.T, w *Workload) {
+func assertStartVolumesAndService(t *testing.T, w *runtimev2.Workload) {
 	t.Helper()
 	volumes := w.GetVolumes()
 	if len(volumes) != 2 ||
@@ -199,7 +201,7 @@ func assertStartVolumesAndService(t *testing.T, w *Workload) {
 	service := w.GetService()
 	if service.GetImage() != "registry.example/service:v1" ||
 		service.GetMaxRestarts() != 3 ||
-		service.GetImagePullPolicy() != ImagePullPolicy_IMAGE_PULL_POLICY_ALWAYS ||
+		service.GetImagePullPolicy() != runtimev2.ImagePullPolicy_IMAGE_PULL_POLICY_ALWAYS ||
 		service.GetImagePullSecret().GetUsername() != "service-user" ||
 		service.GetImagePullSecret().GetPassword() != "service-password" ||
 		service.GetLocalResources().GetEnvironment()["MODE"] != "service" {
@@ -207,7 +209,7 @@ func assertStartVolumesAndService(t *testing.T, w *Workload) {
 	}
 }
 
-func assertStartHostInterfaces(t *testing.T, world *WitWorld) {
+func assertStartHostInterfaces(t *testing.T, world *runtimev2.WitWorld) {
 	t.Helper()
 	interfaces := world.GetHostInterfaces()
 	if len(interfaces) != 1 ||
@@ -223,7 +225,7 @@ func assertStartHostInterfaces(t *testing.T, world *WitWorld) {
 
 // Absent submessages are nil, so these reads go through the generated getters' nil branches.
 func TestAbsentFieldsReadAsZeroValues(t *testing.T) {
-	request := &WorkloadStartRequest{}
+	request := &runtimev2.WorkloadStartRequest{}
 	const sparseStart = `{
  "workload": {"name": "sparse", "witWorld": {"components": [{"image": "app:v1"}]}}
 }`
@@ -242,7 +244,7 @@ func TestAbsentFieldsReadAsZeroValues(t *testing.T) {
 	}
 	if c.GetImagePullSecret().GetUsername() != "" ||
 		c.GetImagePullSecret().GetPassword() != "" ||
-		c.GetImagePullPolicy() != ImagePullPolicy_IMAGE_PULL_POLICY_UNSPECIFIED {
+		c.GetImagePullPolicy() != runtimev2.ImagePullPolicy_IMAGE_PULL_POLICY_UNSPECIFIED {
 		t.Fatal("absent image pull settings read as non-zero")
 	}
 	r := c.GetLocalResources()
@@ -259,8 +261,8 @@ func TestAbsentFieldsReadAsZeroValues(t *testing.T) {
 		w.GetService().GetImage() != "" {
 		t.Fatal("absent resources or service read as non-zero")
 	}
-	var response *WorkloadStartResponse
-	if response.GetWorkloadStatus().GetWorkloadState() != WorkloadState_WORKLOAD_STATE_UNSPECIFIED ||
+	var response *runtimev2.WorkloadStartResponse
+	if response.GetWorkloadStatus().GetWorkloadState() != runtimev2.WorkloadState_WORKLOAD_STATE_UNSPECIFIED ||
 		response.GetWorkloadStatus().GetWorkloadId() != "" {
 		t.Fatal("nil response status reads as non-zero")
 	}
