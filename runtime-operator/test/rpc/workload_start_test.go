@@ -10,6 +10,11 @@ import (
 	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
 )
 
+const (
+	codecJSON     = "json"
+	codecProtobuf = "protobuf"
+)
+
 const startRequestJSON = `{
   "workloadId": "runtime-id",
   "workload": {
@@ -107,7 +112,7 @@ const startRequestJSON = `{
 
 // Field numbers and wire types are pinned by `buf breaking` in the proto workflow.
 func TestWorkloadStartRoundTrip(t *testing.T) {
-	for _, codec := range []string{"json", "protobuf"} {
+	for _, codec := range []string{codecJSON, codecProtobuf} {
 		t.Run(codec, func(t *testing.T) {
 			request := &runtimev2.WorkloadStartRequest{}
 			if err := protojson.Unmarshal([]byte(startRequestJSON), request); err != nil {
@@ -116,7 +121,7 @@ func TestWorkloadStartRoundTrip(t *testing.T) {
 			var data []byte
 			var err error
 			decoded := &runtimev2.WorkloadStartRequest{}
-			if codec == "json" {
+			if codec == codecJSON {
 				data, err = protojson.Marshal(request)
 				if err == nil {
 					err = protojson.Unmarshal(data, decoded)
