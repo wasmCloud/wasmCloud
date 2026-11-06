@@ -49,15 +49,20 @@ the code after the `.await`.
 
 ## Fix
 
-`wasi-webgpu-wasmtime-0.3.1.patch` (against the crates.io source) changes
-`on_submitted_work_done` to register the callback with a channel and then
-poll the queue's device on a blocking thread, waiting for the submission
-the callback was registered on. That sidesteps both problems: no future
-waker is involved, and the device is polled. `GpuQueue` keeps a reference
-to its device, so the poll still has a valid id if the guest drops the
-device first. A poll error traps the guest instead of panicking the host.
+`wasi-webgpu-wasmtime-0.3.1.patch` (against the crates.io source) is the
+code of upstream wasi-gfx/wasi-gfx-runtime#156. Each device gets a
+`DeviceHandle` that owns its device and queue ids and runs at most one poll
+thread. The thread polls only that device, waiting for the highest
+submission a caller needs, and the wgpu callbacks resolve `oneshot`
+channels directly. That fixes both problems: the channel wakes whichever
+task polled last, and the device is always polled. `on_submitted_work_done`
+submits queued writes first, and `map_async` uses the same poll instead of
+`poll_all_devices` on the executor. A lost device resolves waiting calls
+instead of trapping the guest. The guest's device, queues and buffers, and
+a running poll, each hold the handle, so ids stay valid if the guest drops
+the device mid-wait.
 
-With it, llama-bench (Qwen2.5 0.5B Q4_K_M, all layers on the GPU, one CPU
+With an earlier version of the patch, llama-bench (Qwen2.5 0.5B Q4_K_M, all layers on the GPU, one CPU
 thread) runs to completion inside wash-runtime: pp64 54.5–55.0 tok/s and tg16 33.8 tok/s, against
 55.1 and 39.1 for the same llama.cpp on native wgpu (wgpu-native on
 wgpu-core 29.0.4).

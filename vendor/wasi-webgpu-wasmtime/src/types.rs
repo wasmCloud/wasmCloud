@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::wasi::webgpu::webgpu;
+use crate::{device_handle::DeviceHandle, wasi::webgpu::webgpu};
 
 pub struct WgslLanguageFeatures;
 impl WgslLanguageFeatures {
@@ -56,35 +56,43 @@ where
 // usage needed in `GpuBuffer.usage`
 pub struct Buffer {
     pub(crate) buffer_id: wgpu_core::id::BufferId,
+    pub(crate) device: Arc<DeviceHandle>,
     pub(crate) size: u64,
     pub(crate) usage: wgpu_types::BufferUsages,
     pub(crate) map_state: webgpu::GpuBufferMapState,
 }
 
-// references to queue and adapter are also saved in device.
+// references to adapter are also saved in device.
 // TODO: these should be unit-structs instead of `types` so that the internals are private to the crate
 pub type Adapter = Arc<wgpu_core::id::AdapterId>;
 
-// queue needed for Device.queue
 // adapter needed for surface_get_capabilities in connect_graphics_context
-// keeping queue and adapter as Arc for reference counting while dropping.
+// keeping adapter as Arc for reference counting while dropping.
 #[derive(Clone)]
 pub struct Device {
-    pub(crate) device: Arc<wgpu_core::id::DeviceId>,
-    pub(crate) queue: Arc<wgpu_core::id::QueueId>,
+    pub(crate) handle: Arc<DeviceHandle>,
     pub(crate) adapter: Arc<wgpu_core::id::AdapterId>,
     pub(crate) error_handler: Arc<ErrorHandler>,
 }
-// device needed to poll in `GpuQueue.on_submitted_work_done`; it is
-// dropped when both the device and its queues are.
+
+/// A device's queue. It keeps the device alive, so the queue can poll it.
 pub struct Queue {
-    pub(crate) queue: Arc<wgpu_core::id::QueueId>,
-    pub(crate) device: Arc<wgpu_core::id::DeviceId>,
+    pub(crate) handle: Arc<DeviceHandle>,
+}
+
+impl Queue {
+    pub fn queue_id(&self) -> &wgpu_core::id::QueueId {
+        self.handle.queue_id()
+    }
+
+    pub fn device_id(&self) -> &wgpu_core::id::DeviceId {
+        self.handle.device_id()
+    }
 }
 
 impl Device {
     pub fn device_id(&self) -> &wgpu_core::id::DeviceId {
-        self.device.as_ref()
+        self.handle.device_id()
     }
 
     /// Create a `Texture` from a `TextureId` that is connected to this device.

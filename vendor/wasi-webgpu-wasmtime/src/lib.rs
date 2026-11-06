@@ -18,6 +18,7 @@ mod enum_conversions;
 mod flags_conversions;
 mod to_core_conversions;
 
+mod device_handle;
 mod trait_impls;
 mod types;
 pub use types::*;
