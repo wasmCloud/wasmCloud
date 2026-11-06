@@ -115,8 +115,10 @@ jobs:
         run: ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}"
 
       # Subsequent steps inherit the implicit `if: success()` — they only
-      # run when every preceding step succeeded.
+      # run when every preceding step succeeded. A failed memory_pressure
+      # run still renders and uploads its evidence: failures are its result.
       - name: render markdown summary
+        if: ${{ !cancelled() && (success() || (inputs.bench == 'memory_pressure' && steps.run.outcome == 'failure')) }}
         run: |
           # Each `run:` step gets a fresh shell — PATH from previous steps
           # doesn't persist — so re-source rustup's env shim before cargo.
@@ -132,12 +134,14 @@ jobs:
           name: bench-${{ inputs.name || inputs.bench }}-${{ github.run_id }}
           # criterion benches write to target/criterion/, gungraun benches
           # (gungraun) write to target/gungraun/, density benches to
-          # target/density/. A genuinely-empty run is a bug worth flagging
-          # loudly — fail rather than warn.
+          # target/density/, memory_pressure to target/pressure/. A
+          # genuinely-empty run is a bug worth flagging loudly — fail rather
+          # than warn.
           path: |
             ${{ env.CARGO_TARGET_DIR }}/criterion/
             ${{ env.CARGO_TARGET_DIR }}/gungraun/
             ${{ env.CARGO_TARGET_DIR }}/density/
+            ${{ env.CARGO_TARGET_DIR }}/pressure/
           retention-days: 90
           if-no-files-found: error
 

@@ -6,9 +6,12 @@
 # Benchmark families share this script:
 #   - criterion benches (http_invoke, service_http, wasmtime_baseline,
 #     wasmtime_serve) write to $CARGO_TARGET_DIR/criterion/.
-#   - density benches (scale_density, memory_pressure) write a list of
+#   - density benches (scale_density) write a list of
 #     bench_tools::density::Report to $CARGO_TARGET_DIR/density/<bench>.json,
 #     which `bench-tools jsonl` and `summary` read.
+#   - the pressure bench (memory_pressure) runs through `bench-tools
+#     memory-pressure`, which writes a list of bench_tools::pressure::Report
+#     to $CARGO_TARGET_DIR/pressure/<bench>.json for the same commands.
 #   - gungraun benches (gungraun, gungraun_plugin) write to $CARGO_TARGET_DIR/gungraun/
 #     and are pinned to the isolated CPU (set by hetzner-postinstall.sh
 #     via isolcpus=) so that scheduler interference doesn't leak into
@@ -76,7 +79,7 @@ log="${CARGO_TARGET_DIR}/run-${bench}-${GITHUB_RUN_ID:-local}.log"
 # persistent (kept for the *build* cache, not the measurement output).
 # The build cache lives elsewhere in $CARGO_TARGET_DIR and is preserved.
 # Both criterion and gungraun keep "previous run" baseline data we don't use.
-rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun" "${CARGO_TARGET_DIR}/density"
+rm -rf "${CARGO_TARGET_DIR}/criterion" "${CARGO_TARGET_DIR}/gungraun" "${CARGO_TARGET_DIR}/density" "${CARGO_TARGET_DIR}/pressure"
 
 # Touch the run marker right before invoking cargo so `find -newer "$marker"`
 # in `bench-tools jsonl` picks up exactly the files this run produced.
