@@ -22,6 +22,10 @@ on:
         description: "git ref to bench (branch, tag, sha, or #PR; default = the workflow ref)"
         type: string
         default: ""
+      args:
+        description: "memory_pressure only: extra runner flags (e.g. --memory-mib 384 2048 --repeats 3)"
+        type: string
+        default: ""
   # Auto-populate the releases timeline: when a tag is published, run the
   # subset of benches that actually track wash-runtime regressions against
   # that exact tag. The site filters rows by `ref` to render the
@@ -61,6 +65,7 @@ jobs:
       # Pull-request labels use `pull/123`, while checkout uses the full ref.
       ref: ${{ steps.set.outputs.ref }}
       sha: ${{ steps.commit.outputs.sha }}
+      args: ${{ steps.set.outputs.args }}
     env:
       # Subset of inputs.bench.options to run automatically on `release:
       # published`. wasmtime_* are reference baselines for wasmtime itself
@@ -95,10 +100,25 @@ jobs:
           EVENT: ${{ github.event_name }}
           INPUT_BENCH: ${{ inputs.bench }}
           INPUT_REF: ${{ inputs.ref }}
+          INPUT_ARGS: ${{ inputs.args }}
           DEFAULT_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
+          # Only memory_pressure's runner takes flags. Refuse them here,
+          # before the job queues on the bench host, rather than drop them.
+          args="${INPUT_ARGS:-}"
+          if [ -n "$args" ]; then
+            if [ "$INPUT_BENCH" != memory_pressure ]; then
+              echo "args are only accepted for memory_pressure, not ${INPUT_BENCH}" >&2
+              exit 1
+            fi
+            # Flags and values only; the runner validates the rest.
+            if ! [[ "$args" =~ ^[A-Za-z0-9\ ._=-]+$ ]]; then
+              echo "args may contain only letters, digits, spaces, and . _ = -" >&2
+              exit 1
+            fi
+          fi
           if [ "$EVENT" = "release" ]; then
             benches="$RELEASE_BENCHES"
             ref="${RELEASE_TAG}"
@@ -145,6 +165,7 @@ jobs:
             echo "runs=${runs}"
             echo "ref=${ref}"
             echo "checkout_ref=${checkout_ref}"
+            echo "args=${args}"
           } >> "$GITHUB_OUTPUT"
 
       - name: resolve commit
@@ -173,6 +194,7 @@ jobs:
       publish: ${{ matrix.run.publish }}
       ref: ${{ needs.matrix.outputs.ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}
+      args: ${{ needs.matrix.outputs.args }}
       artifact_id: ${{ format('{0}', strategy.job-index) }}
     secrets:
       aws_role_arn: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}

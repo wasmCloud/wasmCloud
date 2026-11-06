@@ -26,6 +26,12 @@ on:
         required: false
         type: string
         default: "{}"
+      # Extra flags for the memory_pressure runner, separated by spaces.
+      # bench.yml accepts them for that bench only.
+      args:
+        required: false
+        type: string
+        default: ""
       # Whether results may enter the public history (pull-request refs
       # never do).
       publish:
@@ -112,7 +118,12 @@ jobs:
 
       - name: run cargo bench
         id: run
-        run: ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}"
+        env:
+          BENCH_ARGS: ${{ inputs.args }}
+        # Split on spaces into separate words, never through eval.
+        run: |
+          read -ra args <<< "$BENCH_ARGS"
+          ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}" "${args[@]}"
 
       # Subsequent steps inherit the implicit `if: success()` — they only
       # run when every preceding step succeeded. A failed memory_pressure
