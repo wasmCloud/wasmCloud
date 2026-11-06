@@ -1,4 +1,4 @@
-package v2connect_test
+package rpc
 
 import (
 	"net/http"

@@ -39,6 +39,9 @@ jobs:
               - 'buf.gen.yaml'
               - 'runtime-operator/buf.yaml'
               - 'runtime-operator/buf.gen.yaml'
+              # buf generate cleans this tree, so a hand-written file
+              # here is deleted on regeneration and fails check-generated.
+              - 'runtime-operator/pkg/rpc/**'
               - '.github/workflows/proto.yml'
               # The Rust bindings under crates/wash-runtime are committed
               # output of `cargo xtask generate-protos`, so anything that
