@@ -1,0 +1,30 @@
+package wasmcloud:host@0.1.7;
+
+/// Metadata for workloads bound to this component plugin.
+interface workload-metadata {
+    use types.{workload-id};
+
+    enum owner-kind {
+        deployment,
+        daemon-set,
+        replica-set,
+        workload,
+    }
+
+    /// Logical identity shared across replicas and revisions. All three
+    /// fields form the key; objects of different kinds may share a name.
+    record workload-owner {
+        namespace: string,
+        kind: owner-kind,
+        name: string,
+    }
+
+    /// The owner resolved by the host before binding any plugins. Available
+    /// during `on-workload-bind` and while bound, including after a plugin
+    /// restart. Access ends when unbinding starts, a bind fails, or the
+    /// workload is evicted. An id this plugin does not serve returns `none`.
+    ///
+    /// A standalone workload owns itself. The identity reflects the
+    /// orchestrator's input, not host-verified authorization.
+    owner: func(id: workload-id) -> option<workload-owner>;
+}

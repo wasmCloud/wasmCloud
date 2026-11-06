@@ -576,13 +576,17 @@ impl HostPlugin for InMemoryMessaging {
                 WorkloadItem::Component(component) => component.name().to_string(),
                 WorkloadItem::Service(_) => "service".to_string(),
             };
-            let workload_name = super::parse_admission_group(admission_group.as_deref())
-                .unwrap_or_else(|| component_handle.stable_workload_name());
-            let identity = super::AdmissionIdentity::new(
-                component_handle.workload_namespace(),
-                workload_name,
-                &component_name,
-            );
+            let group = super::parse_admission_group(admission_group.as_deref());
+            let identity = match group {
+                Some(group) => super::AdmissionIdentity::new(
+                    component_handle.workload_namespace(),
+                    group,
+                    &component_name,
+                ),
+                None => {
+                    super::AdmissionIdentity::for_owner(component_handle.owner(), &component_name)
+                }
+            };
             let admission = self
                 .limits
                 .admission(&identity, max_in_flight)
