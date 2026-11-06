@@ -21,6 +21,8 @@ use wash_runtime::{
     wit::WitInterface,
 };
 
+use crate::perf::{Tee, Timings};
+
 /// The `wasi:webgpu` the host links, as the workload must ask for it.
 const WEBGPU_INTERFACE: &str = "wasi:webgpu/webgpu@0.3.0-rc.2";
 
@@ -46,6 +48,20 @@ impl std::str::FromStr for Mount {
             guest: guest.into(),
         })
     }
+}
+
+/// `mounts` with each host path resolved, as the host and native runs see it.
+pub fn canonical_mounts(mounts: Vec<Mount>) -> Result<Vec<Mount>> {
+    mounts
+        .into_iter()
+        .map(|m| {
+            let host = m
+                .host
+                .canonicalize()
+                .with_context(|| format!("mount {}", m.host.display()))?;
+            Ok(Mount { host, ..m })
+        })
+        .collect()
 }
 
 /// How the host the commands run in is set up.
@@ -77,25 +93,40 @@ pub struct Outcome {
     /// `None` when the guest trapped instead of exiting.
     pub exit_code: Option<i32>,
     pub error: Option<String>,
-    /// Compile, link and plugin bind: a host's workload start.
-    pub resolve_ms: f64,
-    /// `wasi:cli/run`, from call to return.
+    /// Compile, link and plugin bind: a host's workload start. `None` for
+    /// a native process.
+    pub resolve_ms: Option<f64>,
+    /// `wasi:cli/run`, from call to return, or the native process's life.
     pub run_ms: f64,
+    /// Model load, as the guest's llama.cpp reports it.
+    pub load_ms: Option<f64>,
+    /// Prompt eval plus token eval, as the guest's llama.cpp reports it.
+    pub first_token_ms: Option<f64>,
+}
+
+impl Outcome {
+    pub fn new(
+        exit_code: Option<i32>,
+        error: Option<String>,
+        resolve_ms: Option<f64>,
+        run_ms: f64,
+        stderr: &str,
+    ) -> Self {
+        let timings = Timings::parse(stderr);
+        Self {
+            exit_code,
+            error,
+            resolve_ms,
+            run_ms,
+            load_ms: timings.load_ms,
+            first_token_ms: timings.first_token_ms,
+        }
+    }
 }
 
 impl Runner {
     pub fn new(options: Options) -> Result<Self> {
-        let mounts = options
-            .mounts
-            .into_iter()
-            .map(|m| {
-                let host = m
-                    .host
-                    .canonicalize()
-                    .with_context(|| format!("mount {}", m.host.display()))?;
-                Ok(Mount { host, ..m })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mounts = canonical_mounts(options.mounts)?;
         // Guest memory is counted rather than enforced, and the process
         // footprint is not policed: the bench reports what a model needs,
         // and on unified-memory GPUs device allocations land in the process.
@@ -188,10 +219,13 @@ impl Runner {
         let resolve_ms = ms(started.elapsed());
 
         let running = Instant::now();
+        let stderr = Tee::default();
         let result = resolved
             .run_command(
                 &component_id,
-                CommandOptions::new().args(args.iter().cloned()),
+                CommandOptions::new()
+                    .args(args.iter().cloned())
+                    .stderr(stderr.clone()),
             )
             .await;
         let run_ms = ms(running.elapsed());
@@ -201,20 +235,17 @@ impl Runner {
             tracing::warn!(workload = name, error = %format!("{err:#}"), "unbinding plugins failed");
         }
 
-        Ok(match result {
-            Ok(outcome) => Outcome {
-                exit_code: Some(outcome.exit_code),
-                error: None,
-                resolve_ms,
-                run_ms,
-            },
-            Err(err) => Outcome {
-                exit_code: None,
-                error: Some(format!("{err:#}")),
-                resolve_ms,
-                run_ms,
-            },
-        })
+        let (exit_code, error) = match result {
+            Ok(outcome) => (Some(outcome.exit_code), None),
+            Err(err) => (None, Some(format!("{err:#}"))),
+        };
+        Ok(Outcome::new(
+            exit_code,
+            error,
+            Some(resolve_ms),
+            run_ms,
+            &stderr.text(),
+        ))
     }
 }
 

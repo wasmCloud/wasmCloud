@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::{
     turns,
-    workload::{Options, Runner},
+    workload::{Options, Runner, canonical_mounts},
 };
 
 #[derive(Parser)]
@@ -44,12 +44,16 @@ struct RunArgs {
 struct TurnsArgs {
     #[command(flatten)]
     host: Options,
-    /// The plan: `{"turns":[{"name","wasm","args"}],"rounds","idle_ms"}`.
+    /// The plan: `{"turns":[{"name","wasm","native","args"}],"rounds","idle_ms"}`.
     #[arg(long)]
     plan: PathBuf,
     /// Where to write events, one JSON object per line.
     #[arg(long)]
     events: PathBuf,
+    /// Run each turn's `native` binary as a process instead of its `wasm`
+    /// as a workload.
+    #[arg(long)]
+    native: bool,
 }
 
 #[tokio::main]
@@ -93,10 +97,15 @@ async fn run(cli: Cli) -> Result<bool> {
         }
         Command::Turns(args) => {
             let plan = turns::load_plan(&args.plan)?;
-            let runner = Runner::new(args.host)?;
             let mut events = std::fs::File::create(&args.events)
                 .with_context(|| format!("create {}", args.events.display()))?;
-            turns::run(&runner, &plan, &mut events).await
+            if args.native {
+                let mounts = canonical_mounts(args.host.mounts)?;
+                turns::run(&turns::Side::Native(&mounts), &plan, &mut events).await
+            } else {
+                let runner = Runner::new(args.host)?;
+                turns::run(&turns::Side::Wasm(&runner), &plan, &mut events).await
+            }
         }
     }
 }

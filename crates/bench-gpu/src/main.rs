@@ -1,11 +1,14 @@
 //! Runs `wasi:webgpu` commands inside wash-runtime for scripts/gpubench:
 //! `run` is step 3 of the native gap bench, `turns` is the wasmCloud side of
-//! the serverless bench. The guest's stdout and stderr are this process's.
+//! the serverless bench. The guest's stdout and stderr are this process's;
+//! stderr is also read for llama.cpp's own timings.
 //!
 //! wash-runtime has no `wasi:webgpu` on Windows or s390x; there it only says so.
 
 #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
 mod cli;
+#[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
+mod perf;
 #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
 mod turns;
 #[cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))]
