@@ -645,7 +645,15 @@ mod tests {
             (format!("{}-rc.1", newer_tag()?), true),
             (format!("wash-v{current}"), false),
             ("wash-v0.0.0".into(), false),
-            (format!("wash-v{current}-rc.1"), false),
+            // `-0` is the lowest prerelease of the current core version, so it is
+            // older than the build even when the build is itself a prerelease.
+            (
+                format!(
+                    "wash-v{}.{}.{}-0",
+                    current.major, current.minor, current.patch
+                ),
+                false,
+            ),
         ] {
             for force in [false, true] {
                 let temp = tempfile::tempdir()?;
