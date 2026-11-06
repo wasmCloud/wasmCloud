@@ -184,6 +184,9 @@ func TestDeploymentTransientCreateFailureRetries(t *testing.T) {
 	if !metav1.IsControlledBy(&list.Items[0], d) || list.Items[0].Name != d.Status.CurrentReplicaSet.Name {
 		t.Fatalf("created ReplicaSet does not match rollout: %+v", list.Items[0])
 	}
+	if d.Status.PreviousReplicaSet == nil || d.Status.PreviousReplicaSet.Name != before.Status.CurrentReplicaSet.Name {
+		t.Fatalf("rolling update previous = %+v, want %s", d.Status.PreviousReplicaSet, before.Status.CurrentReplicaSet.Name)
+	}
 }
 
 func TestDeploymentReadyTracksPrerequisites(t *testing.T) {

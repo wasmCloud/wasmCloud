@@ -54,11 +54,20 @@ test('branch data must contain valid counters', () => {
 
 test('test trees and parent-named test helpers are test code', () => {
   for (const name of ['example.org/mod/test/utils', 'example.org/mod/test', 'example.org/mod/pkg/wasmbus/wasmbustest']) {
-    assert.equal(isTestCode(name), true, name);
+    assert.equal(isTestCode(name, 'example.org/mod'), true, name);
   }
   for (const name of ['example.org/mod', 'example.org/mod/pkg/wasmbus', 'example.org/mod/testdata', 'example.org/mod/pkg/latest', 'example.org/mod/pkg/contest']) {
-    assert.equal(isTestCode(name), false, name);
+    assert.equal(isTestCode(name, 'example.org/mod'), false, name);
   }
+});
+
+test('the module path does not make its packages test code', () => {
+  assert.equal(isTestCode('example.org/test/mod', 'example.org/test/mod'), false);
+  assert.equal(isTestCode('example.org/test/mod/pkg', 'example.org/test/mod'), false);
+  assert.equal(isTestCode('example.org/test/mod/test/utils', 'example.org/test/mod'), true);
+  assert.equal(isTestCode('example.org/mod/modtest', 'example.org/mod'), true);
+  assert.equal(isTestCode('example.org/modtest', 'example.org/modtest'), false);
+  assert.throws(() => isTestCode('example.org/other/pkg', 'example.org/mod'));
 });
 
 test('target comparisons use exact counts instead of rounded percentages', () => {
@@ -90,7 +99,7 @@ if (tool === 'git') {
   if (args[0] === 'version') console.log('go fixture');
   else if (args[0] === 'list') {
     for (const pkg of ['', '/untested', '/onlytests', '/fake/faketest', '/test/integration', '/test/e2e']) {
-      console.log('example.org/mod' + pkg + '\\t' + process.cwd() + pkg + '\\t' + !(pkg.startsWith('/test/') || pkg === '/onlytests'));
+      console.log('example.org/mod' + pkg + '\\t' + process.cwd() + pkg + '\\t' + !(pkg.startsWith('/test/') || pkg === '/onlytests') + '\\texample.org/mod');
     }
   } else if (args[0] === 'test') {
     if (process.env.GOWORK !== 'off') throw new Error('workspace enabled');

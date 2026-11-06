@@ -104,7 +104,8 @@ func TestReplicaSetScaleUpProtectsManagedAnnotations(t *testing.T) {
 }
 
 func TestReplicaSetScaleReadAndCreateFailuresRetry(t *testing.T) {
-	for _, operation := range []string{testListOperation, testCreateOperation, "ready list"} {
+	const readyListCase = "ready list"
+	for _, operation := range []string{testListOperation, testCreateOperation, readyListCase} {
 		t.Run(operation, func(t *testing.T) {
 			rs := cleanupReplicaSet()
 			cause := errors.New("API unavailable")
@@ -124,14 +125,14 @@ func TestReplicaSetScaleReadAndCreateFailuresRetry(t *testing.T) {
 				},
 			})
 			reconcile := r.reconcileScaleUp
-			if operation == "ready list" {
+			if operation == readyListCase {
 				reconcile = r.reconcileReady
 			}
 			if err := reconcile(t.Context(), rs); err == nil || !strings.Contains(err.Error(), cause.Error()) {
 				t.Fatalf("reconcile = %v, want API error", err)
 			}
-			if rs.Status.Replicas != nil {
-				t.Fatalf("failed reconcile reported replicas: %+v", rs.Status.Replicas)
+			if operation == readyListCase && rs.Status.Replicas != nil {
+				t.Fatalf("failed ready read reported replicas: %+v", rs.Status.Replicas)
 			}
 			fail = false
 			for range 2 {

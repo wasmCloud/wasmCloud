@@ -56,11 +56,14 @@ export function meetsTarget({ covered, total }, target) {
   return total > 0 && covered * 100 >= total * target;
 }
 
-// Test code is a package under a test/ directory, or a helper named after its
-// parent the way net/http/httptest is.
-export function isTestCode(importPath) {
-  const segments = importPath.split('/');
-  return segments.includes('test') || (segments.length > 1 && segments.at(-1) === `${segments.at(-2)}test`);
+// Test code is a package under a test/ directory of the module, or a helper
+// named after its parent the way net/http/httptest is.
+export function isTestCode(importPath, modulePath) {
+  if (importPath !== modulePath && !importPath.startsWith(`${modulePath}/`)) {
+    throw new Error(`Package ${importPath} is outside module ${modulePath}`);
+  }
+  const inner = importPath.slice(modulePath.length).split('/').filter(Boolean);
+  return inner.includes('test') || (inner.length > 0 && inner.at(-1) === `${importPath.split('/').at(-2)}test`);
 }
 
 function percentage({ covered, total }) {
@@ -113,21 +116,23 @@ async function run(module) {
   const commit = await command('git', ['rev-parse', 'HEAD'], 'commit.txt');
   const status = await command('git', ['status', '--short'], 'working-tree.txt');
   const listed = await command('go', [
-    'list', '-f', '{{.ImportPath}}\t{{.Dir}}\t{{if or .GoFiles .CgoFiles}}true{{else}}false{{end}}', './...',
+    'list', '-f', '{{.ImportPath}}\t{{.Dir}}\t{{if or .GoFiles .CgoFiles}}true{{else}}false{{end}}\t{{.Module.Path}}', './...',
   ], 'packages.txt');
   if (failures.length) throw new Error(failures.join('\n'));
   const packages = listed.stdout.trim().split('\n').map((line) => {
     const fields = line.split('\t');
-    const [name, dir, production] = fields;
-    if (fields.length !== 3 || !name || !dir || !['true', 'false'].includes(production)) {
+    const [name, dir, production, modulePath] = fields;
+    if (fields.length !== 4 || !name || !dir || !['true', 'false'].includes(production) || !modulePath) {
       throw new Error(`Invalid package: ${line}`);
     }
-    return { name, dir, production: production === 'true' };
-  }).filter(({ name }) => !/\/test\/e2e(?:\/|$)/.test(name));
-  const measured = packages.filter(({ name }) => !isTestCode(name));
+    const testCode = isTestCode(name, modulePath);
+    const e2e = /(?:^|\/)test\/e2e(?:\/|$)/.test(name.slice(modulePath.length));
+    return { name, dir, production: production === 'true', testCode, e2e };
+  }).filter(({ e2e }) => !e2e);
+  const measured = packages.filter(({ testCode }) => !testCode);
   if (!measured.length) throw new Error('No packages found');
   const names = measured.map(({ name }) => name);
-  const testPackages = packages.filter(({ name }) => isTestCode(name)).map(({ name }) => name);
+  const testPackages = packages.filter(({ testCode }) => testCode).map(({ name }) => name);
   const provenance = {
     module, commit: commit.stdout.trim(), workingTree: status.stdout.trim(),
     collectedAt: new Date().toISOString(), go: go.stdout.trim(), gobco: tool.stdout.trim(),

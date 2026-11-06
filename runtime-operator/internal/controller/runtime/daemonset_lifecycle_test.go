@@ -78,8 +78,8 @@ func TestDaemonSetDefaultReplicasAndService(t *testing.T) {
 	if !reflect.DeepEqual(byHost[dsHostA][0].Spec.Kubernetes, ds.Spec.Kubernetes) || ds.Spec.Template.Spec.Kubernetes != nil {
 		t.Fatal("service was not copied without changing the template")
 	}
-	if ds.Status.Replicas.Expected != 1 {
-		t.Fatalf("default expected replicas = %d", ds.Status.Replicas.Expected)
+	if ds.Status.Replicas == nil || ds.Status.Replicas.Expected != 1 {
+		t.Fatalf("default expected replicas = %+v, want 1", ds.Status.Replicas)
 	}
 }
 
