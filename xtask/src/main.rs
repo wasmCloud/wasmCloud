@@ -23,6 +23,7 @@ mod fuzz;
 #[path = "../../fuzz/src/fuzzer.rs"]
 mod fuzz_adapter;
 mod protos;
+mod scale_density;
 
 use fixtures::{P2_FIXTURES, P3_FIXTURES};
 
@@ -65,6 +66,15 @@ enum Task {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Run wash-runtime's `scale_density` bench with a density, core-sweep or
+    /// stock preset; `crates/wash-runtime/benches/scale_density.md` lists them.
+    ScaleDensity {
+        preset: scale_density::Preset,
+        /// Where each run's JSON report and log go; `<target>/scale-density`
+        /// by default.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -77,6 +87,7 @@ fn main() -> Result<()> {
         Task::E2eImages => e2e_images::run(&workspace),
         Task::GenerateProtos => protos::run(&workspace),
         Task::BenchScale { args } => bench_scale(&workspace, &args),
+        Task::ScaleDensity { preset, out } => scale_density::run(&workspace, preset, out),
     }
 }
 
@@ -163,6 +174,17 @@ fn build_fixtures(workspace: &Path, names: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// The directory cargo builds into. A relative CARGO_TARGET_DIR is joined to
+/// the workspace, as cargo resolves it when run there; an absolute value
+/// replaces the base, matching cargo too.
+pub(crate) fn target_dir(workspace: &Path) -> PathBuf {
+    workspace.join(
+        std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("target")),
+    )
+}
+
 /// Locate the `wash` binary. Fixtures build through `wash build`, which fetches
 /// each fixture's WIT deps from its `wkg.toml` local file refs, runs its
 /// `cargo build`, and wraps a wasip1 core module into a component. Build `wash`
@@ -173,14 +195,7 @@ pub(crate) fn ensure_wash(workspace: &Path) -> Result<PathBuf> {
     // cache survives `actions/checkout --clean`), and under `<workspace>/target`
     // otherwise. Resolve the binary against the same directory cargo uses, or
     // the built `wash` is looked for at a path nothing was written to.
-    // Join against workspace so a relative CARGO_TARGET_DIR resolves the same
-    // way cargo resolves it (cargo runs below with current_dir = workspace); an
-    // absolute value replaces the base, matching cargo too.
-    let target_dir = workspace.join(
-        std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("target")),
-    );
+    let target_dir = target_dir(workspace);
     for profile in ["release", "debug"] {
         let candidate = target_dir.join(profile).join("wash");
         if candidate.exists() {
