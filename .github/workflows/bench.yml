@@ -26,6 +26,10 @@ on:
         description: "memory_pressure only: extra runner flags (e.g. --memory-mib 384 2048 --repeats 3)"
         type: string
         default: ""
+      host:
+        description: "runner label of the bench host (hetzner = the dedicated host)"
+        type: string
+        default: hetzner
   # Auto-populate the releases timeline: when a tag is published, run the
   # subset of benches that actually track wash-runtime regressions against
   # that exact tag. The site filters rows by `ref` to render the
@@ -66,6 +70,7 @@ jobs:
       ref: ${{ steps.set.outputs.ref }}
       sha: ${{ steps.commit.outputs.sha }}
       args: ${{ steps.set.outputs.args }}
+      host: ${{ steps.set.outputs.host }}
     env:
       # Subset of inputs.bench.options to run automatically on `release:
       # published`. wasmtime_* are reference baselines for wasmtime itself
@@ -101,6 +106,7 @@ jobs:
           INPUT_BENCH: ${{ inputs.bench }}
           INPUT_REF: ${{ inputs.ref }}
           INPUT_ARGS: ${{ inputs.args }}
+          INPUT_HOST: ${{ inputs.host }}
           DEFAULT_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -118,6 +124,14 @@ jobs:
               echo "args may contain only letters, digits, spaces, and . _ = -" >&2
               exit 1
             fi
+          fi
+          # Release runs measure the dedicated host. Same shape as
+          # bench-host.mjs's parseHostLabel.
+          host="hetzner"
+          [ "$EVENT" = "release" ] || host="${INPUT_HOST:-hetzner}"
+          if ! [[ "$host" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "invalid host label '${host}'" >&2
+            exit 1
           fi
           if [ "$EVENT" = "release" ]; then
             benches="$RELEASE_BENCHES"
@@ -166,6 +180,7 @@ jobs:
             echo "ref=${ref}"
             echo "checkout_ref=${checkout_ref}"
             echo "args=${args}"
+            echo "host=${host}"
           } >> "$GITHUB_OUTPUT"
 
       - name: resolve commit
@@ -191,7 +206,10 @@ jobs:
       bench: ${{ matrix.run.bench }}
       name: ${{ matrix.run.name }}
       env: ${{ toJSON(matrix.run.env) }}
-      publish: ${{ matrix.run.publish }}
+      # arewefastyet has no host filter yet, so only the dedicated host's
+      # rows enter the public history.
+      publish: ${{ matrix.run.publish && needs.matrix.outputs.host == 'hetzner' }}
+      host: ${{ needs.matrix.outputs.host }}
       ref: ${{ needs.matrix.outputs.ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}
       args: ${{ needs.matrix.outputs.args }}

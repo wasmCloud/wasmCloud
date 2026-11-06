@@ -38,6 +38,11 @@ on:
         required: false
         type: boolean
         default: true
+      # Runner label of the bench host (.github/scripts/bench-host.mjs).
+      host:
+        required: false
+        type: string
+        default: hetzner
     secrets:
       aws_role_arn:
         required: true
@@ -57,12 +62,13 @@ permissions: {}
 jobs:
   bench:
     name: ${{ inputs.name || inputs.bench }}
-    runs-on: [self-hosted, bench, hetzner]
+    runs-on: [self-hosted, bench, "${{ inputs.host }}"]
     timeout-minutes: 60
     permissions:
       contents: read
     env:
       WASMCLOUD_BENCH_NAME: ${{ inputs.bench }}
+      WASMCLOUD_BENCH_HOST_LABEL: ${{ inputs.host }}
       # Persist the cargo build cache outside $GITHUB_WORKSPACE so
       # actions/checkout's clean step doesn't blow it away every run.
       CARGO_TARGET_DIR: /var/lib/bench/target
@@ -91,13 +97,28 @@ jobs:
           EXPECTED_SHA: ${{ inputs.commit_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
+      # Host checks and publish packaging run the workflow's own scripts, so
+      # an older benched ref still gets the current pre-flight. Excluded from
+      # the benched checkout so nothing built from its working tree sees it.
+      - name: checkout workflow tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .bench-publish-tools
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: exclude workflow tools
+        run: echo '/.bench-publish-tools/' >> .git/info/exclude
+
       - name: pre-flight host checks
         env:
-          # Expected hostname of the dedicated bench host. Set as a repo
-          # variable (Settings → Secrets and variables → Actions → Variables).
-          # Kept out of the repo so the box's identity isn't broadcast.
-          WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
-        run: node .github/scripts/bench-preflight.mjs
+          # Each host's expected hostname is a repo variable (Settings →
+          # Secrets and variables → Actions → Variables) named by
+          # bench-host.mjs's hostnameVar. Kept out of the repo so no box's
+          # identity is broadcast.
+          WASMCLOUD_BENCH_REPO_VARS: ${{ toJSON(vars) }}
+        run: node .bench-publish-tools/.github/scripts/bench-preflight.mjs
 
       - name: preset environment
         if: ${{ inputs.env != '{}' }}
@@ -159,14 +180,6 @@ jobs:
       # Package results without AWS credentials. Pull-request refs and runs
       # called with `publish: false` keep their summary and artifact but do
       # not enter the public history.
-      - name: checkout workflow tools
-        if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .bench-publish-tools
-          persist-credentials: false
-
       - name: prepare publish artifact
         if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
         env:
@@ -204,6 +217,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      WASMCLOUD_BENCH_HOST_LABEL: ${{ inputs.host }}
     steps:
       - name: checkout workflow tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

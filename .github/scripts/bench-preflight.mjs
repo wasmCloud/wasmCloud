@@ -7,8 +7,11 @@
 //
 // Invoked from .github/workflows/bench{,-compare}.yml. Reads:
 //
-//   WASMCLOUD_BENCH_HOSTNAME       expected hostname (workflow: vars.WASMCLOUD_BENCH_HOSTNAME)
+//   WASMCLOUD_BENCH_HOST_LABEL     the runner label of the host (default: hetzner; bench-host.mjs)
+//   WASMCLOUD_BENCH_REPO_VARS      toJSON(vars); its hostnameVar(label) is the expected
+//                                  hostname. An env var of that name wins (local runs).
 //   WASMCLOUD_BENCH_ISOLATED_CPU   override for the isolated-CPU index (default: "5")
+//   WASMCLOUD_BENCH_EXPECTED_NPROC online CPUs with nosmt (default: 6, the dedicated host)
 //   CARGO_TARGET_DIR               persistent target dir (default: /var/lib/bench/target)
 //   WASMCLOUD_BENCH_K6             "1" for a k6bench run: also check its tools (#11)
 //
@@ -19,7 +22,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statfsSync } from 'node:fs';
 import { hostname, loadavg, platform } from 'node:os';
 
-const EXPECTED_NPROC = 6;
+import { DEFAULT_HOST_LABEL, hostnameVar, parseHostLabel } from './bench-host.mjs';
+
 const EXPECTED_GOVERNOR = 'performance';
 const MIN_FREE_BYTES = 5 * 1024 ** 3; // 5 GiB
 const MAX_LOAD1 = 1.0;
@@ -72,6 +76,11 @@ function countCpuMask(mask) {
   return total;
 }
 
+const EXPECTED_NPROC = Number(process.env.WASMCLOUD_BENCH_EXPECTED_NPROC || 6);
+if (!Number.isInteger(EXPECTED_NPROC) || EXPECTED_NPROC < 1) {
+  fail(`WASMCLOUD_BENCH_EXPECTED_NPROC='${process.env.WASMCLOUD_BENCH_EXPECTED_NPROC}' is not a CPU count`);
+}
+
 // 0. Linux only. Every check below reads /proc or /sys, and os.loadavg()
 //    returns [0, 0, 0] on Windows — which would silently sail past the
 //    load guard. Refuse outright rather than bench on a bogus baseline.
@@ -79,21 +88,32 @@ if (platform() !== 'linux') {
   fail(`unsupported platform '${platform()}'; the bench host must be Linux`);
 }
 
-// 1. WASMCLOUD_BENCH_HOSTNAME must be exported, and we must be on that host.
-const expectedHostname = process.env.WASMCLOUD_BENCH_HOSTNAME;
+// 1. The host label's expected hostname must be set, and we must be on that host.
+let hostLabel;
+try {
+  hostLabel = parseHostLabel(process.env.WASMCLOUD_BENCH_HOST_LABEL || DEFAULT_HOST_LABEL);
+} catch (e) {
+  fail(e.message);
+}
+const hostVar = hostnameVar(hostLabel);
+let repoVars = {};
+try {
+  repoVars = JSON.parse(process.env.WASMCLOUD_BENCH_REPO_VARS || '{}') ?? {};
+} catch (e) {
+  fail(`WASMCLOUD_BENCH_REPO_VARS is not JSON: ${e.message}`);
+}
+const expectedHostname = process.env[hostVar] || repoVars[hostVar];
 if (!expectedHostname) {
-  fail(
-    'WASMCLOUD_BENCH_HOSTNAME not set ' +
-      '(workflow: vars.WASMCLOUD_BENCH_HOSTNAME; local: export from 1Password)',
-  );
+  fail(`${hostVar} not set (workflow: repo variable ${hostVar}; local: export from 1Password)`);
 }
 const actualHostname = hostname();
 if (actualHostname !== expectedHostname) {
   fail(`wrong host: ${actualHostname} (expected ${expectedHostname})`);
 }
-ok(`host: ${expectedHostname}`);
+ok(`host: ${expectedHostname} (${hostLabel})`);
 
-// 2. /sys/.../cpu/online == 6 cores (nosmt collapsed 12 SMT → 6 physical).
+// 2. /sys/.../cpu/online == EXPECTED_NPROC (on the dedicated host, nosmt
+//    collapses 12 SMT → 6 physical).
 //    None of the `nproc` variants are right here:
 //      - bare `nproc` honors `sched_getaffinity`, which systemd narrows
 //        to "online minus isolcpus" for every service unit it manages

@@ -27,6 +27,17 @@ on:
       raw:
         required: true
         type: boolean
+      # Whether results may enter the public history (pull-request refs
+      # never do).
+      publish:
+        required: false
+        type: boolean
+        default: true
+      # Runner label of the bench host (.github/scripts/bench-host.mjs).
+      host:
+        required: false
+        type: string
+        default: hetzner
     secrets:
       aws_role_arn:
         required: true
@@ -46,7 +57,7 @@ permissions: {}
 jobs:
   k6:
     name: ${{ inputs.run }}
-    runs-on: [self-hosted, bench, hetzner]
+    runs-on: [self-hosted, bench, "${{ inputs.host }}"]
     timeout-minutes: 90
     permissions:
       contents: read
@@ -54,6 +65,7 @@ jobs:
       CARGO_TARGET_DIR: /var/lib/bench/target
       CARGO_INCREMENTAL: "0"
       WASMCLOUD_BENCH_REF: ${{ inputs.ref }}
+      WASMCLOUD_BENCH_HOST_LABEL: ${{ inputs.host }}
       RUN: ${{ inputs.run }}
       INPUT_RATE: ${{ inputs.rate || '1000' }}
       INPUT_DURATION: ${{ inputs.duration || '3m' }}
@@ -74,11 +86,26 @@ jobs:
           EXPECTED_SHA: ${{ inputs.commit_sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
+      # Host checks and publish packaging run the workflow's own scripts, so
+      # an older benched ref still gets the current pre-flight. Excluded from
+      # the benched checkout so --build-local's image context never sees it.
+      - name: checkout workflow tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .bench-publish-tools
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: exclude workflow tools
+        run: echo '/.bench-publish-tools/' >> .git/info/exclude
+
       - name: pre-flight host checks
         env:
-          WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
+          # Expected hostnames are repo variables; see bench-run.yml.
+          WASMCLOUD_BENCH_REPO_VARS: ${{ toJSON(vars) }}
           WASMCLOUD_BENCH_K6: "1"
-        run: node .github/scripts/bench-preflight.mjs
+        run: node .bench-publish-tools/.github/scripts/bench-preflight.mjs
 
       - name: run k6 scenario
         id: run
@@ -122,18 +149,10 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-      # Pull-request refs keep their summary and artifact but do not enter
-      # the public history.
-      - name: checkout workflow tools
-        if: ${{ success() && !startsWith(inputs.ref, 'pull/') }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .bench-publish-tools
-          persist-credentials: false
-
+      # Pull-request refs and runs called with `publish: false` keep their
+      # summary and artifact but do not enter the public history.
       - name: prepare publish artifact
-        if: ${{ success() && !startsWith(inputs.ref, 'pull/') }}
+        if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
         env:
           WASMCLOUD_BENCH_NAME: ${{ steps.run.outputs.name }}
           WASMCLOUD_BENCH_K6_DIR: ${{ steps.run.outputs.dir }}
@@ -141,7 +160,7 @@ jobs:
         run: node .bench-publish-tools/.github/scripts/bench-push-results.mjs prepare "$BUNDLE_DIR"
 
       - name: upload publish artifact
-        if: ${{ success() && !startsWith(inputs.ref, 'pull/') }}
+        if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bench-publish-${{ inputs.artifact_id }}-${{ github.run_id }}
@@ -165,13 +184,15 @@ jobs:
 
   publish:
     needs: k6
-    if: ${{ !startsWith(inputs.ref, 'pull/') }}
+    if: ${{ inputs.publish && !startsWith(inputs.ref, 'pull/') }}
     name: publish ${{ inputs.run }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
+    env:
+      WASMCLOUD_BENCH_HOST_LABEL: ${{ inputs.host }}
     steps:
       - name: checkout workflow tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

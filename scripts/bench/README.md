@@ -356,7 +356,8 @@ cat /etc/wasmcloud-bench-stage     # post-install marker
 ## 6. Self-hosted GitHub Actions runner
 
 The CI pipeline runs on a self-hosted runner registered to
-`wasmCloud/wasmCloud` with the labels `self-hosted, bench, hetzner`.
+`wasmCloud/wasmCloud` with the labels `self-hosted, bench, hetzner`
+(short-lived hosts use another label; see §6.2).
 
 Setup is a one-shot. The 1-hour expiry only governs the window between
 "obtain a registration token" and "`config.sh` consumes it". Once
@@ -445,6 +446,39 @@ The token is single-use and short-lived (~1 hour). It flows: gh API →
 local shell variable → SSH env → `config.sh` on the host. It never
 touches the repo, a CI log, or `/proc/<pid>/cmdline` (env-only).
 
+### 6.2 Short-lived bench hosts
+
+A bench host other than the dedicated one is brought up for a run and torn
+down after it. Each one gets a **host label**, its runner label: lowercase
+words joined by `-`, such as `aws-c7i-metal`
+([`bench-host.mjs`](../../.github/scripts/bench-host.mjs)). To add one:
+
+1. Provision it like the dedicated host (§4, §5): `nosmt`, one isolated CPU,
+   the `performance` governor, and `provision.yml`.
+2. Register its runner with the label and, when they differ from the dedicated
+   host's 6 and 5, its online CPU count and isolated CPU:
+
+   ```sh
+   sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
+     --label aws-c7i-metal --nproc 8 --isolated-cpu 7
+   ```
+
+   `--nproc` and `--isolated-cpu` go into the runner's `.env` as
+   `WASMCLOUD_BENCH_EXPECTED_NPROC` and `WASMCLOUD_BENCH_ISOLATED_CPU`.
+3. Set the repo variable the script prints,
+   `WASMCLOUD_BENCH_<LABEL>_HOSTNAME` (`-` becomes `_`), to the host's
+   hostname.
+4. Dispatch `bench`, `k6bench` or `bench-compare` with `host: <label>`.
+   Release runs always use `hetzner`.
+
+Every row records its `host_label`, and `history.json` keeps each label's
+rows apart (§11). Only `hetzner` rows are published for now, since
+arewefastyet can't yet tell hosts apart. A short-lived host's results stay in
+the run's summary and artifacts.
+
+To tear one down, deregister its runner (`./config.sh remove`) before
+deleting the host. The repo variable can stay for the next time.
+
 ## 7. Pipeline architecture
 
 ```text
@@ -484,7 +518,8 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
     `scale-to-zero-growth-layout256MiB+64KiB`, with no default-layout runs.
     The terminal readout and workflow summary show `max-process-memory`
     for each run; the summary heading also includes that limit in GiB.
-- The single `[self-hosted, bench, hetzner]` runner serializes measurements.
+- The single `[self-hosted, bench, hetzner]` runner serializes measurements
+  (a dispatch's `host` input picks another; §6.2).
   Each entry measures the commit resolved before queuing and publishes as soon
   as its own measurement completes.
 - The bench job has `contents: read`. Only the GitHub-hosted publisher has
@@ -898,18 +933,22 @@ It refuses to proceed if the host has drifted from the baseline,
 because measurements on a drifted host are useless and shouldn't end
 up on the dashboard.
 
-The script requires the env var `WASMCLOUD_BENCH_HOSTNAME` (the expected hostname
-of the dedicated bench host). The workflow sources it from the repo
-variable `vars.WASMCLOUD_BENCH_HOSTNAME`; local runs export it from 1Password.
-Keeping the value out of the script avoids broadcasting the box's
-identity in the public repo.
+The workflows run it from their own commit (`github.workflow_sha`), not the
+benched ref, so an old tag gets today's checks.
+
+The expected hostname comes from the repo variable for the host label in
+`WASMCLOUD_BENCH_HOST_LABEL` (default `hetzner`): `WASMCLOUD_BENCH_HOSTNAME`
+for the dedicated host, `WASMCLOUD_BENCH_<LABEL>_HOSTNAME` for others (§6.2).
+The workflow passes the repo variables in as `WASMCLOUD_BENCH_REPO_VARS`;
+local runs export the variable itself from 1Password. Keeping the value out
+of the script avoids broadcasting the box's identity in the public repo.
 
 Hard-checked invariants:
 
 | Check                                | Expected                                               |
 | ------------------------------------ | ------------------------------------------------------ |
-| `hostname`                           | `${WASMCLOUD_BENCH_HOSTNAME}` (env-injected)           |
-| `nproc`                              | `6`  *(SMT off via `nosmt`)*                           |
+| `hostname`                           | the host label's hostname variable                     |
+| `nproc`                              | `6` *(nosmt, or `${WASMCLOUD_BENCH_EXPECTED_NPROC}`)*  |
 | `scaling_governor` on every CPU      | `performance`                                          |
 | `/sys/devices/system/cpu/isolated`   | `5` *(or `${WASMCLOUD_BENCH_ISOLATED_CPU}`; see §4.2)* |
 | `/proc/mdstat` resync                | not in progress                                        |
@@ -943,7 +982,8 @@ not reachable):
 ```text
 s3://<bucket>/history.json
   - JSON array of every (group, param, metric) row from every run.
-  - Deduped by (sha, bench, group, param, run_attempt, metric), sorted by timestamp.
+  - Deduped by (sha, bench, group, param, run_attempt, metric, host_label), sorted
+    by timestamp. A row without host_label is a hetzner row.
   - Cache-Control: max-age=60.
   - CloudFront invalidation issued after each push.
   - Capped to last 365 days by HISTORY_MAX_AGE_DAYS.
@@ -969,6 +1009,7 @@ Criterion row (`metric: "mean_ns"`):
   "run_id": "...", "run_attempt": "1",
   "timestamp": "2026-05-08T17:21:20Z",
   "host": "<WASMCLOUD_BENCH_HOSTNAME>",
+  "host_label": "hetzner",
   "kernel": "6.8.0-100-generic",
   "cpus_online": 6,
   "metric": "mean_ns",
@@ -993,6 +1034,7 @@ gungraun row (`metric: "Ir"`):
   "run_id": "...", "run_attempt": "1",
   "timestamp": "2026-05-08T17:21:20Z",
   "host": "<WASMCLOUD_BENCH_HOSTNAME>",
+  "host_label": "hetzner",
   "kernel": "6.8.0-100-generic",
   "cpus_online": 6,
   "metric": "Ir",
@@ -1121,7 +1163,7 @@ cache). For longer staleness:
 | [`stage-hetzner.sh`](./stage-hetzner.sh)                                                                       | Phase 1 from your laptop: rescue → installed OS                                                                                                                                                                           |
 | [`ansible/`](./ansible/)                                                                                       | Phase 2 from your laptop: deps + Rust + valgrind + gungraun-runner + repo + kernel cmdline + perf governor. Idempotent; re-run to apply drift or as the "patch a live box without re-staging" path (`--tags kernel`) |
 | [`install-runner.sh`](./install-runner.sh)                                                                     | Phase 3 on the host: registers the GH Actions runner under the `bench` user and wires it to the shared bench tools in `/usr/local` (installed by `provision.yml`). Kept as bash because runner registration takes a one-shot token whose lifecycle is awkward to model declaratively.             |
-| [`../../.github/scripts/bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)                       | CI step: refuses to bench on a drifted host (env: `WASMCLOUD_BENCH_HOSTNAME`). GHA-only — runs via `node` from the workflow.                                                                                              |
+| [`../../.github/scripts/bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)                       | CI step: refuses to bench on a drifted host (env: `WASMCLOUD_BENCH_HOST_LABEL` + its hostname variable). GHA-only — runs via `node` from the workflow.                                                                                              |
 | [`run-bench.sh`](./run-bench.sh)                                                                               | CI step + local: invokes `cargo bench`, writes a run log. Stays bash because compare-bench.sh invokes it on the host for local operator runs.                                                                             |
 | [`../../.github/scripts/bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)                 | Prepares the data artifact on the bench host, then publishes it to S3 from a hosted job.                                                                                    |
 | [`compare-bench.sh`](./compare-bench.sh)                                                                       | Pair-bench script: runs one bench against two refs (interleaved for criterion, 1× for gungraun) and snapshots per-iteration data                                                                                               |

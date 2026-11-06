@@ -18,6 +18,10 @@ use time::macros::format_description;
 const TIMESTAMP_FMT: &[FormatItem<'_>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
 
+/// The label of the dedicated bench host, and of every row from before
+/// rows carried one.
+pub const DEFAULT_HOST_LABEL: &str = "hetzner";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Meta {
     pub sha: String,
@@ -28,6 +32,9 @@ pub struct Meta {
     pub run_attempt: String,
     pub timestamp: String,
     pub host: String,
+    /// The bench host's runner label: `hetzner`, or a short-lived box's
+    /// hardware class. Rows from different labels are different series.
+    pub host_label: String,
     pub kernel: String,
     pub cpus_online: u32,
     /// Contents of `/sys/devices/system/cpu/isolated`, or `"?"` if the file
@@ -61,6 +68,7 @@ impl Meta {
             .format(TIMESTAMP_FMT)
             .context("format current UTC timestamp")?;
         let host = hostname()?;
+        let host_label = env_or("WASMCLOUD_BENCH_HOST_LABEL", DEFAULT_HOST_LABEL);
         let kernel = run(&["uname", "-r"])?;
         let cpus_online = num_cpus_online()?;
         let isolated_cpu = read_isolated_cpu();
@@ -73,6 +81,7 @@ impl Meta {
             run_attempt,
             timestamp,
             host,
+            host_label,
             kernel,
             cpus_online,
             isolated_cpu,

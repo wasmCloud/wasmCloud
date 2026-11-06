@@ -49,8 +49,12 @@ on:
         description: "candidate ref (branch, tag, sha, or #PR) — required"
         type: string
         required: true
+      host:
+        description: "runner label of the bench host (hetzner = the dedicated host)"
+        type: string
+        default: hetzner
 
-# The dedicated runner serializes comparison and trend measurements.
+# Each bench host's runner serializes comparison and trend measurements.
 
 # Workflow-level permissions are the floor; the job below stays at this
 # floor — comparison runs don't write to S3, don't post comments, and
@@ -61,12 +65,14 @@ permissions:
 jobs:
   bench:
     name: ${{ inputs.bench }}
-    runs-on: [self-hosted, bench, hetzner]
+    runs-on: [self-hosted, bench, "${{ inputs.host }}"]
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: /var/lib/bench/target
       CARGO_INCREMENTAL: "0"
       WASMCLOUD_BENCH_NAME: ${{ inputs.bench }}
+      # Validated by the pre-flight (bench-host.mjs).
+      WASMCLOUD_BENCH_HOST_LABEL: ${{ inputs.host }}
       WASMCLOUD_BENCH_REF_A: ${{ inputs.ref_a }}
       WASMCLOUD_BENCH_REF_B: ${{ inputs.ref_b }}
       WASMCLOUD_BENCH_COMPARE_DIR: /tmp/bench-compare-${{ github.run_id }}
@@ -83,7 +89,8 @@ jobs:
 
       - name: pre-flight host checks
         env:
-          WASMCLOUD_BENCH_HOSTNAME: ${{ vars.WASMCLOUD_BENCH_HOSTNAME }}
+          # Expected hostnames are repo variables; see bench-run.yml.
+          WASMCLOUD_BENCH_REPO_VARS: ${{ toJSON(vars) }}
         run: node .github/scripts/bench-preflight.mjs
 
       - name: compare-bench

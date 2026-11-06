@@ -4,7 +4,14 @@
 #
 #   sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
 #     [--repo  wasmCloud/wasmCloud] \
-#     [--version 2.337.0]
+#     [--version 2.337.0] \
+#     [--label hetzner] [--nproc N] [--isolated-cpu N]
+#
+# --label is the host label workflows target with their `host` input
+# (.github/scripts/bench-host.mjs); hetzner is the dedicated host. --nproc and
+# --isolated-cpu tell the pre-flight what this host's online CPU count (with
+# nosmt) and isolated CPU are, when they differ from the dedicated host's 6
+# and 5.
 #
 # The registration token is one-shot. Get one from:
 #   GitHub Repo > Settings > Actions > Runners > New self-hosted runner
@@ -19,7 +26,8 @@
 #   - installs rustup for the bench user (toolchain auto-installs on first
 #     build via the repo's rust-toolchain.toml)
 #   - downloads + verifies + extracts actions-runner to /opt/actions-runner
-#   - configures the runner with labels: self-hosted,bench,hetzner
+#   - configures the runner with labels: self-hosted,bench,<--label>
+#   - writes --nproc / --isolated-cpu into the runner's .env
 #   - registers a systemd service `actions.runner.<owner>-<repo>.bench-host`
 #     that starts on boot
 #   - creates /var/lib/bench/target with bench: ownership for $CARGO_TARGET_DIR
@@ -34,7 +42,9 @@ RUNNER_VERSION="2.337.0"
 # Default to the actual hostname of the box (set by installimage). Override with
 # --name if needed. No hardcoded value here — the box's identity isn't in the repo.
 RUNNER_NAME="$(hostname)"
-LABELS="self-hosted,bench,hetzner"
+HOST_LABEL="hetzner"
+EXPECTED_NPROC=""
+ISOLATED_CPU=""
 RUNNER_DIR="/opt/actions-runner"
 WORK_DIR="/var/lib/bench/work"
 TARGET_DIR="/var/lib/bench/target"
@@ -54,10 +64,24 @@ while [ $# -gt 0 ]; do
     --repo)    REPO="$2"; shift 2 ;;
     --version) RUNNER_VERSION="$2"; shift 2 ;;
     --name)    RUNNER_NAME="$2"; shift 2 ;;
+    --label)   HOST_LABEL="$2"; shift 2 ;;
+    --nproc)   EXPECTED_NPROC="$2"; shift 2 ;;
+    --isolated-cpu) ISOLATED_CPU="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *)         echo "unknown arg: $1" >&2; usage 2 ;;
   esac
 done
+
+# Same shape as bench-host.mjs's parseHostLabel.
+[[ "$HOST_LABEL" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "invalid --label '$HOST_LABEL'"; exit 2; }
+[ -z "$EXPECTED_NPROC" ] || [[ "$EXPECTED_NPROC" =~ ^[1-9][0-9]*$ ]] || { echo "invalid --nproc '$EXPECTED_NPROC'"; exit 2; }
+[ -z "$ISOLATED_CPU" ] || [[ "$ISOLATED_CPU" =~ ^[0-9]+$ ]] || { echo "invalid --isolated-cpu '$ISOLATED_CPU'"; exit 2; }
+LABELS="self-hosted,bench,${HOST_LABEL}"
+if [ "$HOST_LABEL" = hetzner ]; then
+  HOSTNAME_VAR="WASMCLOUD_BENCH_HOSTNAME"
+else
+  HOSTNAME_VAR="WASMCLOUD_BENCH_$(printf '%s' "$HOST_LABEL" | tr 'a-z-' 'A-Z_')_HOSTNAME"
+fi
 
 [ "$(id -u)" -eq 0 ]                     || { echo "must run as root"; exit 1; }
 [ -n "${WASMCLOUD_BENCH_RUNNER_TOKEN:-}" ]         || { echo "WASMCLOUD_BENCH_RUNNER_TOKEN env var required"; exit 1; }
@@ -180,6 +204,14 @@ sudo --preserve-env=WASMCLOUD_BENCH_RUNNER_TOKEN,WASMCLOUD_BENCH_REPO,WASMCLOUD_
     --work "${WASMCLOUD_BENCH_WORK}"
 '
 
+# The runner loads .env (written by config.sh) into every job.
+if [ -n "$EXPECTED_NPROC" ]; then
+  echo "WASMCLOUD_BENCH_EXPECTED_NPROC=${EXPECTED_NPROC}" >> "$RUNNER_DIR/.env"
+fi
+if [ -n "$ISOLATED_CPU" ]; then
+  echo "WASMCLOUD_BENCH_ISOLATED_CPU=${ISOLATED_CPU}" >> "$RUNNER_DIR/.env"
+fi
+
 step "install + start systemd service"
 cd "$RUNNER_DIR"
 ./svc.sh install bench
@@ -198,5 +230,9 @@ Runner registered:
 Confirm in GitHub: Settings > Actions > Runners (the new runner should
 appear as Idle within a few seconds).
 
-Trigger a run from: Actions > bench > Run workflow.
+Set the repo variable the pre-flight checks this host against
+(Settings > Secrets and variables > Actions > Variables):
+  ${HOSTNAME_VAR}=$(hostname)
+
+Trigger a run from: Actions > bench > Run workflow (host: ${HOST_LABEL}).
 EOM
