@@ -16,6 +16,7 @@ clap = { workspace = true, features = ["std"] }
 pbjson-build = { workspace = true, default-features = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }
 tempfile = { workspace = true, default-features = true }
 toml = { workspace = true, features = ["parse"] }
 tonic-prost-build = { workspace = true, default-features = true }

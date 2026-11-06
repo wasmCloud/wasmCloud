@@ -29,6 +29,9 @@ pub(super) const GUEST_MEMORY_MODE: &str = "WASH_SCALE_GUEST_MEMORY_MODE";
 /// `default` is wasmtime's own layout.
 pub(super) const MEMORY_RESERVATION: &str = "WASH_SCALE_MEMORY_RESERVATION";
 
+/// The most linear memories a derived pool count may reach.
+pub(super) const MAX_MEMORIES_CAP: &str = "WASH_SCALE_MAX_MEMORIES_CAP";
+
 /// What a run was told, from the environment.
 #[derive(Debug, Clone)]
 pub(super) struct Settings {
@@ -160,18 +163,28 @@ impl Settings {
         });
         // `split` yields at least one entry, so the default is never reached.
         let memory_layout = memory_layouts.first().copied().flatten();
+        let cap = match number(MAX_MEMORIES_CAP)? {
+            Some(0) => bail!("{MAX_MEMORIES_CAP} must be at least 1"),
+            cap => cap.map(|cap| u32::try_from(cap).unwrap_or(u32::MAX)),
+        };
         // `WASH_SCALE_CORE_INSTANCES` named this count before the pool's
         // totals were derived from its memory count; still read.
         let max_memories = match number("WASH_SCALE_MAX_MEMORIES")? {
             Some(n) => u32::try_from(n).context("WASH_SCALE_MAX_MEMORIES")?,
             None => match number("WASH_SCALE_CORE_INSTANCES")? {
                 Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-                None => match memory_layout {
-                    Some(layout) => host_memory::derive_max_memories_with(
-                        host_memory::MaxMemoriesDerivation::default().with_memory_layout(layout),
-                    ),
-                    None => host_memory::derive_max_memories(),
-                },
+                None => {
+                    let derived = match memory_layout {
+                        Some(layout) => host_memory::derive_max_memories_with(
+                            host_memory::MaxMemoriesDerivation::default()
+                                .with_memory_layout(layout),
+                        ),
+                        None => host_memory::derive_max_memories(),
+                    };
+                    // Small slots derive from the memory limit, so a cap keeps
+                    // hosts of different sizes at one pool size.
+                    cap.map_or(derived, |cap| derived.min(cap))
+                }
             },
         };
         let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
