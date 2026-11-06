@@ -14,7 +14,8 @@ by hand inside a bench before, and that copy had to be deleted in review.
 | Footprint (self / another pid) | `engine::process_memory::{process_footprint, pid_footprint}`: the guard's own accounting |
 | Pool and guest memory | `Engine::pool_usage()`, `pool_usage::pool_refusals()`, `Engine::guest_memory()` |
 | Density ramps | `bench_tools::density`: `spread`, `percentile`, `ServingEvidence`, `memory_estimate`, `Report`/`Step`, `print_step`, `print_comparison` |
-| Publishing | criterion → `target/criterion`, gungraun → `target/gungraun`, density → `<target>/density/<bench>.json`; `bench-tools jsonl`/`summary` turn these into trend-site rows. Add the bench to the `bench.yml` options; run it locally with `scripts/bench/run-bench.sh <bench>` |
+| Container memory pressure | `bench_tools::pressure`: `Case`, `Report`/`Sample`, `classify`, `print_sample`, `print_summary`; `bench-tools memory-pressure` runs each case in its own Docker cgroup (see `memory_pressure.rs`) |
+| Publishing | criterion → `target/criterion`, gungraun → `target/gungraun`, density → `<target>/density/<bench>.json`, pressure → `<target>/pressure/<bench>.json`; `bench-tools jsonl`/`summary` turn these into trend-site rows. Add the bench to the `bench.yml` options; run it locally with `scripts/bench/run-bench.sh <bench>` |
 
 Rules:
 
@@ -25,7 +26,8 @@ Rules:
 - If a helper exists but is private, make it `pub` in the runtime. Do not
   copy it.
 - Each bench family has one record type and one renderer. To report a new
-  figure, add a field to `density::Report`/`Step`; do not write a second reporter.
+  figure, add a field to that family's record (`density::Report`/`Step`,
+  `pressure::Report`/`Sample`); do not write a second reporter.
 - `harness = false` benches must exit 0 when run without `--bench`, as
   `cargo test --benches` and nextest `--list` do; see `scale_density.rs` `main`.
 - Tests of bench logic use no fixed sleeps. Wait on the event, or use
