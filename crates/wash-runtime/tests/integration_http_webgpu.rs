@@ -1,14 +1,8 @@
-//! Integration test for HTTP and webgpu plugins working together
+//! Integration tests for HTTP and webgpu plugins working together.
 //!
-//! This test demonstrates:
-//! 1. Starting a host with HTTP and webgpu plugins
-//! 2. Creating and starting a workload
-//! 3. Verifying the HTTP server is listening and responding
-//! 4. Confirming the component works with the webgpu plugin
-//!
-//! Note: This is a basic integration test that verifies plugin loading and host functionality.
-//! Full component binding and request routing would require proper WIT interface configuration.
-//!
+//! Most run on the noop backend, which completes GPU work instantly. The
+//! runaway-shader test needs a real GPU and runs only with
+//! `WASH_TEST_WEBGPU_HARDWARE=1`.
 #![cfg_attr(coverage_nightly, recursion_limit = "256")]
 #![cfg(all(
     feature = "wasi-webgpu",
@@ -17,7 +11,12 @@
 ))]
 
 use anyhow::{Context, Result};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::time::timeout;
 
 use wash_runtime::{
@@ -33,36 +32,26 @@ use wash_runtime::{
 
 const HTTP_WEBGPU_WASM: &[u8] = include_bytes!("wasm/http_webgpu.wasm");
 
-#[tokio::test]
-async fn test_http_webgpu_integration() -> Result<()> {
-    tracing_subscriber::fmt()
+/// Starts a host with `webgpu` and the fixture workload, returning the
+/// host (to keep it alive) and the ingress address.
+async fn start(webgpu: WebGpu) -> Result<(impl HostApi, SocketAddr)> {
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+        .try_init();
 
-    println!("Starting HTTP + Webgpu integration test");
-
-    // Create engine
     let engine = Engine::builder().build()?;
-
-    // Create HTTP server plugin on a dynamically allocated port
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();
 
-    // Build host with plugins following the existing pattern from lib.rs test
     let host = HostBuilder::new()
         .with_engine(engine.clone())
         .with_http_handler(Arc::new(ingress))
-        .with_plugin(Arc::new(WebGpu::new(WebGpuBackend::Noop)))?
-        .build()?;
+        .with_plugin(Arc::new(webgpu))?
+        .build()?
+        .start()
+        .await
+        .context("Failed to start host")?;
 
-    println!("Created host with HTTP and webgpu plugins");
-
-    // Start the host (which starts plugins)
-    let host = host.start().await.context("Failed to start host")?;
-
-    println!("Host started, HTTP server listening on {addr}");
-
-    // Create a workload request with the HTTP component
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
@@ -94,7 +83,7 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     namespace: "wasi".to_string(),
                     package: "http".to_string(),
                     interfaces: ["incoming-handler".to_string()].into_iter().collect(),
-                    version: Some(semver::Version::parse("0.2.2").unwrap()),
+                    version: Some(semver::Version::parse("0.2.2").map_err(|e| anyhow::anyhow!(e))?),
                     config: {
                         let mut config = wash_runtime::wit::Config::new();
                         config.insert("host".to_string(), "foo".to_string());
@@ -106,7 +95,9 @@ async fn test_http_webgpu_integration() -> Result<()> {
                     namespace: "wasi".to_string(),
                     package: "webgpu".to_string(),
                     interfaces: ["webgpu".to_string()].into_iter().collect(),
-                    version: Some(semver::Version::parse("0.3.0-rc.2").unwrap()),
+                    version: Some(
+                        semver::Version::parse("0.3.0-rc.2").map_err(|e| anyhow::anyhow!(e))?,
+                    ),
                     config: Default::default(),
                     name: None,
                 },
@@ -114,79 +105,121 @@ async fn test_http_webgpu_integration() -> Result<()> {
             volumes: vec![],
         },
     };
-
-    // Start the workload
-    let workload_response = host
-        .workload_start(req)
+    host.workload_start(req)
         .await
         .context("Failed to start workload")?;
-    println!(
-        "Started workload: {:?}",
-        workload_response.workload_status.workload_id
-    );
+    Ok((host, addr))
+}
 
-    // Test 1: Make HTTP POST request with body data to the webgpu component
-    println!("Testing webgpu component endpoint with POST data");
-
-    let test_numbers = [1, 2, 3, 4];
-    let client = reqwest::Client::new();
+async fn get(addr: SocketAddr, path: &str, limit: Duration) -> Result<String> {
     let response = timeout(
-        Duration::from_secs(5),
-        client
-            .post(format!(
-                "http://{addr}/{}",
-                test_numbers
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ))
+        limit,
+        reqwest::Client::new()
+            .post(format!("http://{addr}{path}"))
             .send(),
     )
     .await
     .context("HTTP request timed out")?
     .context("Failed to make HTTP request")?;
-
     let status = response.status();
-    println!("HTTP Response Status: {status}");
-
-    let response_text = response
+    let body = response
         .text()
         .await
         .context("Failed to read response body")?;
-    println!("HTTP Response Body: {response_text}");
+    anyhow::ensure!(status.is_success(), "{path}: {status}: {body}");
+    Ok(body)
+}
 
-    // The webgpu component should now work with proper plugin binding
-    println!("Webgpu component responded successfully");
-    assert!(status.is_success(), "Expected success, got {status}");
-    assert!(
-        !response_text.trim().is_empty(),
-        "Expected response body content"
-    );
-    // parse the numbers from the response
-    let response_numbers = response_text
-        .chars()
-        .filter(|s| s == &',' || s.is_ascii_digit())
-        .collect::<String>()
-        .split(",")
-        .map(|s| s.parse::<u32>().unwrap())
-        .collect::<Vec<u32>>();
-    // expected to just double the numbers
-    let expected_response = expected_gpu_response(&test_numbers);
-    assert_eq!(
-        response_numbers, expected_response,
-        "Expected response to match the data we sent (round-trip verification)"
-    );
-    println!("Component successfully performed round-trip: POST data → webgpu → response");
+#[tokio::test]
+async fn test_http_webgpu_integration() -> Result<()> {
+    let (_host, addr) = start(WebGpu::new(WebGpuBackend::Noop)).await?;
 
-    // Test 2: The component itself uses webgpu, so this demonstrates both plugins working
-    println!("HTTP and webgpu plugins are both active and working together");
-
-    println!("All integration tests passed");
+    let body = get(addr, "/1,2,3,4", Duration::from_secs(5)).await?;
+    // The noop backend leaves the numbers as they are.
+    assert_eq!(body, "results: [1, 2, 3, 4]");
     Ok(())
 }
 
-fn expected_gpu_response(numbers: &[u32]) -> Vec<u32> {
-    // no-op backend does not change the numbers
-    numbers.to_vec()
+#[tokio::test]
+async fn test_http_webgpu_destroy_resolves_lost() -> Result<()> {
+    let (_host, addr) = start(WebGpu::new(WebGpuBackend::Noop)).await?;
+
+    let body = get(addr, "/lost", Duration::from_secs(5)).await?;
+    assert_eq!(body, "lost: destroyed: device destroyed");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_http_webgpu_zero_timeout_waits() -> Result<()> {
+    let webgpu = WebGpu::new(WebGpuBackend::Noop).with_wait_timeout(Some(Duration::ZERO));
+    let (_host, addr) = start(webgpu).await?;
+
+    let body = get(addr, "/1,2,3,4", Duration::from_secs(5)).await?;
+    assert_eq!(body, "results: [1, 2, 3, 4]");
+    Ok(())
+}
+
+fn hardware() -> bool {
+    let set = std::env::var_os("WASH_TEST_WEBGPU_HARDWARE").is_some();
+    if !set {
+        eprintln!("skipping: set WASH_TEST_WEBGPU_HARDWARE=1 to run on a real GPU");
+    }
+    set
+}
+
+/// A shader that outlives the wait timeout fails the guest's `map-async`,
+/// loses its device, and leaves the guest able to keep calling in.
+#[tokio::test]
+async fn test_http_webgpu_runaway_shader_loses_device() -> Result<()> {
+    if !hardware() {
+        return Ok(());
+    }
+    let wait = Duration::from_millis(500);
+    let webgpu = WebGpu::new(WebGpuBackend::All).with_wait_timeout(Some(wait));
+    let (_host, addr) = start(webgpu).await?;
+
+    let started = Instant::now();
+    // Seconds of GPU time, so the shader ends on its own after the test.
+    let body = get(addr, "/runaway/2000000000", Duration::from_secs(10)).await?;
+    let elapsed = started.elapsed();
+
+    let mut lines = body.lines();
+    assert_eq!(
+        lines.next(),
+        Some("map: OperationError: GPU work did not finish within 500ms"),
+        "{body}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("lost: unknown: GPU work did not finish within 500ms"),
+        "{body}"
+    );
+    assert_eq!(lines.next(), Some("after: ok"), "{body}");
+    assert!(elapsed < wait * 4, "took {elapsed:?}");
+    Ok(())
+}
+
+/// Destroying a device aborts a map still waiting on its work.
+#[tokio::test]
+async fn test_http_webgpu_destroy_aborts_pending_map() -> Result<()> {
+    if !hardware() {
+        return Ok(());
+    }
+    let webgpu = WebGpu::new(WebGpuBackend::All).with_wait_timeout(Some(Duration::from_secs(5)));
+    let (_host, addr) = start(webgpu).await?;
+
+    let started = Instant::now();
+    let body = get(
+        addr,
+        "/destroy-during-map/2000000000",
+        Duration::from_secs(10),
+    )
+    .await?;
+    assert_eq!(body, "map: AbortError: device destroyed");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+    Ok(())
 }

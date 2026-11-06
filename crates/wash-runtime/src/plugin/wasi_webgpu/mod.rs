@@ -59,8 +59,19 @@ impl WebGpu {
                 },
                 None,
             )),
-            options: Default::default(),
+            options: wasi_webgpu_wasmtime::WasiWebGpuOptions {
+                wait_timeout: Some(crate::timeouts::webgpu_wait()),
+                ..Default::default()
+            },
         }
+    }
+
+    /// Sets how long a call waits on GPU work before losing its device,
+    /// overriding `WASH_WEBGPU_WAIT_TIMEOUT_SECS`. `None` or zero waits for
+    /// as long as the work runs.
+    pub fn with_wait_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.options.wait_timeout = timeout;
+        self
     }
 }
 

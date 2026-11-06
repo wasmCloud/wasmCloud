@@ -177,7 +177,7 @@ ignored = [
     "tonic-prost",
 ]
 
-# wasi-webgpu-wasmtime's on_submitted_work_done never returns to the guest;
+# wasi-webgpu-wasmtime hangs or panics the host on GPU waits and device loss;
 # see vendor/wasi-webgpu-wasmtime/README.md. Remove once a fixed release ships.
 [patch.crates-io]
 wasi-webgpu-wasmtime = { path = "vendor/wasi-webgpu-wasmtime" }

@@ -18,8 +18,11 @@ mod enum_conversions;
 mod flags_conversions;
 mod to_core_conversions;
 
+mod lost;
+mod poller;
 mod trait_impls;
 mod types;
+pub use lost::DeviceLostInfo;
 pub use types::*;
 
 /// Re-export of `wgpu_core` and `wgpu_types` so that runtime implementors don't need to keep track of what version of wgpu this crate is using.
@@ -55,6 +58,7 @@ wasmtime::component::bindgen!({
     with: {
         "wasi:webgpu/webgpu.gpu-adapter": types::Adapter,
         "wasi:webgpu/webgpu.gpu-device": types::Device,
+        "wasi:webgpu/webgpu.gpu-device-lost-info": lost::DeviceLostInfo,
         "wasi:webgpu/webgpu.gpu-queue": types::Queue,
         "wasi:webgpu/webgpu.gpu-command-encoder": types::CommandEncoder,
         "wasi:webgpu/webgpu.gpu-render-pass-encoder": types::RenderPassEncoder,
@@ -111,6 +115,10 @@ pub struct WasiWebGpuCtx<'a> {
 pub struct WasiWebGpuOptions {
     /// Memory allocation strategy passed to wgpu on every `request-device`.
     pub device_memory_hints: wgpu_types::MemoryHints,
+    /// Longest `GpuBuffer.map-async` or `GpuQueue.on-submitted-work-done`
+    /// waits for GPU work. Work that runs longer loses its device. `None` or
+    /// zero waits for as long as the work runs.
+    pub wait_timeout: Option<std::time::Duration>,
 }
 
 struct HasWasiWebGpuCtx;

@@ -127,6 +127,16 @@ declare_timeouts! {
     /// handler can hold up a workload stop (unbind is abandoned on expiry).
     #[cfg(feature = "host-component-plugins")]
     plugin_lifecycle_call = ("WASH_PLUGIN_LIFECYCLE_CALL_TIMEOUT_SECS", 30);
+    /// Longest a `wasi:webgpu` call waits on GPU work before losing the
+    /// device that ran it. WebGPU cannot cancel a dispatch, so a runaway
+    /// shader keeps the GPU busy until the driver resets it; this frees the
+    /// guest and the host thread. `0` waits for as long as the work runs.
+    #[cfg(all(
+        feature = "wasi-webgpu",
+        not(target_os = "windows"),
+        not(target_arch = "s390x")
+    ))]
+    webgpu_wait = ("WASH_WEBGPU_WAIT_TIMEOUT_SECS", 30);
     /// Upper bound on a host component plugin's pre-restart backoff.
     #[cfg(feature = "host-component-plugins")]
     plugin_restart_backoff_max = ("WASH_PLUGIN_RESTART_BACKOFF_MAX_SECS", 5);

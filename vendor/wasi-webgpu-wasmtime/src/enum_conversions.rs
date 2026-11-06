@@ -582,7 +582,8 @@ impl From<wgpu_types::error::ErrorType> for webgpu::GpuErrorKind {
             wgpu_types::error::ErrorType::Internal => webgpu::GpuErrorKind::InternalError,
             wgpu_types::error::ErrorType::OutOfMemory => webgpu::GpuErrorKind::OutOfMemoryError,
             wgpu_types::error::ErrorType::Validation => webgpu::GpuErrorKind::ValidationError,
-            wgpu_types::error::ErrorType::DeviceLost => todo!(),
+            // `ErrorHandler` drops these before converting.
+            wgpu_types::error::ErrorType::DeviceLost => webgpu::GpuErrorKind::InternalError,
         }
     }
 }

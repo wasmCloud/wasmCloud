@@ -31,15 +31,16 @@ path = "src/lib.rs"
 [dependencies.async-broadcast]
 version = "0.7"
 
-[dependencies.callback-future]
-version = "0.1"
-
 [dependencies.log]
 version = "0.4"
 
 [dependencies.shared]
 version = "0.3.1"
 package = "wasi-gfx-runtime-shared"
+
+[dependencies.tokio]
+version = "1"
+features = ["sync"]
 
 [dependencies.wasmtime]
 version = "48"

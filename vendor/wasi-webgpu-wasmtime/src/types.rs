@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::wasi::webgpu::webgpu;
+use crate::{poller::Poller, wasi::webgpu::webgpu};
 
 pub struct WgslLanguageFeatures;
 impl WgslLanguageFeatures {
@@ -54,11 +54,26 @@ where
 
 // size needed in `GpuBuffer.size`, `RenderPass.set_index_buffer`, `RenderPass.set_vertex_buffer`.
 // usage needed in `GpuBuffer.usage`
+// device and poller needed to wait in `GpuBuffer.map_async`.
+// map_state is shared with the map callback, which may land after the guest
+// stops waiting.
 pub struct Buffer {
     pub(crate) buffer_id: wgpu_core::id::BufferId,
     pub(crate) size: u64,
     pub(crate) usage: wgpu_types::BufferUsages,
-    pub(crate) map_state: webgpu::GpuBufferMapState,
+    pub(crate) map_state: Arc<Mutex<webgpu::GpuBufferMapState>>,
+    pub(crate) device: Arc<wgpu_core::id::DeviceId>,
+    pub(crate) poller: Arc<Poller>,
+}
+
+impl Buffer {
+    pub(crate) fn map_state(&self) -> webgpu::GpuBufferMapState {
+        *self.map_state.lock().unwrap()
+    }
+
+    pub(crate) fn set_map_state(&self, map_state: webgpu::GpuBufferMapState) {
+        *self.map_state.lock().unwrap() = map_state;
+    }
 }
 
 // references to queue and adapter are also saved in device.
@@ -74,12 +89,49 @@ pub struct Device {
     pub(crate) queue: Arc<wgpu_core::id::QueueId>,
     pub(crate) adapter: Arc<wgpu_core::id::AdapterId>,
     pub(crate) error_handler: Arc<ErrorHandler>,
+    pub(crate) poller: Arc<Poller>,
 }
 // device needed to poll in `GpuQueue.on_submitted_work_done`; it is
-// dropped when both the device and its queues are.
+// dropped when the device and everything holding it are.
+// error_handler needed to report `GpuQueue.submit` errors.
 pub struct Queue {
     pub(crate) queue: Arc<wgpu_core::id::QueueId>,
     pub(crate) device: Arc<wgpu_core::id::DeviceId>,
+    pub(crate) poller: Arc<Poller>,
+    pub(crate) error_handler: Arc<ErrorHandler>,
+}
+
+/// Drops a queue id once nothing else holds it. wgpu blocks while it drops a
+/// queue with work in flight and panics if the work outlasts about 6s, so the
+/// poller drops a busy queue once its device is idle.
+pub(crate) fn release_queue(
+    instance: &Arc<wgpu_core::global::Global>,
+    queue: Arc<wgpu_core::id::QueueId>,
+    device: &Arc<wgpu_core::id::DeviceId>,
+    poller: &Arc<Poller>,
+) {
+    let Some(queue_id) = Arc::into_inner(queue) else {
+        return;
+    };
+    if let Ok(wgpu_types::PollStatus::QueueEmpty) =
+        instance.device_poll(**device, wgpu_types::PollType::Poll)
+    {
+        instance.queue_drop(queue_id);
+        return;
+    }
+    poller.when_idle(instance, device, move |instance| {
+        instance.queue_drop(queue_id)
+    });
+}
+
+/// Drops a device id once nothing else holds it.
+pub(crate) fn release_device(
+    instance: &wgpu_core::global::Global,
+    device: Arc<wgpu_core::id::DeviceId>,
+) {
+    if let Some(device_id) = Arc::into_inner(device) {
+        instance.device_drop(device_id);
+    }
 }
 
 impl Device {
@@ -198,7 +250,12 @@ impl ErrorHandler {
         error: Option<E>,
     ) {
         if let Some(error) = error {
-            let error_kind = error.webgpu_error_type().into();
+            // > If device is lost, return; no errors are generated after this.
+            // https://www.w3.org/TR/webgpu/#abstract-opdef-generate-an-error
+            let error_kind = match error.webgpu_error_type() {
+                wgpu_types::error::ErrorType::DeviceLost => return,
+                error_type => error_type.into(),
+            };
             let error = GpuError {
                 message: error.to_string(),
                 kind: error_kind,

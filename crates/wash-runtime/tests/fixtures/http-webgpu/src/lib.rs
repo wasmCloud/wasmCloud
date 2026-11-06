@@ -1,5 +1,6 @@
 use anyhow::Context;
 use bindings::wasi::webgpu::webgpu;
+use std::{future::Future, task::Poll};
 
 mod bindings {
     wit_bindgen::generate!({
@@ -16,21 +17,21 @@ impl Handler for Component {
     async fn handle(request: Request) -> Result<Response, ErrorCode> {
         // get the path from the request
         let path = request.get_path_with_query().unwrap_or_default();
-        // parse the numbers from the path
 
-        let numbers = path
-            .trim_start_matches('/')
-            .split(',')
-            .filter_map(|s| s.trim().parse::<u32>().ok())
-            .collect::<Vec<u32>>();
-
-        let body = if numbers.is_empty() {
-            "No numbers provided\ntry `/1,2,3,4`".to_string()
-        } else {
-            match double_numbers_on_gpu(&numbers).await {
-                Ok(results) => format!("results: {results:?}"),
-                Err(e) => format!("gpu error: {e:?}"),
+        let body = if path == "/lost" {
+            report(destroy_and_await_lost().await)
+        } else if let Some(iterations) = path.strip_prefix("/runaway/") {
+            match iterations.parse::<u32>() {
+                Ok(iterations) => report(run_away(iterations).await),
+                Err(e) => format!("bad iteration count: {e}"),
             }
+        } else if let Some(iterations) = path.strip_prefix("/destroy-during-map/") {
+            match iterations.parse::<u32>() {
+                Ok(iterations) => report(destroy_during_map(iterations).await),
+                Err(e) => format!("bad iteration count: {e}"),
+            }
+        } else {
+            double_numbers(&path).await
         };
 
         let (mut tx, rx) = bindings::wit_stream::new();
@@ -43,6 +44,181 @@ impl Handler for Component {
 
         let (response, _result) = Response::new(Fields::new(), Some(rx), trailers_rx);
         Ok(response)
+    }
+}
+
+fn report(result: anyhow::Result<String>) -> String {
+    result.unwrap_or_else(|e| format!("gpu error: {e:?}"))
+}
+
+async fn request_device() -> anyhow::Result<webgpu::GpuDevice> {
+    let adapter = webgpu::get_gpu()
+        .request_adapter(None)
+        .await
+        .context("failed to request adapter")?;
+    Ok(adapter.request_device(None).await?)
+}
+
+fn describe_lost(info: &webgpu::GpuDeviceLostInfo) -> String {
+    let reason = match info.reason() {
+        webgpu::GpuDeviceLostReason::Unknown => "unknown",
+        webgpu::GpuDeviceLostReason::Destroyed => "destroyed",
+    };
+    format!("lost: {reason}: {}", info.message())
+}
+
+async fn destroy_and_await_lost() -> anyhow::Result<String> {
+    let device = request_device().await?;
+    let lost = device.lost();
+    device.destroy();
+    Ok(describe_lost(&lost.await))
+}
+
+const RUNAWAY_SHADER: &str = r#"
+@group(0)
+@binding(0)
+var<storage, read_write> data: array<u32>;
+
+@compute
+@workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var i = 0u;
+    loop {
+        if (i >= data[0]) { break; }
+        data[global_id.x + 1u] = data[global_id.x + 1u] ^ i;
+        i = i + 1u;
+    }
+}
+"#;
+
+const RUNAWAY_INVOCATIONS: u32 = 64 * 64;
+
+/// Submits a shader that loops `iterations` times per invocation, copying its
+/// output to the returned staging buffer.
+fn submit_runaway(
+    device: &webgpu::GpuDevice,
+    queue: &webgpu::GpuQueue,
+    iterations: u32,
+) -> anyhow::Result<webgpu::GpuBuffer> {
+    let size = u64::from(RUNAWAY_INVOCATIONS + 1) * 4;
+    let storage = device.create_buffer(&webgpu::GpuBufferDescriptor {
+        label: None,
+        size,
+        usage: webgpu::GpuBufferUsage::STORAGE | webgpu::GpuBufferUsage::COPY_SRC,
+        mapped_at_creation: Some(true),
+    });
+    let mut contents = vec![0u32; RUNAWAY_INVOCATIONS as usize + 1];
+    contents[0] = iterations;
+    storage.get_mapped_range_set_with_copy(bytemuck::cast_slice(&contents), None, None)?;
+    storage.unmap()?;
+    let staging = device.create_buffer(&webgpu::GpuBufferDescriptor {
+        label: None,
+        size: 4,
+        usage: webgpu::GpuBufferUsage::MAP_READ | webgpu::GpuBufferUsage::COPY_DST,
+        mapped_at_creation: None,
+    });
+
+    let module = device.create_shader_module(&webgpu::GpuShaderModuleDescriptor {
+        label: None,
+        code: RUNAWAY_SHADER.to_string(),
+        compilation_hints: None,
+    });
+    let pipeline = device.create_compute_pipeline(webgpu::GpuComputePipelineDescriptor {
+        label: None,
+        layout: webgpu::GpuLayoutMode::Auto,
+        compute: webgpu::GpuProgrammableStage {
+            module: &module,
+            entry_point: Some("main".to_string()),
+            constants: None,
+        },
+    });
+    let bind_group = device.create_bind_group(&webgpu::GpuBindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: vec![webgpu::GpuBindGroupEntry {
+            binding: 0,
+            resource: webgpu::GpuBindingResource::GpuBuffer(&storage),
+        }],
+    });
+
+    let encoder = device.create_command_encoder(None);
+    let pass = encoder.begin_compute_pass(None);
+    pass.set_pipeline(&pipeline);
+    pass.set_bind_group(0, Some(&bind_group), None, None, None)?;
+    pass.dispatch_workgroups(RUNAWAY_INVOCATIONS / 64, Some(1), Some(1));
+    pass.end();
+    encoder.copy_buffer_to_buffer(&storage, Some(4), &staging, Some(0), Some(4));
+    queue.submit(&[&encoder.finish(None)]);
+    Ok(staging)
+}
+
+fn describe_map(mapped: Result<(), webgpu::MapAsyncError>) -> String {
+    match mapped {
+        Ok(()) => "map: ok".to_string(),
+        Err(e) => {
+            let kind = match e.kind {
+                webgpu::MapAsyncErrorKind::OperationError => "OperationError",
+                webgpu::MapAsyncErrorKind::RangeError => "RangeError",
+                webgpu::MapAsyncErrorKind::AbortError => "AbortError",
+            };
+            format!("map: {kind}: {}", e.message)
+        }
+    }
+}
+
+/// Reads a runaway shader's output back, the way a guest waits on compute
+/// results.
+async fn run_away(iterations: u32) -> anyhow::Result<String> {
+    let device = request_device().await?;
+    let lost = device.lost();
+    let queue = device.queue();
+    let staging = submit_runaway(&device, &queue, iterations)?;
+
+    let mapped = staging
+        .map_async(webgpu::GpuMapMode::READ, None, None)
+        .await;
+    if mapped.is_ok() {
+        return Ok(describe_map(mapped));
+    }
+    let mapped = describe_map(mapped);
+    let lost = describe_lost(&lost.await);
+
+    // A lost device refuses new work without trapping the guest.
+    queue.submit(&[&device.create_command_encoder(None).finish(None)]);
+    queue.on_submitted_work_done().await;
+    Ok(format!("{mapped}\n{lost}\nafter: ok"))
+}
+
+/// Destroys the device while a map waits on a runaway shader.
+async fn destroy_during_map(iterations: u32) -> anyhow::Result<String> {
+    let device = request_device().await?;
+    let queue = device.queue();
+    let staging = submit_runaway(&device, &queue, iterations)?;
+
+    let mut map = std::pin::pin!(staging.map_async(webgpu::GpuMapMode::READ, None, None));
+    // The first poll starts the call.
+    let started = std::future::poll_fn(|cx| Poll::Ready(map.as_mut().poll(cx))).await;
+    if let Poll::Ready(mapped) = started {
+        return Ok(format!("finished before destroy: {}", describe_map(mapped)));
+    }
+    device.destroy();
+    Ok(describe_map(map.await))
+}
+
+async fn double_numbers(path: &str) -> String {
+    let numbers = path
+        .trim_start_matches('/')
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect::<Vec<u32>>();
+
+    if numbers.is_empty() {
+        "No numbers provided\ntry `/1,2,3,4`".to_string()
+    } else {
+        match double_numbers_on_gpu(&numbers).await {
+            Ok(results) => format!("results: {results:?}"),
+            Err(e) => format!("gpu error: {e:?}"),
+        }
     }
 }
 
