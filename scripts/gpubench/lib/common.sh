@@ -130,17 +130,22 @@ host_wgpu_versions() {
   ' "$1" | sort -u
 }
 
-# Apply every PATCHDIR/*.patch to the checkout at SRC, skipping ones already
-# applied. A patch that neither applies nor is applied means the pin moved.
+# Apply PATCHDIR/*.patch, in order, to the checkout at SRC. A later patch may
+# rewrite an earlier one's lines, so the series is tracked as a whole: a stamp
+# in .git records the applied series, and any other state is reset to the
+# pinned commit (ignored build output stays) and patched from scratch.
 apply_patches() {
-  local src="$1" dir="$2" patch
+  local src="$1" dir="$2" patch want stamp
+  stamp="$src/.git/gpubench-patches"
+  want="$(for patch in "$dir"/*.patch; do basename "$patch"; cat "$patch"; done | sha256_of /dev/stdin)"
+  if [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then
+    return
+  fi
+  git -C "$src" checkout -q -- .
+  git -C "$src" clean -fdq
   for patch in "$dir"/*.patch; do
-    if git -C "$src" apply --check "$patch" 2>/dev/null; then
-      log "applying $(basename "$patch")"
-      git -C "$src" apply "$patch"
-    else
-      git -C "$src" apply --check --reverse "$patch" 2>/dev/null ||
-        die "$(basename "$patch") neither applies nor is applied to $src"
-    fi
+    log "applying $(basename "$patch")"
+    git -C "$src" apply "$patch" || die "$(basename "$patch") does not apply to $src: the pin moved"
   done
+  echo "$want" >"$stamp"
 }
