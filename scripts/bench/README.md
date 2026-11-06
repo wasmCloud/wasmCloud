@@ -472,9 +472,8 @@ words joined by `-`, such as `aws-c7i-metal`
    Release runs always use `hetzner`.
 
 Every row records its `host_label`, and `history.json` keeps each label's
-rows apart (§11). Only `hetzner` rows are published for now, since
-arewefastyet can't yet tell hosts apart. A short-lived host's results stay in
-the run's summary and artifacts.
+rows apart (§11). Every host's rows are published; arewefastyet charts one
+host at a time (`?host=<label>`), with `hetzner` as the default.
 
 To tear one down, deregister its runner (`./config.sh remove`) before
 deleting the host. The repo variable can stay for the next time.
