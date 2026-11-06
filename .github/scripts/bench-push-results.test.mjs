@@ -201,3 +201,69 @@ test('validates the host label of the artifact and every row', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('prepares a gpubench run portably', (t) => {
+  if (spawnSync('sh', ['-c', 'command -v zstd'], { stdio: 'ignore' }).status !== 0) {
+    t.skip('zstd not installed');
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), 'gpubench-prepare-test-'));
+  try {
+    const bin = join(root, 'bin');
+    const runDir = join(root, 'run');
+    const bundle = join(root, 'bundle');
+    mkdirSync(bin);
+    mkdirSync(join(runDir, 'gap', 'llama'), { recursive: true });
+    writeFileSync(join(runDir, 'metadata.json'), JSON.stringify({ box: 'metal', smoke: false }));
+    writeFileSync(join(runDir, 'gap', 'llama', 'vendor.json'), '[]');
+    const sha = 'd'.repeat(40);
+    const row = {
+      bench: 'gpubench', group: 'llama-pp512', param: 'metal/vendor',
+      sha, short_sha: sha.slice(0, 12), ref: 'main', run_id: '789', run_attempt: '1',
+      host_label: 'metal-m4pro',
+    };
+    const stub = (name, body) => {
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+      chmodSync(join(bin, name), 0o755);
+    };
+    // Only `gpu jsonl <dir>` may be asked for.
+    stub('cargo', `[ "$6 $7 $8" = "gpu jsonl ${runDir}" ] || exit 2\necho '${JSON.stringify(row)}'`);
+    stub('git', `case "$*" in *--short=12*) echo ${sha.slice(0, 12)} ;; *) echo ${sha} ;; esac`);
+    // As on macOS, where there is no nproc.
+    stub('nproc', 'exit 127');
+    const env = {
+      ...process.env,
+      HOME: root,
+      PATH: `${bin}:${process.env.PATH}`,
+      WASMCLOUD_BENCH_NAME: 'gpubench-metal',
+      WASMCLOUD_BENCH_GPU_DIR: runDir,
+      WASMCLOUD_BENCH_HOST_LABEL: 'metal-m4pro',
+      WASMCLOUD_BENCH_REF: 'main',
+      GITHUB_RUN_ID: '789',
+      GITHUB_RUN_ATTEMPT: '1',
+    };
+    delete env.WASMCLOUD_BENCH_K6_DIR;
+    const prepare = spawnSync(process.execPath, [script, 'prepare', bundle], { env, encoding: 'utf8' });
+    assert.equal(prepare.status, 0, prepare.stderr);
+
+    const metadata = JSON.parse(readFileSync(join(bundle, 'metadata.json'), 'utf8'));
+    const getconf = spawnSync('getconf', ['_NPROCESSORS_ONLN'], { encoding: 'utf8' }).stdout.trim();
+    assert.equal(metadata.cpus_online, parseInt(getconf, 10));
+    assert.equal(typeof metadata.cpu, 'string');
+    assert.deepEqual(metadata.gpubench, { box: 'metal', smoke: false });
+    assert.equal(metadata.host_label, 'metal-m4pro');
+    assert.equal(readFileSync(join(bundle, 'results.jsonl'), 'utf8'), JSON.stringify(row) + '\n');
+
+    const list = spawnSync('sh', ['-c', `zstd -dc '${join(bundle, 'gpubench.tar.zst')}' | tar -tf -`], { encoding: 'utf8' });
+    assert.equal(list.status, 0, list.stderr);
+    assert.match(list.stdout, /gap\/llama\/vendor\.json/);
+
+    const validate = spawnSync(process.execPath, [script, 'validate', bundle], {
+      env: { ...env, WASMCLOUD_BENCH_ROW_NAME: 'gpubench', WASMCLOUD_BENCH_SHA: sha },
+      encoding: 'utf8',
+    });
+    assert.equal(validate.status, 0, validate.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
