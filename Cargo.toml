@@ -176,3 +176,7 @@ ignored = [
     "tonic",
     "tonic-prost",
 ]
+
+# EXPERIMENT: local wasmtime with an in-place slot reset on macOS (see ../wasmtime-48.0.8-patched).
+[patch.crates-io]
+wasmtime = { path = "../wasmtime-48.0.8-patched" }
