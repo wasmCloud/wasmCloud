@@ -71,6 +71,14 @@ Everything downloaded or built goes under `~/.cache/wasmcloud-gpubench`
 `pins.env` and `models.json`. On a cuda box, set `GPUBENCH_CUDA_ARCH` (for
 example `89` for an L4).
 
+In CI, dispatch `gpubench.yml` from `main` with the box label and the ref to
+bench. A pull request is published to the GPU view only with `publish_pr`, and
+its rows keep their `pull/N` ref:
+
+```bash
+gh workflow run gpubench.yml --ref main -f ref='#5898' -f box=cuda-l4 -f publish_pr=true
+```
+
 ## Status
 
 | piece | macOS / Metal | Linux / CUDA |
