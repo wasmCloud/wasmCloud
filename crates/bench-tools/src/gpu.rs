@@ -1,12 +1,15 @@
 //! Reads a `scripts/gpubench/run.sh` result directory into history rows.
 //!
-//! - The native gap bench: tok/s for each step (`vendor`, `webgpu-native`,
-//!   `wasm`), and the gaps between them.
-//! - The serverless bench: cold start to first token, and GPU memory while
-//!   busy and while idle, for wasmCloud's cold-started turns.
+//! - The gap bench: tok/s for each step (`vendor`, `webgpu-native`, `wasm`)
+//!   on each model, and the gaps between them. Repetitions run interleaved
+//!   across steps, one llama-bench run each, and are merged here.
+//! - The serverless bench: per model, where a cold-started turn's time goes
+//!   (start, model load, first token); and GPU memory while busy, while idle
+//!   between turns, and before the first turn. Both for wasmCloud's
+//!   workloads and for the same tool run as native processes.
 //!
-//! GPU memory is reported over the idle baseline sampled before a run, so a
-//! box's other GPU users (the window server on macOS) drop out.
+//! GPU memory is reported over the baseline sampled before the run starts,
+//! so a box's other GPU users (the window server on macOS) drop out.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -20,6 +23,13 @@ use crate::k6::Better;
 /// Steps of the gap bench, in the order they're compared.
 pub const STEPS: [&str; 3] = ["vendor", "webgpu-native", "wasm"];
 
+/// webgpu-native with every CPU thread, for the headline model only: if it
+/// moves from the one-thread step, CPU work is part of the WebGPU number.
+pub const THREADS_STEP: &str = "webgpu-native-mt";
+
+/// The serverless bench's two sides.
+pub const SIDES: [&str; 2] = ["wasmcloud", "native"];
+
 /// Timeline points kept on the row that carries the memory-over-time chart.
 const TIMELINE_POINTS: usize = 600;
 
@@ -27,6 +37,7 @@ const TIMELINE_POINTS: usize = 600;
 pub struct Metadata {
     pub box_type: String,
     pub gpu: String,
+    /// The model the headline gap rows are about.
     #[serde(default)]
     pub gap_model: Option<String>,
     #[serde(default)]
@@ -41,14 +52,18 @@ pub struct Metadata {
 }
 
 /// One entry of llama-bench's `-o json` output.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct LlamaTest {
     pub n_prompt: u64,
     pub n_gen: u64,
     pub avg_ts: f64,
     pub stddev_ts: f64,
+    #[serde(default)]
+    pub samples_ts: Vec<f64>,
     pub backends: String,
     pub model_size: u64,
+    #[serde(default)]
+    pub n_threads: u64,
 }
 
 impl LlamaTest {
@@ -60,6 +75,46 @@ impl LlamaTest {
             format!("tg{}", self.n_gen)
         }
     }
+
+    /// Repetitions this result covers.
+    pub fn reps(&self) -> usize {
+        self.samples_ts.len().max(1)
+    }
+}
+
+/// Merges one llama-bench run per repetition into one result per test, with
+/// the mean and sample standard deviation over every repetition's samples.
+pub fn merge_reps(runs: Vec<Vec<LlamaTest>>) -> Vec<LlamaTest> {
+    let mut by_test: BTreeMap<String, LlamaTest> = BTreeMap::new();
+    for t in runs.into_iter().flatten() {
+        let samples = if t.samples_ts.is_empty() {
+            vec![t.avg_ts]
+        } else {
+            t.samples_ts.clone()
+        };
+        by_test
+            .entry(t.name())
+            .and_modify(|m| m.samples_ts.extend(&samples))
+            .or_insert(LlamaTest {
+                samples_ts: samples,
+                ..t
+            });
+    }
+    by_test
+        .into_values()
+        .map(|mut t| {
+            let n = t.samples_ts.len() as f64;
+            let mean = t.samples_ts.iter().sum::<f64>() / n;
+            let var = if t.samples_ts.len() > 1 {
+                t.samples_ts.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0)
+            } else {
+                0.0
+            };
+            t.avg_ts = mean;
+            t.stddev_ts = var.sqrt();
+            t
+        })
+        .collect()
 }
 
 /// bench-gpu's report for one `run`.
@@ -79,6 +134,9 @@ pub struct GpuSample {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    Ready {
+        t_ms: u64,
+    },
     TurnStart {
         t_ms: u64,
         name: String,
@@ -89,6 +147,10 @@ pub enum Event {
         exit_code: Option<i32>,
         resolve_ms: Option<f64>,
         run_ms: f64,
+        #[serde(default)]
+        load_ms: Option<f64>,
+        #[serde(default)]
+        first_token_ms: Option<f64>,
     },
     Idle {
         t_ms: u64,
@@ -99,20 +161,31 @@ pub enum Event {
     },
 }
 
-/// The serverless bench's events and the GPU samples taken while it ran.
+/// One side of the serverless bench: its events and the GPU samples taken
+/// while it ran.
 #[derive(Debug)]
 pub struct Serving {
     pub events: Vec<Event>,
     pub samples: Vec<GpuSample>,
 }
 
+/// The gap bench for one model.
+#[derive(Debug, Default)]
+pub struct Gap {
+    /// llama-bench results per step; a step that didn't run is absent.
+    pub steps: BTreeMap<String, Vec<LlamaTest>>,
+    /// The largest guest memory any wasm repetition reached, and whether
+    /// every one exited 0.
+    pub wasm_report: Option<WasmReport>,
+}
+
 #[derive(Debug)]
 pub struct GpuRun {
     pub meta: Metadata,
-    /// llama-bench results per step; a step that didn't run is absent.
-    pub gap: BTreeMap<String, Vec<LlamaTest>>,
-    pub wasm_report: Option<WasmReport>,
-    pub wasmcloud: Option<Serving>,
+    /// Per model, by the name models.json gives it.
+    pub gap: BTreeMap<String, Gap>,
+    /// Per side of the serverless bench.
+    pub serverless: BTreeMap<String, Serving>,
 }
 
 /// A history row before provenance is attached.
@@ -140,36 +213,43 @@ impl GpuRun {
             serde_json::from_value(v).context("metadata.json")?
         };
         let mut gap = BTreeMap::new();
-        for step in STEPS {
-            let path = dir.join("gap/llama").join(format!("{step}.json"));
-            if path.is_file() {
-                // A step that crashed leaves an empty or partial file: absent.
-                if let Ok(tests) = read_json::<Vec<LlamaTest>>(&path)
-                    && !tests.is_empty()
-                {
-                    gap.insert(step.to_string(), tests);
+        let gap_dir = dir.join("gap");
+        if gap_dir.is_dir() {
+            for entry in std::fs::read_dir(&gap_dir)? {
+                let path = entry?.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(model) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let g = load_gap(&path)?;
+                if !g.steps.is_empty() {
+                    gap.insert(model.to_string(), g);
                 }
             }
         }
-        let report = dir.join("gap/llama/wasm.report.json");
-        let wasm_report = report.is_file().then(|| read_json(&report)).transpose()?;
-        let serverless = dir.join("serverless");
-        let wasmcloud = if serverless.join("wasmcloud.ndjson").is_file() {
-            Some(Serving {
-                events: read_ndjson(&serverless.join("wasmcloud.ndjson"))?,
-                samples: read_ndjson(&serverless.join("gpu.ndjson"))?,
-            })
-        } else {
-            None
-        };
-        if gap.is_empty() && wasmcloud.is_none() {
+        let mut serverless = BTreeMap::new();
+        for side in SIDES {
+            let events = dir.join("serverless").join(format!("{side}.ndjson"));
+            let samples = dir.join("serverless").join(format!("gpu-{side}.ndjson"));
+            if events.is_file() && samples.is_file() {
+                serverless.insert(
+                    side.to_string(),
+                    Serving {
+                        events: read_ndjson(&events)?,
+                        samples: read_ndjson(&samples)?,
+                    },
+                );
+            }
+        }
+        if gap.is_empty() && serverless.is_empty() {
             bail!("{}: no gap or serverless results", dir.display());
         }
         Ok(Self {
             meta,
             gap,
-            wasm_report,
-            wasmcloud,
+            serverless,
         })
     }
 
@@ -189,79 +269,102 @@ impl GpuRun {
         m
     }
 
+    /// The headline model keeps `{box}/{step}`; every other model's rows add
+    /// it: `{box}/{model}/{step}`.
+    pub fn gap_param(&self, model: &str, step: Option<&str>) -> String {
+        let b = &self.meta.box_type;
+        let headline = self.meta.gap_model.as_deref() == Some(model);
+        match (headline, step) {
+            (true, Some(step)) => format!("{b}/{step}"),
+            (true, None) => b.clone(),
+            (false, Some(step)) => format!("{b}/{model}/{step}"),
+            (false, None) => format!("{b}/{model}"),
+        }
+    }
+
     fn gap_rows(&self) -> Vec<GpuRow> {
         let mut rows = Vec::new();
-        let b = &self.meta.box_type;
-        let model = self.meta.gap_model.clone().unwrap_or_default();
-        let mut by_test: BTreeMap<String, BTreeMap<&str, f64>> = BTreeMap::new();
-        for (step, tests) in &self.gap {
-            for t in tests {
-                let mut extra = self.base_extra();
-                extra.insert("model".into(), json!(model));
-                extra.insert("backend".into(), json!(t.backends));
-                extra.insert("stddev".into(), json!(t.stddev_ts));
-                if step == "wasm"
-                    && let Some(r) = &self.wasm_report
-                {
-                    extra.insert("exit_ok".into(), json!(r.exit_code == Some(0)));
-                }
-                rows.push(GpuRow {
-                    group: format!("llama-{}", t.name()),
-                    param: format!("{b}/{step}"),
-                    metric: "tokens_per_s",
-                    value: t.avg_ts,
-                    unit: "tok/s",
-                    better: Better::Higher,
-                    extra,
-                });
-                by_test
-                    .entry(t.name())
-                    .or_default()
-                    .insert(step.as_str(), t.avg_ts);
-            }
-        }
-        for (test, steps) in &by_test {
-            let gaps = [
-                ("webgpu_gap_pct", "vendor", "webgpu-native"),
-                ("wasm_overhead_pct", "webgpu-native", "wasm"),
-                ("native_gap_pct", "vendor", "wasm"),
-            ];
-            for (metric, from, to) in gaps {
-                if let (Some(a), Some(z)) = (steps.get(from), steps.get(to))
-                    && *a > 0.0
-                {
-                    let mut extra = self.base_extra();
-                    extra.insert("model".into(), json!(model));
+        for (model, gap) in &self.gap {
+            let extra = || {
+                let mut e = self.base_extra();
+                e.insert("model".into(), json!(model));
+                e
+            };
+            // test -> step -> (mean, stddev)
+            let mut by_test: BTreeMap<String, BTreeMap<&str, (f64, f64)>> = BTreeMap::new();
+            for (step, tests) in &gap.steps {
+                for t in tests {
+                    let mut e = extra();
+                    e.insert("backend".into(), json!(t.backends));
+                    e.insert("stddev".into(), json!(t.stddev_ts));
+                    e.insert("reps".into(), json!(t.reps()));
+                    e.insert("threads".into(), json!(t.n_threads));
+                    if step == "wasm"
+                        && let Some(r) = &gap.wasm_report
+                    {
+                        e.insert("exit_ok".into(), json!(r.exit_code == Some(0)));
+                    }
                     rows.push(GpuRow {
-                        group: format!("llama-{test}"),
-                        param: b.clone(),
+                        group: format!("llama-{}", t.name()),
+                        param: self.gap_param(model, Some(step)),
+                        metric: "tokens_per_s",
+                        value: t.avg_ts,
+                        unit: "tok/s",
+                        better: Better::Higher,
+                        extra: e,
+                    });
+                    by_test
+                        .entry(t.name())
+                        .or_default()
+                        .insert(step.as_str(), (t.avg_ts, t.stddev_ts));
+                }
+            }
+            for (test, steps) in &by_test {
+                let gaps = [
+                    ("webgpu_gap_pct", "vendor", "webgpu-native"),
+                    ("wasm_overhead_pct", "webgpu-native", "wasm"),
+                    ("native_gap_pct", "vendor", "wasm"),
+                ];
+                for (metric, from, to) in gaps {
+                    if let (Some((a, sa)), Some((z, sz))) = (steps.get(from), steps.get(to))
+                        && *a > 0.0
+                    {
+                        // A gap counts only when it is larger than the two
+                        // steps' combined run-to-run spread.
+                        let noise = sa.hypot(*sz);
+                        let mut e = extra();
+                        e.insert("noise_pct".into(), json!(noise / a * 100.0));
+                        e.insert("significant".into(), json!((a - z).abs() > noise));
+                        rows.push(GpuRow {
+                            group: format!("llama-{test}"),
+                            param: self.gap_param(model, None),
+                            metric,
+                            value: (a - z) / a * 100.0,
+                            unit: "%",
+                            better: Better::Lower,
+                            extra: e,
+                        });
+                    }
+                }
+            }
+            if let (Some(r), Some(t)) = (
+                &gap.wasm_report,
+                gap.steps.get("wasm").and_then(|t| t.first()),
+            ) {
+                for (metric, value) in [
+                    ("model_size", t.model_size),
+                    ("guest_memory_peak", r.guest_memory_peak),
+                ] {
+                    rows.push(GpuRow {
+                        group: "llama-memory".into(),
+                        param: self.gap_param(model, Some("wasm")),
                         metric,
-                        value: (a - z) / a * 100.0,
-                        unit: "%",
+                        value: value as f64,
+                        unit: "B",
                         better: Better::Lower,
-                        extra,
+                        extra: extra(),
                     });
                 }
-            }
-        }
-        if let (Some(r), Some(tests)) = (&self.wasm_report, self.gap.get("wasm"))
-            && let Some(t) = tests.first()
-        {
-            for (metric, value) in [
-                ("model_size", t.model_size),
-                ("guest_memory_peak", r.guest_memory_peak),
-            ] {
-                let mut extra = self.base_extra();
-                extra.insert("model".into(), json!(model));
-                rows.push(GpuRow {
-                    group: "llama-memory".into(),
-                    param: format!("{b}/wasm"),
-                    metric,
-                    value: value as f64,
-                    unit: "B",
-                    better: Better::Lower,
-                    extra,
-                });
             }
         }
         rows
@@ -270,48 +373,29 @@ impl GpuRun {
     fn serverless_rows(&self) -> Vec<GpuRow> {
         let mut rows = Vec::new();
         let b = &self.meta.box_type;
-        if let Some(s) = &self.wasmcloud {
-            let first = s.events.iter().find_map(|e| match e {
-                Event::TurnStart { name, .. } => Some(name.clone()),
-                _ => None,
-            });
+        for (side, s) in &self.serverless {
             let ok = s.events.iter().all(|e| match e {
                 Event::TurnEnd { exit_code, .. } => *exit_code == Some(0),
                 _ => true,
             });
-            let models: std::collections::BTreeSet<&str> = s
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    Event::TurnEnd {
-                        name,
-                        exit_code: Some(0),
-                        ..
-                    } => Some(name.as_str()),
-                    _ => None,
-                })
-                .collect();
-            let cold: Vec<f64> = s
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    Event::TurnEnd {
-                        name,
-                        exit_code: Some(0),
-                        resolve_ms,
-                        run_ms,
-                        ..
-                    } if Some(name) == first.as_ref() => Some(resolve_ms.unwrap_or(0.0) + run_ms),
-                    _ => None,
-                })
-                .collect();
-            let mut push = |metric, value, unit, better, extra: Option<serde_json::Map<_, _>>| {
-                let mut e = extra.unwrap_or_else(|| self.base_extra());
+            let mut push = |param: String,
+                            metric,
+                            value,
+                            unit,
+                            better,
+                            model: Option<&str>,
+                            more: Option<(&str, Value)>| {
+                let mut e = self.base_extra();
                 e.insert("turns_ok".into(), json!(ok));
-                e.insert("model".into(), json!(first.clone().unwrap_or_default()));
+                if let Some(model) = model {
+                    e.insert("model".into(), json!(model));
+                }
+                if let Some((k, v)) = more {
+                    e.insert(k.into(), v);
+                }
                 rows.push(GpuRow {
                     group: "serverless".into(),
-                    param: format!("{b}/wasmcloud"),
+                    param,
                     metric,
                     value,
                     unit,
@@ -319,39 +403,178 @@ impl GpuRun {
                     extra: e,
                 });
             };
-            if let Some(v) = median(&cold) {
-                push("cold_start_ttft_ms", v, "ms", Better::Lower, None);
+            for (model, t) in turn_times(s) {
+                let param = format!("{b}/{side}/{model}");
+                let metrics = [
+                    ("turn_ms", t.turn),
+                    ("start_ms", t.resolve),
+                    ("load_ms", t.load),
+                    ("first_token_ms", t.first_token),
+                    ("ttft_ms", t.ttft),
+                ];
+                for (metric, values) in metrics {
+                    if let Some(v) = median(&values) {
+                        push(
+                            param.clone(),
+                            metric,
+                            v,
+                            "ms",
+                            Better::Lower,
+                            Some(&model),
+                            Some(("turns", json!(values.len()))),
+                        );
+                    }
+                }
             }
-            push(
-                "models_per_gpu",
-                models.len() as f64,
-                "",
-                Better::Higher,
-                None,
-            );
+            let param = format!("{b}/{side}");
             let mem = memory(s);
+            if let Some(v) = mem.host_idle {
+                push(
+                    param.clone(),
+                    "host_idle_gpu_mem",
+                    v,
+                    "B",
+                    Better::Lower,
+                    None,
+                    None,
+                );
+            }
             if let Some(v) = mem.idle {
-                push("idle_gpu_mem", v, "B", Better::Lower, None);
+                push(
+                    param.clone(),
+                    "idle_gpu_mem",
+                    v,
+                    "B",
+                    Better::Lower,
+                    None,
+                    None,
+                );
             }
             if let Some(v) = mem.peak {
-                let mut extra = self.base_extra();
-                extra.insert("timeline".into(), timeline(s, mem.baseline));
-                push("peak_gpu_mem", v, "B", Better::Lower, Some(extra));
+                let timeline = timeline(s, mem.baseline);
+                push(
+                    param,
+                    "peak_gpu_mem",
+                    v,
+                    "B",
+                    Better::Lower,
+                    None,
+                    Some(("timeline", timeline)),
+                );
             }
         }
         rows
     }
 }
 
+fn load_gap(dir: &Path) -> Result<Gap> {
+    let mut gap = Gap::default();
+    let mut reports: Vec<WasmReport> = Vec::new();
+    for step in STEPS.into_iter().chain([THREADS_STEP]) {
+        let mut runs = Vec::new();
+        for path in reps(dir, step, ".json")? {
+            // A run that crashed leaves an empty or partial file: skip it.
+            if let Ok(tests) = read_json::<Vec<LlamaTest>>(&path)
+                && !tests.is_empty()
+            {
+                runs.push(tests);
+            }
+        }
+        if !runs.is_empty() {
+            gap.steps.insert(step.to_string(), merge_reps(runs));
+        }
+    }
+    for path in reps(dir, "wasm", ".report.json")? {
+        reports.push(read_json(&path)?);
+    }
+    gap.wasm_report = reports
+        .iter()
+        .map(|r| r.guest_memory_peak)
+        .max()
+        .map(|guest_memory_peak| WasmReport {
+            exit_code: if reports.iter().all(|r| r.exit_code == Some(0)) {
+                Some(0)
+            } else {
+                reports.iter().find_map(|r| r.exit_code.filter(|c| *c != 0))
+            },
+            guest_memory_peak,
+        });
+    Ok(gap)
+}
+
+/// `{step}.r{N}{suffix}` files in `dir`, in repetition order.
+fn reps(dir: &Path, step: &str, suffix: &str) -> Result<Vec<std::path::PathBuf>> {
+    let prefix = format!("{step}.r");
+    let mut found: Vec<(u32, std::path::PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if let Some(n) = name
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(suffix))
+            .and_then(|n| n.parse().ok())
+        {
+            found.push((n, path));
+        }
+    }
+    found.sort();
+    Ok(found.into_iter().map(|(_, p)| p).collect())
+}
+
+/// One model's turn times, in ms, over its turns that exited 0.
+#[derive(Debug, Default)]
+pub struct TurnTimes {
+    /// Start to exit: workload start plus `wasi:cli/run`, or the process.
+    pub turn: Vec<f64>,
+    /// Workload start (compile, link, bind). wasmCloud side only.
+    pub resolve: Vec<f64>,
+    pub load: Vec<f64>,
+    pub first_token: Vec<f64>,
+    /// Start, model load and first token.
+    pub ttft: Vec<f64>,
+}
+
+pub fn turn_times(s: &Serving) -> BTreeMap<String, TurnTimes> {
+    let mut out: BTreeMap<String, TurnTimes> = BTreeMap::new();
+    for e in &s.events {
+        if let Event::TurnEnd {
+            name,
+            exit_code: Some(0),
+            resolve_ms,
+            run_ms,
+            load_ms,
+            first_token_ms,
+            ..
+        } = e
+        {
+            let t = out.entry(name.clone()).or_default();
+            let start = resolve_ms.unwrap_or(0.0);
+            t.turn.push(start + run_ms);
+            t.resolve.extend(*resolve_ms);
+            t.load.extend(*load_ms);
+            t.first_token.extend(*first_token_ms);
+            if let (Some(l), Some(f)) = (load_ms, first_token_ms) {
+                t.ttft.push(start + l + f);
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Default)]
 pub struct Memory {
     /// Median sample before the first event: what the box holds unprompted.
     pub baseline: u64,
-    /// The most held over the baseline while serving.
+    /// The most held over the baseline from the first turn on.
     pub peak: Option<f64>,
-    /// Median held over the baseline in the back half of each idle window,
-    /// once whatever was being released has gone.
+    /// Median held over the baseline in the back half of each idle window
+    /// after a turn, once whatever was being released has gone.
     pub idle: Option<f64>,
+    /// The same, for the idle window before the first turn: what the
+    /// started host holds before it has served anything.
+    pub host_idle: Option<f64>,
 }
 
 pub fn memory(s: &Serving) -> Memory {
@@ -366,37 +589,52 @@ pub fn memory(s: &Serving) -> Memory {
         .collect();
     let baseline = median(&before).unwrap_or(0.0) as u64;
     let over = |x: &GpuSample| x.used.saturating_sub(baseline) as f64;
+    let first_turn = s
+        .events
+        .iter()
+        .find_map(|e| match e {
+            Event::TurnStart { t_ms, .. } => Some(*t_ms),
+            _ => None,
+        })
+        .unwrap_or(u64::MAX);
     let end = s.events.iter().map(event_t).max().unwrap_or(start);
     let peak = s
         .samples
         .iter()
-        .filter(|x| x.t_ms >= start && x.t_ms <= end)
+        .filter(|x| x.t_ms >= first_turn && x.t_ms <= end)
         .map(over)
         .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
-    let idle_samples: Vec<f64> = s
-        .events
-        .iter()
-        .filter_map(|e| match e {
-            Event::Idle { t_ms, until_ms } => Some((t_ms + (until_ms - t_ms) / 2, *until_ms)),
-            _ => None,
-        })
-        .flat_map(|(from, until)| {
-            s.samples
-                .iter()
-                .filter(move |x| x.t_ms >= from && x.t_ms <= until)
-                .map(over)
-        })
-        .collect();
+    let idle_back_half = |after_first_turn: bool| -> Option<f64> {
+        let samples: Vec<f64> = s
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Idle { t_ms, until_ms } if (*t_ms >= first_turn) == after_first_turn => {
+                    Some((t_ms + (until_ms - t_ms) / 2, *until_ms))
+                }
+                _ => None,
+            })
+            .flat_map(|(from, until)| {
+                s.samples
+                    .iter()
+                    .filter(move |x| x.t_ms >= from && x.t_ms <= until)
+                    .map(over)
+            })
+            .collect();
+        median(&samples)
+    };
     Memory {
         baseline,
         peak,
-        idle: median(&idle_samples),
+        idle: idle_back_half(true),
+        host_idle: idle_back_half(false),
     }
 }
 
 fn event_t(e: &Event) -> u64 {
     match e {
-        Event::TurnStart { t_ms, .. }
+        Event::Ready { t_ms }
+        | Event::TurnStart { t_ms, .. }
         | Event::TurnEnd { t_ms, .. }
         | Event::Idle { t_ms, .. }
         | Event::Stopped { t_ms } => *t_ms,
@@ -448,7 +686,7 @@ pub fn timeline(s: &Serving, baseline: u64) -> Value {
                     until_ms.saturating_sub(t0)
                 ]));
             }
-            Event::Stopped { .. } => {}
+            Event::Ready { .. } | Event::Stopped { .. } => {}
         }
     }
     json!({ "points": points, "turns": turns, "idle": idle })
@@ -493,20 +731,31 @@ pub(crate) mod tests {
         GpuSample { t_ms, used }
     }
 
+    fn end(t_ms: u64, name: &str, exit_code: i32, resolve_ms: f64, run_ms: f64) -> Event {
+        Event::TurnEnd {
+            t_ms,
+            name: name.into(),
+            exit_code: Some(exit_code),
+            resolve_ms: Some(resolve_ms),
+            run_ms,
+            load_ms: Some(50.0),
+            first_token_ms: Some(20.0),
+        }
+    }
+
     fn serving() -> Serving {
         Serving {
             events: vec![
+                Event::Ready { t_ms: 60 },
+                Event::Idle {
+                    t_ms: 60,
+                    until_ms: 100,
+                },
                 Event::TurnStart {
                     t_ms: 100,
                     name: "a".into(),
                 },
-                Event::TurnEnd {
-                    t_ms: 200,
-                    name: "a".into(),
-                    exit_code: Some(0),
-                    resolve_ms: Some(10.0),
-                    run_ms: 90.0,
-                },
+                end(200, "a", 0, 10.0, 90.0),
                 Event::Idle {
                     t_ms: 200,
                     until_ms: 400,
@@ -515,6 +764,7 @@ pub(crate) mod tests {
             samples: vec![
                 sample(0, 1000),
                 sample(50, 1000),
+                sample(90, 1300),
                 sample(150, 9000),
                 sample(250, 5000),
                 sample(350, 1100),
@@ -528,17 +778,18 @@ pub(crate) mod tests {
         let m = memory(&serving());
         assert_eq!(m.baseline, 1000);
         assert_eq!(m.peak, Some(8000.0));
-        // Only the back half of the idle window counts.
+        // Only the back half of each idle window counts.
         assert_eq!(m.idle, Some(100.0));
+        assert_eq!(m.host_idle, Some(300.0));
     }
 
     #[test]
     fn timeline_keeps_peaks_and_marks_turns() {
         let t = timeline(&serving(), 1000);
-        assert_eq!(t["points"][2], json!([150, 8000]));
+        assert_eq!(t["points"][3], json!([150, 8000]));
         assert_eq!(t["turns"][0]["start"], 100);
         assert_eq!(t["turns"][0]["ok"], true);
-        assert_eq!(t["idle"][0], json!([200, 400]));
+        assert_eq!(t["idle"][1], json!([200, 400]));
     }
 
     #[test]
@@ -554,20 +805,36 @@ pub(crate) mod tests {
         assert_eq!(t["points"][0], json!([0, 3]));
     }
 
-    pub(crate) fn run(gap: BTreeMap<String, Vec<LlamaTest>>, wasmcloud: Option<Serving>) -> GpuRun {
+    pub(crate) fn run(
+        gap: BTreeMap<String, BTreeMap<String, Vec<LlamaTest>>>,
+        wasmcloud: Option<Serving>,
+    ) -> GpuRun {
         GpuRun {
             meta: Metadata {
                 box_type: "metal".into(),
                 gpu: "test".into(),
-                gap_model: None,
+                gap_model: Some("big".into()),
                 smoke: false,
                 wgpu: String::new(),
                 llama_cpp: String::new(),
                 failed: Vec::new(),
             },
-            gap,
-            wasm_report: None,
-            wasmcloud,
+            gap: gap
+                .into_iter()
+                .map(|(m, steps)| {
+                    (
+                        m,
+                        Gap {
+                            steps,
+                            wasm_report: None,
+                        },
+                    )
+                })
+                .collect(),
+            serverless: wasmcloud
+                .map(|s| ("wasmcloud".to_string(), s))
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -577,27 +844,143 @@ pub(crate) mod tests {
             n_gen,
             avg_ts,
             stddev_ts: 0.0,
+            samples_ts: Vec::new(),
             backends: String::new(),
             model_size: 0,
+            n_threads: 1,
         }
     }
 
+    /// One model's three steps, each with one tg128 result.
+    pub(crate) fn steps(vendor: f64, native: f64, wasm: f64) -> BTreeMap<String, Vec<LlamaTest>> {
+        BTreeMap::from([
+            ("vendor".to_string(), vec![llama(0, 128, vendor)]),
+            ("webgpu-native".to_string(), vec![llama(0, 128, native)]),
+            ("wasm".to_string(), vec![llama(0, 128, wasm)]),
+        ])
+    }
+
+    fn find<'a>(rows: &'a [GpuRow], param: &str, metric: &str) -> Option<&'a GpuRow> {
+        rows.iter().find(|r| r.param == param && r.metric == metric)
+    }
+
     #[test]
-    fn cold_start_skips_failed_turns() {
+    fn turn_times_skip_failed_turns_and_split_per_model() {
         let mut s = serving();
-        s.events.push(Event::TurnEnd {
-            t_ms: 500,
-            name: "a".into(),
-            exit_code: Some(1),
-            resolve_ms: Some(1.0),
-            run_ms: 1.0,
-        });
+        s.events.push(end(500, "a", 1, 1.0, 1.0));
+        s.events.push(end(600, "b", 0, 5.0, 45.0));
         let rows = run(BTreeMap::new(), Some(s)).rows();
-        let cold = rows
-            .iter()
-            .find(|r| r.metric == "cold_start_ttft_ms")
-            .map(|r| r.value);
-        assert_eq!(cold, Some(100.0));
+        let value = |param: &str, metric: &str| find(&rows, param, metric).map(|r| r.value);
+        assert_eq!(value("metal/wasmcloud/a", "turn_ms"), Some(100.0));
+        assert_eq!(value("metal/wasmcloud/a", "start_ms"), Some(10.0));
+        assert_eq!(value("metal/wasmcloud/a", "ttft_ms"), Some(80.0));
+        assert_eq!(value("metal/wasmcloud/b", "turn_ms"), Some(50.0));
+        assert!(rows.iter().all(|r| r.metric != "models_per_gpu"));
+    }
+
+    #[test]
+    fn native_turns_have_no_start_time() {
+        let events = vec![Event::TurnEnd {
+            t_ms: 1,
+            name: "a".into(),
+            exit_code: Some(0),
+            resolve_ms: None,
+            run_ms: 30.0,
+            load_ms: Some(10.0),
+            first_token_ms: Some(5.0),
+        }];
+        let t = turn_times(&Serving {
+            events,
+            samples: Vec::new(),
+        });
+        let a = t.get("a");
+        assert_eq!(a.map(|a| a.resolve.len()), Some(0));
+        assert_eq!(a.and_then(|a| a.ttft.first().copied()), Some(15.0));
+    }
+
+    #[test]
+    fn headline_model_keeps_short_params() {
+        let gap = BTreeMap::from([
+            ("big".to_string(), steps(100.0, 50.0, 49.0)),
+            ("small".to_string(), steps(200.0, 80.0, 60.0)),
+        ]);
+        let rows = run(gap, None).rows();
+        assert!(find(&rows, "metal/wasm", "tokens_per_s").is_some());
+        assert!(find(&rows, "metal", "wasm_overhead_pct").is_some());
+        let small = find(&rows, "metal/small", "wasm_overhead_pct").map(|r| r.value);
+        assert_eq!(small, Some(25.0));
+        assert!(find(&rows, "metal/small/wasm", "tokens_per_s").is_some());
+    }
+
+    #[test]
+    fn gaps_inside_the_noise_are_not_significant() {
+        let mut s = steps(100.0, 50.0, 49.0);
+        if let Some(t) = s.get_mut("wasm").and_then(|t| t.first_mut()) {
+            t.stddev_ts = 2.0;
+        }
+        let rows = run(BTreeMap::from([("big".to_string(), s)]), None).rows();
+        let overhead = find(&rows, "metal", "wasm_overhead_pct");
+        assert_eq!(
+            overhead.and_then(|r| r.extra.get("significant")),
+            Some(&json!(false))
+        );
+        let vendor = find(&rows, "metal", "webgpu_gap_pct");
+        assert_eq!(
+            vendor.and_then(|r| r.extra.get("significant")),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn merge_reps_pools_samples() {
+        let rep = |ts: f64| {
+            let mut t = llama(0, 128, ts);
+            t.samples_ts = vec![ts];
+            vec![t]
+        };
+        let merged = merge_reps(vec![rep(10.0), rep(12.0), rep(14.0)]);
+        assert_eq!(merged.len(), 1);
+        let t = merged.first();
+        assert_eq!(t.map(|t| t.avg_ts), Some(12.0));
+        assert_eq!(t.map(|t| t.stddev_ts), Some(2.0));
+        assert_eq!(t.map(LlamaTest::reps), Some(3));
+    }
+
+    #[test]
+    fn load_reads_interleaved_reps() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let model = dir.path().join("gap/m");
+        std::fs::create_dir_all(&model)?;
+        std::fs::write(
+            dir.path().join("metadata.json"),
+            r#"{"box":"metal","gpu":"g","gap_model":"m"}"#,
+        )?;
+        let test = |ts: f64| {
+            format!(
+                r#"[{{"n_prompt":0,"n_gen":16,"avg_ts":{ts},"stddev_ts":0,"samples_ts":[{ts}],"backends":"WebGPU","model_size":1,"n_threads":1}}]"#
+            )
+        };
+        std::fs::write(model.join("wasm.r1.json"), test(10.0))?;
+        std::fs::write(model.join("wasm.r2.json"), test(20.0))?;
+        // A crashed repetition leaves an empty file.
+        std::fs::write(model.join("wasm.r3.json"), "")?;
+        std::fs::write(
+            model.join("wasm.r1.report.json"),
+            r#"{"exit_code":0,"guest_memory_peak":5}"#,
+        )?;
+        std::fs::write(
+            model.join("wasm.r2.report.json"),
+            r#"{"exit_code":0,"guest_memory_peak":7}"#,
+        )?;
+        let run = GpuRun::load(dir.path())?;
+        let gap = run.gap.get("m").context("model m")?;
+        let wasm = gap.steps.get("wasm").and_then(|t| t.first());
+        assert_eq!(wasm.map(|t| t.avg_ts), Some(15.0));
+        assert_eq!(
+            gap.wasm_report.as_ref().map(|r| r.guest_memory_peak),
+            Some(7)
+        );
+        Ok(())
     }
 
     #[test]
