@@ -139,13 +139,13 @@ func TestDeploymentScaleFailuresPreserveStateAndRetry(t *testing.T) {
 			if err := r.Get(t.Context(), client.ObjectKeyFromObject(current), got); err != nil || *got.Spec.Replicas != *d.Spec.Replicas {
 				t.Fatalf("current replicas after retry = %+v, %v", got.Spec.Replicas, err)
 			}
-			events := drainEvents(r.Recorder.(*events.FakeRecorder))
+			recorded := drainEvents(r.Recorder.(*events.FakeRecorder))
 			wantEvents := 0
 			if operation == updateDeniedCase {
 				wantEvents = 1
 			}
-			if len(events) != wantEvents {
-				t.Fatalf("refusal events = %v", events)
+			if len(recorded) != wantEvents {
+				t.Fatalf("refusal events = %v", recorded)
 			}
 		})
 	}

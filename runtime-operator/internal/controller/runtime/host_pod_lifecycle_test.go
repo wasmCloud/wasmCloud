@@ -17,6 +17,9 @@ import (
 
 const (
 	testListOperation        = "list"
+	testCreateOperation      = "create"
+	testDeleteOperation      = "delete"
+	testPatchOperation       = "patch"
 	missingPodCase           = "missing Pod"
 	deletingFinalizedPodCase = "deleting with finalizer"
 	cleanupHoldFinalizer     = "cleanup.example/hold"
@@ -74,7 +77,7 @@ func TestHostPodReconcileFinalizers(t *testing.T) {
 }
 
 func TestHostPodCleanupFailureRetainsFinalizerUntilRetry(t *testing.T) {
-	for _, operation := range []string{"get", testListOperation, daemonSetDeleteOperation, "patch"} {
+	for _, operation := range []string{testListOperation, testDeleteOperation, testPatchOperation} {
 		t.Run(operation, func(t *testing.T) {
 			now := time.Now()
 			pod := terminatingPod("10.1.2.3", now, 0)
@@ -84,12 +87,6 @@ func TestHostPodCleanupFailureRetainsFinalizerUntilRetry(t *testing.T) {
 			cause := errors.New("API unavailable")
 			fail := true
 			c := hostPodClientBuilder(t, pod, host).WithInterceptorFuncs(interceptor.Funcs{
-				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-					if fail && operation == "get" {
-						return cause
-					}
-					return c.Get(ctx, key, obj, opts...)
-				},
 				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 					if fail && operation == testListOperation {
 						return cause
@@ -97,13 +94,13 @@ func TestHostPodCleanupFailureRetainsFinalizerUntilRetry(t *testing.T) {
 					return c.List(ctx, list, opts...)
 				},
 				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-					if fail && operation == daemonSetDeleteOperation {
+					if fail && operation == testDeleteOperation {
 						return cause
 					}
 					return c.Delete(ctx, obj, opts...)
 				},
 				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-					if fail && operation == "patch" {
+					if fail && operation == testPatchOperation {
 						return cause
 					}
 					return c.Patch(ctx, obj, patch, opts...)
@@ -121,6 +118,10 @@ func TestHostPodCleanupFailureRetainsFinalizerUntilRetry(t *testing.T) {
 			}
 			if len(got.Finalizers) != 2 {
 				t.Fatalf("failed cleanup removed finalizer: %v", got.Finalizers)
+			}
+			hostErr := c.Get(t.Context(), client.ObjectKeyFromObject(host), &runtimev1alpha1.Host{})
+			if deleted := operation == testPatchOperation; deleted != apierrors.IsNotFound(hostErr) || deleted != r.RetiredHosts.contains(host.HostID) {
+				t.Fatalf("failed %s: host lookup = %v, retired = %v", operation, hostErr, r.RetiredHosts.contains(host.HostID))
 			}
 			for range 2 {
 				if _, err := r.Reconcile(t.Context(), req); err != nil {

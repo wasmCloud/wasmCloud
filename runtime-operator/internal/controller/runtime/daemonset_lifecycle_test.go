@@ -33,14 +33,33 @@ func TestDaemonSetScheduleWaitsForArtifacts(t *testing.T) {
 			}
 			r := newDaemonSetReconciler(t, ds, defaultGroupHost(dsHostA))
 			before := ds.DeepCopy()
-			if err := r.reconcileSchedule(t.Context(), ds); err == nil || state == artifactPendingCase && !condition.IsStatusUnknown(err) {
-				t.Fatalf("schedule = %v", err)
+			err := r.reconcileSchedule(t.Context(), ds)
+			want := "artifact missing not found in deployment spec"
+			if state == artifactPendingCase {
+				want = "artifacts not ready"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) || condition.IsStatusUnknown(err) != (state == artifactPendingCase) {
+				t.Fatalf("schedule = %v, want %q", err, want)
 			}
 			if !reflect.DeepEqual(ds, before) || len(workloadsByHost(t, r)) != 0 {
 				t.Fatal("blocked schedule changed state")
 			}
-			if err := r.reconcileReady(t.Context(), ds); !condition.IsStatusUnknown(err) {
-				t.Fatalf("ready = %v, want Unknown", err)
+		})
+	}
+}
+
+func TestDaemonSetReadyWaitsForArtifactsAndSchedule(t *testing.T) {
+	for _, ready := range []condition.ConditionType{
+		runtimev1alpha1.WorkloadDaemonSetConditionArtifact,
+		runtimev1alpha1.WorkloadDaemonSetConditionSchedule,
+	} {
+		t.Run(string(ready)+" only", func(t *testing.T) {
+			ds := testDaemonSet(1)
+			ds.Status.Conditions = nil
+			ds.Status.SetConditions(condition.ReadyCondition(ready))
+			err := (&WorkloadDaemonSetReconciler{}).reconcileReady(t.Context(), ds)
+			if !condition.IsStatusUnknown(err) || !strings.Contains(err.Error(), "daemonset is not scheduled") {
+				t.Fatalf("ready = %v, want not scheduled", err)
 			}
 		})
 	}

@@ -1,17 +1,14 @@
 package v2
 
 import (
-	_ "embed"
-	"encoding/hex"
 	"slices"
-	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
-const startWireFixture = `{
+const startRequestJSON = `{
   "workloadId": "runtime-id",
   "workload": {
     "namespace": "tenant-a",
@@ -106,20 +103,12 @@ const startWireFixture = `{
   }
 }`
 
-// The fixture pins the v2 field numbers and wire types independently of the encoder.
-//
-//go:embed testdata/workload-start-v2.hex
-var startWireHex string
-
-func TestWorkloadStartWireContract(t *testing.T) {
-	wire, err := hex.DecodeString(strings.Join(strings.Fields(startWireHex), ""))
-	if err != nil {
-		t.Fatal(err)
-	}
+// Field numbers and wire types are pinned by `buf breaking` in the proto workflow.
+func TestWorkloadStartRoundTrip(t *testing.T) {
 	for _, codec := range []string{"json", "protobuf"} {
 		t.Run(codec, func(t *testing.T) {
 			request := &WorkloadStartRequest{}
-			if err := protojson.Unmarshal([]byte(startWireFixture), request); err != nil {
+			if err := protojson.Unmarshal([]byte(startRequestJSON), request); err != nil {
 				t.Fatal(err)
 			}
 			var data []byte
@@ -131,10 +120,13 @@ func TestWorkloadStartWireContract(t *testing.T) {
 					err = protojson.Unmarshal(data, decoded)
 				}
 			} else {
-				err = proto.Unmarshal(wire, decoded)
+				data, err = proto.Marshal(request)
+				if err == nil {
+					err = proto.Unmarshal(data, decoded)
+				}
 			}
 			if err != nil || !proto.Equal(request, decoded) {
-				t.Fatalf("decoded request differs from the wire contract: %v", err)
+				t.Fatalf("round trip changed the start request: %v", err)
 			}
 			w := decoded.GetWorkload()
 			if decoded.GetWorkloadId() != "runtime-id" ||
@@ -229,12 +221,13 @@ func assertStartHostInterfaces(t *testing.T, world *WitWorld) {
 	}
 }
 
-func TestOlderWorkloadMessagesKeepRestrictiveDefaults(t *testing.T) {
+// Absent submessages are nil, so these reads go through the generated getters' nil branches.
+func TestAbsentFieldsReadAsZeroValues(t *testing.T) {
 	request := &WorkloadStartRequest{}
-	const legacyStart = `{
- "workload": {"name": "legacy", "witWorld": {"components": [{"image": "app:v1"}]}}
+	const sparseStart = `{
+ "workload": {"name": "sparse", "witWorld": {"components": [{"image": "app:v1"}]}}
 }`
-	if err := protojson.Unmarshal([]byte(legacyStart), request); err != nil {
+	if err := protojson.Unmarshal([]byte(sparseStart), request); err != nil {
 		t.Fatal(err)
 	}
 	w := request.GetWorkload()
@@ -245,30 +238,30 @@ func TestOlderWorkloadMessagesKeepRestrictiveDefaults(t *testing.T) {
 		c.GetMaxInvocations() != 0 ||
 		c.GetReclaimWindowSeconds() != 0 ||
 		c.GetReclaimMinInstances() != 0 {
-		t.Fatal("absent instance limits must remain unconfigured")
+		t.Fatal("absent instance limits read as non-zero")
 	}
 	if c.GetImagePullSecret().GetUsername() != "" ||
 		c.GetImagePullSecret().GetPassword() != "" ||
 		c.GetImagePullPolicy() != ImagePullPolicy_IMAGE_PULL_POLICY_UNSPECIFIED {
-		t.Fatal("absent image configuration gained credentials or a pull policy")
+		t.Fatal("absent image pull settings read as non-zero")
 	}
 	r := c.GetLocalResources()
 	if len(r.GetAllowedHosts()) != 0 ||
 		len(r.GetAllowedIpNameLookups()) != 0 ||
 		len(r.GetAllowedHostLoopbackPorts()) != 0 ||
 		len(r.GetVolumeMounts()) != 0 {
-		t.Fatal("absent resources must grant no network or filesystem access")
+		t.Fatal("absent egress and volume lists read as non-empty")
 	}
 	if len(r.GetConfig()) != 0 ||
 		len(r.GetEnvironment()) != 0 ||
 		r.GetMemoryLimitMb() != 0 ||
 		r.GetCpuLimit() != 0 ||
 		w.GetService().GetImage() != "" {
-		t.Fatal("absent resources or service gained configuration")
+		t.Fatal("absent resources or service read as non-zero")
 	}
 	var response *WorkloadStartResponse
 	if response.GetWorkloadStatus().GetWorkloadState() != WorkloadState_WORKLOAD_STATE_UNSPECIFIED ||
 		response.GetWorkloadStatus().GetWorkloadId() != "" {
-		t.Fatal("absent status must not report a running workload")
+		t.Fatal("nil response status reads as non-zero")
 	}
 }

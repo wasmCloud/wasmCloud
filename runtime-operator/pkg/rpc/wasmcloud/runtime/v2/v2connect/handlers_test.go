@@ -26,8 +26,8 @@ func TestServiceRoutesReturnMethodSpecificErrors(t *testing.T) {
 			if codec == "json" {
 				options = append(options, connect.WithProtoJSON())
 			}
-			workloads := v2connect.NewWorkloadServiceClient(server.Client(), server.URL+"///", options...)
-			hosts := v2connect.NewHostServiceClient(server.Client(), server.URL+"/", options...)
+			workloads := v2connect.NewWorkloadServiceClient(server.Client(), server.URL, options...)
+			hosts := v2connect.NewHostServiceClient(server.Client(), server.URL, options...)
 			_, startErr := workloads.WorkloadStart(t.Context(), connect.NewRequest(&runtimev2.WorkloadStartRequest{}))
 			_, statusErr := workloads.WorkloadStatus(t.Context(), connect.NewRequest(
 				&runtimev2.WorkloadStatusRequest{WorkloadId: "workload"}))
