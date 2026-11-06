@@ -465,9 +465,11 @@ GitHub-hosted publisher
 **Workflows:** [`bench.yml`](../../.github/workflows/bench.yml) dispatches
 each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.yml).
 
-- Trigger: `workflow_dispatch` and published releases. Inputs: `bench` (a bench
-  or named variant from the workflow's choices) and `ref`
-  (any branch/tag/sha or `#PR`; defaults to the workflow's ref).
+- Trigger: `workflow_dispatch` and published releases. Inputs:
+  - `bench`: a bench or named variant from the workflow's choices.
+  - `ref`: any branch/tag/sha or `#PR`; defaults to the workflow's ref.
+  - `args`: extra `bench-tools memory-pressure` flags, for `memory_pressure` only.
+    Other benches refuse a non-empty value.
 - Published releases run `http_invoke`, `service_http`, `gungraun`, and
   `max_scale`. These run after publication, not as a pre-release gate.
 - Variants: a `bench` choice may name an entry in `BENCH_VARIANTS` (in
@@ -873,6 +875,8 @@ it does not certify application sizing or make an expected OOM acceptable in pro
   dispatch-only, never in the release subset, and never published.
   It renders the summary and uploads the evidence even when cases fail.
   Its cleanup stops Docker so the next bench's pre-flight sees the usual idle host.
+- The workflow's `args` input passes runner flags through, for example
+  `gh workflow run bench.yml -f bench=memory_pressure -f args='--memory-mib 384 2048 --repeats 3'`.
 
 The standard reporting commands read pressure results:
 
