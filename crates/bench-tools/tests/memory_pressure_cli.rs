@@ -319,13 +319,20 @@ fn completed_case_applies_limits_cleans_up_and_feeds_shared_reports() -> Result<
         .context("missing case")?;
     assert_eq!(serde_json::from_str::<Case>(case)?, report.case);
     assert!(fixture.removed("case")?);
-    for subcommand in ["jsonl", "summary"] {
+    for (subcommand, expected) in [
+        ("jsonl", r#""metric":"admitted_stores","value":2304.0"#),
+        (
+            "summary",
+            "| 768m-sparse-growth-cow-on-1 | completed | 2304 | 2304 |",
+        ),
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
             .args([subcommand, "--bench", "memory_pressure", "--target-dir"])
             .arg(fixture.target())
             .output()?;
         passed(&output)?;
-        assert!(String::from_utf8(output.stdout)?.contains("admitted_stores"));
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(stdout.contains(expected), "{subcommand} output: {stdout}");
     }
     Ok(())
 }

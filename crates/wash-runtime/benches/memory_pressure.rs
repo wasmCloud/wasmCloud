@@ -193,7 +193,10 @@ async fn run() -> Result<()> {
         "copy-on-write setting was not applied"
     );
     if let Some(mib) = case.guest_memory_mib {
-        ensure!(budget.cap() == mib * MIB, "guest memory cap was not applied");
+        ensure!(
+            budget.cap() == mib * MIB,
+            "guest memory cap was not applied"
+        );
     }
     if let Some(mib) = initial_cap {
         ensure!(
