@@ -717,12 +717,20 @@ cannot exfiltrate the WRITE role or comment on PRs.
 
 ### 9.5 Guest memory pressure test
 
-The `memory_pressure` density benchmark compares `enforce` and `growth` under
-real Linux cgroup v2 limits, with CoW both enabled and disabled. It uses the
-shared `bench_tools::density::Report`, step/comparison renderers, and JSONL and
-summary commands. Docker orchestration lives in `bench-tools`; the Rust bench
-only measures its own process. It needs Docker and enough Docker VM memory
-for an 8 GiB build container. On the Linux bench host:
+The `memory_pressure` bench compares `enforce` and `growth`
+under real Linux cgroup v2 limits,
+with copy-on-write (CoW) both enabled and disabled.
+It is a pass/fail diagnostic, not a trend benchmark:
+
+- Most admission counts follow from the budgets alone
+  (`G / declared bytes` in `enforce`, `I / min(declared, 2 MiB)` in `growth`).
+  The bench checks that the runtime's accounting matches them exactly.
+- What only a container shows is where the process guard,
+  CoW, and transparent huge pages (THP) stop admission earlier,
+  whether late writes OOM the container,
+  and the cgroup's peak memory.
+
+On the Linux bench host:
 
 ```bash
 CARGO_TARGET_DIR=target scripts/bench/run-bench.sh memory_pressure \
@@ -735,36 +743,56 @@ For a local Docker run, including on macOS, invoke the same Rust runner directly
 cargo run -p bench-tools -- memory-pressure --memory-mib 384 768 --repeats 3
 ```
 
-The runner builds the locked Rust bench in the repository's pinned Rust
-toolchain image, then runs each case sequentially in a fresh container with two
-CPUs, the specified memory limit, no swap, and no network. Limits from 384 to
-2048 MiB are supported. The measured container runs the Rust executable as
-PID 1; the runner and build run outside its cgroup. Build caches use the
-named volumes `wash-pressure-target` and `wash-pressure-registry`; override them
-with `--target-volume` and `--registry-volume`. Do not rebuild into the same
-target volume while a pressure run is using its binary.
+#### What runs
 
-The synthetic components retain every admitted store. Admission pauses for
-55 ms per 16 MiB of declared initial memory to allow guard refreshes. Four
-worker threads then start together, retaining all stores until the final
-memory sample:
+- `bench-tools memory-pressure` builds the locked bench
+  in the repository's pinned Rust toolchain image (an 8 GiB build container),
+  then runs each case sequentially in a fresh container.
+- Each measured container has two CPUs, the requested memory limit (384–2048 MiB),
+  no swap, and no network. The bench runs as PID 1; the runner and build stay outside its cgroup.
+- The runner passes the whole case to the bench as JSON in `WASH_PRESSURE_CASE`.
+- Repeats run outermost, so host drift spreads across every case.
+- Build caches use the named volumes `wash-pressure-target` and `wash-pressure-registry`
+  (`--target-volume`, `--registry-volume`).
+  Do not rebuild into the same target volume while a pressure run is using its binary.
 
-| Shape | Initial memory | Initial data | Request writes | Final writes |
+The engine uses the runtime's budget defaults
+(`G = 75%` of the limit, `I = 4 × G`, the process guard at 90%)
+unless `--guest-memory-mib` or `--initial-cap-mib` overrides them.
+Pool settings are not production defaults:
+a 64 MiB slot per memory and 8192 memories, so `4 × G` of 1 MiB memories fits the pool.
+Fuel is off, and the build uses `--no-default-features`.
+
+Admission runs without pauses, as a burst of real starts would.
+The process guard refreshes its own reading at most every 50 ms,
+so a guard-limited count includes whatever was admitted between readings.
+Up to four threads then write together, and every store stays alive
+until the `touched` sample.
+
+| Shape | Initial memory | Initial data | Admission writes | Final writes |
 | --- | --- | --- | --- | --- |
 | `sparse` | One 1 MiB memory | 4 KiB | First 64 KiB | Same 64 KiB |
 | `data-heavy` | One 8 MiB memory | 8 MiB | First 64 KiB | Same 64 KiB |
 | `multiple` | Four 1 MiB memories in separate core modules | 4 KiB each | First 64 KiB of each | Same 64 KiB of each |
 | `dirty` | One 1 MiB memory | 4 KiB | First 64 KiB | Every initial page |
 
-`--dirty-mib 2` selects 2 MiB for the last shape. Running both sizes matters:
-transparent huge pages can make a 2 MiB allocation resident during admission
-with CoW disabled, while a 1 MiB allocation can remain sparse until the final
-writes. The `multiple` shape tests per-memory allowance accounting across core
-instances in a single component. These are controlled memory scenarios, not an
-end-to-end HTTP throughput benchmark; use the density benches for application
-performance and additional cold-start costs.
+`--dirty-mib 2` selects 2 MiB for the last shape.
+Results at 2 MiB depend on the kernel's THP policy:
 
-The default matrix includes all four shapes, both modes, and both CoW settings.
+- With CoW off, each memory is anonymous.
+  Under THP `always`, a 2 MiB-aligned 2 MiB memory faults in a whole huge page
+  on its first write, so the guard stops admission early.
+- With CoW on, each memory maps the image, which `shmem_enabled` governs instead.
+- A 1 MiB memory cannot hold a huge page, so it stays sparse until the final writes.
+
+The bench records both THP settings with every case.
+Compare runs only across hosts with the same policy.
+
+Other selectors:
+
+- `--modes enforce growth` and `--cow on off` select subsets.
+- `--initial-cap-mib` applies only to `growth`.
+
 To focus on late writes, then compare a smaller initial allowance:
 
 ```bash
@@ -776,60 +804,73 @@ cargo run -p bench-tools -- memory-pressure \
   --initial-cap-mib 288 --repeats 3
 ```
 
-`--modes enforce growth` and `--cow on off` select subsets. The initial-cap
-override applies only to `growth`. Without overrides, the real EngineBuilder
-defaults apply, including the `4 × G` initial allowance. See the runtime's
-[sizing guidance](../../crates/wash-runtime/README.md#sizing-guest-memory-in-containers)
+See the runtime's [sizing guidance](../../crates/wash-runtime/README.md#sizing-guest-memory-in-containers)
 for the budget calculation and its physical-memory assumptions.
 
-Results use the framework's `<target>/density/memory_pressure.json` report list.
-Each run also creates a timestamped directory beside it containing the build
-log, revision and working-tree patch, image ID, requested settings, per-case
-logs, checkpoints, and Docker state/limits. `--target-dir` selects the target
-directory and otherwise follows `CARGO_TARGET_DIR`, then `target/`.
-Steps record `baseline`, `ready`, `writing`, `touched`, and
-`released`, with guest reservations, process footprint, cgroup current/peak
-memory when available, kernel, architecture, and transparent-huge-page policy.
-The `ready` sample records the actual admission stop reason. The final resident
-sample is taken while every store is still alive; successful cleanup must
-return both reservation counters to zero. A peak from an OOM case is unknown
-unless captured before the kill; the last sampled value is not its final peak.
+#### Results
 
-An expected pressure result is either a complete bounded run, or Docker-verified
-OOM during `dirty` writes in `growth` after admission has reserved more initial
-bytes than the container can hold. The latter demonstrates the risk being
-tested, so it is labeled `expected late-write OOM` and passes the experiment.
-Exit 137 alone is insufficient. An OOM before writing, an OOM in `enforce` or a
-sparse/data-heavy/multiple case, a timeout, a configuration mismatch, or missing
-completion/accounting evidence fails the run. A guard or eager allocation can
-bound admission early enough that `growth` survives; OOM is not required on
-every kernel. Compare admission counts and retained memory as well as the
-pass/fail result. This test demonstrates overcommit behavior; it does not
-certify application sizing or make an expected OOM acceptable in production.
+- `<target>/pressure/memory_pressure.json` holds a list of `bench_tools::pressure::Report`.
+  `--target-dir` selects the target directory; it otherwise follows `CARGO_TARGET_DIR`, then `target/`.
+- A timestamped directory beside it holds the build log,
+  revision and working-tree patch, image ID, and per-case logs, reports, and Docker state.
+- Each report records samples at `baseline`, `ready`, `touched`, and `released`:
+  stores, guest reservations, process footprint, cgroup current and peak memory, and refusal counters.
+  It also records the kernel, architecture, THP policies, CPUs, and actual limits.
+- The bench checks the guest accounting before it writes each later sample:
+  - At `ready`, the reservations must equal the retained memories and stay within their budgets.
+  - At `touched`, they must not have changed during writes.
+  - At `released`, both counters must be back at zero.
+- A peak from an OOM case is unknown unless captured before the kill,
+  so OOM cases report no peak.
 
-Docker control commands have a 30-second timeout, configurable with
-`--docker-timeout`. SIGINT and SIGTERM interrupt builds, measurements, and
-control commands. Cleanup is registered by name before container creation and
-attempts removal even after cancellation. Removal waits at most five seconds
-(or `--docker-timeout`, if shorter); a failed removal prints the container name
-for manual cleanup. Docker retains the build-cache volumes. The `bench` workflow
-offers `memory_pressure` as a dispatch-only diagnostic: it uploads the shared
-density report and raw evidence without publishing pressure cases to the trend
-site. Its cleanup stops Docker so the next bench's pre-flight sees the usual
-idle host. It is excluded from automatic release runs.
+#### Outcomes
 
-The standard reporting commands consume pressure results:
+A case passes as either of these:
+
+- **Completed**: all four samples, exit 0, and evidence that admission stopped
+  on memory pressure (a refusal or the guard over its limit).
+- **Expected late-write OOM**: a `growth` `dirty` case that Docker reports as OOM-killed
+  with exit 137, after the `ready` sample and before `touched`.
+  This is the overcommit risk the test demonstrates.
+  It does not require the declared total to exceed the limit,
+  because host overhead can tip a just-fitting write set over it.
+
+Anything else fails the run:
+
+- exit 137 without Docker's OOM flag
+- an OOM before admission completed, in `enforce`, or in a non-`dirty` shape
+- a timeout, or a failed accounting check
+- a `dirty` case that completed although its full writes exceed the limit
+
+A failed case's report carries the last lines of the bench's stderr.
+A guard or eager allocation can bound admission early enough that `growth` survives,
+so OOM is not required on every kernel.
+This test demonstrates overcommit behavior;
+it does not certify application sizing or make an expected OOM acceptable in production.
+
+#### Cancellation and CI
+
+- Docker control commands time out after 30 seconds (`--docker-timeout`).
+- SIGINT and SIGTERM interrupt builds, measurements, and control commands.
+- Cleanup is registered by name before container creation and runs even after cancellation.
+  Removal waits at most five seconds, or `--docker-timeout` if shorter;
+  a failed removal prints the container name for manual cleanup.
+- The `bench` workflow lists `memory_pressure` in `DIAGNOSTIC_BENCHES`:
+  dispatch-only, never in the release subset, and never published.
+  It renders the summary and uploads the evidence even when cases fail.
+  Its cleanup stops Docker so the next bench's pre-flight sees the usual idle host.
+
+The standard reporting commands read pressure results:
 
 ```bash
 cargo run -p bench-tools -- summary --bench memory_pressure --target-dir target
 cargo run -p bench-tools -- jsonl --bench memory_pressure --target-dir target
 ```
 
-Only measured figures are emitted; an OOM case has no final cgroup peak.
 Classifier and schema tests run without containers:
 
 ```bash
-cargo test -p bench-tools --lib
+cargo test -p bench-tools
 ```
 
 ## 10. Pre-flight assertions

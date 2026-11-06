@@ -162,21 +162,28 @@ wash-runtime provides three main abstractions:
 
 ## Sizing guest memory in containers
 
-`enforce` is the default guest-memory mode. It charges declared initial memory
-and subsequent growth to `--max-guest-memory`. The opt-in `growth` mode leaves
-up to 2 MiB of each memory's first allocation uncharged against that budget;
-any excess and subsequent growth are charged. A separate
-`--max-initial-guest-memory` bounds the sum of those uncharged bytes across all
-live stores. Dropping a store releases its reservations. Memories that start at
-zero receive the allowance on their first successful allocation.
+The two guest-memory modes charge memory differently:
+
+- `enforce` (the default) charges declared initial memory
+  and subsequent growth to `--max-guest-memory`.
+- `growth` (opt-in) leaves up to 2 MiB of each memory's first allocation uncharged;
+  any excess and subsequent growth are charged.
+  A separate `--max-initial-guest-memory` bounds the sum of those uncharged bytes
+  across all live stores.
+  Memories that start at zero receive the allowance on their first successful allocation.
+- In both modes, dropping a store releases its reservations.
 
 Let `C` be the container memory limit, `G` the charged guest budget, and `I` the
-initial allowance. By default, `G` is 75% of `C`, clamped between 256 MiB and
-1 TiB, and **`I = 4 × G`**. When the clamp does not apply, that permits `3 × C`
-in uncharged initial memory, plus `0.75 × C` in charged memory. These are declared
-byte reservations, not resident-memory measurements. The factor of four is a
-density policy for sparse guests; it is not a guarantee that the container can
-back every admitted page. An explicit `G` also changes the default `I`.
+initial allowance. The defaults are:
+
+- `G` is 75% of `C`, clamped between 256 MiB and 1 TiB.
+- **`I = 4 × G`**, so an explicit `G` also changes the default `I`.
+- When the clamp does not apply, that permits `3 × C` in uncharged initial memory,
+  plus `0.75 × C` in charged memory.
+
+These are declared byte reservations, not resident-memory measurements.
+The factor of four is a density policy for sparse guests;
+it does not guarantee that the container can back every admitted page.
 
 For one component, compute `e = sum(min(initial_bytes_per_memory, 2 MiB))`.
 If `e > 0`, the initial allowance permits at most `floor(I / e)` such live instances.
