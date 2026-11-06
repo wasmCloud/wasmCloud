@@ -832,13 +832,15 @@ A case passes as either of these:
 - **Expected late-write OOM**: a `growth` `dirty` case that Docker reports as OOM-killed
   with exit 137, after the `ready` sample and before `touched`.
   This is the overcommit risk the test demonstrates.
-  It does not require the declared total to exceed the limit,
-  because host overhead can tip a just-fitting write set over it.
+  The writes must also be unable to fit:
+  cgroup usage at `ready` plus the admitted stores' declared bytes exceeds the limit.
+  That counts host overhead without accepting an OOM a small initial cap should prevent.
 
 Anything else fails the run:
 
 - exit 137 without Docker's OOM flag
 - an OOM before admission completed, in `enforce`, or in a non-`dirty` shape
+- a late-write OOM whose writes should have fit
 - a timeout, or a failed accounting check
 - a `dirty` case that completed although its full writes exceed the limit
 

@@ -297,7 +297,8 @@ pub struct Exit {
 }
 
 /// An expected OOM needs Docker's OOM flag, a `growth` `dirty` case,
-/// and a kill after admission completed but before writes finished.
+/// a kill after admission completed but before writes finished,
+/// and writes that could not fit beside what the cgroup held at `ready`.
 pub fn classify(report: &Report, exit: &Exit) -> Result<Outcome, String> {
     let case = &report.case;
     let host = report.host.as_ref().ok_or("no report before exit")?;
@@ -311,15 +312,20 @@ pub fn classify(report: &Report, exit: &Exit) -> Result<Outcome, String> {
         return Err("admission stopped without memory-pressure evidence".into());
     }
     let phases: Vec<Phase> = report.samples.iter().map(|s| s.phase).collect();
+    let writes = ready.stores as u64 * case.initial_bytes();
     if exit.oom_killed {
-        if case.mode == Mode::Growth
-            && case.shape == Shape::Dirty
-            && exit.exit_code == 137
-            && phases == [Phase::Baseline, Phase::Ready]
+        if case.mode != Mode::Growth
+            || case.shape != Shape::Dirty
+            || exit.exit_code != 137
+            || phases != [Phase::Baseline, Phase::Ready]
         {
-            return Ok(Outcome::ExpectedOom);
+            return Err("unexpected OOM (admission or control case)".into());
         }
-        return Err("unexpected OOM (admission or control case)".into());
+        // Writes add at most `writes` to what the cgroup already held.
+        if ready.cgroup_current.unwrap_or(0) + writes <= host.memory_limit {
+            return Err("late writes fit the cgroup limit but still OOMed".into());
+        }
+        return Ok(Outcome::ExpectedOom);
     }
     if exit.exit_code != 0 {
         return Err(format!(
@@ -337,8 +343,7 @@ pub fn classify(report: &Report, exit: &Exit) -> Result<Outcome, String> {
     {
         return Err("missing or out-of-order completion samples".into());
     }
-    if case.shape == Shape::Dirty && ready.stores as u64 * case.initial_bytes() > host.memory_limit
-    {
+    if case.shape == Shape::Dirty && writes > host.memory_limit {
         return Err("full private writes exceeded the cgroup limit without an OOM".into());
     }
     Ok(Outcome::Completed)
@@ -400,7 +405,7 @@ mod tests {
             footprint_bytes: None,
             guest_memory_bytes: 0,
             initial_memory_bytes: stores as u64 * MIB,
-            cgroup_current: None,
+            cgroup_current: Some(100 * MIB),
             cgroup_peak: Some(100 * MIB),
             guest_refused: 0,
             initial_refused: 1,
@@ -468,6 +473,14 @@ mod tests {
         let (mut report, exit) = oom();
         report.samples = vec![sample(Phase::Baseline, 0), sample(Phase::Ready, 700)];
         assert_eq!(classify(&report, &exit), Ok(Outcome::ExpectedOom));
+    }
+
+    #[test]
+    fn oom_with_writes_that_fit_is_a_failure() {
+        // A small initial cap admits too little to exhaust the container.
+        let (mut report, exit) = oom();
+        report.samples = vec![sample(Phase::Baseline, 0), sample(Phase::Ready, 288)];
+        assert!(classify(&report, &exit).is_err());
     }
 
     #[test]

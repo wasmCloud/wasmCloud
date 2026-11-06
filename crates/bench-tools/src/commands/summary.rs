@@ -241,16 +241,22 @@ fn render_pressure<W: Write>(
     writeln!(out)?;
     writeln!(
         out,
-        "| case | outcome | admitted | completed | charged | uncharged | cgroup peak | THP | stopped by |"
+        "| case | outcome | admitted | completed | charged | uncharged | cgroup peak | THP (anon / shmem) | stopped by |"
     )?;
     writeln!(out, "|---|---|---:|---:|---:|---:|---:|---|---|")?;
     for report in reports {
         let ready = report.sample(Phase::Ready);
-        let thp = report
-            .host
-            .as_ref()
-            .and_then(|h| h.transparent_hugepage.as_deref())
-            .unwrap_or("-");
+        // THP for anonymous memories (CoW off), then for image mappings (CoW on).
+        let thp = report.host.as_ref().map_or_else(
+            || "-".to_owned(),
+            |h| {
+                format!(
+                    "{} / {}",
+                    h.transparent_hugepage.as_deref().unwrap_or("-"),
+                    h.shmem_hugepage.as_deref().unwrap_or("-")
+                )
+            },
+        );
         writeln!(
             out,
             "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
@@ -262,7 +268,8 @@ fn render_pressure<W: Write>(
             bytes(ready.map(|s| s.initial_memory_bytes)),
             bytes(report.cgroup_peak()),
             thp,
-            report.stop.replace('|', "\\|"),
+            // One table row: escape cell separators and fold line breaks.
+            report.stop.replace('|', "\\|").replace(['\r', '\n'], " "),
         )?;
     }
     Ok(())
