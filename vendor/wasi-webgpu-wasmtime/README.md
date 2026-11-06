@@ -9,9 +9,13 @@ The workspace `Cargo.toml` swaps it in with `[patch.crates-io]`. Its own
 only so the license check can resolve it alone; builds use the root lock.
 
 The patch fixes `on_submitted_work_done`, which never returns to the guest.
-It now waits on a blocking thread, polling only the queue's device for the
-submission the callback was registered on, and a poll error traps the guest.
-`GpuQueue` keeps a reference to its device for that poll.
+It is the code of upstream
+[wasi-gfx/wasi-gfx-runtime#156](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/156)
+at 7f0b6af. A new `DeviceHandle` owns the device and queue ids, and runs at
+most one thread per device that polls only that device and runs the wgpu
+callbacks. `on_submitted_work_done` and `map_async` both wait on it, and
+neither traps the guest if the device is lost. `callback-future` is replaced
+by `oneshot`.
 
 `scripts/gpubench/repro/queue-wait/` has the repro. Drop this directory and the
 patch entry once a release with the fix is in `Cargo.lock`.
