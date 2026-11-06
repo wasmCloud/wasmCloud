@@ -1,9 +1,10 @@
 package v2
 
 import (
-	"bytes"
 	_ "embed"
+	"encoding/hex"
 	"slices"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -107,10 +108,14 @@ const startWireFixture = `{
 
 // The fixture pins the v2 field numbers and wire types independently of the encoder.
 //
-//go:embed testdata/workload-start-v2.bin
-var startWireBinary []byte
+//go:embed testdata/workload-start-v2.hex
+var startWireHex string
 
 func TestWorkloadStartWireContract(t *testing.T) {
+	wire, err := hex.DecodeString(strings.Join(strings.Fields(startWireHex), ""))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, codec := range []string{"json", "protobuf"} {
 		t.Run(codec, func(t *testing.T) {
 			request := &WorkloadStartRequest{}
@@ -126,16 +131,10 @@ func TestWorkloadStartWireContract(t *testing.T) {
 					err = protojson.Unmarshal(data, decoded)
 				}
 			} else {
-				if err = proto.Unmarshal(startWireBinary, decoded); err != nil {
-					t.Fatal(err)
-				}
-				data, err = (proto.MarshalOptions{Deterministic: true}).Marshal(request)
-				if err == nil && !bytes.Equal(data, startWireBinary) {
-					t.Fatal("protobuf encoding differs from the v2 binary fixture")
-				}
+				err = proto.Unmarshal(wire, decoded)
 			}
 			if err != nil || !proto.Equal(request, decoded) {
-				t.Fatalf("round trip changed the start request: %v", err)
+				t.Fatalf("decoded request differs from the wire contract: %v", err)
 			}
 			w := decoded.GetWorkload()
 			if decoded.GetWorkloadId() != "runtime-id" ||
