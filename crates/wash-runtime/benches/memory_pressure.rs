@@ -15,8 +15,11 @@ const WASM_PAGE: u64 = 64 * 1024;
 use wash_runtime::engine::{
     Engine,
     ctx::{Ctx, SharedCtx},
-    guest_memory::{FIRST_ALLOCATION_UNCHARGED, GuestMemoryMode, install_memory_limiter},
-    host_memory::{HostMemoryBudgets, detected_memory_limit},
+    guest_memory::{
+        DEFAULT_INITIAL_OVERCOMMIT, FIRST_ALLOCATION_UNCHARGED, GuestMemoryMode,
+        derive_initial_cap, install_memory_limiter,
+    },
+    host_memory::{HostMemoryBudgets, derive_max_process_memory_bytes, detected_memory_limit},
     process_memory::process_footprint,
 };
 use wasmtime::component::{Component, Linker, TypedFunc};
@@ -204,22 +207,43 @@ async fn run() -> Result<()> {
         Mode::Growth => GuestMemoryMode::Growth,
     };
     let (memories, bytes_per_memory, data_bytes) = case.dimensions();
+    let budgets = HostMemoryBudgets::resolve(
+        case.guest_memory_mib.map(|mib| mib * MIB),
+        Some(HEAP_BYTES),
+        Some(MAX_MEMORIES),
+        None,
+    )
+    .map_err(anyhow::Error::msg)?;
     let mut builder = Engine::builder()
-        .with_host_memory(
-            HostMemoryBudgets::resolve(
-                case.guest_memory_mib.map(|mib| mib * MIB),
-                Some(HEAP_BYTES),
-                Some(MAX_MEMORIES),
-                None,
-            )
-            .map_err(anyhow::Error::msg)?,
-        )
+        .with_host_memory(budgets)
         .with_guest_memory_mode(mode)
         .with_memory_init_cow(case.cow)
         .with_fuel_consumption(false);
     let initial_cap = case.initial_cap_mib.filter(|_| case.mode == Mode::Growth);
-    if let Some(cap) = initial_cap {
-        builder = builder.with_max_initial_guest_memory_bytes(cap * MIB);
+    // The runtime's own `I` where the pool holds what it admits; past that,
+    // the budget's rule, which fits the pool at every limit. Only a cap the
+    // engine would not derive itself is named to it.
+    let expected_initial_cap = (case.mode == Mode::Growth).then(|| match initial_cap {
+        Some(mib) => (mib * MIB, true),
+        None => {
+            let (derived, _) = derive_initial_cap(
+                budgets.max_guest_memory,
+                Some(derive_max_process_memory_bytes()),
+                Some(limit),
+            );
+            let admitted = budget_stores(&case, budgets.max_guest_memory, derived);
+            if admitted.saturating_mul(memories) <= u64::from(MAX_MEMORIES) {
+                (derived, false)
+            } else {
+                let of_budget = budgets
+                    .max_guest_memory
+                    .saturating_mul(DEFAULT_INITIAL_OVERCOMMIT);
+                (of_budget, true)
+            }
+        }
+    });
+    if let Some((cap, true)) = expected_initial_cap {
+        builder = builder.with_max_initial_guest_memory_bytes(cap);
     }
     let engine = builder.build()?;
     let budget = engine.guest_memory();
@@ -233,10 +257,11 @@ async fn run() -> Result<()> {
             "guest memory cap was not applied"
         );
     }
-    if let Some(mib) = initial_cap {
+    if let Some((cap, _)) = expected_initial_cap {
         ensure!(
-            budget.initial_cap() == mib * MIB,
-            "initial cap was not applied"
+            budget.initial_cap() == cap,
+            "initial cap {} differs from the expected {cap}",
+            budget.initial_cap()
         );
     }
     // `enforce` ignores the initial cap the engine always installs.

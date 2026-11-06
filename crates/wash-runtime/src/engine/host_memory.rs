@@ -1719,15 +1719,21 @@ const PROCESS_MEMORY_PERCENT: u64 = 90;
 
 /// `max_process_memory` when an operator names none: [`PROCESS_MEMORY_PERCENT`]
 /// of the cgroup limit, or of physical memory where there is no cgroup.
-/// `u64::MAX`, never enforced, where neither can be read.
+/// [`UNENFORCED_PROCESS_MEMORY`] where neither can be read.
 pub fn derive_max_process_memory_bytes() -> u64 {
     derive_max_process_memory_bytes_within(detected_memory_limit())
 }
 
 /// [`derive_max_process_memory_bytes`] from a limit the caller already detected.
 pub(crate) fn derive_max_process_memory_bytes_within(memory_limit: Option<u64>) -> u64 {
-    memory_limit.map_or(u64::MAX, |limit| limit / 100 * PROCESS_MEMORY_PERCENT)
+    memory_limit.map_or(UNENFORCED_PROCESS_MEMORY, |limit| {
+        limit / 100 * PROCESS_MEMORY_PERCENT
+    })
 }
+
+/// The `max_process_memory` no footprint can reach, derived where no memory
+/// limit can be read.
+pub const UNENFORCED_PROCESS_MEMORY: u64 = u64::MAX;
 
 /// What to say about `max_process_memory` at startup, if anything: a limit
 /// past the memory this process can actually have is one the kernel enforces
