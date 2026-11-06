@@ -206,9 +206,7 @@ jobs:
       bench: ${{ matrix.run.bench }}
       name: ${{ matrix.run.name }}
       env: ${{ toJSON(matrix.run.env) }}
-      # arewefastyet has no host filter yet, so only the dedicated host's
-      # rows enter the public history.
-      publish: ${{ matrix.run.publish && needs.matrix.outputs.host == 'hetzner' }}
+      publish: ${{ matrix.run.publish }}
       host: ${{ needs.matrix.outputs.host }}
       ref: ${{ needs.matrix.outputs.ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}

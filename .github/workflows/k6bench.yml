@@ -185,9 +185,6 @@ jobs:
       rate: ${{ inputs.rate || '1000' }}
       duration: ${{ inputs.duration || '3m' }}
       raw: ${{ inputs.raw || false }}
-      # arewefastyet has no host filter yet, so only the dedicated host's
-      # rows enter the public history.
-      publish: ${{ needs.matrix.outputs.host == 'hetzner' }}
       host: ${{ needs.matrix.outputs.host }}
     secrets:
       aws_role_arn: ${{ secrets.WASMCLOUD_BENCH_AWS_ROLE_ARN }}
