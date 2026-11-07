@@ -31,3 +31,10 @@ device's memory in the host's shared wgpu instance, about 270 MiB per run on an
 NVIDIA L4. Upstream, this is
 [wasi-gfx/wasi-gfx-runtime#159](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/159),
 against `main` without #156.
+
+Guest-supplied input can't panic the host. Out-of-range offsets and lengths
+in `write-buffer-with-copy`, `set-bind-group` and
+`get-mapped-range-set-with-copy` return the WIT error the spec calls for, as
+does a mapped-range call on a buffer that isn't mapped. A call on a pass or
+bundle encoder after `end` or `finish` traps the guest. Upstream, this is
+[wasi-gfx/wasi-gfx-runtime#160](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/160).
