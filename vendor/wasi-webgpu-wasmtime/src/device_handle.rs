@@ -42,10 +42,37 @@ pub(crate) struct DeviceHandle {
 #[derive(Default)]
 struct Poller {
     running: bool,
-    target: SubmissionIndex,
     /// Counts poll starts, so a poll only retires waiters registered before it.
     generation: u64,
     waiting: Vec<Waiter>,
+}
+
+impl Poller {
+    fn start_poll(&mut self) -> (SubmissionIndex, u64) {
+        let started = self.generation;
+        self.generation += 1;
+        let target = self
+            .waiting
+            .iter()
+            .map(|waiter| waiter.index)
+            .min()
+            .unwrap_or(0);
+        (target, started)
+    }
+
+    fn finish_poll(&mut self, target: SubmissionIndex, started: u64, finished: bool) -> bool {
+        self.waiting.retain(|waiter| {
+            let retired = finished && waiter.index <= target && waiter.generation <= started;
+            !retired && !waiter.pending.is_settled()
+        });
+        let now = Instant::now();
+        // Later submissions and newly registered calls need their own poll.
+        self.waiting.iter().any(|waiter| {
+            waiter.index <= target
+                && waiter.generation <= started
+                && waiter.deadline.is_some_and(|deadline| deadline <= now)
+        })
+    }
 }
 
 struct Waiter {
@@ -184,7 +211,6 @@ impl DeviceHandle {
         }
         {
             let mut poller = self.lock_poller();
-            poller.target = poller.target.max(index);
             let generation = poller.generation;
             poller.waiting.push(Waiter {
                 index,
@@ -211,12 +237,7 @@ impl DeviceHandle {
 
     fn run_poller(self: Arc<Self>) {
         loop {
-            let (target, started) = {
-                let mut poller = self.lock_poller();
-                let started = poller.generation;
-                poller.generation += 1;
-                (poller.target, started)
-            };
+            let (target, started) = self.lock_poller().start_poll();
             // Index 0 means nothing is in flight, and any poll fires the callback.
             let poll_type = match target {
                 0 => wgpu_types::PollType::Poll,
@@ -242,22 +263,11 @@ impl DeviceHandle {
                 return;
             }
             let mut poller = self.lock_poller();
-            // A waiter registered after this poll started has not been
-            // polled yet, so it can be neither retired nor late.
-            poller.waiting.retain(|waiter| {
-                let retired = finished && waiter.index <= target && waiter.generation <= started;
-                !retired && !waiter.pending.is_settled()
-            });
+            let late = poller.finish_poll(target, started, finished);
             if poller.waiting.is_empty() {
                 poller.running = false;
-                poller.target = 0;
                 return;
             }
-            let now = Instant::now();
-            let late = poller.waiting.iter().any(|waiter| {
-                waiter.generation <= started
-                    && waiter.deadline.is_some_and(|deadline| deadline <= now)
-            });
             drop(poller);
             if late {
                 self.lose(
@@ -277,7 +287,6 @@ impl DeviceHandle {
         let waiting = {
             let mut poller = self.lock_poller();
             poller.running = false;
-            poller.target = 0;
             std::mem::take(&mut poller.waiting)
         };
         for waiter in waiting {
@@ -442,10 +451,10 @@ impl<T> Settle<T> {
 
     /// Like `send`, but runs `first` before sending, and only if this is the
     /// first value.
-    fn send_with(&self, value: T, first: impl FnOnce(&T)) {
+    fn send_with(&self, mut value: T, first: impl FnOnce(&mut T)) {
         let send = self.0.lock().unwrap_or_else(PoisonError::into_inner).take();
         if let Some(send) = send {
-            first(&value);
+            first(&mut value);
             let _ = send.send(value);
         }
     }
@@ -473,7 +482,12 @@ struct MapSettle {
 impl MapSettle {
     fn send(&self, mapped: Result<(), webgpu::MapAsyncError>) {
         self.settle.send_with(mapped, |mapped| {
-            *self.state.lock().unwrap_or_else(PoisonError::into_inner) = match mapped {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if *state != webgpu::GpuBufferMapState::Pending {
+                *mapped = Err(aborted("buffer was unmapped before its map completed"));
+                return;
+            }
+            *state = match mapped {
                 Ok(()) => webgpu::GpuBufferMapState::Mapped,
                 Err(_) => webgpu::GpuBufferMapState::Unmapped,
             };
@@ -816,5 +830,55 @@ mod tests {
         settle.clone().send(1);
         settle.send(2);
         assert_eq!(recv.recv_timeout(TIMEOUT).unwrap(), 1);
+    }
+
+    #[test]
+    fn completed_watch_does_not_expire_behind_newer_work() {
+        let now = Instant::now();
+        let mut poller = Poller::default();
+        for (index, deadline) in [(1, now - TIMEOUT), (2, now + TIMEOUT)] {
+            poller.waiting.push(Waiter {
+                index,
+                generation: 0,
+                deadline: Some(deadline),
+                pending: Box::new(Watch),
+            });
+        }
+        let completed = 1;
+        let (target, started) = poller.start_poll();
+        assert!(!poller.finish_poll(target, started, target <= completed));
+        assert_eq!(poller.waiting.len(), 1);
+        assert_eq!(poller.waiting[0].index, 2);
+    }
+
+    #[test]
+    fn each_expired_watch_is_polled_before_loss() {
+        let mut poller = Poller::default();
+        for index in 1..=2 {
+            poller.waiting.push(Waiter {
+                index,
+                generation: 0,
+                deadline: Some(Instant::now() - TIMEOUT),
+                pending: Box::new(Watch),
+            });
+        }
+        let (target, started) = poller.start_poll();
+        assert!(!poller.finish_poll(target, started, true));
+        let (target, started) = poller.start_poll();
+        assert!(!poller.finish_poll(target, started, true));
+        assert!(poller.waiting.is_empty());
+    }
+
+    #[test]
+    fn unfinished_watch_expires() {
+        let mut poller = Poller::default();
+        poller.waiting.push(Waiter {
+            index: 1,
+            generation: 0,
+            deadline: Some(Instant::now() - TIMEOUT),
+            pending: Box::new(Watch),
+        });
+        let (target, started) = poller.start_poll();
+        assert!(poller.finish_poll(target, started, false));
     }
 }

@@ -244,7 +244,6 @@ fn rejected_duplicate_preserves_pending_mapping() {
 fn cancelled_map_still_settles_its_buffer() {
     let (state, rep) = State::new(false);
     let release = state.hold_poll();
-    let map_state = state.map_state(rep);
     let mut store = Store::new(&Engine::default(), state);
     block_on(store.run_concurrent(async |access| {
         let access = access.with_getter::<HasWasiWebGpuCtx>(State::webgpu_ctx);
@@ -261,6 +260,7 @@ fn cancelled_map_still_settles_its_buffer() {
         drop(map);
     }))
     .unwrap();
+    let map_state = store.data().map_state(rep);
     release.send(()).unwrap();
     let deadline = Instant::now() + TEST_TIMEOUT;
     while *map_state.lock().unwrap() == webgpu::GpuBufferMapState::Pending {
@@ -291,4 +291,165 @@ fn reading_an_unmapped_range_is_an_operation_error() {
         write.unwrap_err().kind,
         webgpu::GetMappedRangeErrorKind::OperationError
     ));
+}
+
+fn assert_operation_error<T: std::fmt::Debug>(result: Result<T, webgpu::GetMappedRangeError>) {
+    assert!(
+        matches!(
+            &result,
+            Err(webgpu::GetMappedRangeError {
+                kind: webgpu::GetMappedRangeErrorKind::OperationError,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn an_invalid_mapped_range_is_an_operation_error() {
+    let (mut state, rep) = State::new(true);
+    let mut ctx = state.webgpu_ctx();
+    let buffer = || Resource::new_borrow(rep);
+    // Past the end, unaligned, and longer than the buffer.
+    for (offset, size) in [(Some(24), None), (Some(4), None), (None, Some(24))] {
+        assert_operation_error(
+            ctx.get_mapped_range_get_with_copy(buffer(), offset, size)
+                .unwrap(),
+        );
+        assert_operation_error(
+            ctx.get_mapped_range_set_with_copy(buffer(), vec![0; 16], offset, size)
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
+fn writing_the_wrong_length_is_an_operation_error() {
+    let (mut state, rep) = State::new(true);
+    let mut ctx = state.webgpu_ctx();
+    let buffer = || Resource::new_borrow(rep);
+    for len in [8, 24] {
+        assert_operation_error(
+            ctx.get_mapped_range_set_with_copy(buffer(), vec![1; len], None, None)
+                .unwrap(),
+        );
+    }
+    let data: Vec<u8> = (0..8).collect();
+    ctx.get_mapped_range_set_with_copy(buffer(), data.clone(), Some(8), None)
+        .unwrap()
+        .unwrap();
+    let read = ctx
+        .get_mapped_range_get_with_copy(buffer(), None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(read, [vec![0; 8], data].concat());
+}
+
+fn unmap_before_map_callback(remap: bool, destroy: bool) {
+    let (state, rep) = State::new(false);
+    let (other, error) = state.instance.device_create_buffer(
+        *state.device.device_id(),
+        &wgpu_core::resource::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu_types::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        },
+        None,
+    );
+    assert!(error.is_none());
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    state
+        .instance
+        .buffer_map_async(
+            other,
+            0,
+            None,
+            wgpu_core::resource::BufferMapOperation {
+                host: wgpu_core::device::HostMap::Read,
+                callback: Some(Box::new(move |result| {
+                    assert!(result.is_ok());
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(TEST_TIMEOUT).unwrap();
+                })),
+            },
+        )
+        .unwrap();
+    let mut store = Store::new(&Engine::default(), state);
+    block_on(store.run_concurrent(async |access| {
+        let access = access.with_getter::<HasWasiWebGpuCtx>(State::webgpu_ctx);
+        let mut first = std::pin::pin!(HasWasiWebGpuCtx::map_async(
+            &access,
+            Resource::new_borrow(rep),
+            webgpu::GpuMapMode::READ,
+            None,
+            None,
+        ));
+        assert!(poll_fn(|cx| Poll::Ready(first.as_mut().poll(cx)))
+            .await
+            .is_pending());
+        entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
+        // Native mapping is complete; its callback is blocked behind another map.
+        access.with(|mut access| {
+            let mut ctx = access.get();
+            if destroy {
+                ctx.destroy(Resource::new_borrow(rep)).unwrap();
+            } else {
+                ctx.unmap(Resource::new_borrow(rep)).unwrap().unwrap();
+            }
+        });
+        let mut second = std::pin::pin!(HasWasiWebGpuCtx::map_async(
+            &access,
+            Resource::new_borrow(rep),
+            webgpu::GpuMapMode::READ,
+            None,
+            None,
+        ));
+        if remap {
+            assert!(poll_fn(|cx| Poll::Ready(second.as_mut().poll(cx)))
+                .await
+                .is_pending());
+        }
+        release_tx.send(()).unwrap();
+        let err = first.await.unwrap().unwrap_err();
+        assert!(matches!(err.kind, webgpu::MapAsyncErrorKind::AbortError));
+        if remap {
+            second.await.unwrap().unwrap();
+        }
+        access.with(|mut access| {
+            let mut ctx = access.get();
+            assert_eq!(
+                ctx.map_state(Resource::new_borrow(rep)).unwrap(),
+                if remap {
+                    webgpu::GpuBufferMapState::Mapped
+                } else {
+                    webgpu::GpuBufferMapState::Unmapped
+                }
+            );
+            if remap {
+                ctx.get_mapped_range_get_with_copy(Resource::new_borrow(rep), None, None)
+                    .unwrap()
+                    .unwrap();
+            }
+        });
+    }))
+    .unwrap();
+    store.data().instance.buffer_drop(other);
+}
+
+#[test]
+fn unmap_rejects_a_delayed_map_callback() {
+    unmap_before_map_callback(false, false);
+}
+
+#[test]
+fn delayed_map_callback_preserves_a_new_mapping() {
+    unmap_before_map_callback(true, false);
+}
+
+#[test]
+fn destroy_rejects_a_delayed_map_callback() {
+    unmap_before_map_callback(false, true);
 }

@@ -23,8 +23,12 @@ at 895488a, plus the commits stacked on it in
   lost device panicked `GpuQueue.submit` and the error conversion. A loss now
   resolves `lost` and settles every waiting call, and `destroy()` aborts
   pending maps. A map on a buffer that is mapped or has a map pending
-  rejects without touching that map, and reading the range of a buffer that
-  is not mapped returns `OperationError` instead of panicking.
+  rejects without touching that map, and unmapping or destroying a buffer
+  before its map completes rejects that map with `AbortError`.
+- Mapped ranges: reading or writing the range of a buffer that is not
+  mapped, an out-of-bounds or unaligned range, or a write whose length
+  differs from the range returns `OperationError`. These used to panic or
+  trap.
 - Timeout: submitted work that outlives `WasiWebGpuOptions::wait_timeout`
   loses the device, whether or not a call waits on it. The shader keeps the GPU busy until it ends or the driver resets
   it.
