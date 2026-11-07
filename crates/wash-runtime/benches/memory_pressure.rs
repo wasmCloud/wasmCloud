@@ -1,14 +1,15 @@
 //! Container pressure scenarios, run by `bench-tools memory-pressure`.
 //!
-//! Each sample after `baseline` is written only after the guest accounting
-//! it implies has been checked, so a missing sample means a failed check.
+//! Ready, touched, and released checkpoints require verified guest accounting.
+//! Admission snapshots are diagnostic and never count as checkpoints.
 
 use std::path::PathBuf;
 use std::sync::Barrier;
 
 use anyhow::{Context as _, Result, ensure};
 use bench_tools::pressure::{
-    CASE_ENV, Case, Host, MIB, Mode, Phase, REPORT_ENV, Report, Sample, WARM_BYTES, print_sample,
+    CASE_ENV, Case, Host, MIB, Mode, Phase, REPORT_ENV, Report, Sample, WARM_BYTES,
+    cgroup_stat_bytes, print_sample,
 };
 
 const WASM_PAGE: u64 = 64 * 1024;
@@ -24,8 +25,10 @@ use wasmtime::component::{Component, Linker, TypedFunc};
 /// Heap ceiling per memory: each synthetic memory's maximum is 1024 pages.
 /// Pool slots stay the default reservation plus guard.
 const HEAP_BYTES: u64 = 64 * MIB;
-/// Pool memories: room for `4 × G` of 1 MiB memories at the largest limit.
+/// Pool memories; cases must fit without changing runtime budget defaults.
 const MAX_MEMORIES: u32 = 8192;
+/// Bound diagnostic I/O during burst admission.
+const ADMISSION_SAMPLE_BYTES: u64 = 128 * MIB;
 
 /// Stores the budgets alone admit, before the guard or the pool can stop admission.
 fn budget_stores(case: &Case, guest_cap: u64, initial_cap: u64) -> u64 {
@@ -50,6 +53,7 @@ impl Recorder {
     fn record(&mut self, engine: &Engine, phase: Phase, stores: usize) -> Result<()> {
         let budget = engine.guest_memory();
         let guard = engine.process_memory().context("missing process guard")?;
+        let stat = read_trimmed("/sys/fs/cgroup/memory.stat").unwrap_or_default();
         let sample = Sample {
             phase,
             stores,
@@ -58,13 +62,19 @@ impl Recorder {
             initial_memory_bytes: budget.initial_uncharged(),
             cgroup_current: cgroup_bytes("memory.current").ok(),
             cgroup_peak: cgroup_bytes("memory.peak").ok(),
+            cgroup_page_tables: cgroup_stat_bytes(&stat, "pagetables"),
+            cgroup_kernel: cgroup_stat_bytes(&stat, "kernel"),
             guest_refused: budget.refused(),
             initial_refused: budget.initial_refused(),
             process_refused: budget.process_refused(),
             process_over: guard.is_over(),
         };
         print_sample(self.report.samples.is_empty(), &sample);
-        self.report.samples.push(sample);
+        if phase == Phase::Admitting {
+            self.report.last_admission = Some(sample);
+        } else {
+            self.report.samples.push(sample);
+        }
         let temporary = self.path.with_extension("tmp");
         std::fs::write(&temporary, serde_json::to_vec(&self.report)?)?;
         std::fs::rename(temporary, &self.path)?;
@@ -233,19 +243,16 @@ async fn run() -> Result<()> {
             "guest memory cap was not applied"
         );
     }
-    if let Some(mib) = initial_cap {
-        ensure!(
-            budget.initial_cap() == mib * MIB,
-            "initial cap was not applied"
-        );
-    }
-    // `enforce` ignores the initial cap the engine always installs.
+    case.validate_initial_cap(initial_cap.map(|mib| mib * MIB), budget.initial_cap())
+        .map_err(anyhow::Error::msg)?;
+    // Never lower the runtime default to fit this benchmark's pool.
+    // Enforce ignores the initial cap the engine always installs.
     let initial_limit = (case.mode == Mode::Growth).then(|| budget.initial_cap());
     let budget_stores = budget_stores(&case, budget.cap(), initial_limit.unwrap_or(u64::MAX));
     ensure!(
         budget_stores.saturating_mul(memories) <= u64::from(MAX_MEMORIES),
         "the budgets admit {budget_stores} stores ({} memories), more than the pool's \
-         {MAX_MEMORIES}; lower --guest-memory-mib or --initial-cap-mib",
+         {MAX_MEMORIES}; use a smaller --memory-mib or explicitly request a lower-cap comparison",
         budget_stores.saturating_mul(memories)
     );
     let mut report = Report::new(case.clone());
@@ -299,6 +306,7 @@ async fn run() -> Result<()> {
     // Admit without pauses, as a burst of real starts would; the guard
     // refreshes its own reading at most every `REFRESH_INTERVAL`.
     let guard = engine.process_memory().context("missing process guard")?;
+    let sample_every = usize::try_from((ADMISSION_SAMPLE_BYTES / case.initial_bytes()).max(1))?;
     let mut guests = Vec::new();
     let stop = loop {
         if let Err(error) = guard.admit_start() {
@@ -334,6 +342,9 @@ async fn run() -> Result<()> {
             touch.push(instance.get_typed_func::<(), ()>(&mut store, &format!("touch-{suffix}"))?);
         }
         guests.push(Guest { store, touch });
+        if guests.len().is_multiple_of(sample_every) {
+            recorder.record(&engine, Phase::Admitting, guests.len())?;
+        }
     };
     recorder.report.stop = stop;
 

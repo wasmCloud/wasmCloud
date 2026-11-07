@@ -241,11 +241,12 @@ fn render_pressure<W: Write>(
     writeln!(out)?;
     writeln!(
         out,
-        "| case | outcome | admitted / budget | completed | charged | uncharged | cgroup peak | THP (anon / shmem) | stopped by |"
+        "| case | outcome | initial cap policy | admitted / budget | completed | charged | uncharged | cgroup peak | page tables / kernel at admission | THP (anon / shmem) | stopped by |"
     )?;
-    writeln!(out, "|---|---|---:|---:|---:|---:|---:|---|---|")?;
+    writeln!(out, "|---|---|---|---:|---:|---:|---:|---:|---|---|---|")?;
     for report in reports {
         let ready = report.sample(Phase::Ready);
+        let last = ready.or(report.last_admission.as_ref());
         // THP for anonymous memories (CoW off), then for image mappings (CoW on).
         let thp = report.host.as_ref().map_or_else(
             || "-".to_owned(),
@@ -259,14 +260,20 @@ fn render_pressure<W: Write>(
         );
         writeln!(
             out,
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             report.case.label(),
             report.outcome.map_or("-", |o| o.name()),
+            report.case.cap_policy(),
             report.admissions(),
             report.completed(),
             bytes(ready.map(|s| s.guest_memory_bytes)),
             bytes(ready.map(|s| s.initial_memory_bytes)),
             bytes(report.cgroup_peak()),
+            format_args!(
+                "{} / {}",
+                bytes(last.and_then(|s| s.cgroup_page_tables)),
+                bytes(last.and_then(|s| s.cgroup_kernel))
+            ),
             thp,
             // One table row: escape cell separators and fold line breaks.
             report.stop.replace('|', "\\|").replace(['\r', '\n'], " "),

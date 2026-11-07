@@ -22,7 +22,7 @@ enum Cow {
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
-    #[arg(long, num_args = 1.., default_values = ["768"], value_parser = clap::value_parser!(u64).range(MEMORY_MIB))]
+    #[arg(long, num_args = 1.., default_values = ["384", "512"], value_parser = clap::value_parser!(u64).range(MEMORY_MIB))]
     memory_mib: Vec<u64>,
     #[arg(long, num_args = 1.., value_enum, default_values = ["sparse", "data-heavy", "multiple", "dirty"])]
     shapes: Vec<Shape>,
@@ -34,6 +34,9 @@ pub struct Args {
     dirty_mib: u64,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     initial_cap_mib: Option<u64>,
+    /// Require sparse growth coverage with unmodified runtime memory budgets.
+    #[arg(long, conflicts_with_all = ["initial_cap_mib", "guest_memory_mib"])]
+    require_runtime_defaults: bool,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     guest_memory_mib: Option<u64>,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
@@ -392,7 +395,7 @@ fn run_case(
             "PASS"
         },
         outcome.name(),
-        report.admitted()
+        report.admission_count()
     );
     fs::write(
         directory.join("validated.json"),
@@ -417,6 +420,11 @@ pub fn run(mut args: Args) -> Result<()> {
     dedup(&mut args.shapes);
     dedup(&mut args.modes);
     dedup(&mut args.cow);
+    ensure!(
+        !args.require_runtime_defaults
+            || (args.modes.contains(&Mode::Growth) && args.shapes.contains(&Shape::Sparse)),
+        "--require-runtime-defaults requires sparse growth cases"
+    );
     let cancel = Cancel(Arc::new(AtomicBool::new(false)));
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -473,6 +481,7 @@ pub fn run(mut args: Args) -> Result<()> {
         serde_json::to_vec_pretty(&json!({
             "revision": git("git-revision", &["rev-parse", "HEAD"])?,
             "dirty": !git("git-status", &["status", "--porcelain"])?.is_empty(),
+            "runtime_defaults_required": args.require_runtime_defaults,
             "image": image, "binary": binary,
             "build": {"cpus": 4, "memory_mib": 8192}, "measured": {"cpus": 2, "swap_mib": 0},
         }))?,
@@ -554,5 +563,52 @@ fn termination() -> std::io::Result<impl std::future::Future<Output = ()>> {
         Ok(async move {
             interrupt.recv().await;
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        args: Args,
+    }
+
+    #[test]
+    fn defaults_cover_small_container_regressions() {
+        let args = Cli::parse_from(["pressure", "--require-runtime-defaults"]).args;
+        assert_eq!(args.memory_mib, [384, 512]);
+        assert_eq!(args.modes, [Mode::Enforce, Mode::Growth]);
+        assert!(args.shapes.contains(&Shape::Sparse));
+        assert!(args.shapes.contains(&Shape::Dirty));
+        assert_eq!(args.cow, [Cow::On, Cow::Off]);
+    }
+
+    #[test]
+    fn runtime_default_checks_reject_budget_overrides() {
+        for flag in ["--initial-cap-mib", "--guest-memory-mib"] {
+            assert!(
+                Cli::try_parse_from(["pressure", "--require-runtime-defaults", flag, "256"])
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_default_checks_require_sparse_growth() {
+        for flags in [["--shapes", "dirty"], ["--modes", "enforce"]] {
+            let args =
+                Cli::parse_from(["pressure", "--require-runtime-defaults", flags[0], flags[1]])
+                    .args;
+            assert!(
+                run(args)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires sparse growth")
+            );
+        }
     }
 }

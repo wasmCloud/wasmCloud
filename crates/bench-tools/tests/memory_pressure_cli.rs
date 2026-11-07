@@ -128,6 +128,8 @@ impl Fixture {
                     initial_memory_bytes: if growth { reserved } else { 0 },
                     cgroup_current: Some(256 * MIB),
                     cgroup_peak: Some(300 * MIB),
+                    cgroup_page_tables: None,
+                    cgroup_kernel: None,
                     guest_refused: u64::from(!growth),
                     initial_refused: u64::from(growth),
                     process_refused: 0,
@@ -167,6 +169,8 @@ impl Fixture {
         command
             .args([
                 "memory-pressure",
+                "--memory-mib",
+                "768",
                 "--shapes",
                 shape.name(),
                 "--modes",
@@ -300,7 +304,7 @@ fn completed_case_applies_limits_cleans_up_and_feeds_shared_reports() -> Result<
     passed(&fixture.command(Shape::Sparse, "growth")?.output()?)?;
     let report = fixture.report()?;
     assert_eq!(report.outcome, Some(Outcome::Completed));
-    assert_eq!(report.admitted(), 2304);
+    assert_eq!(report.admitted(), Some(2304));
     let args = fs::read_to_string(fixture.path().join("create-args"))?;
     for setting in [
         "--memory=768m",
@@ -324,7 +328,7 @@ fn completed_case_applies_limits_cleans_up_and_feeds_shared_reports() -> Result<
         ("jsonl", r#""metric":"admitted_stores","value":2304.0"#),
         (
             "summary",
-            "| 768m-sparse-growth-cow-on-1 | completed | 2304 / 2304 | 2304 |",
+            "| 768m-sparse-growth-cow-on-1 | completed | runtime default | 2304 / 2304 | 2304 |",
         ),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
@@ -525,5 +529,38 @@ fn a_failed_new_build_cannot_leave_the_previous_aggregate_as_current() -> Result
         !aggregate.exists(),
         "previous run is still advertised as the current report"
     );
+    Ok(())
+}
+
+#[test]
+fn early_oom_preserves_diagnostics_without_claiming_admission() -> Result<()> {
+    let fixture = Fixture::new(Shape::Sparse, "growth", true)?;
+    let input = fixture.path().join("input.json");
+    let mut report: Report = serde_json::from_slice(&fs::read(&input)?)?;
+    let mut snapshot = report.samples.pop().context("missing ready")?;
+    snapshot.phase = Phase::Admitting;
+    snapshot.stores = 2176;
+    snapshot.cgroup_page_tables = Some(32 * MIB);
+    snapshot.cgroup_kernel = Some(40 * MIB);
+    report.last_admission = Some(snapshot);
+    fs::write(&input, serde_json::to_vec(&report)?)?;
+    let output = fixture.command(Shape::Sparse, "growth")?.output()?;
+    assert!(!output.status.success());
+    let report = fixture.report()?;
+    assert_eq!(report.outcome, Some(Outcome::Failed));
+    assert_eq!(report.admitted(), None);
+    assert!(report.stop.contains("OOM before admission completed"));
+    let summary = Command::new(env!("CARGO_BIN_EXE_bench-tools"))
+        .args(["summary", "--bench", "memory_pressure", "--target-dir"])
+        .arg(fixture.target())
+        .output()?;
+    passed(&summary)?;
+    let markdown = String::from_utf8(summary.stdout)?;
+    assert!(
+        markdown.contains("unknown (last observed 2176) / 2304"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("32.0MiB / 40.0MiB"), "{markdown}");
+    assert!(fixture.removed("case")?);
     Ok(())
 }

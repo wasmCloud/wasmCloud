@@ -1,0 +1,89 @@
+name: memory-pressure
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'crates/wash-runtime/src/engine/**'
+              - 'crates/wash-runtime/benches/memory_pressure.rs'
+              - 'crates/wash-runtime/Cargo.toml'
+              - 'crates/bench-tools/**'
+              - '.cargo/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/memory-pressure.yml'
+
+  pressure:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true') }}
+    name: memory pressure cases
+    # PR code runs only on a disposable hosted VM.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build runner and test reporting
+        run: |
+          cargo test --locked -p bench-tools
+          cargo build --locked -p bench-tools
+      - name: Check runtime defaults under memory pressure
+        run: target/debug/bench-tools memory-pressure --require-runtime-defaults --repeats 3
+      - name: Summarize results
+        if: ${{ !cancelled() && hashFiles('target/pressure/memory_pressure.json') != '' }}
+        run: |
+          target/debug/bench-tools summary --bench memory_pressure --target-dir target > target/pressure/summary.md
+          cat target/pressure/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain reports and failure diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: memory-pressure
+          path: target/pressure/
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate:
+    name: gate-memory-pressure
+    needs: [changes, pressure]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require checks to pass or be skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          if echo "$RESULTS" | grep -qE '"(failure|cancelled)"'; then
+            exit 1
+          fi
