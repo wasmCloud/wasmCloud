@@ -14,6 +14,7 @@
 #   ansible-playbook provision.yml                  # everything
 #   ansible-playbook provision.yml --tags kernel    # just the GRUB drop-in
 #   ansible-playbook provision.yml --tags toolchain # apt + rustup + gungraun
+#   ansible-playbook provision.yml --tags logind    # kill dropped sessions' work
 #   ansible-playbook provision.yml --check          # dry-run
 #
 # After --tags kernel changes, a reboot is required for the new cmdline
@@ -428,6 +429,35 @@
         - enable cpu-performance
       tags: [governor]
 
+    # ── Kill a closed login session's processes ───────────────────────────
+    # Work started over SSH otherwise outlives a dropped connection, and a
+    # loop polling `docker ps` keeps the socket-activated daemon up for every
+    # bench after it. logind's default exempts root, which operators log in
+    # as, so the exemption list is emptied. Work meant to outlive the session
+    # goes in `systemd-run --unit=<name>` (README §2.1). The runner is a
+    # system service, so this doesn't touch it.
+    - name: logind drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      tags: [logind]
+
+    - name: logind drop-in killing a closed session's processes
+      ansible.builtin.copy:
+        dest: /etc/systemd/logind.conf.d/50-bench.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Login]
+          KillUserProcesses=yes
+          KillExcludeUsers=
+      notify: restart systemd-logind
+      tags: [logind]
+
     # ── Provisioning marker ───────────────────────────────────────────────
     - name: Stamp /etc/wasmcloud-bench-stage
       ansible.builtin.copy:
@@ -460,6 +490,16 @@
         name: cpu-performance.service
         enabled: true
       listen: enable cpu-performance
+
+    # logind keeps its sessions across a restart (their state is under
+    # /run/systemd), so this doesn't end the SSH session running the play.
+    # The new setting applies to sessions as they close, including ones open
+    # now.
+    - name: restart systemd-logind
+      ansible.builtin.systemd:
+        name: systemd-logind.service
+        state: restarted
+      listen: restart systemd-logind
 
     # The running runner keeps the groups it started with, so jobs wouldn't
     # see docker until it restarts. svc.sh records its unit name in .service.
