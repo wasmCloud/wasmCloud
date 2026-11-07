@@ -1495,6 +1495,31 @@ pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     options: NatsConnectionOptions,
 ) -> Result<async_nats::Client, anyhow::Error> {
+    // async-nats takes the two as a pair, so one alone would connect with no
+    // client certificate and no error.
+    if options.tls_cert.is_some() != options.tls_key.is_some() {
+        anyhow::bail!("NATS TLS client certificate and key must be set together");
+    }
+
+    // `to_server_addrs` here rather than per attempt: the addresses are what
+    // the retry is over, and resolving them once means a malformed URL is
+    // reported as one instead of being retried for the whole window.
+    let addrs = addr
+        .to_server_addrs()
+        .context("failed to parse NATS server address")?
+        .collect::<Vec<_>>();
+
+    // Without async-nats's `websockets` feature these dial plain TCP and skip
+    // the TLS upgrade, `require_tls` included. Host and port only, since a URL
+    // can carry credentials.
+    if let Some(server) = addrs.iter().find(|server| server.is_websocket()) {
+        anyhow::bail!(
+            "{}:{}: WebSocket NATS servers are not supported",
+            server.host(),
+            server.port()
+        );
+    }
+
     let mut opts = options.auth.into_connect_options()?;
 
     if let Some(name) = options.name {
@@ -1560,18 +1585,10 @@ pub async fn connect_nats(
 
     let Some(window) = options.connect_retry else {
         return opts
-            .connect(addr)
+            .connect(addrs)
             .await
             .context("failed to connect to NATS");
     };
-
-    // `to_server_addrs` here rather than per attempt: the addresses are what
-    // the retry is over, and resolving them once means a malformed URL is
-    // reported as one instead of being retried for the whole window.
-    let addrs = addr
-        .to_server_addrs()
-        .context("failed to parse NATS server address")?
-        .collect::<Vec<_>>();
 
     let deadline = tokio::time::Instant::now() + window;
     let mut backoff = Duration::from_millis(250);
@@ -3289,6 +3306,93 @@ mod tests {
         assert!(!received.contains("secret-token"), "{received}");
         assert!(client.is_err());
         Ok(())
+    }
+
+    /// A client certificate is an identity to present, and only a TLS
+    /// connection presents it.
+    #[tokio::test]
+    async fn a_client_certificate_requires_tls() -> anyhow::Result<()> {
+        use crate::nats_credentials::tests::record_after_plaintext_info;
+        crate::init_crypto();
+
+        let dir = tempfile::tempdir()?;
+        let key = rcgen::KeyPair::generate()?;
+        let cert = rcgen::CertificateParams::new(vec!["host".into()])?.self_signed(&key)?;
+        let (cert_path, key_path) = (dir.path().join("tls.crt"), dir.path().join("tls.key"));
+        std::fs::write(&cert_path, cert.pem())?;
+        std::fs::write(&key_path, key.serialize_pem())?;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let options = NatsConnectionOptions::default().with_tls_client_cert(cert_path, key_path);
+        let (received, client) = tokio::join!(
+            record_after_plaintext_info(&listener),
+            connect_nats(format!("nats://{}", listener.local_addr()?), options),
+        );
+        assert!(!received?.contains("CONNECT"));
+        assert!(client.is_err());
+        Ok(())
+    }
+
+    /// A configuration mistake is not worth retrying for, so a host with a
+    /// window still reports it at once rather than looking like it is waiting
+    /// for NATS.
+    #[tokio::test]
+    async fn half_a_client_certificate_is_refused() {
+        for options in [
+            NatsConnectionOptions {
+                tls_cert: Some("tls.crt".into()),
+                ..Default::default()
+            },
+            NatsConnectionOptions {
+                tls_key: Some("tls.key".into()),
+                ..Default::default()
+            },
+        ] {
+            let options = NatsConnectionOptions {
+                connect_retry: Some(Duration::from_secs(60)),
+                ..options
+            };
+            let err = connect_nats(REFUSED, options)
+                .await
+                .expect_err("half a client certificate must not connect");
+            assert!(
+                format!("{err:#}").contains("must be set together"),
+                "{err:#}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn websocket_servers_are_refused() {
+        for servers in [
+            vec!["ws://127.0.0.1:1"],
+            vec!["wss://127.0.0.1:1"],
+            vec!["WSS://127.0.0.1:1"],
+            vec!["nats://127.0.0.1:1", "wss://127.0.0.1:1"],
+        ] {
+            let options = NatsConnectionOptions {
+                connect_retry: Some(Duration::from_secs(60)),
+                ..Default::default()
+            };
+            let err = connect_nats(&servers, options)
+                .await
+                .expect_err("a WebSocket server must not be dialed");
+            assert!(
+                format!("{err:#}").contains("WebSocket"),
+                "{servers:?}: {err:#}"
+            );
+        }
+    }
+
+    /// The error names the server, and a server URL can carry credentials.
+    #[tokio::test]
+    async fn a_refused_websocket_server_keeps_its_credentials_out_of_the_error() {
+        let err = connect_nats("wss://user:hunter2@127.0.0.1:1", Default::default())
+            .await
+            .expect_err("a WebSocket server must not be dialed");
+        let message = format!("{err:#}");
+        assert!(message.contains("127.0.0.1:1"), "{message}");
+        assert!(!message.contains("hunter2"), "{message}");
     }
 
     #[tokio::test]
