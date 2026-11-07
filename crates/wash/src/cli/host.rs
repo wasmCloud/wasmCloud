@@ -102,13 +102,14 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-tls-first", default_value_t = false)]
     pub scheduler_nats_tls_first: bool,
 
-    /// Path to NATS TLS certificate file for NATS Scheduler connection. Setting
-    /// it makes TLS required.
-    #[arg(long = "scheduler-nats-tls-cert")]
+    /// Path to NATS TLS certificate file for NATS Scheduler connection, set
+    /// together with its key. Setting it makes TLS required.
+    #[arg(long = "scheduler-nats-tls-cert", requires = "scheduler_nats_tls_key")]
     pub scheduler_nats_tls_cert: Option<PathBuf>,
 
-    /// Path to NATS TLS private key file for NATS Scheduler connection
-    #[arg(long = "scheduler-nats-tls-key")]
+    /// Path to NATS TLS private key file for NATS Scheduler connection, set
+    /// together with its certificate
+    #[arg(long = "scheduler-nats-tls-key", requires = "scheduler_nats_tls_cert")]
     pub scheduler_nats_tls_key: Option<PathBuf>,
 
     /// NATS URL for Data Plane communications
@@ -164,13 +165,14 @@ pub struct HostCommand {
     #[arg(long = "data-nats-tls-first", default_value_t = false)]
     pub data_nats_tls_first: bool,
 
-    /// Path to NATS TLS certificate file for NATS Data connection. Setting it
-    /// makes TLS required.
-    #[arg(long = "data-nats-tls-cert")]
+    /// Path to NATS TLS certificate file for NATS Data connection, set together
+    /// with its key. Setting it makes TLS required.
+    #[arg(long = "data-nats-tls-cert", requires = "data_nats_tls_key")]
     pub data_nats_tls_cert: Option<PathBuf>,
 
-    /// Path to NATS TLS private key file for NATS Data connection
-    #[arg(long = "data-nats-tls-key")]
+    /// Path to NATS TLS private key file for NATS Data connection, set together
+    /// with its certificate
+    #[arg(long = "data-nats-tls-key", requires = "data_nats_tls_cert")]
     pub data_nats_tls_key: Option<PathBuf>,
 
     /// The host name to assign to the host
@@ -2273,6 +2275,20 @@ mod nats_tests {
         assert!(!host.data_nats_jwt_as_token);
         assert!(host.scheduler_nats_auth().hook.is_some());
         assert!(host.data_nats_auth().hook.is_none());
+    }
+
+    /// One alone would otherwise connect with no client certificate.
+    #[test]
+    fn host_nats_tls_cert_and_key_require_each_other() {
+        for plane in ["scheduler", "data"] {
+            let cert = format!("--{plane}-nats-tls-cert=tls.crt");
+            let key = format!("--{plane}-nats-tls-key=tls.key");
+            for lone in [&cert, &key] {
+                let argv = ["wash-host", lone.as_str()];
+                assert!(TestCli::try_parse_from(argv).is_err(), "{argv:?}");
+            }
+            assert!(TestCli::try_parse_from(["wash-host", cert.as_str(), key.as_str()]).is_ok());
+        }
     }
 
     /// Only a credentials file carries a JWT to repeat.
