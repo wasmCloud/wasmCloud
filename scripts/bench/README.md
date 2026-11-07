@@ -656,7 +656,7 @@ GitHub → **Actions** → **bench** → **Run workflow**:
 
 | Input   | Description                                                                                | Default          |
 | ------- | ------------------------------------------------------------------------------------------ | ---------------- |
-| `bench` | which bench to run (`http_invoke`, `service_http`, `gungraun`, `wasmtime_baseline`, `wasmtime_serve`, `gungraun_plugin`) | `http_invoke`    |
+| `bench` | which bench to run (`http_invoke`, `service_http`, `gungraun`, `wasmtime_baseline`, `wasmtime_serve`, `ids`, `gungraun_plugin`) | `http_invoke`    |
 | `ref`   | git ref to bench (branch, tag, sha, or a pull request as `#123` / `pull/123` / `pr/123` — the same spellings bench-compare accepts) | the workflow ref |
 
 A pull-request ref produces a step summary and an uploaded artifact but is
@@ -675,6 +675,7 @@ against its baseline rather than read its absolute numbers, use **bench-compare*
 | `gungraun`          | gungraun      | CPU instruction count (cachegrind) | deterministic regression detection; not subject to shared-runner timing noise. `gungraun` is the renamed/refreshed `iai-callgrind` (rename landed upstream at 0.17.0) |
 | `wasmtime_baseline` | criterion     | wall-clock                         | wasmtime-only baseline for context                                                                                                                             |
 | `wasmtime_serve`    | criterion     | wall-clock                         | wasmtime serve subcommand baseline                                                                                                                             |
+| `ids`               | criterion     | wall-clock (ns / IDs/s)            | runtime UUID minting (`wash_runtime::ids::now_v7`): a tight loop at 1, 2, 4 and all-cores threads, and one ID per millisecond tick, the rate most host threads mint at |
 | `gungraun_plugin`   | gungraun      | CPU instruction count (cachegrind) | host component plugin: the cross-store capability hop, and the plugin's `on-workload-bind` contribution separated from component instantiation. Both are far below what a wall-clock harness can resolve, which is why this is an instruction-count bench rather than a criterion one. Needs `--features host-component-plugins` (added by `run-bench.sh`) plus valgrind — no Apple Silicon support, so it runs on the bench host only |
 
 The repository Actions policy restricts dispatch to the maintainer teams and
@@ -737,7 +738,7 @@ workflow; supply:
 
 - `gungraun`: **1×** per ref. Instruction counts via valgrind are
   deterministic, so repeats don't reduce noise.
-- Criterion benches (`http_invoke`, `wasmtime_*`): **3× interleaved**
+- Criterion benches (`http_invoke`, `wasmtime_*`, `ids`): **3× interleaved**
   (a₁ b₁ a₂ b₂ a₃ b₃); the median of the three is what the delta is
   computed from. ~30 min per bench.
 
