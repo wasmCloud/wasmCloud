@@ -71,6 +71,7 @@ chrono = { workspace = true }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
 futures = { workspace = true }
+getrandom = { workspace = true }
 hmac = { workspace = true, optional = true }
 hostname = { workspace = true }
 http = { workspace = true }
