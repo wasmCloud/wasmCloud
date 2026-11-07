@@ -576,7 +576,7 @@ func TestDeploymentCreateIsIdempotentAcrossStatusWriteRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := r.reconcileDeploy(t.Context(), original.DeepCopy()); err == nil ||
-		!strings.Contains(err.Error(), "different ownership or spec") {
+		!strings.Contains(err.Error(), "not controlled by this deployment") {
 		t.Fatalf("unowned ReplicaSet adopted, got %v", err)
 	}
 }

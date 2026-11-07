@@ -140,8 +140,11 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 		replicaSetTemplate.Template.Spec.Kubernetes = deployment.Spec.Kubernetes.DeepCopy()
 	}
 
-	replicaSetName := rolloutChildName(deployment.Name, fmt.Sprintf("%s:%d:%s",
-		deployment.UID, deployment.Generation, replicaSetTemplate.Template.Hash()))
+	// One name per template, so the second of two passes on the same template,
+	// such as one that read status before the first's write reached the cache,
+	// finds the first's ReplicaSet rather than creating another.
+	templateHash := replicaSetTemplate.Template.Hash()
+	replicaSetName := deploymentReplicaSetName(deployment, templateHash)
 
 	// Copy the deployment's labels and stamp the managed selector label so the
 	// /scale subresource's selector actually matches this deployment's
@@ -164,39 +167,75 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 	if err := controllerutil.SetControllerReference(deployment, newReplicaSet, r.Scheme); err != nil {
 		return err
 	}
-	if err := r.Create(ctx, newReplicaSet); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			if isRefused(err) {
-				recordRefused(r.Recorder, deployment, nil, "Create", "WorkloadReplicaSet create refused", err)
-			}
-			return fmt.Errorf("creating WorkloadReplicaSet: %w", err)
-		}
-		// A successful Create can precede a failed status write or a stale
-		// Deployment cache read. Reuse only this rollout's owned child.
-		reader := r.APIReader
-		if reader == nil {
-			reader = r.Client
-		}
-		existing := &runtimev1alpha1.WorkloadReplicaSet{}
-		if err := reader.Get(ctx, client.ObjectKeyFromObject(newReplicaSet), existing); err != nil {
+	if err := r.Create(ctx, newReplicaSet); apierrors.IsAlreadyExists(err) {
+		if err := r.checkExistingReplicaSet(ctx, deployment, replicaSetName, &replicaSetTemplate.Template); err != nil {
 			return err
 		}
-		if !existing.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(existing, deployment) ||
-			!apiequality.Semantic.DeepDerivative(newReplicaSet.Spec, existing.Spec) {
-			return fmt.Errorf("WorkloadReplicaSet %s exists with different ownership or spec, or is terminating", replicaSetName)
+	} else if err != nil {
+		if isRefused(err) {
+			recordRefused(r.Recorder, deployment, nil, "Create", "WorkloadReplicaSet create refused", err)
 		}
+		return fmt.Errorf("creating WorkloadReplicaSet: %w", err)
 	}
 
-	if deployment.Spec.DeployPolicy != runtimev1alpha1.WorkloadDeployPolicyRecreate &&
-		(deployment.Status.CurrentReplicaSet == nil || deployment.Status.CurrentReplicaSet.Name != replicaSetName) {
-		// the default policy is rolling
-		deployment.Status.PreviousReplicaSet = deployment.Status.CurrentReplicaSet
+	if current := deployment.Status.CurrentReplicaSet; current == nil || current.Name != replicaSetName {
+		if deployment.Spec.DeployPolicy != runtimev1alpha1.WorkloadDeployPolicyRecreate {
+			// the default policy is rolling
+			deployment.Status.PreviousReplicaSet = current
+		}
+		deployment.Status.CurrentReplicaSet = &corev1.LocalObjectReference{Name: replicaSetName}
 	}
-	deployment.Status.CurrentReplicaSet = &corev1.LocalObjectReference{Name: newReplicaSet.GetName()}
+	// reconcileScale deletes the previous ReplicaSet, so it must never be the
+	// current one, as it would be on going back to its template under Recreate.
+	if previous := deployment.Status.PreviousReplicaSet; previous != nil && previous.Name == replicaSetName {
+		deployment.Status.PreviousReplicaSet = nil
+	}
 
 	// Skip remaining reconciliation steps & update API Server because we touched a '.Status' field
 	condition.ForceStatusUpdate(ctx)
 	return condition.ErrSkipReconciliation()
+}
+
+// deploymentReplicaSetName names deployment's ReplicaSet for a template. The UID
+// keeps it from colliding with a ReplicaSet orphaned by an earlier Deployment of
+// the same name.
+func deploymentReplicaSetName(deployment *runtimev1alpha1.WorkloadDeployment, templateHash string) string {
+	return rolloutChildName(deployment.Name, string(deployment.UID)+"/"+templateHash)
+}
+
+// checkExistingReplicaSet returns nil if the ReplicaSet that a create found
+// under name is one deployment can roll out to.
+func (r *WorkloadDeploymentReconciler) checkExistingReplicaSet(
+	ctx context.Context,
+	deployment *runtimev1alpha1.WorkloadDeployment,
+	name string,
+	template *runtimev1alpha1.WorkloadReplicaTemplate,
+) error {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	existing := &runtimev1alpha1.WorkloadReplicaSet{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: deployment.Namespace, Name: name}, existing); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			// The API server has it and the cache does not yet. Its watch event
+			// requeues this Deployment.
+			return condition.ErrStatusUnknown(fmt.Errorf("WorkloadReplicaSet %s has not reached the cache", name))
+		}
+		return fmt.Errorf("reading WorkloadReplicaSet %s: %w", name, err)
+	}
+	if !metav1.IsControlledBy(existing, deployment) {
+		return fmt.Errorf("WorkloadReplicaSet %s exists and is not controlled by this deployment", name)
+	}
+	if existing.Spec.Template.Hash() != template.Hash() ||
+		!apiequality.Semantic.DeepDerivative(template.Spec, existing.Spec.Template.Spec) {
+		return fmt.Errorf("WorkloadReplicaSet %s exists with a different template", name)
+	}
+	// Its deletion's watch event requeues this Deployment, which then creates it anew.
+	if !existing.DeletionTimestamp.IsZero() {
+		return condition.ErrStatusUnknown(fmt.Errorf("WorkloadReplicaSet %s is being deleted", name))
+	}
+	return nil
 }
 
 func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
