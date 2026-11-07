@@ -490,7 +490,12 @@ pub struct HostCommand {
     /// fails to instantiate, and a running guest's first `memory.grow` of an
     /// empty memory returns -1.
     ///
-    /// Unset, it is four times `--max-guest-memory`. Ignored in the other
+    /// Unset, it is sixteen times `--max-process-memory`, itself derived as
+    /// 90% of the container or physical memory unless set; `--max-guest-memory`
+    /// does not change it. Where that limit can never refuse anything (`off`,
+    /// no memory limit to derive it from, or set past that memory), and on
+    /// platforms other than Linux and macOS, it is four times
+    /// `--max-guest-memory` instead. Ignored in the other
     /// modes, which charge initial memory to `--max-guest-memory`, and the
     /// host warns if it is set there.
     #[arg(

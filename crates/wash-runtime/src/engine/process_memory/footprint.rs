@@ -6,6 +6,11 @@ pub fn process_footprint() -> Option<u64> {
     FootprintReader::new().read()
 }
 
+/// Whether [`process_footprint`] counts pages moved out of memory: swap on
+/// Linux, the compressor on macOS. The resident size read elsewhere falls as
+/// the OS pages a process out, so it can sit under a limit the process is past.
+pub const FOOTPRINT_COUNTS_PAGED_OUT: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
 /// Another process's footprint, counted the same way as
 /// [`process_footprint`], so an outside observer such as a benchmark compares
 /// like with like against the host's own guard. `None` where it cannot be
@@ -118,8 +123,9 @@ fn read_footprint(pid: u32) -> Option<u64> {
     Some(unsafe { info.assume_init() }.ri_phys_footprint)
 }
 
-/// `RssAnon + VmSwap` out of `/proc/self/status`, in bytes, or
-/// `VmRSS + VmSwap` on a kernel too old (before 4.5) to report `RssAnon`.
+/// Anonymous memory, swap, and page tables from `/proc/self/status`.
+/// Kernels without `RssAnon` (before 4.5) use `VmRSS` for resident memory, and
+/// kernels before 4.15 report PMD tables apart from `VmPTE`, as `VmPMD`.
 ///
 /// `VmRSS` counts a shared page once for every mapping that has it faulted
 /// in, and wasmtime maps each instance's copy-on-write initial-memory image
@@ -128,18 +134,30 @@ fn read_footprint(pid: u32) -> Option<u64> {
 /// pages a guest writes become anonymous, so they are still counted. Shmem
 /// (`RssShmem`) is left out along with file pages: wasmtime's images are
 /// memfds, which the kernel reports as shmem, so counting it would bring the
-/// same per-mapping overcount back.
+/// same per-mapping overcount back. Page tables are private kernel memory,
+/// charged to the container even when the mapped pages are shared.
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn linux_footprint(status: &str) -> Option<u64> {
-    let kib = |name: &str| {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .and_then(|rest| rest.trim().strip_suffix("kB"))
+    let (mut rss_anon, mut vm_rss, mut kib_extra) = (None, None, 0u64);
+    for line in status.lines() {
+        let Some((name, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(kib) = rest
+            .trim()
+            .strip_suffix("kB")
             .and_then(|n| n.trim().parse::<u64>().ok())
-    };
-    let resident = kib("RssAnon:").or_else(|| kib("VmRSS:"))?;
-    // Swap is absent on kernels built without it, which means none.
-    let kib_total = resident.saturating_add(kib("VmSwap:").unwrap_or(0));
+        else {
+            continue;
+        };
+        match name {
+            "RssAnon" => rss_anon = Some(kib),
+            "VmRSS" => vm_rss = Some(kib),
+            // Swap is absent on kernels built without it, which means none.
+            "VmSwap" | "VmPTE" | "VmPMD" => kib_extra = kib_extra.saturating_add(kib),
+            _ => {}
+        }
+    }
+    let kib_total = rss_anon.or(vm_rss)?.saturating_add(kib_extra);
     Some(kib_total.saturating_mul(1024))
 }

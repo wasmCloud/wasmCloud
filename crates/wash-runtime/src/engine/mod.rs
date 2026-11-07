@@ -1611,7 +1611,10 @@ impl EngineBuilder {
     /// the most initial memory the budget may leave uncharged across the host;
     /// past it, a new memory is refused.
     ///
-    /// - Unset, it is [`guest_memory::DEFAULT_INITIAL_OVERCOMMIT`] times `max_guest_memory`.
+    /// - Unset, it is [`guest_memory::DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS`] times
+    ///   `max_process_memory`, or [`guest_memory::DEFAULT_INITIAL_OVERCOMMIT`] times
+    ///   `max_guest_memory` when no process limit is enforced or the platform's
+    ///   footprint misses paged-out memory; see [`guest_memory::derive_initial_cap`].
     /// - Other modes charge initial memory, ignore it, and warn that it was set.
     #[must_use]
     pub fn with_max_initial_guest_memory_bytes(mut self, bytes: u64) -> Self {
@@ -2230,15 +2233,19 @@ impl EngineBuilder {
             }
             None => None,
         };
-        // Growth mode's bound on uncharged initial memory: named, or derived.
-        let max_initial_guest_memory = self.max_initial_guest_memory_bytes.unwrap_or(
-            host_memory
-                .max_guest_memory
-                .saturating_mul(guest_memory::DEFAULT_INITIAL_OVERCOMMIT),
-        );
+        let (max_initial_guest_memory, initial_cap_basis) =
+            match self.max_initial_guest_memory_bytes {
+                Some(bytes) => (bytes, guest_memory::InitialCapBasis::Explicit),
+                None => guest_memory::derive_initial_cap(
+                    host_memory.max_guest_memory,
+                    max_process_memory_bytes,
+                    memory_limit,
+                ),
+            };
         if self.guest_memory_mode == guest_memory::GuestMemoryMode::Growth {
             tracing::info!(
                 max_initial_guest_memory = %host_memory::render_bytes(max_initial_guest_memory),
+                from = initial_cap_basis.as_str(),
                 "guest-memory-mode is growth: initial memory is uncharged up to this cap"
             );
         } else if self.max_initial_guest_memory_bytes.is_some() {
@@ -2901,22 +2908,51 @@ mod tests {
         assert!(!engine.inner().get_memory_init_cow());
     }
 
-    // Growth mode's initial cap: derived from the budget unless named.
+    // Growth mode's initial cap: from an enforced process limit, else from the
+    // budget, unless named.
     #[test]
     fn growth_mode_caps_uncharged_initial_memory() {
         let budgets = || host_memory::HostMemoryBudgets::resolve(Some(64 << 20), None, None, None);
-        let engine = Engine::builder()
-            .with_host_memory(budgets().unwrap())
-            .with_guest_memory_mode(guest_memory::GuestMemoryMode::Growth)
+        let growth = || {
+            Engine::builder()
+                .with_host_memory(budgets().unwrap())
+                .with_guest_memory_mode(guest_memory::GuestMemoryMode::Growth)
+        };
+        let engine = growth()
+            .without_max_process_memory()
             .build()
             .expect("growth mode should build");
         assert_eq!(
             engine.guest_memory().initial_cap(),
             (64 << 20) * guest_memory::DEFAULT_INITIAL_OVERCOMMIT
         );
-        let engine = Engine::builder()
-            .with_host_memory(budgets().unwrap())
-            .with_guest_memory_mode(guest_memory::GuestMemoryMode::Growth)
+        // A process limit sets the cap, smaller than the budget's multiple or
+        // not, where the guard sees paged-out memory.
+        for limit in [256 << 20, 8 << 20] {
+            let engine = growth()
+                .with_max_process_memory_bytes(limit)
+                .build()
+                .expect("growth mode with a process limit should build");
+            let expected = if process_memory::FOOTPRINT_COUNTS_PAGED_OUT {
+                limit * guest_memory::DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS
+            } else {
+                (64 << 20) * guest_memory::DEFAULT_INITIAL_OVERCOMMIT
+            };
+            assert_eq!(engine.guest_memory().initial_cap(), expected);
+        }
+        // The limit derived where no memory limit can be read enforces nothing.
+        let engine = growth()
+            .with_max_process_memory_bytes(host_memory::derive_max_process_memory_bytes_within(
+                None,
+            ))
+            .build()
+            .expect("growth mode with an unenforced process limit should build");
+        assert_eq!(
+            engine.guest_memory().initial_cap(),
+            (64 << 20) * guest_memory::DEFAULT_INITIAL_OVERCOMMIT
+        );
+        let engine = growth()
+            .with_max_process_memory_bytes(256 << 20)
             .with_max_initial_guest_memory_bytes(10 << 20)
             .build()
             .expect("an explicit cap should build");
