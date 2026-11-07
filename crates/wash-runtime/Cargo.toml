@@ -368,6 +368,10 @@ harness = false
 name = "wasmtime_serve"
 harness = false
 
+[[bench]]
+name = "ids"
+harness = false
+
 # Ramps warm and scale-to-zero HTTP workloads to max-process-memory; see the
 # module docs for the knobs.
 [[bench]]

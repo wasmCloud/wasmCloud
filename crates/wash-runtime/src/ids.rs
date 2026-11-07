@@ -9,7 +9,7 @@ thread_local! {
 
 /// A UUIDv7 from a per-thread context, without a process-wide sequence lock.
 /// IDs are monotonic per thread; random bits distinguish IDs across threads.
-pub(crate) fn now_v7() -> Uuid {
+pub fn now_v7() -> Uuid {
     Uuid::new_v7(Timestamp::now(ThreadLocalContext::new(&CONTEXT_V7)))
 }
 

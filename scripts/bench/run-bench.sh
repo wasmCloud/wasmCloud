@@ -5,7 +5,7 @@
 #
 # Benchmark families share this script:
 #   - criterion benches (http_invoke, service_http, wasmtime_baseline,
-#     wasmtime_serve) write to $CARGO_TARGET_DIR/criterion/.
+#     wasmtime_serve, ids) write to $CARGO_TARGET_DIR/criterion/.
 #   - density benches (scale_density) write a list of
 #     bench_tools::density::Report to $CARGO_TARGET_DIR/density/<bench>.json,
 #     which `bench-tools jsonl` and `summary` read.
