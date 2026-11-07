@@ -165,9 +165,12 @@ mod tests {
             ids.iter()
                 .all(|id| id.get_variant() == uuid::Variant::RFC4122)
         );
-        // Unique without counting on the random tails.
+        // Unique by counter alone, whatever the timestamps and random tails.
         assert_eq!(
-            ids.iter().map(ms_and_counter).collect::<HashSet<_>>().len(),
+            ids.iter()
+                .map(|id| ms_and_counter(id).1)
+                .collect::<HashSet<_>>()
+                .len(),
             ids.len()
         );
         Ok(())
