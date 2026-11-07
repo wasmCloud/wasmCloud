@@ -25,17 +25,24 @@ at 895488a, plus the commits stacked on it in
   pending maps. A map on a buffer that is mapped or has a map pending
   rejects without touching that map, and unmapping or destroying a buffer
   before its map completes rejects that map with `AbortError`.
+  `destroy()` unmaps the device's buffers. `unmap`, `write-buffer` and
+  `write-texture` no longer trap on a lost device: unmap ignores wgpu's
+  errors, and write errors go to the device's error scopes.
 - Mapped ranges: reading or writing the range of a buffer that is not
   mapped, an out-of-bounds or unaligned range, or a write whose length
-  differs from the range returns `OperationError`. These used to panic or
-  trap.
+  differs from the range returns `OperationError`. So does a
+  `write-buffer` data offset or size outside the data, or a size that isn't
+  a multiple of 4. These used to panic or trap.
 - Timeout: submitted work that outlives `WasiWebGpuOptions::wait_timeout`
-  loses the device, whether or not a call waits on it. The shader keeps the GPU busy until it ends or the driver resets
+  loses the device, whether or not a call waits on it. Each submission
+  settles through a work-done callback, and an idle poller thread waits
+  100ms for more work before it exits. The shader keeps the GPU busy until it ends or the driver resets
   it.
 - Busy queue drop: dropping a queue with work in flight blocked for about 6s
   and then panicked inside wgpu. A busy queue is now dropped from a thread
-  once its device is idle; if a lost device is still busy 60s later, its
-  queue and the wgpu instance are leaked rather than dropped.
+  once its device is idle, or at once if the driver lost the device. If a
+  lost device is still busy 60s later, its queue and the wgpu instance are
+  leaked rather than dropped.
 
 Drop this directory and the patch entry once a release with these fixes is in
 `Cargo.lock`.

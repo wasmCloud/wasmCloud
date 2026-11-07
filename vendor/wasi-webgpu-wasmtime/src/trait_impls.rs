@@ -1033,13 +1033,14 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
             .collect::<wasmtime::Result<Vec<_>>>()?;
         let queue = self.table.get(&queue)?;
         // A lost device refuses the submission, and generates no error for it.
-        match self
+        // A failed submit may still have sent queued writes to the GPU.
+        if let Err((_, err)) = self
             .instance
             .queue_submit(*queue.queue_id(), &command_buffers)
         {
-            Ok(index) => queue.handle.watch(index),
-            Err((_, err)) => queue.error_handler.handle_possible_error(Some(err)),
+            queue.error_handler.handle_possible_error(Some(err));
         }
+        queue.handle.watch();
         Ok(())
     }
 
@@ -1052,19 +1053,18 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
         data_offset: Option<webgpu::GpuSize64>,
         size: Option<webgpu::GpuSize64>,
     ) -> wasmtime::Result<Result<(), webgpu::WriteBufferError>> {
-        let queue = *self.table.get(&queue)?.queue_id();
+        let queue = self.table.get(&queue)?;
         let buffer_id = self.table.get(&buffer)?.buffer_id;
-        let mut data = &data[..];
-        if let Some(data_offset) = data_offset {
-            let data_offset = data_offset as usize;
-            data = &data[data_offset..];
+        let data = match write_range(&data, data_offset, size) {
+            Ok(data) => data,
+            Err(err) => return Ok(Err(err)),
+        };
+        if let Err(err) =
+            self.instance
+                .queue_write_buffer(*queue.queue_id(), buffer_id, buffer_offset, data)
+        {
+            queue.error_handler.handle_possible_error(Some(err));
         }
-        if let Some(size) = size {
-            let size = size as usize;
-            data = &data[..size];
-        }
-        self.instance
-            .queue_write_buffer(queue, buffer_id, buffer_offset, data)?;
         Ok(Ok(()))
     }
 
@@ -1076,14 +1076,19 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
         data_layout: webgpu::GpuTexelCopyBufferLayout,
         size: webgpu::GpuExtent3D,
     ) -> wasmtime::Result<()> {
-        let queue = *self.table.get(&queue)?.queue_id();
-        self.instance.queue_write_texture(
-            queue,
-            &destination.to_core(self.table),
+        let destination = destination.to_core(self.table);
+        let data_layout = data_layout.to_core(self.table);
+        let size = size.to_core(self.table);
+        let queue = self.table.get(&queue)?;
+        if let Err(err) = self.instance.queue_write_texture(
+            *queue.queue_id(),
+            &destination,
             &data,
-            &data_layout.to_core(self.table),
-            &size.to_core(self.table),
-        )?;
+            &data_layout,
+            &size,
+        ) {
+            queue.error_handler.handle_possible_error(Some(err));
+        }
         Ok(())
     }
 
@@ -2573,7 +2578,11 @@ impl<'a> webgpu::HostGpuBuffer for WasiWebGpuCtx<'a> {
     ) -> wasmtime::Result<Result<(), webgpu::UnmapError>> {
         let buffer = self.table.get(&buffer)?;
         buffer.set_map_state(webgpu::GpuBufferMapState::Unmapped);
-        self.instance.buffer_unmap(buffer.buffer_id)?;
+        // `unmap` has no validation: wgpu's errors for a buffer that isn't
+        // mapped, a destroyed buffer or a lost device are no-ops in WebGPU.
+        if let Err(err) = self.instance.buffer_unmap(buffer.buffer_id) {
+            log::debug!("ignoring unmap error: {err}");
+        }
         Ok(Ok(()))
     }
 
@@ -2618,6 +2627,55 @@ fn mapped_range(
     match instance.buffer_get_mapped_range(buffer.buffer_id, offset.unwrap_or(0), size) {
         Ok((ptr, len)) => Ok((ptr, len as usize)),
         Err(err) => Err(operation_error(err.to_string())),
+    }
+}
+
+/// The bytes of `data` that `writeBuffer` copies, or the `OperationError` it
+/// throws.
+/// https://www.w3.org/TR/webgpu/#dom-gpuqueue-writebuffer
+fn write_range(
+    data: &[u8],
+    offset: Option<webgpu::GpuSize64>,
+    size: Option<webgpu::GpuSize64>,
+) -> Result<&[u8], webgpu::WriteBufferError> {
+    let offset = offset.unwrap_or(0);
+    let rest = match usize::try_from(offset)
+        .ok()
+        .and_then(|offset| data.get(offset..))
+    {
+        Some(rest) => rest,
+        None => {
+            return Err(write_error(format!(
+                "data offset {offset} is past the {} bytes of data",
+                data.len()
+            )))
+        }
+    };
+    let range = match size {
+        None => rest,
+        Some(size) => match usize::try_from(size).ok().and_then(|size| rest.get(..size)) {
+            Some(range) => range,
+            None => {
+                return Err(write_error(format!(
+                    "size {size} is more than the {} bytes after the data offset",
+                    rest.len()
+                )))
+            }
+        },
+    };
+    if !range.len().is_multiple_of(4) {
+        return Err(write_error(format!(
+            "size {} is not a multiple of 4 bytes",
+            range.len()
+        )));
+    }
+    Ok(range)
+}
+
+fn write_error(message: String) -> webgpu::WriteBufferError {
+    webgpu::WriteBufferError {
+        kind: webgpu::WriteBufferErrorKind::OperationError,
+        message,
     }
 }
 

@@ -64,7 +64,12 @@ pub struct Buffer {
 }
 
 impl Buffer {
+    /// Destroying the device unmaps its buffers.
+    /// https://www.w3.org/TR/webgpu/#dom-gpudevice-destroy
     pub(crate) fn map_state(&self) -> webgpu::GpuBufferMapState {
+        if self.device.is_destroyed() {
+            return webgpu::GpuBufferMapState::Unmapped;
+        }
         *self.map_state.lock().unwrap()
     }
 

@@ -1,10 +1,11 @@
 //! Shared ownership of a device and its queue, and the thread that polls them.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use wgpu_core::{
-    device::{queue::SubmittedWorkDoneClosure, WaitIdleError},
+    device::{queue::SubmittedWorkDoneClosure, DeviceError, WaitIdleError},
     global::Global,
     id::{BufferId, DeviceId, QueueId},
     resource::{BufferAccessError, BufferMapOperation},
@@ -25,6 +26,10 @@ const WAIT_SLICE: Duration = Duration::from_millis(10);
 /// instance are leaked instead once this passes.
 const ABANDON_AFTER: Duration = Duration::from_secs(60);
 
+/// How long an idle poller waits for more work before its thread exits, so a
+/// steady stream of submits reuses one thread.
+const LINGER: Duration = Duration::from_millis(100);
+
 /// A device and its queue. They leave the hub when the last holder drops.
 ///
 /// The guest's device, its queues and buffers, and a running poll each hold
@@ -36,18 +41,32 @@ pub(crate) struct DeviceHandle {
     /// Longest submitted work may run before the device is lost.
     timeout: Option<Duration>,
     lost: Arc<DeviceLost>,
+    /// Set by `destroy`, which unmaps the device's buffers.
+    destroyed: AtomicBool,
     poller: Mutex<Poller>,
+    /// Wakes an idle poller when a call starts waiting.
+    wake: Condvar,
 }
 
 #[derive(Default)]
 struct Poller {
     running: bool,
-    /// Counts poll starts, so a poll only retires waiters registered before it.
+    /// Counts poll starts, so a poll only judges waiters registered before it.
     generation: u64,
     waiting: Vec<Waiter>,
 }
 
+/// What one poll did to the waiting calls.
+struct Pass {
+    /// A call polled from the start is still unsettled past its deadline.
+    late: bool,
+    /// Some call settled.
+    progressed: bool,
+}
+
 impl Poller {
+    /// Targets the newest submission; wgpu runs the callback of every
+    /// submission that finishes on the way, even if the wait times out.
     fn start_poll(&mut self) -> (SubmissionIndex, u64) {
         let started = self.generation;
         self.generation += 1;
@@ -55,23 +74,22 @@ impl Poller {
             .waiting
             .iter()
             .map(|waiter| waiter.index)
-            .min()
+            .max()
             .unwrap_or(0);
         (target, started)
     }
 
-    fn finish_poll(&mut self, target: SubmissionIndex, started: u64, finished: bool) -> bool {
-        self.waiting.retain(|waiter| {
-            let retired = finished && waiter.index <= target && waiter.generation <= started;
-            !retired && !waiter.pending.is_settled()
-        });
+    fn finish_poll(&mut self, started: u64) -> Pass {
+        let before = self.waiting.len();
+        self.waiting.retain(|waiter| !waiter.pending.is_settled());
         let now = Instant::now();
-        // Later submissions and newly registered calls need their own poll.
-        self.waiting.iter().any(|waiter| {
-            waiter.index <= target
-                && waiter.generation <= started
-                && waiter.deadline.is_some_and(|deadline| deadline <= now)
-        })
+        let late = self.waiting.iter().any(|waiter| {
+            waiter.generation <= started && waiter.deadline.is_some_and(|deadline| deadline <= now)
+        });
+        Pass {
+            late,
+            progressed: self.waiting.len() < before,
+        }
     }
 }
 
@@ -84,7 +102,7 @@ struct Waiter {
 
 /// Something the poller waits on: a call's wgpu callback, or submitted work.
 trait Pending: Send {
-    /// Whether wgpu has run the callback.
+    /// Whether wgpu has run the callback, which retires the waiter.
     fn is_settled(&self) -> bool;
 
     /// Settles the call with the device's loss instead.
@@ -112,7 +130,9 @@ impl DeviceHandle {
             queue,
             timeout: timeout.filter(|timeout| !timeout.is_zero()),
             lost,
+            destroyed: AtomicBool::new(false),
             poller: Mutex::default(),
+            wake: Condvar::new(),
         }
     }
 
@@ -132,10 +152,16 @@ impl DeviceHandle {
     /// only to a poll; the spec loses it at once.
     /// https://www.w3.org/TR/webgpu/#dom-gpudevice-destroy
     pub(crate) fn destroy(&self) {
+        self.destroyed.store(true, Ordering::Release);
         self.lose(
             webgpu::GpuDeviceLostReason::Destroyed,
             "device destroyed".into(),
         );
+    }
+
+    /// Whether `destroy` was called, which unmaps every buffer of the device.
+    pub(crate) fn is_destroyed(&self) -> bool {
+        self.destroyed.load(Ordering::Acquire)
     }
 
     /// Loses the device and settles every call waiting on it. The device
@@ -146,12 +172,22 @@ impl DeviceHandle {
         self.abort_waiting();
     }
 
-    /// Bounds the work up to `index` by the timeout, even if no call waits
+    /// Bounds the work submitted so far by the timeout, even if no call waits
     /// on it. Without a timeout there is nothing to enforce.
-    pub(crate) fn watch(self: &Arc<Self>, index: SubmissionIndex) {
-        if self.timeout.is_some() {
-            self.poll_until(index, Box::new(Watch));
+    pub(crate) fn watch(self: &Arc<Self>) {
+        if self.timeout.is_none() {
+            return;
         }
+        let (settle, _done) = Settle::new();
+        self.poll_until(self.work_done(settle.clone()), Box::new(settle));
+    }
+
+    /// Registers `settle` to run when the work submitted so far is done, and
+    /// returns the submission it waits for.
+    fn work_done(&self, settle: Settle<()>) -> SubmissionIndex {
+        let callback: SubmittedWorkDoneClosure = Box::new(move || settle.send(()));
+        self.instance
+            .queue_on_submitted_work_done(self.queue, callback)
     }
 
     /// Resolves once all work submitted so far, including queued writes, is
@@ -165,12 +201,7 @@ impl DeviceHandle {
             }
         }
         let (settle, done) = Settle::new();
-        let on_done = settle.clone();
-        let callback: SubmittedWorkDoneClosure = Box::new(move || on_done.send(()));
-        let index = self
-            .instance
-            .queue_on_submitted_work_done(self.queue, callback);
-        self.poll_until(index, Box::new(settle));
+        self.poll_until(self.work_done(settle.clone()), Box::new(settle));
         done
     }
 
@@ -219,6 +250,7 @@ impl DeviceHandle {
                 pending,
             });
             if poller.running {
+                self.wake.notify_one();
                 return;
             }
             poller.running = true;
@@ -246,9 +278,9 @@ impl DeviceHandle {
                     timeout: Some(WAIT_SLICE),
                 },
             };
-            let finished = match self.instance.device_poll(self.device, poll_type) {
-                Ok(_) => true,
-                Err(WaitIdleError::Timeout) => false,
+            let waited_out = match self.instance.device_poll(self.device, poll_type) {
+                Ok(_) => false,
+                Err(WaitIdleError::Timeout) => true,
                 Err(err) => {
                     self.lose(
                         webgpu::GpuDeviceLostReason::Unknown,
@@ -263,18 +295,32 @@ impl DeviceHandle {
                 return;
             }
             let mut poller = self.lock_poller();
-            let late = poller.finish_poll(target, started, finished);
+            let pass = poller.finish_poll(started);
             if poller.waiting.is_empty() {
-                poller.running = false;
-                return;
+                let (mut poller, _) = self
+                    .wake
+                    .wait_timeout_while(poller, LINGER, |poller| {
+                        poller.running && poller.waiting.is_empty()
+                    })
+                    .unwrap_or_else(PoisonError::into_inner);
+                if poller.waiting.is_empty() {
+                    poller.running = false;
+                    return;
+                }
+                continue;
             }
             drop(poller);
-            if late {
+            if pass.late {
                 self.lose(
                     webgpu::GpuDeviceLostReason::Unknown,
                     timed_out(self.timeout.unwrap_or_default()),
                 );
                 return;
+            }
+            // A finished wait whose callbacks haven't run yet would otherwise
+            // poll again at once.
+            if !waited_out && !pass.progressed {
+                std::thread::sleep(WAIT_SLICE);
             }
         }
     }
@@ -289,6 +335,7 @@ impl DeviceHandle {
             poller.running = false;
             std::mem::take(&mut poller.waiting)
         };
+        self.wake.notify_all();
         for waiter in waiting {
             waiter.pending.abort(&info);
         }
@@ -323,10 +370,10 @@ impl Drop for DeviceHandle {
     /// the work outlasts about 6s, so a busy queue is dropped from a thread
     /// once its device is idle.
     fn drop(&mut self) {
-        let idle = self
+        let polled = self
             .instance
             .device_poll(self.device, wgpu_types::PollType::Poll);
-        if let Ok(wgpu_types::PollStatus::QueueEmpty) = idle {
+        if droppable(&polled) {
             self.instance.queue_drop(self.queue);
             self.instance.device_drop(self.device);
             return;
@@ -347,6 +394,15 @@ impl Drop for DeviceHandle {
             std::mem::forget(Arc::clone(&self.instance));
         }
     }
+}
+
+/// Whether the queue can be dropped without wgpu panicking: its device is
+/// idle, or the driver lost it, which ends wgpu's wait for the queue.
+fn droppable(polled: &Result<wgpu_types::PollStatus, WaitIdleError>) -> bool {
+    matches!(
+        polled,
+        Ok(wgpu_types::PollStatus::QueueEmpty) | Err(WaitIdleError::Device(DeviceError::Lost))
+    )
 }
 
 /// A busy queue and its device, dropped once the device is idle. It holds the
@@ -372,12 +428,15 @@ impl Release {
                     timeout: Some(WAIT_SLICE),
                 },
             );
-            match polled {
-                Ok(wgpu_types::PollStatus::QueueEmpty) => {
-                    self.instance.queue_drop(self.queue);
-                    self.instance.device_drop(self.device);
-                    return true;
+            if droppable(&polled) {
+                if let Err(err) = &polled {
+                    self.lose(format!("device poll failed: {err}"));
                 }
+                self.instance.queue_drop(self.queue);
+                self.instance.device_drop(self.device);
+                return true;
+            }
+            match polled {
                 Ok(_) | Err(WaitIdleError::Timeout) => {}
                 Err(err) => {
                     self.lose(format!("device poll failed: {err}"));
@@ -409,18 +468,6 @@ impl Release {
             message,
         );
     }
-}
-
-/// Submitted work the poller bounds by the timeout, with no call waiting on
-/// it. It settles when its index completes.
-struct Watch;
-
-impl Pending for Watch {
-    fn is_settled(&self) -> bool {
-        false
-    }
-
-    fn abort(self: Box<Self>, _info: &DeviceLostInfo) {}
 }
 
 /// Sends one value from whichever clone calls `send` first.
@@ -758,10 +805,25 @@ mod tests {
     #[test]
     fn watched_work_that_finishes_keeps_the_device() {
         let device = noop_device_with(Some(Duration::from_secs(5)));
-        let index = device.instance.queue_submit(device.queue, &[]).unwrap();
-        device.watch(index);
+        device.instance.queue_submit(device.queue, &[]).unwrap();
+        device.watch();
         assert!(poller_idle(&device), "poller never went idle");
         assert!(!device.lost().is_lost());
+    }
+
+    #[test]
+    fn an_idle_poller_serves_the_next_wait() {
+        let device = noop_device();
+        device
+            .on_submitted_work_done()
+            .recv_timeout(TIMEOUT)
+            .unwrap();
+        assert!(device.lock_poller().running, "poller exited at once");
+        device
+            .on_submitted_work_done()
+            .recv_timeout(TIMEOUT)
+            .unwrap();
+        assert!(poller_idle(&device), "poller never went idle");
     }
 
     #[test]
@@ -832,53 +894,63 @@ mod tests {
         assert_eq!(recv.recv_timeout(TIMEOUT).unwrap(), 1);
     }
 
+    fn waiter(index: SubmissionIndex, deadline: Instant, generation: u64) -> (Waiter, Settle<()>) {
+        let (settle, _done) = Settle::new();
+        let waiter = Waiter {
+            index,
+            generation,
+            deadline: Some(deadline),
+            pending: Box::new(settle.clone()),
+        };
+        (waiter, settle)
+    }
+
     #[test]
-    fn completed_watch_does_not_expire_behind_newer_work() {
+    fn a_poll_targets_the_newest_submission() {
+        let mut poller = Poller::default();
+        for index in [3, 1, 2] {
+            poller
+                .waiting
+                .push(waiter(index, Instant::now() + TIMEOUT, 0).0);
+        }
+        assert_eq!(poller.start_poll().0, 3);
+    }
+
+    #[test]
+    fn finished_work_does_not_expire_behind_newer_work() {
         let now = Instant::now();
         let mut poller = Poller::default();
-        for (index, deadline) in [(1, now - TIMEOUT), (2, now + TIMEOUT)] {
-            poller.waiting.push(Waiter {
-                index,
-                generation: 0,
-                deadline: Some(deadline),
-                pending: Box::new(Watch),
-            });
-        }
-        let completed = 1;
-        let (target, started) = poller.start_poll();
-        assert!(!poller.finish_poll(target, started, target <= completed));
+        let (done, settle) = waiter(1, now - TIMEOUT, 0);
+        poller.waiting.push(done);
+        poller.waiting.push(waiter(2, now + TIMEOUT, 0).0);
+        let (_, started) = poller.start_poll();
+        settle.send(());
+        let pass = poller.finish_poll(started);
+        assert!(!pass.late);
+        assert!(pass.progressed);
         assert_eq!(poller.waiting.len(), 1);
         assert_eq!(poller.waiting[0].index, 2);
     }
 
     #[test]
-    fn each_expired_watch_is_polled_before_loss() {
+    fn unfinished_work_expires() {
         let mut poller = Poller::default();
-        for index in 1..=2 {
-            poller.waiting.push(Waiter {
-                index,
-                generation: 0,
-                deadline: Some(Instant::now() - TIMEOUT),
-                pending: Box::new(Watch),
-            });
-        }
-        let (target, started) = poller.start_poll();
-        assert!(!poller.finish_poll(target, started, true));
-        let (target, started) = poller.start_poll();
-        assert!(!poller.finish_poll(target, started, true));
-        assert!(poller.waiting.is_empty());
+        poller
+            .waiting
+            .push(waiter(1, Instant::now() - TIMEOUT, 0).0);
+        let (_, started) = poller.start_poll();
+        let pass = poller.finish_poll(started);
+        assert!(pass.late);
+        assert!(!pass.progressed);
     }
 
     #[test]
-    fn unfinished_watch_expires() {
+    fn a_wait_registered_during_a_poll_is_not_late() {
         let mut poller = Poller::default();
-        poller.waiting.push(Waiter {
-            index: 1,
-            generation: 0,
-            deadline: Some(Instant::now() - TIMEOUT),
-            pending: Box::new(Watch),
-        });
-        let (target, started) = poller.start_poll();
-        assert!(poller.finish_poll(target, started, false));
+        let (_, started) = poller.start_poll();
+        poller
+            .waiting
+            .push(waiter(1, Instant::now() - TIMEOUT, poller.generation).0);
+        assert!(!poller.finish_poll(started).late);
     }
 }

@@ -12,7 +12,8 @@ use wasmtime::{
 
 use crate::{
     device_handle::DeviceHandle,
-    wasi::webgpu::webgpu::{self, HostGpuBuffer, HostGpuBufferWithStore},
+    types::{ErrorHandler, Queue},
+    wasi::webgpu::webgpu::{self, HostGpuBuffer, HostGpuBufferWithStore, HostGpuQueue},
     Buffer, HasWasiWebGpuCtx, WasiWebGpuCtx, WasiWebGpuCtxView, WasiWebGpuOptions,
 };
 
@@ -121,6 +122,15 @@ impl State {
         ));
         entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
         release_tx
+    }
+
+    /// A queue of the device that records errors in `errors`.
+    fn queue(&mut self, errors: &Arc<ErrorHandler>) -> u32 {
+        let queue = Queue {
+            handle: Arc::clone(&self.device),
+            error_handler: Arc::clone(errors),
+        };
+        self.table.push(queue).unwrap().rep()
     }
 
     fn map_state(&self, rep: u32) -> Arc<Mutex<webgpu::GpuBufferMapState>> {
@@ -344,6 +354,105 @@ fn writing_the_wrong_length_is_an_operation_error() {
         .unwrap()
         .unwrap();
     assert_eq!(read, [vec![0; 8], data].concat());
+}
+
+#[test]
+fn unmap_ignores_what_wgpu_rejects() {
+    let (mut state, rep) = State::new(false);
+    let mut ctx = state.webgpu_ctx();
+    // Not mapped, then destroyed.
+    ctx.unmap(Resource::new_borrow(rep)).unwrap().unwrap();
+    ctx.destroy(Resource::new_borrow(rep)).unwrap();
+    ctx.unmap(Resource::new_borrow(rep)).unwrap().unwrap();
+}
+
+#[test]
+fn unmap_on_a_destroyed_device_succeeds() {
+    let (mut state, rep) = State::new(true);
+    state.device.destroy();
+    state
+        .webgpu_ctx()
+        .unmap(Resource::new_borrow(rep))
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn destroying_the_device_unmaps_its_buffers() {
+    let (mut state, rep) = State::new(true);
+    let buffer = || Resource::new_borrow(rep);
+    state.device.destroy();
+    let mut ctx = state.webgpu_ctx();
+    assert_eq!(
+        ctx.map_state(buffer()).unwrap(),
+        webgpu::GpuBufferMapState::Unmapped
+    );
+    assert_operation_error(
+        ctx.get_mapped_range_get_with_copy(buffer(), None, None)
+            .unwrap(),
+    );
+}
+
+#[test]
+fn write_buffer_rejects_a_bad_data_range() {
+    let (mut state, rep) = State::new(false);
+    let queue = state.queue(&Arc::default());
+    let mut ctx = state.webgpu_ctx();
+    // Offset past the data, size past the data, and a size that isn't a
+    // multiple of 4.
+    for (offset, size) in [(Some(24), None), (Some(8), Some(16)), (None, Some(3))] {
+        let written = ctx
+            .write_buffer_with_copy(
+                Resource::new_borrow(queue),
+                Resource::new_borrow(rep),
+                0,
+                vec![0; 16],
+                offset,
+                size,
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                &written,
+                Err(webgpu::WriteBufferError {
+                    kind: webgpu::WriteBufferErrorKind::OperationError,
+                    ..
+                })
+            ),
+            "{written:?}"
+        );
+    }
+}
+
+#[test]
+fn write_buffer_reports_wgpu_errors_to_the_device() {
+    let (mut state, rep) = State::new(false);
+    let errors = Arc::<ErrorHandler>::default();
+    let queue = state.queue(&errors);
+    let write = |state: &mut State| {
+        state
+            .webgpu_ctx()
+            .write_buffer_with_copy(
+                Resource::new_borrow(queue),
+                Resource::new_borrow(rep),
+                0,
+                vec![0; 16],
+                None,
+                None,
+            )
+            .unwrap()
+            .unwrap();
+    };
+    // The buffer lacks COPY_DST, so wgpu rejects the write.
+    errors.push_scope(webgpu::GpuErrorFilter::Validation);
+    write(&mut state);
+    assert!(errors.pop_scope().unwrap().is_some());
+
+    // A lost device generates no error.
+    state.device.destroy();
+    errors.push_scope(webgpu::GpuErrorFilter::Validation);
+    write(&mut state);
+    assert!(errors.pop_scope().unwrap().is_none());
 }
 
 fn unmap_before_map_callback(remap: bool, destroy: bool) {
