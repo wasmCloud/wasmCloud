@@ -15,9 +15,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
@@ -42,6 +47,9 @@ const (
 	// heartbeat (typically a namespace); the Host object itself always
 	// lives in the operator's namespace.
 	hostEnvironmentIndex = "spec.environment"
+	// workloadUnplacedIndex indexes the Workloads waiting for a host, so a Host
+	// becoming schedulable looks at those alone rather than at every Workload.
+	workloadUnplacedIndex = "status.unplaced"
 	// workloadReplicaSetLegacyAnnotation is an older spelling of
 	// workloadReplicaSetNameAnnotation that the host still reads.
 	workloadReplicaSetLegacyAnnotation = "runtime.wasmcloud.dev/workload-replicaset"
@@ -423,6 +431,48 @@ func schedulableHostIndexValue(rawObj client.Object) []string {
 		return []string{string(condition.ConditionTrue)}
 	}
 	return []string{}
+}
+
+func unplacedWorkloadIndexValue(rawObj client.Object) []string {
+	if workload, ok := rawObj.(*runtimev1alpha1.Workload); ok && workload.Status.HostID == "" && workload.DeletionTimestamp.IsZero() {
+		return []string{string(condition.ConditionTrue)}
+	}
+	return nil
+}
+
+// workloadsForHost enqueues the unplaced Workloads that host can take. Once its
+// condition stops changing, a Workload that found no host otherwise looks again
+// only on its reconcile interval, however soon a host arrives.
+func (r *WorkloadReconciler) workloadsForHost(ctx context.Context, obj client.Object) []reconcile.Request {
+	host, ok := obj.(*runtimev1alpha1.Host)
+	if !ok || !isSchedulable(host) {
+		return nil
+	}
+	workloads := &runtimev1alpha1.WorkloadList{}
+	if err := r.List(ctx, workloads, client.MatchingFields{workloadUnplacedIndex: string(condition.ConditionTrue)}); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "listing unplaced Workloads for Host event")
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range workloads.Items {
+		workload := &workloads.Items[i]
+		// A pinned Workload waits for its one host, whatever its selector says.
+		if workload.Spec.HostID != "" {
+			if workload.Spec.HostID != host.HostID {
+				continue
+			}
+		} else if !labels.SelectorFromSet(workload.Spec.HostSelector).Matches(labels.Set(host.Labels)) {
+			continue
+		}
+		filter, err := hostEnvironmentFilter(r.AllowSharedHosts, workload.Namespace, &workload.Spec)
+		if err != nil || (filter != "" && filter != host.Environment) {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: workload.Namespace, Name: workload.Name},
+		})
+	}
+	return requests
 }
 
 // lookupHostByID finds a Host CRD by HostID. Hosts always live in the
@@ -990,8 +1040,20 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&runtimev1alpha1.Workload{},
+		workloadUnplacedIndex,
+		unplacedWorkloadIndexValue,
+	); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Workload{}).
+		Watches(&runtimev1alpha1.Host{},
+			handler.EnqueueRequestsFromMapFunc(r.workloadsForHost),
+			builder.WithPredicates(hostPlacementChanged)).
 		Named("workload-replica").
 		Complete(r)
 }
