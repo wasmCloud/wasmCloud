@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -735,5 +737,112 @@ func TestPinnedHostNotRegisteredRecordedOnce(t *testing.T) {
 	_ = r.reconcileHostSelection(context.Background(), workload)
 	if got := drainEvents(recorder); len(got) != 1 || !strings.Contains(got[0], "another-host") {
 		t.Errorf("events = %q, want one for the new host", got)
+	}
+}
+
+// The mapping has to agree with findFreeHost and the pinned path of host
+// selection: a Workload it skips waits out its reconcile interval.
+func TestWorkloadsForHostEnqueuesThoseItCanTake(t *testing.T) {
+	const (
+		arrivingID = "arriving"
+		otherID    = "other"
+		tenant     = "tenant-a"
+		otherGroup = "other-group"
+	)
+	matching := map[string]string{testHostGroupLabel: testHostGroup}
+	pending := func(name, namespace string, spec runtimev1alpha1.WorkloadSpec) *runtimev1alpha1.Workload {
+		return &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}, Spec: spec}
+	}
+	placed := pending("placed", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching})
+	placed.Status.HostID = otherID
+	objects := []client.Object{
+		pending("selected", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching}),
+		pending("no-selector", tenant, runtimev1alpha1.WorkloadSpec{}),
+		pending("own-environment", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching, Environment: tenant}),
+		pending("other-group", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: map[string]string{testHostGroupLabel: otherGroup}}),
+		pending("other-namespace", "tenant-b", runtimev1alpha1.WorkloadSpec{HostSelector: matching}),
+		pending("other-environment", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching, Environment: "tenant-b"}),
+		pending("pinned", tenant, runtimev1alpha1.WorkloadSpec{HostID: arrivingID, HostSelector: map[string]string{testHostGroupLabel: otherGroup}}),
+		pending("pinned-elsewhere", tenant, runtimev1alpha1.WorkloadSpec{HostID: otherID, HostSelector: matching}),
+		placed,
+	}
+
+	ready := func(mutate func(*runtimev1alpha1.Host)) *runtimev1alpha1.Host {
+		host := &runtimev1alpha1.Host{
+			ObjectMeta:  metav1.ObjectMeta{Name: arrivingID, Namespace: testNamespace, Labels: matching},
+			HostID:      arrivingID,
+			Environment: tenant,
+		}
+		host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+		if mutate != nil {
+			mutate(host)
+		}
+		return host
+	}
+
+	for _, tc := range []struct {
+		name         string
+		allowSharing bool
+		host         *runtimev1alpha1.Host
+		want         []string
+	}{
+		{
+			name: "isolated, a Host in the Workload's namespace",
+			host: ready(nil),
+			want: []string{"no-selector", "own-environment", "pinned", "selected"},
+		},
+		{
+			name:         "shared, a Host in any Environment",
+			allowSharing: true,
+			host:         ready(func(h *runtimev1alpha1.Host) { h.Environment = "elsewhere" }),
+			want:         []string{"no-selector", "other-namespace", "pinned", "selected"},
+		},
+		{
+			name: "a Host not Ready yet",
+			host: ready(func(h *runtimev1alpha1.Host) { h.Status.Conditions = nil }),
+		},
+		{
+			name: "a Host being deleted",
+			host: ready(func(h *runtimev1alpha1.Host) { h.DeletionTimestamp = &metav1.Time{Time: time.Now()} }),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &WorkloadReconciler{
+				Client: fake.NewClientBuilder().
+					WithScheme(newScaleTestScheme(t)).
+					WithObjects(objects...).
+					WithIndex(&runtimev1alpha1.Workload{}, workloadUnplacedIndex, unplacedWorkloadIndexValue).
+					Build(),
+				AllowSharedHosts: tc.allowSharing,
+			}
+
+			var got []string
+			for _, request := range r.workloadsForHost(context.Background(), tc.host) {
+				got = append(got, request.Name)
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("enqueued %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkloadsForHostIgnoresFailedList(t *testing.T) {
+	r := &WorkloadReconciler{
+		Client: fake.NewClientBuilder().
+			WithScheme(newScaleTestScheme(t)).
+			WithInterceptorFuncs(interceptor.Funcs{
+				List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+					return errors.New("cache not synced")
+				},
+			}).
+			Build(),
+	}
+	host := &runtimev1alpha1.Host{}
+	host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+
+	if requests := r.workloadsForHost(context.Background(), host); requests != nil {
+		t.Fatalf("enqueued %v after a failed list", requests)
 	}
 }
