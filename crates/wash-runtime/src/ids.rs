@@ -58,7 +58,9 @@ fn fill_random(bytes: &mut [u8]) {
 fn unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 /// One thread's reserved counter values and their random tails.
@@ -159,7 +161,10 @@ mod tests {
         })?;
         let ids: Vec<Uuid> = ids.into_iter().flatten().collect();
         assert!(ids.iter().all(|id| id.get_version_num() == 7));
-        assert!(ids.iter().all(|id| id.get_variant() == uuid::Variant::RFC4122));
+        assert!(
+            ids.iter()
+                .all(|id| id.get_variant() == uuid::Variant::RFC4122)
+        );
         // Unique without counting on the random tails.
         assert_eq!(
             ids.iter().map(ms_and_counter).collect::<HashSet<_>>().len(),
