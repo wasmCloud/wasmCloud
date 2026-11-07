@@ -190,8 +190,8 @@ These are declared byte reservations, not resident-memory measurements.
 The factor of sixteen is a density policy for sparse guests: a warm
 `http-handler-p3` declares about fifteen times what it touches, so the process
 guard stops admitting such guests before `I` does, as far as it sees their pages.
-It counts anonymous memory, so shared and file-backed pages (such as CoW images)
-can grow the cgroup's usage without moving it; see below.
+On Linux it counts anonymous memory and page tables, so shared and file-backed
+pages (such as CoW images) can grow the cgroup's usage without moving it; see below.
 It does not guarantee that the container can back every admitted page.
 
 For one component, compute `e = sum(min(initial_bytes_per_memory, 2 MiB))`.
@@ -217,7 +217,7 @@ that physical cost earlier. Include both CoW settings in capacity testing.
 
 Plan against the whole cgroup's peak memory, including sibling processes and
 file/shared pages. On Linux the process guard normally measures
-`RssAnon + VmSwap`, so its reading is not interchangeable with cgroup usage.
+`RssAnon + VmSwap + VmPTE`, so its reading is not interchangeable with cgroup usage.
 The default process threshold is 90% of detected memory. It refuses new work
 and growth after a sampled crossing; it cannot stop writes to pages already
 admitted or enforce a hard physical ceiling. Keep a container limit and reserve

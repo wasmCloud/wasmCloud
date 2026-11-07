@@ -38,13 +38,14 @@
 //! | Platform | Reading |
 //! | --- | --- |
 //! | macOS | `phys_footprint` from `proc_pid_rusage`, what Activity Monitor shows as Memory: resident plus compressed |
-//! | Linux | `RssAnon + VmSwap` from `/proc/self/status` (`VmRSS + VmSwap` on kernels without `RssAnon`) |
+//! | Linux | `RssAnon + VmSwap + VmPTE` from `/proc/self/status` (`VmRSS` replaces `RssAnon` on older kernels) |
 //! | elsewhere | the resident size `sysinfo` reports |
 //!
 //! On Linux, file and shmem pages are left out: `VmRSS` counts a shared page
 //! once per mapping, and wasmtime maps each instance's copy-on-write memory
 //! image separately, so it would count one copy of the image per warm
-//! instance though memory holds one.
+//! instance though memory holds one. Page tables are counted because each
+//! mapping needs kernel memory even when the mapped pages are shared.
 //!
 //! [`GuestMemoryBudget`]: crate::engine::guest_memory::GuestMemoryBudget
 //! [`GuestMemoryBudget::with_process_guard`]: crate::engine::guest_memory::GuestMemoryBudget::with_process_guard
@@ -633,6 +634,20 @@ mod tests {
         let status = "VmRSS:\t 4196352 kB\nRssAnon:\t  2048 kB\nRssFile:\t  4096 kB\n\
                       RssShmem:\t 4190208 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(status), Some(3 * MIB));
+    }
+
+    #[test]
+    fn linux_counts_page_tables_without_counting_shared_mappings() {
+        let status = "VmRSS: 1050624 kB\nRssAnon: 2048 kB\nRssShmem: 1048576 kB\nVmSwap: 1024 kB\nVmPTE: 64 kB\n";
+        assert_eq!(linux_footprint(status), Some(3 * MIB + 64 * 1024));
+        let legacy = "VmRSS: 2048 kB\nVmPTE: 64 kB\n";
+        assert_eq!(linux_footprint(legacy), Some(2 * MIB + 64 * 1024));
+    }
+
+    #[test]
+    fn linux_page_table_accounting_saturates() {
+        let status = format!("RssAnon: 1 kB\nVmPTE: {} kB\n", u64::MAX);
+        assert_eq!(linux_footprint(&status), Some(u64::MAX));
     }
 
     #[test]

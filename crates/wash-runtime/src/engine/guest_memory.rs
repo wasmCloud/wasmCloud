@@ -143,8 +143,8 @@ pub const DEFAULT_INITIAL_OVERCOMMIT: u64 = 4;
 /// Growth mode's derived initial cap, as a multiple of an enforced process
 /// limit. Above the declared-to-touched ratio [`DEFAULT_INITIAL_OVERCOMMIT`]
 /// cites, so the process guard stops admitting such instances first, as far
-/// as it sees their pages: it counts anonymous memory, not shared or
-/// file-backed pages. The cap bounds what admitted instances write later.
+/// as it sees their pages: on Linux it counts anonymous memory and page
+/// tables, not shared or file-backed pages. The cap bounds what admitted instances write later.
 pub const DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS: u64 = 16;
 
 /// What growth mode's initial cap came from, for the startup line.
