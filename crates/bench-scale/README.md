@@ -97,7 +97,7 @@ so they go to stderr only; the report says why a run stopped without them.
 
 ## Caveats
 
-- The footprint is the host guard's own reading (`RssAnon + VmSwap` on Linux,
+- The footprint is the host guard's own reading (`RssAnon + VmSwap + VmPTE` on Linux,
   `phys_footprint` on macOS), so the bench's limit and the host's agree.
   It is a single process: a wrapper's children are not counted.
 - The limit is sampled, not enforced:
