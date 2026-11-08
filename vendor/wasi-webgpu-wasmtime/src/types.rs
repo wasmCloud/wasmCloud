@@ -86,9 +86,12 @@ pub struct Device {
     pub(crate) error_handler: Arc<ErrorHandler>,
 }
 
-/// A device's queue. It keeps the device alive, so the queue can poll it.
+/// A device's queue. It keeps the device alive, so the queue can poll it, and
+/// shares the device's error handler, so validation errors from queue
+/// operations reach the device's error scopes.
 pub struct Queue {
     pub(crate) handle: Arc<DeviceHandle>,
+    pub(crate) error_handler: Arc<ErrorHandler>,
 }
 
 impl Buffer {

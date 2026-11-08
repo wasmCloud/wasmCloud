@@ -260,6 +260,7 @@ impl<'a> webgpu::HostGpuDevice for WasiWebGpuCtx<'a> {
         let device = self.table.get(&device)?;
         let queue = Queue {
             handle: Arc::clone(&device.handle),
+            error_handler: Arc::clone(&device.error_handler),
         };
         Ok(self.table.push(queue)?)
     }
@@ -1013,10 +1014,17 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
     ) -> wasmtime::Result<()> {
         let command_buffers = val
             .into_iter()
-            .map(|buffer| **self.table.get(&buffer).unwrap())
-            .collect::<Vec<_>>();
-        let queue = *self.table.get(&queue)?.queue_id();
-        self.instance.queue_submit(queue, &command_buffers).unwrap();
+            .map(|buffer| Ok(**self.table.get(&buffer)?))
+            .collect::<wasmtime::Result<Vec<_>>>()?;
+        let queue = self.table.get(&queue)?;
+        // From the spec, an invalid submission generates a validation error.
+        // https://www.w3.org/TR/webgpu/#dom-gpuqueue-submit
+        let err = self
+            .instance
+            .queue_submit(*queue.queue_id(), &command_buffers)
+            .err()
+            .map(|(_, err)| err);
+        queue.error_handler.handle_possible_error(err);
         Ok(())
     }
 
@@ -1029,14 +1037,20 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
         data_offset: Option<webgpu::GpuSize64>,
         size: Option<webgpu::GpuSize64>,
     ) -> wasmtime::Result<Result<(), webgpu::WriteBufferError>> {
-        let queue = *self.table.get(&queue)?.queue_id();
         let buffer_id = self.table.get(&buffer)?.buffer_id();
+        let queue = self.table.get(&queue)?;
         let data = match write_buffer_data(&data, data_offset, size) {
             Ok(data) => data,
             Err(e) => return Ok(Err(e)),
         };
-        self.instance
-            .queue_write_buffer(queue, buffer_id, buffer_offset, data)?;
+        // From the spec, an invalid buffer or buffer-offset generates a
+        // validation error rather than throwing.
+        // https://www.w3.org/TR/webgpu/#dom-gpuqueue-writebuffer
+        let err = self
+            .instance
+            .queue_write_buffer(*queue.queue_id(), buffer_id, buffer_offset, data)
+            .err();
+        queue.error_handler.handle_possible_error(err);
         Ok(Ok(()))
     }
 
@@ -1048,14 +1062,15 @@ impl<'a> webgpu::HostGpuQueue for WasiWebGpuCtx<'a> {
         data_layout: webgpu::GpuTexelCopyBufferLayout,
         size: webgpu::GpuExtent3D,
     ) -> wasmtime::Result<()> {
-        let queue = *self.table.get(&queue)?.queue_id();
-        self.instance.queue_write_texture(
-            queue,
-            &destination.to_core(self.table),
-            &data,
-            &data_layout.to_core(self.table),
-            &size.to_core(self.table),
-        )?;
+        let destination = destination.to_core(self.table);
+        let data_layout = data_layout.to_core(self.table);
+        let size = size.to_core(self.table);
+        let queue = self.table.get(&queue)?;
+        let err = self
+            .instance
+            .queue_write_texture(*queue.queue_id(), &destination, &data, &data_layout, &size)
+            .err();
+        queue.error_handler.handle_possible_error(err);
         Ok(())
     }
 
@@ -1546,13 +1561,14 @@ impl<'a> webgpu::HostGpuRenderPassEncoder for WasiWebGpuCtx<'a> {
         dynamic_offsets_data_start: Option<webgpu::GpuSize64>,
         dynamic_offsets_data_length: Option<webgpu::GpuSize32>,
     ) -> wasmtime::Result<Result<(), webgpu::SetBindGroupError>> {
-        let bind_group = bind_group.map(|bind_group| **self.table.get(&bind_group).unwrap());
+        let bind_group = bind_group
+            .map(|bind_group| self.table.get(&bind_group).map(|bind_group| **bind_group))
+            .transpose()?;
         let mut render_pass = self.table.get_mut(&render_pass)?.lock();
         let render_pass = render_pass.as_mut().ok_or_else(encoder_ended)?;
         // https://www.w3.org/TR/webgpu/#programmable-passes
-        let dynamic_offsets_data = dynamic_offsets_data.unwrap_or_default();
         let dynamic_offsets = match dynamic_offsets(
-            &dynamic_offsets_data,
+            dynamic_offsets_data.as_deref(),
             dynamic_offsets_data_start,
             dynamic_offsets_data_length,
         ) {
@@ -1951,14 +1967,15 @@ impl<'a> webgpu::HostGpuComputePassEncoder for WasiWebGpuCtx<'a> {
         dynamic_offsets_data_start: Option<webgpu::GpuSize64>,
         dynamic_offsets_data_length: Option<webgpu::GpuSize32>,
     ) -> wasmtime::Result<Result<(), webgpu::SetBindGroupError>> {
-        let bind_group = bind_group.map(|bind_group| **self.table.get(&bind_group).unwrap());
+        let bind_group = bind_group
+            .map(|bind_group| self.table.get(&bind_group).map(|bind_group| **bind_group))
+            .transpose()?;
         let mut compute_pass = self.table.get_mut(&compute_pass)?.lock();
         let compute_pass = compute_pass.as_mut().ok_or_else(encoder_ended)?;
         // https://www.w3.org/TR/webgpu/#programmable-passes
 
-        let dynamic_offsets_data = dynamic_offsets_data.unwrap_or_default();
         let dynamic_offsets = match dynamic_offsets(
-            &dynamic_offsets_data,
+            dynamic_offsets_data.as_deref(),
             dynamic_offsets_data_start,
             dynamic_offsets_data_length,
         ) {
@@ -2173,14 +2190,15 @@ impl<'a> webgpu::HostGpuRenderBundleEncoder for WasiWebGpuCtx<'a> {
         dynamic_offsets_data_start: Option<webgpu::GpuSize64>,
         dynamic_offsets_data_length: Option<webgpu::GpuSize32>,
     ) -> wasmtime::Result<Result<(), webgpu::SetBindGroupError>> {
-        let bind_group_id = bind_group.map(|bind_group| **self.table.get(&bind_group).unwrap());
+        let bind_group_id = bind_group
+            .map(|bind_group| self.table.get(&bind_group).map(|bind_group| **bind_group))
+            .transpose()?;
         let mut bundle_encoder = self.table.get_mut(&bundle_encoder)?.lock();
         let bundle_encoder = bundle_encoder.as_mut().ok_or_else(encoder_ended)?;
 
         // https://www.w3.org/TR/webgpu/#programmable-passes
-        let dynamic_offsets_data = dynamic_offsets_data.unwrap_or_default();
         let dynamic_offsets = match dynamic_offsets(
-            &dynamic_offsets_data,
+            dynamic_offsets_data.as_deref(),
             dynamic_offsets_data_start,
             dynamic_offsets_data_length,
         ) {
@@ -2496,18 +2514,12 @@ impl<'a> webgpu::HostGpuBuffer for WasiWebGpuCtx<'a> {
         size: Option<webgpu::GpuSize64>,
     ) -> wasmtime::Result<Result<Vec<u8>, webgpu::GetMappedRangeError>> {
         let buffer = self.table.get(&buffer)?;
-        if buffer.map_state != webgpu::GpuBufferMapState::Mapped {
-            return Ok(Err(buffer_not_mapped()));
-        }
-        let buffer_id = buffer.buffer_id();
-        let (ptr, len) = self
-            .instance
-            // https://www.w3.org/TR/webgpu/#gpubuffer
-            .buffer_get_mapped_range(buffer_id, offset.unwrap_or(0), size)?;
-        let data = unsafe { slice::from_raw_parts(ptr.as_ptr(), len as usize) };
-        let mut output = vec![0; len as usize];
-        output.copy_from_slice(data);
-        Ok(Ok(output))
+        let (ptr, len) = match mapped_range(self.instance, buffer, offset, size) {
+            Ok(range) => range,
+            Err(e) => return Ok(Err(e)),
+        };
+        let data = unsafe { slice::from_raw_parts(ptr.as_ptr(), len) };
+        Ok(Ok(data.to_vec()))
     }
 
     fn get_mapped_range_set_with_copy(
@@ -2518,26 +2530,23 @@ impl<'a> webgpu::HostGpuBuffer for WasiWebGpuCtx<'a> {
         size: Option<webgpu::GpuSize64>,
     ) -> wasmtime::Result<Result<(), webgpu::GetMappedRangeError>> {
         let buffer = self.table.get(&buffer)?;
-        if buffer.map_state != webgpu::GpuBufferMapState::Mapped {
-            return Ok(Err(buffer_not_mapped()));
-        }
-        let buffer_id = buffer.buffer_id();
-        let (ptr, len) = self
-            .instance
-            // https://www.w3.org/TR/webgpu/#gpubuffer
-            .buffer_get_mapped_range(buffer_id, offset.unwrap_or(0), size)?;
-        let buffer = unsafe { slice::from_raw_parts_mut(ptr.as_ptr(), len as usize) };
-        if data.len() != buffer.len() {
+        let (ptr, len) = match mapped_range(self.instance, buffer, offset, size) {
+            Ok(range) => range,
+            Err(e) => return Ok(Err(e)),
+        };
+        let range = unsafe { slice::from_raw_parts_mut(ptr.as_ptr(), len) };
+        // Like `TypedArray.set` on the range: `data` fills its start, and a
+        // `RangeError` is thrown if it doesn't fit.
+        let Some(range) = range.get_mut(..data.len()) else {
             return Ok(Err(webgpu::GetMappedRangeError {
                 kind: webgpu::GetMappedRangeErrorKind::RangeError,
                 message: format!(
-                    "data length {} does not match mapped range length {}",
+                    "data length {} is longer than the mapped range length {len}",
                     data.len(),
-                    buffer.len()
                 ),
             }));
-        }
-        buffer.copy_from_slice(&data);
+        };
+        range.copy_from_slice(&data);
         Ok(Ok(()))
     }
 
@@ -3156,14 +3165,29 @@ fn encoder_ended() -> wasmtime::Error {
     wasmtime::Error::msg("the encoder has already ended")
 }
 
-/// From the spec, `getMappedRange` throws an `OperationError` unless the
-/// buffer is mapped.
+/// Returns the mapped range `getMappedRange(offset, size)` would return.
+///
+/// From the spec, `getMappedRange` throws an `OperationError` unless the buffer
+/// is mapped and the range is a valid part of the mapping.
 /// https://www.w3.org/TR/webgpu/#dom-gpubuffer-getmappedrange
-fn buffer_not_mapped() -> webgpu::GetMappedRangeError {
-    webgpu::GetMappedRangeError {
+fn mapped_range(
+    instance: &wgpu_core::global::Global,
+    buffer: &Buffer,
+    offset: Option<u64>,
+    size: Option<u64>,
+) -> Result<(std::ptr::NonNull<u8>, usize), webgpu::GetMappedRangeError> {
+    let operation_error = |message| webgpu::GetMappedRangeError {
         kind: webgpu::GetMappedRangeErrorKind::OperationError,
-        message: "buffer is not mapped".to_string(),
+        message,
+    };
+    if buffer.map_state != webgpu::GpuBufferMapState::Mapped {
+        return Err(operation_error("buffer is not mapped".to_string()));
     }
+    let (ptr, len) = instance
+        .buffer_get_mapped_range(buffer.buffer_id(), offset.unwrap_or(0), size)
+        .map_err(|e| operation_error(e.to_string()))?;
+    let len = usize::try_from(len).map_err(|e| operation_error(e.to_string()))?;
+    Ok((ptr, len))
 }
 
 /// Returns the `[start, start + length)` sub-slice of a guest-supplied list, or `None` if that
@@ -3222,10 +3246,11 @@ fn write_buffer_data(
 /// `dynamicOffsetsDataStart + dynamicOffsetsDataLength > dynamicOffsetsData.length`.
 /// https://www.w3.org/TR/webgpu/#programmable-passes
 fn dynamic_offsets(
-    data: &[webgpu::GpuBufferDynamicOffset],
+    data: Option<&[webgpu::GpuBufferDynamicOffset]>,
     start: Option<u64>,
     length: Option<u32>,
 ) -> Result<&[webgpu::GpuBufferDynamicOffset], webgpu::SetBindGroupError> {
+    let data = data.unwrap_or_default();
     guest_sub_slice(data, start, length.map(u64::from)).ok_or_else(|| {
         let start = start.unwrap_or(0);
         webgpu::SetBindGroupError {
@@ -3319,12 +3344,15 @@ mod tests {
     #[test]
     fn dynamic_offsets_in_range() {
         let data = [0u32, 256, 512, 768];
-        assert_eq!(dynamic_offsets(&data, None, None).unwrap(), &data[..]);
         assert_eq!(
-            dynamic_offsets(&data, Some(1), Some(2)).unwrap(),
+            dynamic_offsets(Some(&data[..]), None, None).unwrap(),
+            &data[..]
+        );
+        assert_eq!(
+            dynamic_offsets(Some(&data[..]), Some(1), Some(2)).unwrap(),
             &data[1..3]
         );
-        assert_eq!(dynamic_offsets(&[], None, None).unwrap(), &[] as &[u32]);
+        assert_eq!(dynamic_offsets(None, None, None).unwrap(), &[] as &[u32]);
     }
 
     #[test]
@@ -3336,7 +3364,7 @@ mod tests {
             (None, Some(5)),
             (Some(u64::MAX), Some(u32::MAX)),
         ] {
-            match dynamic_offsets(&data, start, length) {
+            match dynamic_offsets(Some(&data[..]), start, length) {
                 Err(webgpu::SetBindGroupError {
                     kind: webgpu::SetBindGroupErrorKind::RangeError,
                     ..
@@ -3344,7 +3372,7 @@ mod tests {
                 other => panic!("expected a range error for {start:?}/{length:?}, got {other:?}"),
             }
         }
-        assert!(dynamic_offsets(&[], Some(1), None).is_err());
+        assert!(dynamic_offsets(None, Some(1), None).is_err());
     }
 
     fn noop_device() -> (
@@ -3464,5 +3492,242 @@ mod tests {
         assert_eq!(err.to_string(), "the encoder has already ended");
         let err = webgpu::HostGpuComputePassEncoder::end(&mut ctx, borrow()).unwrap_err();
         assert_eq!(err.to_string(), "the encoder has already ended");
+    }
+
+    fn mapped_buffer(
+        handle: &Arc<crate::device_handle::DeviceHandle>,
+        instance: &Arc<wgpu_core::global::Global>,
+        device: wgpu_core::id::DeviceId,
+        size: u64,
+    ) -> Buffer {
+        let usage = wgpu_types::BufferUsages::MAP_WRITE | wgpu_types::BufferUsages::COPY_SRC;
+        let (buffer_id, err) = instance.device_create_buffer(
+            device,
+            &wgpu_types::BufferDescriptor {
+                label: None,
+                size,
+                usage,
+                mapped_at_creation: true,
+            },
+            None,
+        );
+        assert!(err.is_none(), "{err:?}");
+        Buffer {
+            buffer_id: Owned::new(instance, buffer_id),
+            device: Arc::clone(handle),
+            size,
+            usage,
+            map_state: webgpu::GpuBufferMapState::Mapped,
+        }
+    }
+
+    fn assert_mapped_range_error<T: std::fmt::Debug>(
+        result: Result<T, webgpu::GetMappedRangeError>,
+        kind: webgpu::GetMappedRangeErrorKind,
+    ) {
+        match result {
+            Err(e) if std::mem::discriminant(&e.kind) == std::mem::discriminant(&kind) => {}
+            other => panic!("expected {kind:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mapped_range_set_fills_the_start_of_the_range() {
+        let (handle, instance, device) = noop_device();
+        let mut table = wasmtime::component::ResourceTable::new();
+        let buffer = table
+            .push(mapped_buffer(&handle, &instance, device, 16))
+            .unwrap();
+        let options = Default::default();
+        let mut ctx = WasiWebGpuCtx {
+            instance: &instance,
+            table: &mut table,
+            options: &options,
+        };
+        let borrow = || Resource::<Buffer>::new_borrow(buffer.rep());
+
+        webgpu::HostGpuBuffer::get_mapped_range_set_with_copy(
+            &mut ctx,
+            borrow(),
+            vec![1, 2, 3, 4],
+            Some(8),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let range = webgpu::HostGpuBuffer::get_mapped_range_get_with_copy(
+            &mut ctx,
+            borrow(),
+            Some(8),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(range[..4], [1, 2, 3, 4]);
+        assert_eq!(range.len(), 8);
+
+        assert_mapped_range_error(
+            webgpu::HostGpuBuffer::get_mapped_range_set_with_copy(
+                &mut ctx,
+                borrow(),
+                vec![0; 12],
+                Some(8),
+                None,
+            )
+            .unwrap(),
+            webgpu::GetMappedRangeErrorKind::RangeError,
+        );
+    }
+
+    #[test]
+    fn invalid_mapped_range_is_an_operation_error() {
+        let (handle, instance, device) = noop_device();
+        let mut table = wasmtime::component::ResourceTable::new();
+        let buffer = table
+            .push(mapped_buffer(&handle, &instance, device, 16))
+            .unwrap();
+        let options = Default::default();
+        let mut ctx = WasiWebGpuCtx {
+            instance: &instance,
+            table: &mut table,
+            options: &options,
+        };
+        let borrow = || Resource::<Buffer>::new_borrow(buffer.rep());
+
+        // Past the end, an offset that isn't a multiple of 8, and a size that
+        // isn't a multiple of 4.
+        for (offset, size) in [(Some(32), None), (Some(4), None), (None, Some(6))] {
+            assert_mapped_range_error(
+                webgpu::HostGpuBuffer::get_mapped_range_get_with_copy(
+                    &mut ctx,
+                    borrow(),
+                    offset,
+                    size,
+                )
+                .unwrap(),
+                webgpu::GetMappedRangeErrorKind::OperationError,
+            );
+            assert_mapped_range_error(
+                webgpu::HostGpuBuffer::get_mapped_range_set_with_copy(
+                    &mut ctx,
+                    borrow(),
+                    vec![],
+                    offset,
+                    size,
+                )
+                .unwrap(),
+                webgpu::GetMappedRangeErrorKind::OperationError,
+            );
+        }
+    }
+
+    /// Runs `f` inside a validation error scope and returns the error the
+    /// scope caught.
+    fn validation_error(
+        error_handler: &ErrorHandler,
+        f: impl FnOnce() -> wasmtime::Result<()>,
+    ) -> Option<webgpu::GpuError> {
+        error_handler.push_scope(webgpu::GpuErrorFilter::Validation);
+        f().unwrap();
+        error_handler.pop_scope().unwrap()
+    }
+
+    #[test]
+    fn submitting_a_command_buffer_twice_is_a_validation_error() {
+        let (handle, instance, device) = noop_device();
+        let (encoder, err) = instance.device_create_command_encoder(
+            device,
+            &wgpu_types::CommandEncoderDescriptor::default(),
+            None,
+        );
+        assert!(err.is_none(), "{err:?}");
+        let (command_buffer, err) = instance.command_encoder_finish(
+            encoder,
+            &wgpu_types::CommandBufferDescriptor::default(),
+            None,
+        );
+        assert!(err.is_none(), "{err:?}");
+        let mut table = wasmtime::component::ResourceTable::new();
+        table.push(Owned::new(&instance, encoder)).unwrap();
+        let command_buffer = table.push(Owned::new(&instance, command_buffer)).unwrap();
+        let error_handler = Arc::new(ErrorHandler::default());
+        let queue = table
+            .push(Queue {
+                handle,
+                error_handler: Arc::clone(&error_handler),
+            })
+            .unwrap();
+        let options = Default::default();
+        let mut ctx = WasiWebGpuCtx {
+            instance: &instance,
+            table: &mut table,
+            options: &options,
+        };
+        let submit = |ctx: &mut WasiWebGpuCtx| {
+            webgpu::HostGpuQueue::submit(
+                ctx,
+                Resource::new_borrow(queue.rep()),
+                vec![Resource::new_borrow(command_buffer.rep())],
+            )
+        };
+
+        assert!(validation_error(&error_handler, || submit(&mut ctx)).is_none());
+        let err = validation_error(&error_handler, || submit(&mut ctx));
+        assert!(err.is_some(), "the second submit wasn't rejected");
+    }
+
+    #[test]
+    fn write_buffer_to_an_unaligned_offset_is_a_validation_error() {
+        let (handle, instance, device) = noop_device();
+        let (buffer_id, err) = instance.device_create_buffer(
+            device,
+            &wgpu_types::BufferDescriptor {
+                label: None,
+                size: 16,
+                usage: wgpu_types::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            },
+            None,
+        );
+        assert!(err.is_none(), "{err:?}");
+        let mut table = wasmtime::component::ResourceTable::new();
+        let buffer = table
+            .push(Buffer {
+                buffer_id: Owned::new(&instance, buffer_id),
+                device: Arc::clone(&handle),
+                size: 16,
+                usage: wgpu_types::BufferUsages::COPY_DST,
+                map_state: webgpu::GpuBufferMapState::Unmapped,
+            })
+            .unwrap();
+        let error_handler = Arc::new(ErrorHandler::default());
+        let queue = table
+            .push(Queue {
+                handle,
+                error_handler: Arc::clone(&error_handler),
+            })
+            .unwrap();
+        let options = Default::default();
+        let mut ctx = WasiWebGpuCtx {
+            instance: &instance,
+            table: &mut table,
+            options: &options,
+        };
+        let mut write = |buffer_offset| {
+            webgpu::HostGpuQueue::write_buffer_with_copy(
+                &mut ctx,
+                Resource::new_borrow(queue.rep()),
+                Resource::new_borrow(buffer.rep()),
+                buffer_offset,
+                vec![0; 4],
+                None,
+                None,
+            )
+            .map(|result| result.unwrap())
+        };
+
+        assert!(validation_error(&error_handler, || write(4)).is_none());
+        assert!(validation_error(&error_handler, || write(2)).is_some());
+        assert!(validation_error(&error_handler, || write(16)).is_some());
     }
 }

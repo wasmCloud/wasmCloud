@@ -185,7 +185,12 @@ mod tests {
         table.push(Owned::new(&instance, bind_group)).unwrap();
         table.push(Owned::new(&instance, encoder)).unwrap();
         table.push(Owned::new(&instance, command_buffer)).unwrap();
-        table.push(Queue { handle }).unwrap();
+        table
+            .push(Queue {
+                handle,
+                error_handler: Default::default(),
+            })
+            .unwrap();
         assert_eq!(instance.generate_report().hub.devices.num_allocated, 1);
 
         drop(table);
