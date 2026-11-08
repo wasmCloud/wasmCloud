@@ -408,6 +408,21 @@
       notify: regenerate grub config
       tags: [kernel]
 
+    # ── Mapping limit for very large pools (opt-in, no reboot needed) ────
+    # Each warm component holds about six mappings, so a pool past ~170k
+    # memories needs more than Ubuntu's 1,048,576. Set per host, e.g.
+    # `-e vm_max_map_count=16777216` on aws-c9g-16xlarge; left alone
+    # otherwise, so the dedicated host's derived pool does not move.
+    - name: sysctl vm.max_map_count
+      ansible.posix.sysctl:
+        name: vm.max_map_count
+        value: "{{ vm_max_map_count }}"
+        sysctl_file: /etc/sysctl.d/90-wasmcloud-bench.conf
+        state: present
+        reload: true
+      when: vm_max_map_count is defined
+      tags: [kernel, sysctl]
+
     # ── cpu-performance governor (no reboot needed) ───────────────────────
     - name: Install cpu-performance systemd unit
       ansible.builtin.copy:

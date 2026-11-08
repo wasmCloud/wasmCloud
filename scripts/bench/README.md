@@ -500,10 +500,14 @@ For a 64-vCPU c9g.16xlarge, for example:
 
 ```sh
 WASMCLOUD_BENCH_HOSTNAME=<hostname> ansible-playbook -i <inventory> provision.yml \
-  --skip-tags k6bench -e isolated_cpu=63
+  --skip-tags k6bench -e isolated_cpu=63 -e vm_max_map_count=16777216
 sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
   --label aws-c9g-16xlarge --nproc 64 --isolated-cpu 63 --no-cpufreq
 ```
+
+The c9g also carries `-e vm_max_map_count=16777216` for the `million_warm`
+preset (`bench.yml`), whose 1.6M-memory pool needs about 10M mappings;
+`provision.yml` leaves `vm.max_map_count` alone unless it is given.
 
 ## 7. Pipeline architecture
 
