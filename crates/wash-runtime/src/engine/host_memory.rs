@@ -27,7 +27,7 @@
 //! `memory_reservation`, plus a guard region (see [`pool_slot_bytes`]). A
 //! `default_heap_memory` past the reservation does not make the slot larger;
 //! wasmtime refuses to build that pool at all. A pool of 1000 such memories claims 3.9 TiB of
-//! address space; the 128 TiB a 64-bit process can map holds about 30,000 of
+//! address space; the 128 TiB an x86_64 process can map holds about 30,000 of
 //! them, so `max_memories` has a ceiling, and the derived default stops
 //! well short of it. Naming the budget lets the host say, at startup, whether
 //! the pool it is about to build is one the machine could actually back.
@@ -1512,7 +1512,7 @@ const USER_ADDRESS_SPACE: u64 = 2 * 1024 * MIB;
 /// stacks, compiled code, libraries — small beside the pool, but not nothing.
 const POOL_ADDRESS_SPACE_PERCENT: u64 = 90;
 
-/// The most address space this process can map: [`USER_ADDRESS_SPACE`],
+/// The most address space this process can map: [`user_address_space`],
 /// lowered by `RLIMIT_AS` where one is set.
 ///
 /// The limit is read on Linux only, from `/proc/self/limits`, which needs no
@@ -1536,7 +1536,7 @@ fn usable_address_space_within(limits: Option<&str>) -> u64 {
 /// 4-level page tables, 2^48 on aarch64 with 4-level tables, 2^39 on aarch64
 /// kernels built with 3. Elsewhere, or when the stack cannot be read or lands
 /// outside 2^32..=2^57, [`USER_ADDRESS_SPACE`].
-pub fn user_address_space() -> u64 {
+fn user_address_space() -> u64 {
     static SPACE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *SPACE.get_or_init(|| {
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
@@ -1551,7 +1551,10 @@ pub fn user_address_space() -> u64 {
 }
 
 /// [`user_address_space`] from a `/proc/self/maps` already read.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(all(target_os = "linux", target_pointer_width = "64")),
+    allow(dead_code)
+)]
 fn user_address_space_from_maps(maps: &str) -> Option<u64> {
     let line = maps
         .lines()
