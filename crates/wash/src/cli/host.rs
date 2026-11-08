@@ -526,6 +526,16 @@ pub struct HostCommand {
     #[arg(long = "hostcall-fuel", env = "WASH_HOSTCALL_FUEL")]
     pub hostcall_fuel: Option<String>,
 
+    /// The most bytes one WASIp3 file stream read moves (e.g. `1MiB`).
+    ///
+    /// Each read is a trip to the blocking pool sized to what the guest asked
+    /// for, up to this. wasmtime-wasi's `max_io_size`; unset, its default of
+    /// 64 KiB. Raise it for large sequential reads such as loading a model.
+    /// Each in-flight read holds a host buffer of up to this size, outside the
+    /// guest memory budget.
+    #[arg(long = "max-io-size", env = "WASH_MAX_IO_SIZE")]
+    pub max_io_size: Option<String>,
+
     /// Address space reserved for each guest linear memory (e.g. `1GiB`):
     /// the memory itself, plus the room it may grow into.
     /// Defaults to wasmtime's 4 GiB.
@@ -1071,6 +1081,13 @@ impl HostCommand {
             .map_err(|e| anyhow::anyhow!("invalid hostcall-fuel: {e}"))
     }
 
+    /// `--max-io-size` as the engine takes it; `None` keeps wasmtime-wasi's
+    /// default.
+    fn max_io_size(&self) -> anyhow::Result<Option<std::num::NonZeroUsize>> {
+        wash_runtime::engine::host_memory::parse_max_io_size(self.max_io_size.as_deref())
+            .map_err(|e| anyhow::anyhow!("invalid max-io-size: {e}"))
+    }
+
     /// How the scheduler connection authenticates.
     fn scheduler_nats_auth(&self) -> wash_runtime::washlet::NatsAuth {
         nats_auth(
@@ -1379,6 +1396,7 @@ impl CliCommand for HostCommand {
         let max_initial_guest_memory =
             parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
         let hostcall_fuel = self.hostcall_fuel()?;
+        let max_io_size = self.max_io_size()?;
         let memory_layout = parse_memory_layout(
             self.memory_reservation.as_deref(),
             self.memory_guard_size.as_deref(),
@@ -1528,6 +1546,9 @@ impl CliCommand for HostCommand {
         engine_builder = engine_builder.with_guest_memory_mode(self.guest_memory_mode);
         if let Some(fuel) = hostcall_fuel {
             engine_builder = engine_builder.with_hostcall_fuel(fuel);
+        }
+        if let Some(size) = max_io_size {
+            engine_builder = engine_builder.with_max_io_size(size);
         }
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
@@ -2693,6 +2714,21 @@ mod policy_mode_tests {
             .unwrap_err()
             .to_string();
         assert_eq!(err, "invalid hostcall-fuel: must be greater than zero");
+        Ok(())
+    }
+
+    #[test]
+    fn max_io_size_flag_is_parsed_by_the_host_command() -> anyhow::Result<()> {
+        assert_eq!(
+            parse(&["--max-io-size", "1MiB"]).max_io_size()?,
+            std::num::NonZeroUsize::new(1 << 20)
+        );
+        assert_eq!(parse(&[]).max_io_size()?, None);
+        let err = parse(&["--max-io-size", "0"])
+            .max_io_size()
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "invalid max-io-size: must be greater than zero");
         Ok(())
     }
 

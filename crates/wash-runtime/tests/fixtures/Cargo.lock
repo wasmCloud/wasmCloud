@@ -272,6 +272,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "file-read-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

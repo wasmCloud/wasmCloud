@@ -31,7 +31,7 @@
 {{- /* A host group's own `resources` replaces the chart-wide block wholesale
        (no merge), and carries the host knobs `defaultHeapMemory`,
        `memoryReservation`, `memoryGuardSize`, `maxMemories`, `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`,
-       `guestMemoryMode`, `maxConcurrentStarts` and `hostcallFuel` alongside
+       `guestMemoryMode`, `maxConcurrentStarts`, `hostcallFuel` and `maxIoSize` alongside
        the Kubernetes requests/limits. */}}
 {{- $resources := .resources | default $top.Values.runtime.resources | default dict }}
 {{- /* Probes, unlike `resources`, merge per field: a group naming one timing
@@ -299,6 +299,13 @@ spec:
             - name: WASH_HOSTCALL_FUEL
               value: "{{ include "runtime-operator.envNumber" . }}"
             {{- end }}
+            {{- if eq (toString $resources.maxIoSize) "0" }}
+            {{- fail "resources.maxIoSize must be greater than zero: leave it empty for wasmtime-wasi's default" }}
+            {{- end }}
+            {{- with $resources.maxIoSize }}
+            - name: WASH_MAX_IO_SIZE
+              value: "{{ include "runtime-operator.envNumber" . }}"
+            {{- end }}
             {{- with $top.Values.runtime.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -514,7 +521,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-          {{- with omit $resources "defaultHeapMemory" "memoryReservation" "memoryGuardSize" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" "hostcallFuel" }}
+          {{- with omit $resources "defaultHeapMemory" "memoryReservation" "memoryGuardSize" "maxMemories" "setMaxMemoriesFromMemoryPrecommitLimit" "coreInstances" "guestMemoryMode" "maxConcurrentStarts" "hostcallFuel" "maxIoSize" }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

@@ -35,6 +35,7 @@ pub(crate) const P2_FIXTURES: &[&str] = &[
 
 pub(crate) const P3_FIXTURES: &[&str] = &[
     "command-p3",
+    "file-read-p3",
     "messaging-echo-p3",
     "messaging-sleeper-p3",
     "nats-async-handler-p3",

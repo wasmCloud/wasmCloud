@@ -122,6 +122,12 @@ impl CliCommand for DevCommand {
         {
             engine_builder = engine_builder.with_hostcall_fuel(fuel);
         }
+        if let Some(size) =
+            wash_runtime::engine::host_memory::parse_max_io_size(dev_config.max_io_size.as_deref())
+                .map_err(|e| anyhow::anyhow!("invalid dev.max_io_size: {e}"))?
+        {
+            engine_builder = engine_builder.with_max_io_size(size);
+        }
         // Raised before any ceiling is computed from it: every allowance below
         // is a share of the soft descriptor limit. `wash dev` applies it for
         // the same reason `wash host` does — both own their process.

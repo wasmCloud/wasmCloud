@@ -16,7 +16,7 @@ use wash_runtime::{
         workload::{ResolvedWorkload, WorkloadItem},
     },
     plugin::{HostPlugin, WitInterfaces},
-    types::{Component, LocalResources, Workload},
+    types::{Component, HostPathVolume, LocalResources, Volume, VolumeMount, VolumeType, Workload},
     wit::WitWorld,
 };
 use wasmtime_wasi::{
@@ -31,6 +31,11 @@ use wasmtime_wasi::{
 /// arguments, environment and stdin on stdout, writes `diagnostic` to stderr,
 /// and ends the way `EXIT_MODE` says.
 const COMMAND_P3_WASM: &[u8] = include_bytes!("wasm/command_p3.wasm");
+
+/// A WASIp3 command built from `fixtures/file-read-p3`: it reads `FILE` from
+/// its first preopen, offering `CHUNK` bytes per stream read, and prints the
+/// total, the number of reads and the largest.
+const FILE_READ_P3_WASM: &[u8] = include_bytes!("wasm/file_read_p3.wasm");
 
 struct Probe {
     calls: Arc<AtomicUsize>,
@@ -536,5 +541,98 @@ async fn setup_failures_are_not_traps() -> Result<()> {
         "{message}"
     );
     assert!(!message.contains("command trapped"), "{message}");
+    Ok(())
+}
+
+/// What `file-read-p3` prints after reading a 1 MiB file from a read-only
+/// `hostPath` volume in `chunk`-byte stream reads.
+async fn read_file(max_io_size: Option<std::num::NonZeroUsize>, chunk: usize) -> Result<String> {
+    let dir = tempfile::tempdir()?;
+    // Volumes are opened without following links, and macOS's temp dir has one.
+    let path = std::fs::canonicalize(dir.path())?;
+    std::fs::write(path.join("data.bin"), vec![7u8; 1 << 20])?;
+    let mut builder = Engine::builder()
+        .with_pooling_allocator(false)
+        .with_allowed_host_paths([path.clone()]);
+    if let Some(size) = max_io_size {
+        builder = builder.with_max_io_size(size);
+    }
+    let engine = builder.build()?;
+    let command = Component {
+        name: "command".into(),
+        bytes: bytes::Bytes::from_static(FILE_READ_P3_WASM),
+        local_resources: LocalResources {
+            environment: HashMap::from([
+                ("FILE".into(), "data.bin".into()),
+                ("CHUNK".into(), chunk.to_string()),
+            ]),
+            volume_mounts: vec![VolumeMount {
+                name: "data".into(),
+                mount_path: "/data".into(),
+                read_only: true,
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let resolved = engine
+        .initialize_workload(
+            "file-read-test",
+            Workload {
+                name: "file-read-test".into(),
+                namespace: "test".into(),
+                annotations: HashMap::new(),
+                service: None,
+                volumes: vec![Volume {
+                    name: "data".into(),
+                    volume_type: VolumeType::HostPath(HostPathVolume {
+                        local_path: path.to_string_lossy().into_owned(),
+                    }),
+                }],
+                host_interfaces: Vec::new(),
+                components: vec![command],
+            },
+        )?
+        .resolve(
+            None,
+            &Default::default(),
+            &wash_runtime::host::HostRef::detached(),
+            &Default::default(),
+        )
+        .await?;
+    let id = resolved
+        .components()
+        .read_owned()
+        .await
+        .keys()
+        .next()
+        .cloned()
+        .context("missing command")?;
+    let stdout = MemoryOutputPipe::new(1024);
+    let outcome = resolved
+        .run_command(&id, CommandOptions::new().stdout(stdout.clone()))
+        .await?;
+    resolved.unbind_all_plugins().await?;
+    assert_eq!(outcome.exit_code, 0);
+    Ok(String::from_utf8(stdout.contents().to_vec())?)
+}
+
+/// Each p3 file stream read is sized to what the guest offered, up to
+/// `max_io_size`. The last read is the end of the file.
+#[tokio::test]
+async fn p3_file_reads_follow_max_io_size() -> Result<()> {
+    let mib = std::num::NonZeroUsize::new(1 << 20);
+    assert_eq!(
+        read_file(None, 1 << 20).await?,
+        "bytes=1048576 reads=17 largest=65536"
+    );
+    assert_eq!(
+        read_file(mib, 1 << 20).await?,
+        "bytes=1048576 reads=2 largest=1048576"
+    );
+    assert_eq!(
+        read_file(mib, 4096).await?,
+        "bytes=1048576 reads=257 largest=4096"
+    );
     Ok(())
 }

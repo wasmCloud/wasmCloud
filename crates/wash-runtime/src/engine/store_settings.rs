@@ -15,6 +15,20 @@ pub(crate) struct StoreSettings {
     /// wasmtime's [`wasmtime::Store::set_hostcall_fuel`]. `None` keeps
     /// wasmtime's default of 128 MiB.
     pub(crate) hostcall_fuel: Option<NonZeroUsize>,
+    /// wasmtime-wasi's `max_io_size`, applied by
+    /// [`crate::engine::read_via_stream`]. `None` keeps its default of 64 KiB.
+    pub(crate) max_io_size: Option<NonZeroUsize>,
+}
+
+/// wasmtime-wasi's default `max_io_size`.
+const DEFAULT_MAX_IO_SIZE: usize = 64 * 1024;
+
+impl StoreSettings {
+    /// The most bytes one p3 file stream read asks the OS for.
+    pub(crate) fn max_io_size(&self) -> usize {
+        self.max_io_size
+            .map_or(DEFAULT_MAX_IO_SIZE, NonZeroUsize::get)
+    }
 }
 
 /// Readies a freshly built store to run guests. `policy` is the one thing
