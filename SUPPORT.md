@@ -2,7 +2,8 @@
 
 ## Supported releases
 
-wasmCloud supports only its latest minor release. Today that is 2.11.
+wasmCloud supports only its latest minor release, the newest `vX.Y.Z` on the
+[releases page](https://github.com/wasmCloud/wasmCloud/releases/latest).
 
 - Bug fixes and security fixes land on `main` and ship in the next release. The
   [release train](RELEASE_RUNBOOK.md#release-cadence) cuts a release every two weeks, so a fix

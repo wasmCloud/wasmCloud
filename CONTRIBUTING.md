@@ -425,8 +425,10 @@ affect, and reports a single gate check that passes only when those jobs pass:
 
 - `gate` (`wash.yml`): `cargo test` for the workspace on Linux, macOS and Windows, the ignored
   tests, rustfmt and clippy, and the `runtime-operator` end-to-end tests against the `wash` image.
-- `gate-audit` (`audit.yml`): `cargo audit`, `cargo deny check licenses`, and dependency review
-  of newly added dependencies.
+- `gate-audit` (`audit.yml`): `cargo audit`, `cargo deny check licenses`, `osv-scanner` over
+  every lockfile, and dependency review of newly added dependencies.
+- CodeQL (`codeql.yml`): Rust and Go analysis. The `main` ruleset blocks a merge that adds a
+  high or critical alert. See [Code scanning](SECURITY.md#code-scanning).
 - `gate-runtime-operator` and `gate-runtime-gateway`: the Go tests for each module.
 - `gate-wit`, `gate-charts`, `gate-templates`, `gate-examples`, `gate-proto`,
   `gate-test-install-scripts` and `gate-lint-workflows`: WIT package validation, Helm chart lint,
