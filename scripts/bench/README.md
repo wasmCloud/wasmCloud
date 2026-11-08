@@ -538,9 +538,14 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
   `max_scale`. These run after publication, not as a pre-release gate.
 - Variants: a `bench` choice may name an entry in `BENCH_VARIANTS` (in
   `bench.yml`) instead of a bench. It runs that entry's `bench` with its `env`
-  preset. Variants can run manually or in the release subset; their results
-  remain in the workflow summary and artifact and are never published to the
-  public benchmark history.
+  preset. Variants can run manually or in the release subset. Their results
+  remain in the workflow summary and artifact, and stay out of the public
+  benchmark history unless the entry names a `publish_group`. A density
+  variant with one publishes under that group instead of `density`
+  (`bench-tools jsonl --group`, or `WASMCLOUD_BENCH_GROUP`), so its rows form
+  their own series; the publisher refuses a row in any other group.
+  - `million_warm`: published as `density-max`, the record run the density
+    page on arewefastyet draws.
   - `max_scale`: `scale_density` with `WASH_SCALE_MEMORY_RESERVATION=256MiB`,
     `WASH_SCALE_MEMORY_GUARD=64KiB`, `WASH_SCALE_GUEST_MEMORY_MODE=growth`,
     and `WASH_SCALE_MEMORY_LIMIT=2GiB`.
@@ -1101,6 +1106,40 @@ present only when measured:
   "value": 3250,
   "unit": "workloads",
   "better": "higher"
+}
+```
+
+After a flavour's metric rows comes one `ramp` row, when the run took steps:
+the steps thinned to at most 80, evenly spread and always keeping the last
+clean one, as one column per figure. `value` is how many steps the run took
+before thinning. It has no `better`, so it is not a trend; the trends and
+compare pages leave it out, and the density page draws it.
+
+```json
+{
+  "bench": "scale_density",
+  "group": "density-max",
+  "param": "warm-growth-layout64MiB+64KiB",
+  "sha": "...", "ref": "main", "...": "...",
+  "metric": "ramp",
+  "value": 142,
+  "unit": "steps",
+  "flavour": "warm",
+  "stop": "max-process-memory (7705 growths refused)",
+  "guest_memory_mode": "growth",
+  "memory_limit_bytes": 107374182400,
+  "baseline_footprint_bytes": 810094592,
+  "marginal_bytes_per_workload": 84440,
+  "peak_starts_per_sec": 45529.0,
+  "steps": {
+    "workloads": [10000, 30000, "..."],
+    "footprint_bytes": [1760358400, 3458715648, "..."],
+    "starts_per_sec": [27759.0, 32442.0, "..."],
+    "requests_per_sec": [152520.0, 158741.0, "..."],
+    "request_p50_ms": [0.612, 0.513, "..."],
+    "request_p99_ms": [1.132, 1.037, "..."],
+    "clean": [true, true, "..."]
+  }
 }
 ```
 

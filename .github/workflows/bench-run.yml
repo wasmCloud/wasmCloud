@@ -38,6 +38,13 @@ on:
         required: false
         type: boolean
         default: true
+      # Group the rows are published under in place of the bench's own,
+      # for a preset that is its own series (bench.yml's publish_group).
+      # Empty keeps the bench's group.
+      group:
+        required: false
+        type: string
+        default: ""
       # Runner label of the bench host (.github/scripts/bench-host.mjs).
       host:
         required: false
@@ -184,6 +191,7 @@ jobs:
         if: ${{ success() && inputs.publish && !startsWith(inputs.ref, 'pull/') }}
         env:
           BUNDLE_DIR: ${{ runner.temp }}/bench-publish
+          WASMCLOUD_BENCH_GROUP: ${{ inputs.group }}
         run: node .bench-publish-tools/.github/scripts/bench-push-results.mjs prepare "$BUNDLE_DIR"
 
       - name: upload publish artifact
@@ -211,7 +219,7 @@ jobs:
   publish:
     needs: bench
     if: ${{ inputs.publish && !startsWith(inputs.ref, 'pull/') }}
-    name: publish ${{ inputs.bench }}
+    name: publish ${{ inputs.name || inputs.bench }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -237,6 +245,7 @@ jobs:
           WASMCLOUD_BENCH_NAME: ${{ inputs.bench }}
           WASMCLOUD_BENCH_REF: ${{ inputs.ref }}
           WASMCLOUD_BENCH_SHA: ${{ inputs.commit_sha }}
+          WASMCLOUD_BENCH_GROUP: ${{ inputs.group }}
           BUNDLE_DIR: ${{ runner.temp }}/bench-publish
         run: node .github/scripts/bench-push-results.mjs validate "$BUNDLE_DIR"
 
@@ -251,6 +260,7 @@ jobs:
           WASMCLOUD_BENCH_NAME: ${{ inputs.bench }}
           WASMCLOUD_BENCH_REF: ${{ inputs.ref }}
           WASMCLOUD_BENCH_SHA: ${{ inputs.commit_sha }}
+          WASMCLOUD_BENCH_GROUP: ${{ inputs.group }}
           WASMCLOUD_BENCH_S3_BUCKET: ${{ secrets.s3_bucket }}
           WASMCLOUD_BENCH_CF_DISTRIBUTION_ID: ${{ secrets.cf_distribution_id }}
           BUNDLE_DIR: ${{ runner.temp }}/bench-publish
