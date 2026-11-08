@@ -47,6 +47,9 @@
 //! submodule; this module drives it from `ComponentHostPlugin`'s `HostPlugin`
 //! impl.
 //!
+//! Nonempty imports containing only structural types need no provider and do
+//! not become workload callbacks. Empty marker interfaces remain capabilities.
+//!
 //! Calls also run the other way. A plugin that imports
 //! `wasmcloud:host/workload-call` may *import* an interface no host built-in
 //! provides, in which case a workload that exports it satisfies it — the
@@ -1145,7 +1148,7 @@ async fn link_native_imports(
     engine: &Engine,
     id: &str,
     component: &Component,
-    linker: Linker<SharedCtx>,
+    mut linker: Linker<SharedCtx>,
     already_linked: &std::collections::HashSet<Arc<str>>,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     config: &HashMap<String, String>,
@@ -1156,6 +1159,7 @@ async fn link_native_imports(
     // `WorkloadMetadata::world()`'s own import merge — otherwise each would
     // carry its own copy of the plugin's whole config and collide as two
     // bindings setting the same keys.
+    let type_only = type_only_imports(component);
     let mut merged: HashMap<String, WitInterface> = HashMap::new();
     for imported in introspect_imports(component)? {
         if already_linked.contains(&imported.name) {
@@ -1163,6 +1167,10 @@ async fn link_native_imports(
         }
         let wit = imported.wit;
         if is_reserved(&wit) || is_base_wasi(&wit) {
+            continue;
+        }
+        if type_only.contains(imported.name.as_ref()) {
+            linker.instance(&imported.name)?;
             continue;
         }
         merged
@@ -1323,11 +1331,13 @@ fn classify_workload_imports(
     if !declares_workload_calls(&imports) {
         return Ok(Vec::new());
     }
+    let type_only = type_only_imports(component);
     let native_worlds: Vec<WitWorld> = native_plugins.values().map(|p| p.world()).collect();
 
     let mut workload_imports = Vec::new();
     for imported in imports {
-        if is_self_satisfied(&imported, exports)
+        if type_only.contains(imported.name.as_ref())
+            || is_self_satisfied(&imported, exports)
             || native_worlds
                 .iter()
                 .any(|world| world.provides(&imported.wit))
@@ -2284,6 +2294,25 @@ fn introspect_imports(component: &Component) -> anyhow::Result<Vec<ExportedInter
     introspect_interfaces(component, ty.imports(component.engine()))
 }
 
+/// Structural types need no capability provider. Empty markers still do.
+fn type_only_imports(component: &Component) -> std::collections::HashSet<String> {
+    let engine = component.engine();
+    component
+        .component_type()
+        .imports(engine)
+        .filter_map(|(name, item)| {
+            let ComponentItem::ComponentInstance(instance) = item.ty else {
+                return None;
+            };
+            let mut exports = instance.exports(engine).peekable();
+            exports.peek()?;
+            exports
+                .all(|(_, item)| matches!(item.ty, ComponentItem::Type(_)))
+                .then(|| name.to_owned())
+        })
+        .collect()
+}
+
 /// Collect the capability interfaces (and their functions and resource types)
 /// from one side of a component's type — its exports or its imports. A
 /// top-level func not inside an interface is not a capability we route, so it
@@ -2342,6 +2371,10 @@ fn introspect_interfaces<'a>(
 
     Ok(interfaces)
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod type_import_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
