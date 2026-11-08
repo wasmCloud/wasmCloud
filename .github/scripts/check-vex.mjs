@@ -61,7 +61,7 @@ function main(args) {
   const artifacts = readArtifacts('.');
   const doc = readVex('.');
   checkVex(doc, ignored, version, artifacts);
-  const drift = lockDrift(doc, version, artifacts, lock).map(describeDrift);
+  const drift = lockDrift(doc, version, artifacts, lock, ignored).map(describeDrift);
   if (release) {
     assert.ok(!drift.length, `reassess before releasing ${version}:\n${drift.join('\n')}`);
   }
