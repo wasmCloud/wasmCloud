@@ -193,6 +193,7 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
         linker,
         <SharedCtx as wasmtime_wasi::filesystem::WasiFilesystemView>::filesystem,
     )?;
+    read_via_stream::add_to_linker(linker)?;
     wasmtime_wasi::p3::bindings::filesystem::preopens::add_to_linker::<SharedCtx, SharedCtx>(
         linker,
         ctx::extract_active_ctx,
@@ -252,6 +253,7 @@ mod pool_gc;
 pub mod pool_share;
 pub mod pool_usage;
 pub mod process_memory;
+mod read_via_stream;
 mod scratch;
 pub(crate) mod store;
 pub(crate) mod store_settings;
@@ -663,6 +665,12 @@ impl Engine {
     /// [`EngineBuilder::with_hostcall_fuel`]. `None` is wasmtime's default.
     pub fn hostcall_fuel(&self) -> Option<std::num::NonZeroUsize> {
         self.store_settings.hostcall_fuel
+    }
+
+    /// The most bytes one p3 file stream read moves: see
+    /// [`EngineBuilder::with_max_io_size`]. `None` is wasmtime-wasi's default.
+    pub fn max_io_size(&self) -> Option<std::num::NonZeroUsize> {
+        self.store_settings.max_io_size
     }
 
     /// The process's memory footprint against `max_process_memory`, for an
@@ -1468,6 +1476,7 @@ pub struct EngineBuilder {
     guest_memory_mode: guest_memory::GuestMemoryMode,
     max_initial_guest_memory_bytes: Option<u64>,
     hostcall_fuel: Option<std::num::NonZeroUsize>,
+    max_io_size: Option<std::num::NonZeroUsize>,
     /// Optional TLS provider override for wasi:tls client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -1632,6 +1641,21 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_hostcall_fuel(mut self, fuel: std::num::NonZeroUsize) -> Self {
         self.hostcall_fuel = Some(fuel);
+        self
+    }
+
+    /// The most bytes one WASIp3 `wasi:filesystem` stream read moves:
+    /// wasmtime-wasi's `max_io_size`. Each read is a trip to the blocking
+    /// pool sized to what the guest asked for, up to this. Unset, it is
+    /// wasmtime-wasi's default of 64 KiB.
+    ///
+    /// Raising it speeds up large sequential reads, such as loading a model:
+    /// 512 MiB read in 64 MiB `fread`s takes 8,193 trips at 64 KiB and 513 at
+    /// 1 MiB. Each in-flight read holds a host buffer of up to this size,
+    /// outside the guest memory budget.
+    #[must_use]
+    pub fn with_max_io_size(mut self, size: std::num::NonZeroUsize) -> Self {
+        self.max_io_size = Some(size);
         self
     }
 
@@ -2304,6 +2328,7 @@ impl EngineBuilder {
             },
             store_settings: store_settings::StoreSettings {
                 hostcall_fuel: self.hostcall_fuel,
+                max_io_size: self.max_io_size,
             },
             process_memory,
             #[cfg(feature = "wasi-tls")]

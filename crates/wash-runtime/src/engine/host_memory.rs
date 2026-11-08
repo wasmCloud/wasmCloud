@@ -659,6 +659,22 @@ const MAX_DERIVED_MAX_GUEST_MEMORY: u64 = 1024 * 1024 * MIB;
 /// Anything [`parse_bytes`] refuses, zero, which would trap every call that
 /// passes the host any data, or a size this platform's `usize` cannot hold.
 pub fn parse_hostcall_fuel(raw: Option<&str>) -> Result<Option<std::num::NonZeroUsize>, String> {
+    parse_nonzero_size(raw)
+}
+
+/// A `max_io_size` setting (`--max-io-size`, `dev.max_io_size`) as
+/// [`crate::engine::EngineBuilder::with_max_io_size`] takes it: a byte size
+/// per [`parse_bytes`], with a blank value read as unset.
+///
+/// # Errors
+///
+/// Anything [`parse_bytes`] refuses, zero, or a size this platform's `usize`
+/// cannot hold.
+pub fn parse_max_io_size(raw: Option<&str>) -> Result<Option<std::num::NonZeroUsize>, String> {
+    parse_nonzero_size(raw)
+}
+
+fn parse_nonzero_size(raw: Option<&str>) -> Result<Option<std::num::NonZeroUsize>, String> {
     let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
         return Ok(None);
     };

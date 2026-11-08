@@ -1378,6 +1378,14 @@ pub struct DevConfig {
     /// [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostcall_fuel: Option<String>,
+
+    /// The most bytes one WASIp3 file stream read moves (e.g. `1MiB`).
+    ///
+    /// Each read is a trip to the blocking pool sized to what the guest asked
+    /// for, up to this. wasmtime-wasi's `max_io_size`; unset, its default of
+    /// 64 KiB. Raise it for large sequential reads such as loading a model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_io_size: Option<String>,
 }
 
 impl DevConfig {
@@ -1563,6 +1571,12 @@ impl DevConfig {
             wash_runtime::engine::host_memory::parse_hostcall_fuel(self.hostcall_fuel.as_deref())
         {
             errors.push(format!("dev.hostcall_fuel: {err}"));
+        }
+
+        if let Err(err) =
+            wash_runtime::engine::host_memory::parse_max_io_size(self.max_io_size.as_deref())
+        {
+            errors.push(format!("dev.max_io_size: {err}"));
         }
 
         for comp in &self.components {
@@ -2290,6 +2304,20 @@ workload:
         );
         let err = cfg("abc").validate().unwrap_err().to_string();
         assert!(err.contains("dev.hostcall_fuel"), "{err}");
+    }
+
+    #[test]
+    fn dev_max_io_size_is_validated() {
+        let cfg = |raw: &str| DevConfig {
+            max_io_size: Some(raw.to_string()),
+            ..Default::default()
+        };
+        assert!(cfg("1MiB").validate().is_ok());
+        let err = cfg("0").validate().unwrap_err().to_string();
+        assert!(
+            err.contains("dev.max_io_size: must be greater than zero"),
+            "{err}"
+        );
     }
 
     #[test]

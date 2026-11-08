@@ -422,13 +422,14 @@ runtime:
   #
   # `defaultHeapMemory`, `memoryReservation`, `memoryGuardSize`, `maxMemories`,
   # `setMaxMemoriesFromMemoryPrecommitLimit`, `coreInstances`, `guestMemoryMode`,
-  # `maxConcurrentStarts` and `hostcallFuel` are host knobs rather than Kubernetes
+  # `maxConcurrentStarts`, `hostcallFuel` and `maxIoSize` are host knobs rather than Kubernetes
   # resource fields; the chart strips them out of the container's `resources`
   # block and sets them as `WASH_DEFAULT_HEAP_MEMORY` /
   # `WASH_HOST_MEMORY_RESERVATION` / `WASH_HOST_MEMORY_GUARD_SIZE` /
   # `WASH_MAX_MEMORIES` / `WASH_SET_MAX_MEMORIES_FROM_MEMORY_PRECOMMIT_LIMIT` /
   # `WASH_CORE_INSTANCES` / `WASH_GUEST_MEMORY_MODE` /
-  # `WASH_MAX_CONCURRENT_STARTS` / `WASH_HOSTCALL_FUEL` for the host.
+  # `WASH_MAX_CONCURRENT_STARTS` / `WASH_HOSTCALL_FUEL` / `WASH_MAX_IO_SIZE`
+  # for the host.
   # Leaving them empty uses the
   # host's own defaults.
   #
@@ -556,6 +557,15 @@ runtime:
     #
     # [`Store::set_hostcall_fuel`]: https://docs.rs/wasmtime/latest/wasmtime/struct.Store.html#method.set_hostcall_fuel
     hostcallFuel: ""
+    # -- The most bytes one WASIp3 file stream read moves (e.g. `1MiB`). Must
+    # be greater than zero.
+    #
+    # Each read is a trip to the blocking pool sized to what the guest asked
+    # for, up to this. This is wasmtime-wasi's `max_io_size`. Unset, it is
+    # its default of 64 KiB. Raise it for large sequential reads such as
+    # loading a model. Each in-flight read holds a host buffer of up to this
+    # size, outside the guest memory budget.
+    maxIoSize: ""
   # -- Probes for host containers, rendered for a host group with
   # `probes.endpoint` enabled or one that serves HTTP
   # (`hostGroups[].http.enabled`). A host group sets its own with
@@ -1182,6 +1192,7 @@ runtime:
       #   guestMemoryMode: "count"
       #   maxConcurrentStarts: "1"
       #   hostcallFuel: "256MiB"
+      #   maxIoSize: "1MiB"
       # -- Node labels this group's host pods must match, e.g. to keep a
       # webgpu group on GPU nodes. Add `tolerations` when those nodes are
       # tainted:
