@@ -301,7 +301,7 @@ fn template(engine: &crate::engine::Engine, id: &str) -> ComponentCtxTemplate {
         workload_id: "contract-workload".into(),
         local_resources: crate::types::LocalResources::default(),
         volume_mounts: vec![],
-        plugins: Some(HashMap::new()),
+        plugins: Some(Arc::default()),
         loopback: Arc::new(std::sync::Mutex::new(loopback::Network::default())),
         socket_policy: Arc::new(crate::sockets::policy::SocketPolicy::default()),
         guest_memory: Arc::clone(engine.guest_memory()),
@@ -594,7 +594,7 @@ async fn ephemeral_store_recipe_names_missing_components() -> anyhow::Result<()>
     components
         .write()
         .await
-        .insert("ghost".into(), workload_component("ghost"));
+        .insert("ghost".into(), Box::new(workload_component("ghost")));
     let error = new_ephemeral_store(&call)
         .await
         .err()
@@ -606,7 +606,7 @@ async fn ephemeral_store_recipe_names_missing_components() -> anyhow::Result<()>
     components
         .write()
         .await
-        .insert("missing".into(), workload_component("missing"));
+        .insert("missing".into(), Box::new(workload_component("missing")));
     let store = new_ephemeral_store(&call).await?;
     assert_eq!(store.data().active_ctx.component_id.as_ref(), "ghost");
     assert!(store.data().contexts.contains_key("missing"));
@@ -723,7 +723,10 @@ impl Callee {
         );
         entry.metadata.id = "callee".into();
         let pool = Arc::clone(&entry.instances);
-        let components = Arc::new(RwLock::new(BTreeMap::from([("callee".into(), entry)])));
+        let components = Arc::new(RwLock::new(BTreeMap::from([(
+            "callee".into(),
+            Box::new(entry),
+        )])));
         Ok(Self {
             engine,
             component,

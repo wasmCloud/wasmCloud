@@ -21,6 +21,29 @@ use wasmtime_wasi_tls::{WasiTlsCtx, WasiTlsCtxBuilder, WasiTlsCtxView, WasiTlsVi
 use crate::host::allowed_hosts::AllowedHost;
 use crate::plugin::HostPlugin;
 
+/// The plugins a store can reach, keyed by id. They all implement
+/// [`HostPlugin`], but are held as `Arc<dyn Any + Send + Sync>` so
+/// [`Ctx::get_plugin`] can downcast to the concrete plugin type.
+///
+/// Shared: a component's map is cast once and every store built for it holds
+/// the same one (see [`CtxBuilder::with_store_plugins`]).
+pub(crate) type StorePlugins = HashMap<&'static str, Arc<dyn Any + Send + Sync>>;
+
+/// Cast `plugins` into the map a store reaches them through.
+pub(crate) fn store_plugins(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
+) -> Arc<StorePlugins> {
+    Arc::new(
+        plugins
+            .iter()
+            .map(|(id, plugin)| (*id, Arc::clone(plugin) as Arc<dyn Any + Send + Sync>))
+            .collect(),
+    )
+}
+
+/// The map of a store with no plugins, shared so such a store allocates none.
+static NO_PLUGINS: std::sync::LazyLock<Arc<StorePlugins>> = std::sync::LazyLock::new(Arc::default);
+
 /// A shareable, cloneable `wasi:tls` provider. Wraps an `Arc<dyn TlsProvider>`
 /// so the same provider can back many per-component contexts without
 /// re-creating it, and implements `TlsProvider` directly so it can be boxed
@@ -405,7 +428,7 @@ pub struct Ctx {
     /// Plugin instances stored by string ID for access during component execution.
     /// These all implement the [`HostPlugin`] trait, but they are cast as `Arc<dyn Any + Send + Sync>`
     /// to support downcasting to the specific plugin type in [`Ctx::get_plugin`]
-    plugins: HashMap<&'static str, Arc<dyn Any + Send + Sync>>,
+    plugins: Arc<StorePlugins>,
     /// The HTTP hooks for outgoing HTTP requests.
     http_hooks: CtxHttpHooks,
     /// The remediation hints this workload deploy has already logged. Shared
@@ -600,12 +623,17 @@ impl WasiHttpHooks for CtxHttpHooks {
 /// Helper struct to build a [`Ctx`] with a builder pattern
 pub struct CtxBuilder {
     id: Arc<str>,
-    store_id: Arc<str>,
+    /// `None` until set: a fresh id is minted at build only for a store that
+    /// was not given one, rather than minted here and thrown away.
+    store_id: Option<Arc<str>>,
     workload_id: Arc<str>,
     component_id: Arc<str>,
     ctx: Option<WasiCtx>,
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
+    /// Plugins cast once and shared with other stores; see
+    /// [`Self::with_store_plugins`].
+    store_plugins: Option<Arc<StorePlugins>>,
     http_handler: Option<crate::host::HostRef>,
     allowed_hosts: Arc<[AllowedHost]>,
     /// TLS provider override for `wasi:tls` client connections.
@@ -617,13 +645,14 @@ impl CtxBuilder {
     pub fn new(workload_id: impl Into<Arc<str>>, component_id: impl Into<Arc<str>>) -> Self {
         Self {
             id: crate::ids::now_v7().to_string().into(),
-            store_id: crate::ids::now_v7().to_string().into(),
+            store_id: None,
             component_id: component_id.into(),
             workload_id: workload_id.into(),
             ctx: None,
             sockets: None,
             http_handler: None,
             plugins: HashMap::new(),
+            store_plugins: None,
             allowed_hosts: Default::default(),
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
@@ -638,6 +667,12 @@ impl CtxBuilder {
     #[cfg(feature = "wasi-tls")]
     pub fn with_tls_provider(mut self, provider: SharedTlsProvider) -> Self {
         self.tls_provider = Some(provider);
+        self
+    }
+
+    /// Share `store_id` with the other component contexts in the same store.
+    pub(crate) fn with_store_id(mut self, store_id: Arc<str>) -> Self {
+        self.store_id = Some(store_id);
         self
     }
 
@@ -675,17 +710,33 @@ impl CtxBuilder {
         self
     }
 
+    /// Reach the plugins in `plugins`, a map shared with other stores rather
+    /// than copied into this one. Plugins added with [`Self::with_plugins`]
+    /// as well are layered over it, in a map of this store's own.
+    pub(crate) fn with_store_plugins(mut self, plugins: Arc<StorePlugins>) -> Self {
+        self.store_plugins = Some(plugins);
+        self
+    }
+
     pub fn with_allowed_hosts(mut self, allowed_hosts: Arc<[AllowedHost]>) -> Self {
         self.allowed_hosts = allowed_hosts;
         self
     }
 
     pub fn build(self) -> Ctx {
-        let plugins = self
-            .plugins
-            .into_iter()
-            .map(|(k, v)| (k, v as Arc<dyn Any + Send + Sync>))
-            .collect();
+        let plugins = match (self.store_plugins, self.plugins.is_empty()) {
+            (Some(shared), true) => shared,
+            (None, true) => Arc::clone(&NO_PLUGINS),
+            (shared, false) => {
+                let mut plugins = shared.map(|shared| (*shared).clone()).unwrap_or_default();
+                plugins.extend(
+                    self.plugins
+                        .into_iter()
+                        .map(|(k, v)| (k, v as Arc<dyn Any + Send + Sync>)),
+                );
+                Arc::new(plugins)
+            }
+        };
 
         let http_hooks = CtxHttpHooks {
             host: HostLink(self.http_handler),
@@ -696,7 +747,9 @@ impl CtxBuilder {
 
         Ctx {
             id: self.id,
-            store_id: self.store_id,
+            store_id: self
+                .store_id
+                .unwrap_or_else(|| crate::ids::now_v7().to_string().into()),
             ctx: self.ctx.unwrap_or_else(|| {
                 WasiCtxBuilder::new()
                     .args(&["main.wasm"])
