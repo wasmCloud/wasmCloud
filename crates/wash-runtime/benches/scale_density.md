@@ -54,7 +54,7 @@ with the component, so these are a guide, not constants.
 
 | | scale-to-zero (`pool_size: 0`) | warm (`pool_size: 1`) |
 | --- | --- | --- |
-| host footprint, marginal | ~11 KiB | ~65-75 KiB |
+| host footprint, marginal | ~11 KiB | ~75-85 KiB, ~9 KiB of it page tables |
 | guest memory charged | 0 | 1.06 MiB (17 pages, the declared initial memory) |
 | pool core instances | 0 | 4 (core modules in the component) |
 | pool linear memories | 0 | 1 |
@@ -73,10 +73,14 @@ with the component, so these are a guide, not constants.
     to instantiate it reports.
   - The bench's fixture imports nothing a plugin writes to, so it holds no
     copy, and this does not show in its figures.
-- **Warm** adds a parked instance: its stores, its core instances, and the
-  pages of linear memory the guest has touched. The guest budget charges the
-  declared size whether or not it is resident, which is why the guest charge
-  is many times the footprint growth.
+- **Warm** adds a parked instance: its stores, its core instances, the
+  pages of linear memory the guest has touched, and the page tables that map
+  its slot. The page-table share was measured at a 64 MiB + 64 KiB layout on
+  arm64 (73.4 KiB a warm instance before the footprint counted page tables,
+  82.2 KiB after); it grows with how much of the slot is touched. Page tables
+  stay counted after the instance is dropped, until the slot's pool goes.
+  The guest budget charges the declared size whether or not it is resident,
+  which is why the guest charge is many times the footprint growth.
 
 ## The limits
 

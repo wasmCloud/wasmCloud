@@ -207,7 +207,8 @@ that physical cost earlier. Include both CoW settings in capacity testing.
 
 Plan against the whole cgroup's peak memory, including sibling processes and
 file/shared pages. On Linux the process guard normally measures
-`RssAnon + VmSwap + VmPTE`, so its reading is not interchangeable with cgroup usage.
+`RssAnon + VmSwap` plus page tables (`VmPTE`, and `VmPMD` on 4.x kernels), so
+its reading is not interchangeable with cgroup usage.
 The default process threshold is 90% of detected memory. It refuses new work
 and growth after a sampled crossing; it cannot stop writes to pages already
 admitted or enforce a hard physical ceiling. Keep a container limit and reserve

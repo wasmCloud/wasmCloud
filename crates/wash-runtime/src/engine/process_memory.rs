@@ -38,13 +38,24 @@
 //! | Platform | Reading |
 //! | --- | --- |
 //! | macOS | `phys_footprint` from `proc_pid_rusage`, what Activity Monitor shows as Memory: resident plus compressed |
-//! | Linux | `RssAnon + VmSwap + VmPTE` from `/proc/self/status` (`VmRSS` in place of `RssAnon` on kernels without it) |
-//! | elsewhere | the resident size `sysinfo` reports |
+//! | Linux | `RssAnon + VmSwap + VmPTE + VmPMD` from `/proc/self/status` (`VmRSS` in place of `RssAnon` on kernels without it) |
+//! | elsewhere | the resident size `sysinfo` reports, which leaves out page tables |
 //!
 //! On Linux, file and shmem pages are left out: `VmRSS` counts a shared page
 //! once per mapping, and wasmtime maps each instance's copy-on-write memory
 //! image separately, so it would count one copy of the image per warm
 //! instance though memory holds one.
+//!
+//! Page tables are counted in, though they are not pages of the process's
+//! own: the kernel allocates them for it, charges them to it and counts them
+//! when it picks a process to OOM-kill. A dense warm pool makes them about a
+//! tenth of the footprint, because every pooled slot is a sparse region that
+//! needs page-table pages of its own. Leaving them out let a host pass its
+//! limit, and be killed, while the guard read under it. They are also slow to
+//! give back: decommitting a slot returns its pages but usually keeps the page
+//! tables that mapped them, so they count as memory the host retains (see
+//! below). `VmPMD` is only reported by Linux 4.0 to 4.14; later kernels fold
+//! it into `VmPTE`. macOS's `phys_footprint` already includes page tables.
 //!
 //! [`GuestMemoryBudget`]: crate::engine::guest_memory::GuestMemoryBudget
 //! [`GuestMemoryBudget::with_process_guard`]: crate::engine::guest_memory::GuestMemoryBudget::with_process_guard
@@ -54,9 +65,10 @@
 //! Refusals start past the limit and stop once the footprint falls back under
 //! [`RECOVER_PERCENT`] of it, so a host at the line does not flap. They also
 //! stop when refusing is plainly not helping: memory the host itself retains
-//! (the allocator, compiled code, warm instance pools) does not shrink because
-//! guests are refused, and could otherwise hold the footprint in that band,
-//! refusing every instantiation, for the rest of the process's life. So once
+//! (the allocator, compiled code, warm instance pools, the page tables of
+//! pooled slots that have been used) does not shrink because guests are
+//! refused, and could otherwise hold the footprint in that band, refusing
+//! every instantiation, for the rest of the process's life. So once
 //! the footprint has stayed within the limit without growing for
 //! [`OVER_RECHECK_SAMPLES`] samples, refusals stop and the host says so
 //! loudly; they start again the moment it crosses the limit. Past the limit
@@ -644,10 +656,21 @@ mod tests {
         assert_eq!(linux_footprint(status), Some(4 * MIB));
     }
 
+    /// Linux 4.0 to 4.14 report the level above the last in `VmPMD` rather
+    /// than in `VmPTE`.
+    #[test]
+    fn linux_counts_pmd_page_tables_on_older_kernels() {
+        let status = "VmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\nVmPTE:\t  1024 kB\n\
+                      VmPMD:\t  1024 kB\nVmSwap:\t  1024 kB\n";
+        assert_eq!(linux_footprint(status), Some(5 * MIB));
+    }
+
     #[test]
     fn linux_without_rss_anon_falls_back_to_vm_rss() {
         let status = "VmRSS:\t  2048 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(status), Some(3 * MIB));
+        let with_page_tables = "VmRSS:\t  2048 kB\nVmPTE:\t  1024 kB\nVmSwap:\t  1024 kB\n";
+        assert_eq!(linux_footprint(with_page_tables), Some(4 * MIB));
     }
 
     #[test]
