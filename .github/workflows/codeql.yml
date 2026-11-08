@@ -6,24 +6,27 @@ name: codeql
 # advisories) by analysing first-party code paths for vulnerable patterns.
 
 on:
+  # Every pull request and merge queue run is analysed so the `code_scanning`
+  # rule on `main` can block new alerts before they merge (OSPS-VM-06.02).
+  # Rust takes about 40 minutes, in line with wash.yml.
+  pull_request:
+    branches:
+      - main
+  merge_group:
+  push:
+    branches:
+      - main
   schedule:
-    # Weekly Mondays at 09:00 UTC. Spaced apart from scorecard (Wed) and
-    # audit (daily) so a single bad runner image doesn't take all three out.
-    # CodeQL on Rust + Go matrix is ~60 min total, so we run it weekly
-    # rather than per-PR; audit.yml + cargo's own checks cover the
-    # per-commit fast-feedback layer.
+    # Weekly Mondays at 09:00 UTC, so new CodeQL queries reach code that
+    # hasn't changed. Spaced apart from scorecard (Wed) and audit (daily).
     - cron: "0 9 * * 1"
   workflow_dispatch:
-  # Validate the analysis on PRs that touch the workflow itself or the
-  # setup-rust composite action it depends on — otherwise a breakage only
-  # surfaces on the weekly cron and we lose a week of coverage.
-  pull_request:
-    paths:
-      - ".github/workflows/codeql.yml"
-      - ".github/actions/setup-rust/**"
-  merge_group:
 
-permissions: read-all
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
 
 jobs:
   analyze-rust:
