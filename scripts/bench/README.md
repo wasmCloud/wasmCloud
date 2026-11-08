@@ -842,8 +842,12 @@ cargo run -p bench-tools -- memory-pressure --memory-mib 384 768 --repeats 3
   Do not rebuild into the same target volume while a pressure run is using its binary.
 
 The engine uses the runtime's budget defaults
-(`G = 75%` of the limit, `I = 4 × G`, the process guard at 90%)
-unless `--guest-memory-mib` or `--initial-cap-mib` overrides them.
+(`G = 75%` of the limit, the process guard at 90%)
+unless `--guest-memory-mib` overrides them.
+`I` is the runtime's own (`16 ×` the process guard's limit) unless `--initial-cap-mib` sets it,
+or unless the stores it admits would need more memories than the pool holds.
+Such cases (1 MiB memories above about 570 MiB, 2 MiB memories above about 1.1 GiB) fall back to `4 × G`,
+the runtime's rule without a process limit; each report records the `I` it ran.
 Pool settings are not production defaults:
 a 64 MiB heap ceiling per memory and 8192 memories, so `4 × G` of 1 MiB memories fits the pool.
 Each slot still reserves wasmtime's default address space plus guard.

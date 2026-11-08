@@ -52,7 +52,9 @@
 //!   Telling them apart would need the limiter to know when an instantiation is under way,
 //!   which every site that instantiates would then have to tell it.
 //! - **What bounds the total:** a cap of its own, [`GuestMemoryBudget::with_initial_cap`].
-//!   An engine derives it as [`DEFAULT_INITIAL_OVERCOMMIT`] times the budget unless told otherwise.
+//!   Unless set explicitly, it is [`DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS`] times the
+//!   process limit, or [`DEFAULT_INITIAL_OVERCOMMIT`] times the guest budget where no
+//!   process limit is enforced (see [`derive_initial_cap`]).
 //!   It is kept apart from `in_use`, so that figure stays a count of growth.
 //!
 //! The trade is overcommit:
@@ -124,21 +126,94 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use super::host_memory::{HostMemoryBudgets, render_bytes};
-use super::process_memory::ProcessMemoryGuard;
+use super::host_memory::{HostMemoryBudgets, UNENFORCED_PROCESS_MEMORY, render_bytes};
+use super::process_memory::{FOOTPRINT_COUNTS_PAGED_OUT, ProcessMemoryGuard};
 
 /// Share of the budget in use past which the periodic report is worth an
 /// operator's attention rather than a debug line.
 const PRESSURE_NUMERATOR: u64 = 3;
 const PRESSURE_DENOMINATOR: u64 = 4;
 
-/// The initial cap an engine derives under [`GuestMemoryMode::Growth`], as a
-/// multiple of the budget: first allocations may be overcommitted this many
-/// times over before new memories are refused. A warm `http-handler-p3`
-/// instance declares about fifteen times what it touches, so four keeps a
-/// margin under that ratio while still holding several times the instances
-/// `Enforce` would.
+/// Growth mode's derived initial cap, as a multiple of the budget, where no
+/// process limit is enforced. A warm `http-handler-p3` instance declares about
+/// fifteen times what it touches, so four keeps a margin under that ratio while
+/// still holding several times the instances `Enforce` would.
 pub const DEFAULT_INITIAL_OVERCOMMIT: u64 = 4;
+
+/// Growth mode's derived initial cap, as a multiple of an enforced process
+/// limit. Above the declared-to-touched ratio [`DEFAULT_INITIAL_OVERCOMMIT`]
+/// cites, so the process guard stops admitting such instances first, as far
+/// as it sees their pages: on Linux it counts anonymous memory and page
+/// tables, not shared or file-backed pages. The cap bounds what admitted
+/// instances write later.
+pub const DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS: u64 = 16;
+
+/// What growth mode's initial cap came from, for the startup line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InitialCapBasis {
+    /// Named by the operator.
+    Explicit,
+    /// [`DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS`] times the process limit.
+    ProcessMemory,
+    /// [`DEFAULT_INITIAL_OVERCOMMIT`] times the guest budget.
+    GuestMemory,
+}
+
+impl InitialCapBasis {
+    /// The knob the cap derives from.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "max-initial-guest-memory",
+            Self::ProcessMemory => "max-process-memory",
+            Self::GuestMemory => "max-guest-memory",
+        }
+    }
+}
+
+/// Growth mode's initial cap when none is named: from an enforced process
+/// limit, else from the guest budget. A process limit the guard can never
+/// reach, [`UNENFORCED_PROCESS_MEMORY`] or one past `memory_limit`, is not
+/// enforced. Nor is any limit where the footprint misses paged-out memory
+/// ([`FOOTPRINT_COUNTS_PAGED_OUT`]): the guard could read under it while the
+/// process is past it.
+pub fn derive_initial_cap(
+    max_guest_memory: u64,
+    max_process_memory: Option<u64>,
+    memory_limit: Option<u64>,
+) -> (u64, InitialCapBasis) {
+    derive_initial_cap_where(
+        FOOTPRINT_COUNTS_PAGED_OUT,
+        max_guest_memory,
+        max_process_memory,
+        memory_limit,
+    )
+}
+
+/// [`derive_initial_cap`] for a footprint that does or does not count
+/// paged-out memory.
+fn derive_initial_cap_where(
+    footprint_counts_paged_out: bool,
+    max_guest_memory: u64,
+    max_process_memory: Option<u64>,
+    memory_limit: Option<u64>,
+) -> (u64, InitialCapBasis) {
+    let enforced = max_process_memory.filter(|&limit| {
+        footprint_counts_paged_out
+            && limit != UNENFORCED_PROCESS_MEMORY
+            && memory_limit.is_none_or(|memory| limit <= memory)
+    });
+    match enforced {
+        Some(limit) => (
+            limit.saturating_mul(DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS),
+            InitialCapBasis::ProcessMemory,
+        ),
+        None => (
+            max_guest_memory.saturating_mul(DEFAULT_INITIAL_OVERCOMMIT),
+            InitialCapBasis::GuestMemory,
+        ),
+    }
+}
 
 /// How much of each memory's first allocation [`GuestMemoryMode::Growth`]
 /// leaves uncharged; the rest is charged as growth.
@@ -1173,6 +1248,44 @@ mod tests {
         assert!(limiter.memory_growing(0, MIB as usize, None).unwrap());
         assert_eq!(budget.initial_uncharged(), MIB);
         assert_eq!(budget.in_use(), 0);
+    }
+
+    /// The initial cap follows a process limit the guard can reach, and falls
+    /// back to the budget's multiple otherwise.
+    #[test]
+    fn initial_cap_derives_from_a_reachable_process_limit() {
+        let guest = 64 * MIB;
+        let of_guest = (
+            guest * DEFAULT_INITIAL_OVERCOMMIT,
+            InitialCapBasis::GuestMemory,
+        );
+        let of_process = |limit: u64| {
+            (
+                limit * DEFAULT_INITIAL_OVERCOMMIT_OF_PROCESS,
+                InitialCapBasis::ProcessMemory,
+            )
+        };
+        for (process, memory, expected) in [
+            (None, Some(1024 * MIB), of_guest),
+            (Some(UNENFORCED_PROCESS_MEMORY), None, of_guest),
+            (Some(512 * MIB), Some(1024 * MIB), of_process(512 * MIB)),
+            (Some(1024 * MIB), Some(1024 * MIB), of_process(1024 * MIB)),
+            (Some(8 * MIB), Some(1024 * MIB), of_process(8 * MIB)),
+            (Some(512 * MIB), None, of_process(512 * MIB)),
+            // Past the memory limit, the guard never refuses anything.
+            (Some(64 * 1024 * MIB), Some(768 * MIB), of_guest),
+        ] {
+            assert_eq!(
+                derive_initial_cap_where(true, guest, process, memory),
+                expected,
+                "process {process:?}, memory limit {memory:?}"
+            );
+            // A footprint blind to paged-out memory never sets the cap.
+            assert_eq!(
+                derive_initial_cap_where(false, guest, process, memory),
+                of_guest
+            );
+        }
     }
 
     /// The initial cap bounds what `Growth` leaves uncharged, counts its own

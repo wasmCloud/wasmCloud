@@ -21,8 +21,8 @@ use tokio::time::timeout;
 use wash_runtime::{
     engine::{
         Engine,
-        guest_memory::{GuestMemoryBudget, GuestMemoryMode},
-        host_memory::HostMemoryBudgets,
+        guest_memory::{self, GuestMemoryBudget, GuestMemoryMode},
+        host_memory::{self, HostMemoryBudgets},
     },
     host::{
         HostApi, HostBuilder,
@@ -261,9 +261,15 @@ async fn growth_mode_leaves_initial_memory_uncharged_and_enforces_growth() -> Re
     init_tracing();
     let (addr, host, budget) = start_host(GuestMemoryMode::Growth).await?;
     let client = reqwest::Client::new();
+    // The engine derives its process limit from the detected memory limit.
+    let (expected_initial_cap, _) = guest_memory::derive_initial_cap(
+        budget.cap(),
+        Some(host_memory::derive_max_process_memory_bytes()),
+        host_memory::detected_memory_limit(),
+    );
     assert_eq!(
         budget.initial_cap(),
-        budget.cap() * wash_runtime::engine::guest_memory::DEFAULT_INITIAL_OVERCOMMIT,
+        expected_initial_cap,
         "an engine bounds uncharged initial memory unless told otherwise"
     );
 

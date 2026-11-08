@@ -43,7 +43,7 @@
 //! | `WASH_SCALE_MEMORY_LIMIT` | the host's max-process-memory, e.g. `4GiB` | half of the machine/container budget, at most 2 GiB |
 //! | `WASH_SCALE_GUEST_MEMORY` | max-guest-memory, the budget for guest linear memory as declared, resident or not | machine/container budget |
 //! | `WASH_SCALE_GUEST_MEMORY_MODE` | `enforce`, `count` or `growth`: how the guest budget is applied; a list (`enforce,growth`) runs each flavour in each | `enforce` |
-//! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | four times `WASH_SCALE_GUEST_MEMORY` |
+//! | `WASH_SCALE_INITIAL_GUEST_MEMORY` | under `growth`, the cap on initial memory left uncharged | sixteen times `WASH_SCALE_MEMORY_LIMIT`, or four times `WASH_SCALE_GUEST_MEMORY` where that limit is past the detected memory or the platform is not Linux or macOS |
 //! | `WASH_SCALE_MEMORY_RESERVATION` | address space reserved per guest memory, below wasmtime's 4 GiB, or a list (`default,256MiB`; `default` is wasmtime's layout) whose reduced entries run both flavours in the first mode; moves an isolation boundary (`THREAT_MODEL.md`) | wasmtime's default |
 //! | `WASH_SCALE_MEMORY_GUARD` | guard after each guest memory, below wasmtime's 32 MiB; moves the same boundary | wasmtime's default |
 //! | `WASH_SCALE_MAX_COMPONENTS` | stop after this many workloads | none |
