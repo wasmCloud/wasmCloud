@@ -391,7 +391,7 @@ with a fresh token). It:
 - Installs **rustup as the `bench` user** so `cargo` is available in
   the workflow's PATH. The actual toolchain is auto-installed on
   first build via `rust-toolchain.toml`.
-- Downloads `actions-runner-linux-x64-2.337.0.tar.gz`, **verifies the
+- Downloads `actions-runner-linux-<x64|arm64>-2.337.0.tar.gz`, **verifies the
   SHA256** (constant in the script — bump version + sha together
   when upgrading), extracts to `/opt/actions-runner`.
 - Registers the runner with labels `self-hosted, bench, hetzner` and
@@ -410,7 +410,7 @@ with a fresh token). It:
 
 **Runner upgrade procedure:**
 
-1. Bump `RUNNER_VERSION` and `RUNNER_SHA256` in
+1. Bump `RUNNER_VERSION`, `RUNNER_SHA256_X64` and `RUNNER_SHA256_ARM64` in
    [`install-runner.sh`](./install-runner.sh) (SHA256 from the runner
    release page).
 2. On the host, stop the service, run `./config.sh remove --token …`
@@ -477,6 +477,33 @@ host at a time (`?host=<label>`), with `hetzner` as the default.
 
 To tear one down, deregister its runner (`./config.sh remove`) before
 deleting the host. The repo variable can stay for the next time.
+
+**EC2 and arm64 hosts.** A cloud VM differs from the dedicated host in a few
+ways the scripts handle with flags rather than edits:
+
+- **No cpufreq driver.** EC2 VMs (Graviton included) expose no
+  `cpufreq/` in sysfs; the hypervisor sets the clock. Register the runner with
+  `--no-cpufreq` so the pre-flight skips the governor check. It still fails if
+  a driver appears later.
+- **No SMT on Graviton.** `nosmt` is a no-op, so `--nproc` is the vCPU count.
+  Isolate the last CPU (`-e isolated_cpu=<n-1>` for `provision.yml`,
+  `--isolated-cpu <n-1>` for `install-runner.sh`).
+- **arm64.** `install-runner.sh` picks the runner tarball for `uname -m`.
+  `provision.yml` skips the k6bench binaries off x86_64 (they're pinned to
+  amd64); run it with `--skip-tags k6bench`.
+- **Login.** EC2 images log in as `ubuntu` with sudo, not `root`. Point
+  Ansible at the host with a local inventory that sets `ansible_user: ubuntu`
+  and `ansible_become: true`, plus a `ProxyJump` in `~/.ssh/config` when the
+  host is reachable only through a jump box.
+
+For a 64-vCPU c9g.16xlarge, for example:
+
+```sh
+WASMCLOUD_BENCH_HOSTNAME=<hostname> ansible-playbook -i <inventory> provision.yml \
+  --skip-tags k6bench -e isolated_cpu=63
+sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
+  --label aws-c9g-16xlarge --nproc 64 --isolated-cpu 63 --no-cpufreq
+```
 
 ## 7. Pipeline architecture
 
@@ -1234,7 +1261,7 @@ into layers, each with its own cadence.
 | Rust toolchain                         | rolls with `rust-toolchain.toml` (monthly stable) | repo file                                                                                          | No bench-host-specific pin.                                                                                                                                                                                            |
 | `gungraun` crate + runner              | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml`, resolved in `Cargo.lock`                                          | Bump the dep in `Cargo.toml` and `cargo update -p gungraun`; `provision.yml` installs the matching `gungraun-runner` (derived from the **resolved** `Cargo.lock` version — a caret req resolves up to the latest patch) to the shared `/usr/local`; until it is re-run, `run-bench.sh` installs a per-version copy itself. gungraun enforces crate-vs-runner equality at run time.                       |
 | Node.js                                | quarterly (with the kernel bump)                  | `provision.yml` (`node_lts_major`)                                                                 | Bump to the current active LTS line. Built-ins-only scripts; Node version changes are usually low-risk.                                                                                                                |
-| GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
+| GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256_*`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
 | Action SHA pins (`actions/checkout@…`) | weekly via Dependabot                             | `.github/workflows/*.yml`                                                                          | Low risk — these execute on hosted runners, not the bench host.                                                                                                                                                        |
 | AWS CLI v2                             | yearly                                            | `install-runner.sh` (curl from official zip)                                                       | Unpinned; we just pull whatever's current at install time.                                                                                                                                                             |
 | Docker, kind, kubectl, helm, k6 (k6bench) | quarterly (with the kernel bump) | `provision.yml` (`k6bench_tools` / `k6bench_archives`, URL + sha256) | kubectl tracks the kind node image pinned in `scripts/k6bench/kind-config.yaml`; bump both together. Docker is Ubuntu's `docker.io` plus `docker-buildx`, socket-activated. |
@@ -1253,8 +1280,8 @@ issue auto-closes once `RUNNER_VERSION` catches up to upstream.
 
 To accept a bump:
 
-1. Note the SHA-256 from the release page's assets — `actions-runner-linux-x64-<version>.tar.gz`.
-2. Bump `RUNNER_VERSION` and `RUNNER_SHA256` in `install-runner.sh` together.
+1. Note the SHA-256s from the release page's assets — `actions-runner-linux-x64-<version>.tar.gz` and `actions-runner-linux-arm64-<version>.tar.gz`.
+2. Bump `RUNNER_VERSION`, `RUNNER_SHA256_X64` and `RUNNER_SHA256_ARM64` in `install-runner.sh` together.
 3. On the bench host: stop the service, deregister with a fresh removal token, `rm -rf /opt/actions-runner`, re-run `install-runner.sh`. See §6 for the full re-registration flow.
 
 ### Quarterly: bench-host maintenance window
