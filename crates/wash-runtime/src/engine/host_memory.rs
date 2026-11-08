@@ -1553,9 +1553,13 @@ pub fn user_address_space() -> u64 {
 /// [`user_address_space`] from a `/proc/self/maps` already read.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn user_address_space_from_maps(maps: &str) -> Option<u64> {
-    let line = maps.lines().find(|line| line.trim_end().ends_with("[stack]"))?;
+    let line = maps
+        .lines()
+        .find(|line| line.trim_end().ends_with("[stack]"))?;
     let (_, end) = line.split_whitespace().next()?.split_once('-')?;
-    let space = u64::from_str_radix(end, 16).ok()?.checked_next_power_of_two()?;
+    let space = u64::from_str_radix(end, 16)
+        .ok()?
+        .checked_next_power_of_two()?;
     (1 << 32..=1 << 57).contains(&space).then_some(space)
 }
 
@@ -2903,7 +2907,8 @@ mod tests {
         let x86_64 = "55d0c0a00000-55d0c0a21000 rw-p 00000000 00:00 0  [heap]\n\
                       7ffd1c3a1000-7ffd1c3c2000 rw-p 00000000 00:00 0  [stack]\n";
         assert_eq!(user_address_space_from_maps(x86_64), Some(1 << 47));
-        let aarch64 = "ffffc1300000-ffffc1321000 rw-p 00000000 00:00 0                          [stack]\n";
+        let aarch64 =
+            "ffffc1300000-ffffc1321000 rw-p 00000000 00:00 0                          [stack]\n";
         assert_eq!(user_address_space_from_maps(aarch64), Some(1 << 48));
         let aarch64_39_bit = "7fd5a1e000-7fd5a3f000 rw-p 00000000 00:00 0  [stack]\n";
         assert_eq!(user_address_space_from_maps(aarch64_39_bit), Some(1 << 39));
