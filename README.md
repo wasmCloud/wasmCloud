@@ -3,6 +3,10 @@
 [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/wasmcloud/wasmCloud)](https://github.com/wasmcloud/wasmCloud/releases)
 [![Slack](https://img.shields.io/badge/Slack-wasmcloud-4A154B?logo=slack)](https://slack.wasmcloud.com/)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/6363/badge)](https://www.bestpractices.dev/projects/6363)
+[![OpenSSF Baseline](https://www.bestpractices.dev/projects/6363/baseline)](https://www.bestpractices.dev/projects/6363)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/wasmCloud/wasmCloud/badge)](https://scorecard.dev/viewer/?uri=github.com/wasmCloud/wasmCloud)
+[![CLOMonitor](https://img.shields.io/endpoint?url=https://clomonitor.io/api/projects/cncf/wasm-cloud/badge)](https://clomonitor.io/projects/cncf/wasm-cloud)
 
 <p>
   <a href="https://www.cncf.io/projects/wasmcloud/">
