@@ -98,10 +98,13 @@ function prepare(out) {
 }
 
 function publish(bundle) {
-  const { metadata, rows } = validate(bundle);
+  const { metadata, rows, group } = validate(bundle);
   const bucket = required('WASMCLOUD_BENCH_S3_BUCKET');
   const distId = required('WASMCLOUD_BENCH_CF_DISTRIBUTION_ID');
-  const prefix = `runs/${metadata.timestamp.slice(0, 10)}/${metadata.short_sha}/${metadata.run_id}/${metadata.bench}`;
+  // A preset published under its own group gets its own directory, so it
+  // never overwrites the base bench's files from the same run.
+  const prefix = `runs/${metadata.timestamp.slice(0, 10)}/${metadata.short_sha}/${metadata.run_id}/${metadata.bench}` +
+    (group ? `/${group}` : '');
   const work = join(tmpdir(), `bench-publish-${process.pid}`);
   mkdirSync(work, { recursive: true });
   try {
@@ -205,7 +208,7 @@ function validate(bundle) {
       throw new Error('artifact row does not match this job');
     }
   }
-  return { metadata, rows };
+  return { metadata, rows, group: expectedGroup };
 }
 
 function readHistory(bucket, work) {
