@@ -118,8 +118,17 @@ fn read_footprint(pid: u32) -> Option<u64> {
     Some(unsafe { info.assume_init() }.ri_phys_footprint)
 }
 
-/// `RssAnon + VmSwap` out of `/proc/self/status`, in bytes, or
-/// `VmRSS + VmSwap` on a kernel too old (before 4.5) to report `RssAnon`.
+/// `RssAnon + VmSwap + VmPTE` out of `/proc/self/status`, in bytes, or
+/// `VmRSS + VmSwap + VmPTE` on a kernel too old (before 4.5) to report
+/// `RssAnon`.
+///
+/// `VmPTE` is the page tables mapping this process, memory the kernel
+/// allocates for it and charges to it (the OOM killer counts it). A dense
+/// pool makes it large: every slot is its own sparse region, so each warm
+/// instance needs page-table pages of its own for its memory, its image and
+/// its stack, about 9 KiB an instance at a 64 MiB layout, 13.7 GiB at 1.5M
+/// warm instances. Left out, a host that sized `max-process-memory` to its
+/// machine is OOM-killed with its guard still reading under the limit.
 ///
 /// `VmRSS` counts a shared page once for every mapping that has it faulted
 /// in, and wasmtime maps each instance's copy-on-write initial-memory image
@@ -139,7 +148,11 @@ pub(super) fn linux_footprint(status: &str) -> Option<u64> {
             .and_then(|n| n.trim().parse::<u64>().ok())
     };
     let resident = kib("RssAnon:").or_else(|| kib("VmRSS:"))?;
-    // Swap is absent on kernels built without it, which means none.
-    let kib_total = resident.saturating_add(kib("VmSwap:").unwrap_or(0));
+    // Swap is absent on kernels built without it, which means none; page
+    // tables are reported by every kernel this reads, but treat a missing
+    // line the same way rather than fail the reading over it.
+    let kib_total = resident
+        .saturating_add(kib("VmSwap:").unwrap_or(0))
+        .saturating_add(kib("VmPTE:").unwrap_or(0));
     Some(kib_total.saturating_mul(1024))
 }

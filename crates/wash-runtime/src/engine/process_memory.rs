@@ -38,7 +38,7 @@
 //! | Platform | Reading |
 //! | --- | --- |
 //! | macOS | `phys_footprint` from `proc_pid_rusage`, what Activity Monitor shows as Memory: resident plus compressed |
-//! | Linux | `RssAnon + VmSwap` from `/proc/self/status` (`VmRSS + VmSwap` on kernels without `RssAnon`) |
+//! | Linux | `RssAnon + VmSwap + VmPTE` from `/proc/self/status` (`VmRSS` in place of `RssAnon` on kernels without it) |
 //! | elsewhere | the resident size `sysinfo` reports |
 //!
 //! On Linux, file and shmem pages are left out: `VmRSS` counts a shared page
@@ -633,6 +633,15 @@ mod tests {
         let status = "VmRSS:\t 4196352 kB\nRssAnon:\t  2048 kB\nRssFile:\t  4096 kB\n\
                       RssShmem:\t 4190208 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(status), Some(3 * MIB));
+    }
+
+    /// Page tables are the process's memory too: at a dense pool they are a
+    /// tenth of it, and the OOM killer counts them.
+    #[test]
+    fn linux_counts_page_tables() {
+        let status =
+            "VmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\nVmPTE:\t  1024 kB\nVmSwap:\t  1024 kB\n";
+        assert_eq!(linux_footprint(status), Some(4 * MIB));
     }
 
     #[test]
