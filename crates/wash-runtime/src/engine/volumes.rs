@@ -98,7 +98,7 @@ pub(crate) async fn resolve_volume_mounts(
 ///
 /// Open unresolved mounts outside the components lock. Existing handles are kept.
 pub(crate) async fn resolve_component_volume_mounts_in_map(
-    components: &Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
+    components: &Arc<RwLock<BTreeMap<Arc<str>, Box<WorkloadComponent>>>>,
     component_ids: &[Arc<str>],
 ) -> anyhow::Result<()> {
     let pending = {

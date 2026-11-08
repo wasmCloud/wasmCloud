@@ -158,6 +158,11 @@ pub struct WorkloadMetadata {
     pub(crate) local_resources: LocalResources,
     /// The plugins available to this component
     pub(crate) plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
+    /// `plugins` as every store built for this component reaches them, cast
+    /// once here and shared, rather than collected into a map of each store's
+    /// own. Kept in step with `plugins` by [`Self::add_plugin`] and
+    /// [`Self::with_plugins`].
+    pub(crate) store_plugins: Option<Arc<crate::engine::ctx::StorePlugins>>,
     /// Workload loopback
     pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// The host-level half of this component's socket policy: enforcement mode,
@@ -455,6 +460,7 @@ impl WorkloadMetadata {
             plugins.insert(id, plugin);
             self.plugins = Some(plugins);
         }
+        self.store_plugins = self.plugins.as_ref().map(crate::engine::ctx::store_plugins);
     }
 
     /// Replaces all plugins for this component with the provided set.
@@ -462,6 +468,7 @@ impl WorkloadMetadata {
         &mut self,
         plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
     ) {
+        self.store_plugins = Some(crate::engine::ctx::store_plugins(&plugins));
         self.plugins = Some(plugins);
     }
 
@@ -617,6 +624,7 @@ impl WorkloadService {
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
                 plugins: None,
+                store_plugins: None,
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
@@ -744,6 +752,7 @@ impl WorkloadComponent {
                 resolved_volume_mounts: Vec::new(),
                 local_resources,
                 plugins: None,
+                store_plugins: None,
                 loopback,
                 socket_policy: Arc::default(),
                 guest_memory: Arc::default(),
@@ -920,7 +929,7 @@ pub struct ResolvedWorkload {
     /// All components in the workload. Behind a `RwLock` because resolving
     /// writes to them (binding and linking, then sealing each linker) while
     /// the cleanup snapshot shares them; resolved, they are only read.
-    components: Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>>,
+    components: Arc<RwLock<BTreeMap<Arc<str>, Box<WorkloadComponent>>>>,
     /// How many entries `components` holds, which never changes once resolved.
     component_count: usize,
     /// The HTTP handler for outgoing HTTP requests. See
@@ -1551,7 +1560,7 @@ impl ResolvedWorkload {
     /// each linker: [`WorkloadMetadata::linker`] then returns an error.
     /// Adding or removing components after resolution is unsupported: the
     /// component count and bindings are settled when the workload is resolved.
-    pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, WorkloadComponent>>> {
+    pub fn components(&self) -> Arc<RwLock<BTreeMap<Arc<str>, Box<WorkloadComponent>>>> {
         self.components.clone()
     }
 
@@ -3047,8 +3056,12 @@ pub struct UnresolvedWorkload {
     host_interfaces: Vec<WitInterface>,
     /// The [`WorkloadService`] associated with this workload, if any
     service: Option<WorkloadService>,
-    /// All [`WorkloadComponent`]s in the workload
-    components: BTreeMap<Arc<str>, WorkloadComponent>,
+    /// All [`WorkloadComponent`]s in the workload.
+    ///
+    /// Boxed because a `BTreeMap` allocates its first leaf with room for
+    /// eleven entries: unboxed, a workload of one component paid for eleven
+    /// (several KiB) for as long as it ran.
+    components: BTreeMap<Arc<str>, Box<WorkloadComponent>>,
     /// Component IDs in manifest order. Used to pick the first in the manifest
     /// whenever the host can dispatch an export to only one component
     component_order: Vec<Arc<str>>,
@@ -3254,7 +3267,7 @@ impl UnresolvedWorkload {
                 .map(|c| {
                     let id: Arc<str> = Arc::from(c.id());
                     component_order.push(id.clone());
-                    (id, c)
+                    (id, Box::new(c))
                 })
                 .collect(),
             component_order,
@@ -3304,7 +3317,7 @@ impl UnresolvedWorkload {
     fn components_in_manifest_order(&self) -> impl Iterator<Item = &WorkloadComponent> {
         self.component_order
             .iter()
-            .filter_map(|id| self.components.get(id))
+            .filter_map(|id| self.components.get(id).map(|c| &**c))
     }
 
     /// Picks the component that serves a host-dispatched export. Used
@@ -3359,7 +3372,7 @@ impl UnresolvedWorkload {
     /// backing map.
     #[cfg(feature = "host-component-plugins")]
     pub(crate) fn take_component(&mut self, id: &str) -> Option<WorkloadComponent> {
-        self.components.remove(id)
+        self.components.remove(id).map(|c| *c)
     }
 
     /// Bind this workload to the host plugins based on the requested
