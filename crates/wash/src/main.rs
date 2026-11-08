@@ -16,6 +16,21 @@ use wash::cli::{
     CONFIG_DIR_NAME, CONFIG_FILE_NAME, CliCommand, CliContext, CommandOutput, OutputKind,
 };
 
+// Opt-in global allocator; see the `mimalloc` and `jemalloc` features in
+// Cargo.toml. mimalloc wins when both are enabled, and jemalloc is skipped on
+// MSVC, which it does not support.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(all(
+    feature = "jemalloc",
+    not(feature = "mimalloc"),
+    not(target_env = "msvc")
+))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "wash",

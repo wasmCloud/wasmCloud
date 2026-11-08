@@ -104,6 +104,31 @@ use wash_runtime::types::{
     Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState,
 };
 
+// Opt-in global allocator, chosen the same way as `wash`'s: see the
+// `mimalloc` and `jemalloc` features in this crate's Cargo.toml. mimalloc wins
+// when both are enabled, and jemalloc is skipped on MSVC, which it does not
+// support.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(all(
+    feature = "jemalloc",
+    not(feature = "mimalloc"),
+    not(target_env = "msvc")
+))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+/// The allocator the block above selected, printed so a log says what it measured.
+const ALLOCATOR: &str = if cfg!(feature = "mimalloc") {
+    "mimalloc"
+} else if cfg!(all(feature = "jemalloc", not(target_env = "msvc"))) {
+    "jemalloc"
+} else {
+    "system"
+};
+
 #[path = "scale_density/estimate.rs"]
 mod estimate;
 #[path = "scale_density/load.rs"]
@@ -143,6 +168,7 @@ fn main() -> Result<()> {
         settings.validate_flavour(flavour)?;
     }
 
+    eprintln!("global allocator: {ALLOCATOR}");
     let mut reports = Vec::new();
     for run in selected_runs(&settings, &flavours) {
         let name = layout_label(

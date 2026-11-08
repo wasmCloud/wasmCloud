@@ -58,6 +58,11 @@ wasmcloud-postgres = [
     "dep:bit-vec", "dep:cidr", "dep:geo-types",
 ]
 wasi-tls = ["dep:wasmtime-wasi-tls"]
+# Global allocator for this crate's benches only, so `scale_density` measures
+# the allocator a `wash` built with the same feature runs on. The library
+# never sets `#[global_allocator]`; a binary embedding it chooses its own.
+mimalloc = ["dep:mimalloc"]
+jemalloc = ["dep:tikv-jemallocator"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -164,10 +169,17 @@ ulid = { workspace = true, features = ["std"] }
 url = { workspace = true }
 webpki-roots = { workspace = true }
 
+# Bench-only global allocators; see the `mimalloc` and `jemalloc` features.
+mimalloc = { workspace = true, optional = true }
+
 # `proc_pid_rusage`, for the process footprint `max-process-memory` is held
 # against: RSS understates a macOS process whose pages were compressed.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
+
+# jemalloc does not build for MSVC; see the `jemalloc` feature.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { workspace = true, optional = true }
 
 # wasi-webgpu dependencies (optional, behind 'wasi-webgpu' feature). Pulled in
 # only on platforms where the `wasi_webgpu` plugin module compiles: wgpu-hal
