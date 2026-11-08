@@ -31,10 +31,14 @@ export function cargoPurl(id) {
 
 // Each cargo subcomponent of a `version` product that Cargo.lock does not
 // contain at that exact version: the dependency moved since the assessment.
-export function lockDrift(doc, version, artifacts, lock) {
+// Only statements for advisories in `ignored` count, since only those still
+// suppress a finding.
+export function lockDrift(doc, version, artifacts, lock, ignored) {
   const required = new Set(releaseProducts(version, artifacts));
+  const suppressing = new Set(ignored);
   const drift = new Map();
   for (const statement of doc.statements ?? []) {
+    if (!suppressing.has(statement.vulnerability?.name)) continue;
     for (const product of statement.products ?? []) {
       if (!required.has(product['@id'])) continue;
       for (const sub of product.subcomponents ?? []) {
