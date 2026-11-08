@@ -209,3 +209,40 @@ Reading the preset runs:
   set no linear-memory keep-resident. Its macOS and Linux warm memory also
   differ by host page size, which is no evidence for changing production heap
   limits.
+
+## The allocator
+
+Starting a warm workload makes many small host allocations from every start
+worker at once, and glibc's malloc serializes them: on a 64-core host the
+start rate stops at about a fifth of the CPU the bench could use (`cpu%`
+about 20, `cpu max starts/s` five times `starts/s`). The bench takes the same
+`mimalloc` and `jemalloc` features as `wash`, so it measures the allocator
+a `wash` built with that feature runs on:
+
+```text
+cargo bench -p wash-runtime --features mimalloc --bench scale_density -- warm
+cargo bench -p wash-runtime --features jemalloc --bench scale_density -- warm
+```
+
+The run prints `global allocator: <name>` before its first flavour.
+Measured on aws-c9g-16xlarge (arm64, 63 cores, glibc) with the
+`million_warm` settings capped at 300,000 warm workloads, two runs each:
+
+| allocator | starts/s | per workload | p99 ms |
+| --- | --- | --- | --- |
+| system (glibc) | 33,628 / 33,848 | 73.5 KiB | 1.2 / 1.0 |
+| mimalloc | 48,299 / 48,637 | 77.4 KiB | 1.0 / 1.1 |
+| jemalloc | 48,668 / 49,952 | 74.2 KiB | 1.1 / 0.9 |
+
+- Either allocator starts workloads about 45% faster. Request latency does
+  not move.
+- mimalloc costs about 5% more host memory per warm workload, which is 5%
+  fewer workloads under the same max-process-memory. jemalloc costs about 1%.
+  mimalloc's v2 (`libmimalloc-sys/v2`) is the same, at 77.1 KiB.
+- jemalloc does not build for MSVC. On Windows the `jemalloc` feature is
+  accepted and does nothing.
+- jemalloc builds with its own `configure` and `make`, so it needs a `sh`,
+  a `make` and an `ar` for the target. Cross-building it from macOS with
+  `cargo zigbuild` needs `ar` on `PATH` to be one that writes ELF archives
+  (for example a wrapper that runs `zig ar`), or it links with no
+  allocator symbols. mimalloc builds with `cc` alone.
