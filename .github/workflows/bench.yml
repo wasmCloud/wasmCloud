@@ -66,7 +66,7 @@ jobs:
       contents: read
     outputs:
       # One entry per bench job: {name, bench, env, args, publish, group}.
-      runs: ${{ steps.set.outputs.runs }}
+      runs: ${{ steps.runs.outputs.runs }}
       # `ref` labels each data row; the matrix checkout resolves the commit.
       # Pull-request labels use `pull/123`, while checkout uses the full ref.
       ref: ${{ steps.set.outputs.ref }}
@@ -93,6 +93,12 @@ jobs:
       #   preset without one stays unpublished: on a ref whose bench
       #   ignores the variables, its rows would be indistinguishable from
       #   the bench's.
+      # - A preset with a `publish_host` publishes only from that host; run
+      #   elsewhere it stays unpublished, so another machine's numbers never
+      #   enter its series. It also stays unpublished on a ref whose
+      #   bench-tools predates `jsonl --group`, since those rows would land
+      #   in the default group. Both are decided here, before the bench host
+      #   is taken.
       #
       # max_scale: scale_density's max-scale preset, warm and scale-to-zero
       # in growth mode with each guest memory's reservation and guard
@@ -121,7 +127,8 @@ jobs:
                                   "WASH_SCALE_MAX_MEMORIES": "1600000",
                                   "WASH_SCALE_STEP": "10000",
                                   "WASH_SCALE_MAX_SECS": "1800"},
-                          "publish_group": "density-max"}}
+                          "publish_group": "density-max",
+                          "publish_host": "aws-c9g-16xlarge"}}
       # Dispatch-only diagnostics whose results never enter the public
       # history. memory_pressure checks pass/fail outcomes; it has no trend.
       DIAGNOSTIC_BENCHES: '["memory_pressure"]'
@@ -205,28 +212,9 @@ jobs:
                 ;;
             esac
           fi
-          runs="$(jq -cn --argjson benches "$benches" --argjson variants "$BENCH_VARIANTS" \
-            --argjson diagnostics "$DIAGNOSTIC_BENCHES" --arg args "$args" '
-            # A bench dispatched with the preset of a variant as its args
-            # runs as that variant, so its rows go to the same group.
-            [$benches[] as $name |
-              (if $variants[$name] then $name
-               else [$variants | to_entries[]
-                     | select(.value.bench == $name and .value.args == $args)
-                     | .key][0]
-               end) as $variant |
-              if $variant then
-                $variants[$variant] as $v |
-                {name: $variant, bench: $v.bench,
-                 env: ($v.env // {}), args: ($v.args // ""),
-                 publish: ($v.publish_group != null),
-                 group: ($v.publish_group // "")}
-              else
-                {name: $name, bench: $name, env: {}, args: $args,
-                 publish: ($diagnostics | any(. == $name) | not), group: ""}
-              end]')"
           {
-            echo "runs=${runs}"
+            echo "benches=${benches}"
+            echo "args=${args}"
             echo "ref=${ref}"
             echo "checkout_ref=${checkout_ref}"
             echo "host=${host}"
@@ -240,6 +228,56 @@ jobs:
 
       - id: commit
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # After the checkout, so a preset's publish group can be checked
+      # against the bench-tools of the ref it will run.
+      - id: runs
+        env:
+          BENCHES: ${{ steps.set.outputs.benches }}
+          ARGS: ${{ steps.set.outputs.args }}
+          HOST: ${{ steps.set.outputs.host }}
+        run: |
+          set -euo pipefail
+          # bench-tools learned `jsonl --group` alongside publish groups; an
+          # older ref would ignore the group and emit default-group rows.
+          groups=false
+          if grep -q WASMCLOUD_BENCH_GROUP crates/bench-tools/src/commands/jsonl.rs 2>/dev/null; then
+            groups=true
+          fi
+          runs="$(jq -cn --argjson benches "$BENCHES" --argjson variants "$BENCH_VARIANTS" \
+            --argjson diagnostics "$DIAGNOSTIC_BENCHES" --arg args "$ARGS" \
+            --arg host "$HOST" --argjson groups "$groups" '
+            # A bench dispatched with the preset of a variant as its args
+            # runs as that variant, so its rows go to the same group.
+            [$benches[] as $name |
+              (if $variants[$name] then $name
+               else [$variants | to_entries[]
+                     | select(.value.bench == $name and .value.args == $args)
+                     | .key][0]
+               end) as $variant |
+              if $variant then
+                $variants[$variant] as $v |
+                ($v.publish_group != null and $groups and
+                 ($v.publish_host == null or $v.publish_host == $host)) as $publish |
+                {name: $variant, bench: $v.bench,
+                 env: ($v.env // {}), args: ($v.args // ""),
+                 publish: $publish,
+                 group: (if $publish then $v.publish_group else "" end),
+                 note: (if $v.publish_group == null or $publish then null
+                        elif ($groups | not) then
+                          "bench-tools at the benched ref has no jsonl --group"
+                        else
+                          "it publishes \($v.publish_group) from \($v.publish_host) only, not \($host)"
+                        end)}
+              else
+                {name: $name, bench: $name, env: {}, args: $args,
+                 publish: ($diagnostics | any(. == $name) | not), group: "",
+                 note: null}
+              end]')"
+          # Say why a preset that names a group will not publish.
+          jq -r '.[] | select(.note) | "::warning::\(.name) stays unpublished: \(.note)"' <<< "$runs"
+          runs="$(jq -c 'map(del(.note))' <<< "$runs")"
+          echo "runs=${runs}" >> "$GITHUB_OUTPUT"
 
   bench:
     needs: matrix

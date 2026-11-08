@@ -563,9 +563,14 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
   history unless the entry names a `publish_group`. A density variant with
   one publishes under that group instead of `density`
   (`bench-tools jsonl --group`, or `WASMCLOUD_BENCH_GROUP`), so its rows form
-  their own series; the publisher refuses a row in any other group.
-  - `million_warm`: an `env` preset, published as `density-max`, the record
-    run the density page on arewefastyet draws.
+  their own series, each flavour with a per-step `ramp` row; the publisher
+  refuses a row in any other group and keeps the run's files under
+  `<bench>/<group>/` in S3. An entry with a `publish_host` publishes only from
+  that host, and an entry never publishes from a ref whose `bench-tools`
+  predates `jsonl --group`; the matrix job warns and runs it unpublished.
+  - `million_warm`: an `env` preset, published as `density-max` from
+    `aws-c9g-16xlarge` only, the record run the density page on arewefastyet
+    draws.
   - `max_scale`: `scale_density -- max-scale`, which sets
     `WASH_SCALE_MEMORY_RESERVATION=256MiB`, `WASH_SCALE_MEMORY_GUARD=64KiB`,
     `WASH_SCALE_GUEST_MEMORY_MODE=growth` and `WASH_SCALE_MEMORY_LIMIT=2GiB`
@@ -1146,11 +1151,13 @@ present only when measured:
 }
 ```
 
-After a flavour's metric rows comes one `ramp` row, when the run took steps:
-the steps thinned to at most 80, evenly spread and always keeping the last
-clean one, as one column per figure. `value` is how many steps the run took
-before thinning. It has no `better`, so it is not a trend; the trends and
-compare pages leave it out, and the density page draws it.
+Under a preset's group (`--group`, such as `density-max`), each flavour's
+metric rows are followed by one `ramp` row, when the run took steps: the steps
+thinned to at most 80, evenly spread and always keeping the last clean one, as
+one column per figure. A rate or latency that was not measured is `null`.
+`value` is how many steps the run took before thinning. It has no `better`, so
+it is not a trend; the trends and compare pages leave it out, and the density
+page draws it. The default `density` series has no ramp rows.
 
 ```json
 {

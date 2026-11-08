@@ -66,6 +66,7 @@ impl Repository {
             .arg(subcommand)
             .env_remove("CARGO_TARGET_DIR")
             .env_remove("WASMCLOUD_BENCH_REF")
+            .env_remove("WASMCLOUD_BENCH_GROUP")
             .env("GITHUB_REF_NAME", "workflow-dispatch-ref")
             .env("GITHUB_RUN_ID", "fixture-run")
             .env("GITHUB_RUN_ATTEMPT", "3");
@@ -329,18 +330,40 @@ fn density_exports_publish_clean_measurements_and_preserve_sparse_reports() -> R
         &repo.target().join("density/scale_density.json"),
         serde_json::to_vec(&reports)?,
     )?;
-    let all = rows(&success(
+    let data = rows(&success(
         repo.command("jsonl").args(["--bench", "scale_density"]),
     )?)?;
-    // The metric rows, then one ramp for the flavour that took steps.
-    let (ramps, data): (Vec<Value>, Vec<Value>) =
-        all.into_iter().partition(|r| r["metric"] == "ramp");
+    // The default series carries metric rows only.
     assert_eq!(data.len(), 10);
-    let [ramp] = ramps.as_slice() else {
-        anyhow::bail!("expected one ramp row, got {ramps:?}");
-    };
+    assert!(data.iter().all(|r| r["metric"] != "ramp"));
+    // The workflow passes an empty group for a bench without one.
+    let unset = rows(&success(
+        repo.command("jsonl")
+            .args(["--bench", "scale_density"])
+            .env("WASMCLOUD_BENCH_GROUP", ""),
+    )?)?;
+    assert_eq!(unset.len(), 10);
+    assert!(unset.iter().all(|r| r["group"] == "density"));
+
+    // Under a preset's group, each flavour's ramp follows its own metrics.
+    let grouped = rows(&success(repo.command("jsonl").args([
+        "--bench",
+        "scale_density",
+        "--group",
+        "density-max",
+    ]))?)?;
+    let params: Vec<(&str, bool)> = grouped
+        .iter()
+        .map(|r| (r["param"].as_str().unwrap_or(""), r["metric"] == "ramp"))
+        .collect();
+    let warm = params.iter().filter(|(p, _)| *p == "warm").count();
+    assert_eq!(grouped.len(), 11);
+    assert!(params[..warm].iter().all(|(p, _)| *p == "warm"));
+    assert_eq!(params[warm - 1], ("warm", true));
+    assert!(params[warm..].iter().all(|(p, ramp)| *p != "warm" && !ramp));
+    let ramp = &grouped[warm - 1];
     provenance(ramp, &repo, "bench-fixture")?;
-    assert_eq!(ramp["group"], "density");
+    assert_eq!(ramp["group"], "density-max");
     assert_eq!(ramp["param"], "warm");
     assert_eq!(ramp["value"], 3.0);
     assert_eq!(ramp["unit"], "steps");
