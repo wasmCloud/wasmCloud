@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Requires a current release assessment for every Cargo audit ignore.
+// Requires a current release assessment for every Cargo audit ignore, and the
+// same ignore in osv-scanner.toml so both scanners suppress the same advisories.
 
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
@@ -52,15 +53,25 @@ export function checkVex(doc, ignored, version, artifacts) {
   }
 }
 
+// OSV-Scanner reads the same Cargo.lock as cargo-audit. An advisory VEX marks
+// not_affected there must be ignored by both, or osv-scanner fails gate-audit.
+export function checkOsvMirror(ignored, osvIgnored) {
+  const osv = new Set(osvIgnored);
+  for (const advisory of ignored) {
+    assert.ok(osv.has(advisory), `Cargo audit ignores ${advisory} but osv-scanner.toml does not`);
+  }
+}
+
 // With `--release`, a dependency that moved since its assessment is an error.
 // Between releases it is a warning, since main still carries the last
 // release's version and products.
 function main(args) {
   const release = args.includes('--release');
-  const { ignored, version, lock } = readCargo('.');
+  const { ignored, osvIgnored, version, lock } = readCargo('.');
   const artifacts = readArtifacts('.');
   const doc = readVex('.');
   checkVex(doc, ignored, version, artifacts);
+  checkOsvMirror(ignored, osvIgnored);
   const drift = lockDrift(doc, version, artifacts, lock, ignored).map(describeDrift);
   if (release) {
     assert.ok(!drift.length, `reassess before releasing ${version}:\n${drift.join('\n')}`);

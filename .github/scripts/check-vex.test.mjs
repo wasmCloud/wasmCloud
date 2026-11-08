@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { checkVex } from './check-vex.mjs';
+import { checkOsvMirror, checkVex } from './check-vex.mjs';
 
 const ADVISORY = 'RUSTSEC-2026-0001';
 const VERSION = '2.0.0';
@@ -42,6 +42,14 @@ test('accepts complete non-exploitability assessments', () => check(document()))
 
 test('rejects an ignored advisory without an assessment', () => {
   assert.throws(() => check(document(), ['RUSTSEC-2026-0002']), /without a VEX statement/);
+});
+
+test('accepts audit ignores mirrored in osv-scanner.toml', () => {
+  checkOsvMirror([ADVISORY], [ADVISORY, 'RUSTSEC-2024-0384']);
+});
+
+test('rejects an audit ignore missing from osv-scanner.toml', () => {
+  assert.throws(() => checkOsvMirror([ADVISORY], []), /osv-scanner\.toml does not/);
 });
 
 test('an assessment for an old release cannot cover a new release', () => {
@@ -86,6 +94,7 @@ test('CLI parses multiline TOML ignores with comments and literal strings', () =
     for (const dir of ['.cargo', '.github/workflows', 'vex']) mkdirSync(join(root, dir), { recursive: true });
     writeFileSync(join(root, 'Cargo.toml'), `[workspace.package]\nversion = "${VERSION}"\n`);
     writeFileSync(join(root, '.cargo/audit.toml'), `[advisories]\nignore = [\n# "RUSTSEC-2026-9999" is a comment\n'${ADVISORY}',\n]\n`);
+    writeFileSync(join(root, 'osv-scanner.toml'), `[[IgnoredVulns]]\nid = "${ADVISORY}"\nreason = "VEX not_affected"\n`);
     writeFileSync(join(root, '.github/workflows/wash.yml'), `artifact: ignored\n  artifact: ${BINARY}\n`);
     writeFileSync(join(root, 'vex/wasmcloud.openvex.json'), JSON.stringify(document()));
     const script = fileURLToPath(new URL('./check-vex.mjs', import.meta.url));
