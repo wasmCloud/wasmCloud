@@ -43,13 +43,24 @@ pub(super) fn derived_fallback(
 fn allocation_failure(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause.is::<wasmtime::OutOfMemory>()
-            || cause
-                .downcast_ref::<rustix::io::Errno>()
-                .is_some_and(|error| *error == rustix::io::Errno::NOMEM)
+            || errno_out_of_memory(cause)
             || cause
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|error| error.kind() == std::io::ErrorKind::OutOfMemory)
     })
+}
+
+#[cfg(unix)]
+fn errno_out_of_memory(cause: &(dyn std::error::Error + 'static)) -> bool {
+    cause
+        .downcast_ref::<rustix::io::Errno>()
+        .is_some_and(|error| *error == rustix::io::Errno::NOMEM)
+}
+
+/// Windows mapping failures arrive as `std::io::Error`s, checked above.
+#[cfg(not(unix))]
+fn errno_out_of_memory(_: &(dyn std::error::Error + 'static)) -> bool {
+    false
 }
 
 pub(super) fn build_with_fallback<T>(
@@ -93,6 +104,15 @@ mod tests {
             .total_stacks(totals.stacks)
             .total_gc_heaps(totals.gc_heaps);
         pool
+    }
+
+    /// The error a failed pool mapping reports on this platform.
+    fn mapping_out_of_memory() -> wasmtime::Error {
+        #[cfg(unix)]
+        let error = rustix::io::Errno::NOMEM;
+        #[cfg(not(unix))]
+        let error = std::io::Error::from(std::io::ErrorKind::OutOfMemory);
+        wasmtime::Error::new(error)
     }
 
     #[test]
@@ -168,7 +188,7 @@ mod tests {
         let engine = build_with_fallback(&mut config, fallback, |config| {
             attempts += 1;
             if attempts == 1 {
-                return Err(wasmtime::Error::new(rustix::io::Errno::NOMEM)
+                return Err(mapping_out_of_memory()
                     .context("failed to create memory pool mapping")
                     .into());
             }
@@ -188,6 +208,7 @@ mod tests {
     fn recognizes_wasmtime_oom_without_retrying_other_system_errors() {
         let oom = wasmtime::Error::new(wasmtime::OutOfMemory::new(4096));
         assert!(allocation_failure(&oom.into()));
+        #[cfg(unix)]
         assert!(!allocation_failure(&rustix::io::Errno::ACCESS.into()));
         assert!(!allocation_failure(
             &std::io::Error::from(std::io::ErrorKind::PermissionDenied).into()
@@ -218,7 +239,7 @@ mod tests {
         let mut attempts = 0;
         let result = build_with_fallback::<()>(&mut config, None, |_| {
             attempts += 1;
-            Err(rustix::io::Errno::NOMEM.into())
+            Err(mapping_out_of_memory().into())
         });
         assert!(result.is_err());
         assert_eq!(attempts, 1);
