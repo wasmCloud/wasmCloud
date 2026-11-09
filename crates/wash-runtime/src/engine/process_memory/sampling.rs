@@ -184,6 +184,27 @@ mod tests {
     }
 
     #[test]
+    fn failed_samples_block_a_healthy_host_until_accounting_recovers() {
+        let guard = Arc::new(ProcessMemoryGuard::new(1000));
+        guard.observe(100);
+        let sampled = Mutex::new(Sampled {
+            guards: vec![Arc::downgrade(&guard)],
+            ..Sampled::new()
+        });
+        for _ in 1..MAX_FAILED_READS {
+            assert!(sample_once(&sampled, |_| None));
+            assert!(!guard.is_over());
+        }
+        assert!(sample_once(&sampled, |_| None));
+        assert!(guard.is_over());
+        assert!(!guard.is_readable());
+        assert_eq!(guard.footprint_bytes(), 100);
+        assert!(try_refresh(&sampled, |_| Some(100)));
+        assert!(!guard.is_over());
+        assert!(guard.is_readable());
+    }
+
+    #[test]
     fn successful_refresh_breaks_a_streak_of_failed_periodic_reads() {
         let guard = Arc::new(ProcessMemoryGuard::new(1000));
         let sampled = Mutex::new(Sampled {
@@ -201,8 +222,8 @@ mod tests {
             assert!(sample_once(&sampled, |_| None));
         }
         assert!(
-            !guard.is_over(),
-            "five new failures still release stale pressure"
+            guard.is_over() && !guard.is_readable(),
+            "five new failures refuse admission without forgetting pressure"
         );
     }
 }

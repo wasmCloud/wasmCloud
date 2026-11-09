@@ -412,3 +412,30 @@ fn an_unknown_proposal_is_named_in_its_parse_error() {
         "{rendered}"
     );
 }
+
+#[test]
+fn strict_process_memory_rejects_disabled_or_unbounded_limits() {
+    let disabled = Engine::builder()
+        .with_strict_process_memory(true)
+        .without_max_process_memory()
+        .build()
+        .err()
+        .expect("strict mode rejects disabling accounting");
+    assert!(
+        disabled.to_string().contains("cannot be combined"),
+        "{disabled:#}"
+    );
+    let unbounded = Engine::builder()
+        .with_strict_process_memory(true)
+        .with_max_process_memory_bytes(u64::MAX)
+        .build()
+        .err()
+        .expect("strict mode rejects an unbounded threshold");
+    assert!(unbounded.to_string().contains("strict"), "{unbounded:#}");
+    let zero = Engine::builder()
+        .with_max_process_memory_bytes(0)
+        .build()
+        .err()
+        .expect("zero is an invalid threshold");
+    assert!(zero.to_string().contains("greater than zero"), "{zero:#}");
+}

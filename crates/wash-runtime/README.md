@@ -285,3 +285,40 @@ some cases deliberately exhaust their container's memory.
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](../../LICENSE) file for details.
+
+### Process memory failures and recovery
+
+If memory capacity cannot be detected, automatic process sizing fails at startup.
+Set an explicit `max-process-memory` to supply the missing capacity policy, or
+explicitly disable the guard only when another mechanism bounds the process.
+Zero is rejected through both the CLI and the engine builder.
+
+Use `--strict-process-memory` (`WASH_HOST_STRICT_PROCESS_MEMORY=true`), or
+`EngineBuilder::with_strict_process_memory(true)`, to require detected capacity
+and reject a threshold at or above it. Strict mode also rejects disabling the
+guard. Without strict mode, explicit swap-backed thresholds remain supported,
+with a warning when they leave no headroom below detected capacity.
+
+An unavailable initial footprint blocks starts and guest growth. Five consecutive
+failed periodic samples also block admission until a valid reading returns.
+`process_memory.readable` is 0 while accounting is unavailable and 1 when it is
+readable; alert on sustained 0. The footprint gauge retains its last reading.
+On Linux, missing `VmPTE` or malformed accounting fields invalidate the sample;
+absent optional `VmSwap` and `VmPMD` fields still mean zero.
+
+If the footprint stays above the threshold after workloads drain, inspect retained
+allocator memory and pool page tables. Decommitting a pooled slot can retain its
+page tables. After draining, recreate the engine/pool or restart the host to
+release those mappings. Refusals remain in force while the footprint is above
+the threshold; the approximately one-minute recovery applies only after memory
+has fallen within it. Restarting or unmapping an active pool is not automatic.
+
+The measured 9 KiB per instance and roughly 10% page-table overhead are workload
+observations, not capacity bounds. Sparse reads can allocate page tables without
+allocating private data pages. Include page tables in the host overhead `H` above,
+and bound pool size, admitted guest memory, and concurrency for the intended
+workload. Reserve enough space that the process threshold plus uncounted memory
+and worst-case allocations already admitted remain below the actual capacity.
+The default 90% threshold alone cannot establish that bound. Use OS/container
+limits to contain total usage and workload isolation where tenant availability
+must be independent.

@@ -1729,6 +1729,39 @@ pub(crate) fn derive_max_process_memory_bytes_within(memory_limit: Option<u64>) 
     memory_limit.map_or(u64::MAX, |limit| limit / 100 * PROCESS_MEMORY_PERCENT)
 }
 
+/// Resolve admission policy without silently disabling an automatic limit.
+/// Strict mode additionally requires a detected capacity and headroom below it.
+pub(crate) fn resolve_process_memory_limit(
+    requested: Option<u64>,
+    detected: Option<u64>,
+    strict: bool,
+) -> Result<u64, String> {
+    let bytes = match requested {
+        Some(bytes) => bytes,
+        None => derive_max_process_memory_bytes_within(Some(detected.ok_or(
+            "cannot detect memory capacity; set max-process-memory explicitly or explicitly disable it",
+        )?)),
+    };
+    if bytes == 0 {
+        return Err(
+            "max-process-memory must be greater than zero; explicitly disable it for no limit"
+                .into(),
+        );
+    }
+    if strict {
+        let capacity =
+            detected.ok_or("strict process memory requires detectable memory capacity")?;
+        if bytes >= capacity {
+            return Err(format!(
+                "strict max-process-memory {} must be below detected capacity {}; reserve headroom for in-flight allocations and uncounted memory",
+                render_bytes(bytes),
+                render_bytes(capacity),
+            ));
+        }
+    }
+    Ok(bytes)
+}
+
 /// What to say about `max_process_memory` at startup, if anything: a limit
 /// past the memory this process can actually have is one the kernel enforces
 /// first, and on macOS that means the whole machine stalling.
@@ -1742,10 +1775,10 @@ pub(crate) fn process_memory_advisory_within(
     memory_limit: Option<u64>,
 ) -> Option<String> {
     let limit = memory_limit?;
-    (max_process_memory_bytes > limit).then(|| {
+    (max_process_memory_bytes >= limit).then(|| {
         format!(
-            "max-process-memory {} is more than the {} this process can actually have, so it \
-             will never refuse anything; the kernel will get there first. Set it below {}",
+            "max-process-memory {} leaves no headroom below detected capacity {}; the kernel \
+             may run out of memory before admission stops. Set it below {}",
             render_bytes(max_process_memory_bytes),
             render_bytes(limit),
             render_bytes(limit),
@@ -2919,6 +2952,38 @@ mod tests {
         assert_eq!(resolved.advisory(), None);
         assert!(reservation_advisory(&resolved, USER_ADDRESS_SPACE).is_some());
         assert!(map_count_advisory(&resolved, 65_530).is_some());
+    }
+
+    #[test]
+    fn process_limit_resolution_requires_a_deliberate_fallback() {
+        assert!(resolve_process_memory_limit(None, None, false).is_err());
+        assert_eq!(
+            resolve_process_memory_limit(Some(100), None, false),
+            Ok(100)
+        );
+        assert!(resolve_process_memory_limit(Some(0), Some(1000), false).is_err());
+        assert_eq!(
+            resolve_process_memory_limit(None, Some(1000), false),
+            Ok(900)
+        );
+        assert!(resolve_process_memory_limit(None, Some(0), false).is_err());
+    }
+
+    #[test]
+    fn strict_process_limits_require_headroom() {
+        for bytes in [1000, 1001, u64::MAX] {
+            assert!(resolve_process_memory_limit(Some(bytes), Some(1000), true).is_err());
+        }
+        assert!(resolve_process_memory_limit(Some(100), None, true).is_err());
+        assert_eq!(
+            resolve_process_memory_limit(Some(999), Some(1000), true),
+            Ok(999)
+        );
+        assert_eq!(
+            resolve_process_memory_limit(Some(1001), Some(1000), false),
+            Ok(1001)
+        );
+        assert!(process_memory_advisory_within(1000, Some(1000)).is_some());
     }
 
     #[test]
