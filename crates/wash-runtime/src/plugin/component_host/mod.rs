@@ -1159,7 +1159,6 @@ async fn link_native_imports(
     // `WorkloadMetadata::world()`'s own import merge — otherwise each would
     // carry its own copy of the plugin's whole config and collide as two
     // bindings setting the same keys.
-    let type_only = type_only_imports(component);
     let mut merged: HashMap<String, WitInterface> = HashMap::new();
     for imported in introspect_imports(component)? {
         if already_linked.contains(&imported.name) {
@@ -1167,12 +1166,6 @@ async fn link_native_imports(
         }
         let wit = imported.wit;
         if is_reserved(&wit) || is_base_wasi(&wit) {
-            continue;
-        }
-        if type_only.contains(imported.name.as_ref()) {
-            // Wasmtime needs no definition for structural types. An empty
-            // instance here could shadow a native's compatible version when
-            // another import needs functions from the same interface.
             continue;
         }
         merged
@@ -1333,13 +1326,11 @@ fn classify_workload_imports(
     if !declares_workload_calls(&imports) {
         return Ok(Vec::new());
     }
-    let type_only = type_only_imports(component);
     let native_worlds: Vec<WitWorld> = native_plugins.values().map(|p| p.world()).collect();
 
     let mut workload_imports = Vec::new();
     for imported in imports {
-        if type_only.contains(imported.name.as_ref())
-            || is_self_satisfied(&imported, exports)
+        if is_self_satisfied(&imported, exports)
             || native_worlds
                 .iter()
                 .any(|world| world.provides(&imported.wit))
@@ -2291,28 +2282,38 @@ fn introspect_exports(component: &Component) -> anyhow::Result<Vec<ExportedInter
 /// Introspect a plugin component's *imported* interfaces and their functions.
 /// Used to wire self-imports (an interface the plugin both imports and exports)
 /// back to the plugin's own capability channel.
+///
+/// Imports that define only types are left out (see [`is_type_only`]),
+/// so no caller mistakes one for a capability or a workload callback.
 fn introspect_imports(component: &Component) -> anyhow::Result<Vec<ExportedInterface>> {
+    let engine = component.engine();
     let ty = component.component_type();
-    introspect_interfaces(component, ty.imports(component.engine()))
+    introspect_interfaces(
+        component,
+        ty.imports(engine)
+            .filter(|(_, item)| !is_type_only(engine, item)),
+    )
 }
 
-/// Structural types need no capability provider. Empty markers still do.
-fn type_only_imports(component: &Component) -> std::collections::HashSet<String> {
-    let engine = component.engine();
-    component
-        .component_type()
-        .imports(engine)
-        .filter_map(|(name, item)| {
-            let ComponentItem::ComponentInstance(instance) = item.ty else {
-                return None;
-            };
-            let mut exports = instance.exports(engine).peekable();
-            exports.peek()?;
-            exports
-                .all(|(_, item)| matches!(item.ty, ComponentItem::Type(_)))
-                .then(|| name.to_owned())
-        })
-        .collect()
+/// Whether an imported instance defines types and nothing else.
+///
+/// Wasmtime needs no definition for such an import,
+/// so it needs no provider either.
+/// Linking an empty instance for it anyway could shadow
+/// a native's semver-compatible version of the same interface
+/// that another import needs functions from.
+///
+/// An empty instance is not type-only:
+/// a marker interface still names a capability.
+fn is_type_only(
+    engine: &wasmtime::Engine,
+    item: &wasmtime::component::types::ComponentExtern<'_>,
+) -> bool {
+    let ComponentItem::ComponentInstance(instance) = &item.ty else {
+        return false;
+    };
+    let mut exports = instance.exports(engine).peekable();
+    exports.peek().is_some() && exports.all(|(_, item)| matches!(item.ty, ComponentItem::Type(_)))
 }
 
 /// Collect the capability interfaces (and their functions and resource types)
