@@ -213,7 +213,10 @@ mod tests {
             .with_user("derek")
             .with_password("s3cr3t-pass");
         let debug = format!("{auth:?}");
-        assert!(!debug.contains("s3cr3t"), "{debug}");
-        assert!(debug.contains("derek"), "{debug}");
+        assert!(
+            !debug.contains("s3cr3t"),
+            "debug output exposed a credential"
+        );
+        assert!(debug.contains("derek"), "debug output omitted the username");
     }
 }

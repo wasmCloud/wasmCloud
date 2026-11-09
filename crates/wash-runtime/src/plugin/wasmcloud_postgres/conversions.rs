@@ -1448,11 +1448,10 @@ mod tests {
             value.to_sql_checked(&ty, &mut encoded)?,
             IsNull::No
         ));
-        assert_eq!(encoded, wire, "encoding {value:?} as {ty}");
+        assert!(encoded == wire, "encoding a value as {ty}");
         let decoded = PgValue::from_sql(&ty, &wire)?;
-        assert_eq!(
-            format!("{decoded:?}"),
-            format!("{expected:?}"),
+        assert!(
+            format!("{decoded:?}") == format!("{expected:?}"),
             "decoding {ty}"
         );
         Ok(())
@@ -1731,7 +1730,7 @@ mod tests {
             (PgValue::PathArray(vec![points.clone()]), PgType::PATH),
             (PgValue::Polygon(vec![]), PgType::POLYGON),
         ] {
-            assert!(bind(&value, &ty).is_err(), "{value:?} as {ty}");
+            assert!(bind(&value, &ty).is_err(), "invalid value accepted as {ty}");
         }
         for raw in [
             &polygon[..3],
@@ -1909,7 +1908,7 @@ mod tests {
         ] {
             assert!(
                 value.to_sql_checked(&ty, &mut BytesMut::new()).is_err(),
-                "{value:?}"
+                "invalid value accepted as {ty}"
             );
         }
         for offset in [

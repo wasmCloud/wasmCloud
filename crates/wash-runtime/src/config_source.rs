@@ -1026,7 +1026,7 @@ mod tests {
             let err = layer(config, secret_from).unwrap_err();
             assert!(
                 err.contains(expect) && err.contains("`url`"),
-                "{secret_from:?}: {err}"
+                "invalid configuration source did not report the expected key and reason"
             );
             assert!(!err.contains("postgres://"), "{err}");
         }

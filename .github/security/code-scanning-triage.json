@@ -100,8 +100,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/config.rs",
       "line": 1467,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 731,
@@ -109,8 +109,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/config.rs",
       "line": 1468,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 734,
@@ -118,8 +118,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
       "line": 216,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 735,
@@ -127,8 +127,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
       "line": 217,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 736,
@@ -901,8 +901,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/config_source.rs",
       "line": 1029,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 822,
@@ -910,8 +910,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/config.rs",
       "line": 1730,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 823,
@@ -919,8 +919,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_postgres/async_p3.rs",
       "line": 83,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 824,
@@ -928,8 +928,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_postgres/mod.rs",
       "line": 28,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 825,
@@ -937,8 +937,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/src/wit/config.rs",
       "line": 408,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Retained assertions and redaction coverage but removed value-bearing failure diagnostics. A failed redaction check must not print the very credential it detected. Postgres conversion failures identify the type without dumping the value. Awaiting CodeQL rescan."
     },
     {
       "number": 826,

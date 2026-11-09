@@ -405,7 +405,10 @@ mod tests {
             format!("{}", config.get_value("password").unwrap()),
             serde_json::to_string(&config).unwrap(),
         ] {
-            assert!(!rendered.contains("hunter2"), "{rendered}");
+            assert!(
+                !rendered.contains("hunter2"),
+                "rendering exposed a credential"
+            );
         }
         assert_eq!(
             serde_json::to_string(&config).unwrap(),
