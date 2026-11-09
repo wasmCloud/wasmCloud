@@ -1,10 +1,18 @@
 # OSV-Scanner configuration.
 #
-# The advisories ignored below are "unmaintained crate" notices (RustSec
-# informational advisories) with no patched version available. They are pulled
-# in transitively and only appear in example, template, and test-fixture
-# lockfiles -- not in any shipped wasmCloud artifact. Each is blocked on an
-# upstream change we cannot make from this repository; see the reasons below.
+# There are two kinds of ignore here:
+#
+# - Released-code ignores, when needed. Each mirrors an ignore in
+#   .cargo/audit.toml, has a not_affected statement in
+#   vex/wasmcloud.openvex.json, and gives a reason starting with
+#   "VEX not_affected:". .github/scripts/check-vex.mjs fails if one is
+#   missing, or if one stays after its audit ignore is removed.
+# - Examples, templates and test fixtures only. These are not in any
+#   shipped wasmCloud artifact and need no VEX statement. Each is blocked on
+#   an upstream change we cannot make from this repository; see the reasons.
+#
+# RustSec informational advisories (unmaintained, unsound) only warn in
+# gate-audit, so the first two ignores below silence warnings, not failures.
 #
 # Note: the OpenSSF Scorecard "Vulnerabilities" check may query OSV directly and
 # might not honor these repo-local ignores. They are documented here regardless
@@ -26,20 +34,3 @@ id = "RUSTSEC-2024-0436"
 # fork (wasi-gfx/wgpu) -> metal 0.27 -> paste. It cannot be bumped until that
 # fork updates.
 reason = "Unmaintained-crate advisory, no fix; transitive (test fixture only) via pinned wasi-gfx/wgpu fork -> metal -> paste. Blocked on upstream wgpu fork update."
-
-# The advisories below affect released code and match the ignores in
-# .cargo/audit.toml. Each has a not_affected statement in
-# vex/wasmcloud.openvex.json; .github/scripts/check-vex.mjs fails if an audit
-# ignore is missing here.
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0391"
-reason = "VEX not_affected: https://github.com/wasmCloud/wasmCloud/blob/main/vex/wasmcloud.openvex.json (zstd `with_context` on a reused context; Wasmtime's cache uses encode_all/decode_all only)."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0398"
-reason = "VEX not_affected: https://github.com/wasmCloud/wasmCloud/blob/main/vex/wasmcloud.openvex.json (zstd `seekable` feature, not enabled)."
-
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0403"
-reason = "VEX not_affected: https://github.com/wasmCloud/wasmCloud/blob/main/vex/wasmcloud.openvex.json (zstd legacy frames through `write::Decoder` only, not used)."

@@ -44,12 +44,24 @@ test('rejects an ignored advisory without an assessment', () => {
   assert.throws(() => check(document(), ['RUSTSEC-2026-0002']), /without a VEX statement/);
 });
 
+const RELEASED = { id: ADVISORY, reason: 'VEX not_affected: https://example.org/vex.json' };
+const EXAMPLES_ONLY = { id: 'RUSTSEC-2024-0384', reason: 'Unmaintained; examples only.' };
+
 test('accepts audit ignores mirrored in osv-scanner.toml', () => {
-  checkOsvMirror([ADVISORY], [ADVISORY, 'RUSTSEC-2024-0384']);
+  checkOsvMirror([ADVISORY], [RELEASED, EXAMPLES_ONLY], document());
 });
 
 test('rejects an audit ignore missing from osv-scanner.toml', () => {
-  assert.throws(() => checkOsvMirror([ADVISORY], []), /osv-scanner\.toml does not/);
+  assert.throws(() => checkOsvMirror([ADVISORY], [EXAMPLES_ONLY], document()), /osv-scanner\.toml does not/);
+});
+
+test('rejects a released-code osv-scanner.toml ignore left behind after the audit ignore is removed', () => {
+  // Marked as released code by its reason.
+  assert.throws(() => checkOsvMirror([], [RELEASED], { statements: [] }), /RUSTSEC-2026-0001 as released code/);
+  // Marked as released code by a VEX statement, whatever its reason says.
+  assert.throws(() => checkOsvMirror([], [{ id: ADVISORY, reason: 'Fixed upstream.' }], document()), /as released code/);
+  // An examples-only ignore needs no audit ignore.
+  checkOsvMirror([], [EXAMPLES_ONLY], document());
 });
 
 test('an assessment for an old release cannot cover a new release', () => {

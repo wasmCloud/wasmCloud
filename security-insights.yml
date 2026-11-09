@@ -193,8 +193,10 @@ repository:
           Scans every Cargo, Go and npm lockfile against OSV, including the
           OpenSSF malicious-packages feed, on every pull request, merge queue
           run, push to main and daily. Fails gate-audit on any finding not
-          ignored in osv-scanner.toml; released-code ignores require a VEX
-          statement. Policy: SECURITY.md#malicious-dependencies.
+          ignored in osv-scanner.toml, except RustSec informational advisories,
+          which warn as they do in cargo-audit; malicious packages always fail.
+          Released-code ignores require a VEX statement. Policy:
+          SECURITY.md#malicious-dependencies.
         rulesets:
           - default
         integration:

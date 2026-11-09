@@ -141,6 +141,7 @@ function repo(version, lockVersion, ignored = [ADVISORY]) {
   writeFileSync(join(root, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`);
   writeFileSync(join(root, 'Cargo.lock'), `version = 4\n\n[[package]]\nname = "zstd"\nversion = "${lockVersion}"\n`);
   writeFileSync(join(root, '.cargo/audit.toml'), `[advisories]\nignore = ${JSON.stringify(ignored)}\n`);
+  writeFileSync(join(root, 'osv-scanner.toml'), ignored.map((id) => `[[IgnoredVulns]]\nid = "${id}"\nreason = "VEX not_affected"\n`).join('\n'));
   writeFileSync(join(root, '.github/workflows/wash.yml'), `  artifact: ${BINARY}\n`);
   writeFileSync(join(root, 'vex/wasmcloud.openvex.json'), `${JSON.stringify(document(), null, 2)}\n`);
   return root;
