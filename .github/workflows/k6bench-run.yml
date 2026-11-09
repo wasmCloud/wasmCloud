@@ -126,7 +126,7 @@ jobs:
           else
             args+=(--build-local)
           fi
-          ./scripts/k6bench/run.sh "${args[@]}"
+          ./scripts/bench/box-lock.sh ./scripts/k6bench/run.sh "${args[@]}"
           {
             echo "dir=${out}"
             echo "name=k6-${name}"

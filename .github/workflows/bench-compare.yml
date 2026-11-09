@@ -95,7 +95,7 @@ jobs:
         run: node .github/scripts/bench-preflight.mjs
 
       - name: compare-bench
-        run: ./scripts/bench/compare-bench.sh "${WASMCLOUD_BENCH_NAME}" "${WASMCLOUD_BENCH_REF_A}" "${WASMCLOUD_BENCH_REF_B}"
+        run: ./scripts/bench/box-lock.sh ./scripts/bench/compare-bench.sh "${WASMCLOUD_BENCH_NAME}" "${WASMCLOUD_BENCH_REF_A}" "${WASMCLOUD_BENCH_REF_B}"
 
       - name: append delta to step summary
         if: always()

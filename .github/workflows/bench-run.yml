@@ -151,7 +151,7 @@ jobs:
         # Split on spaces into separate words, never through eval.
         run: |
           read -ra args <<< "$BENCH_ARGS"
-          ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}" "${args[@]}"
+          ./scripts/bench/box-lock.sh ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}" "${args[@]}"
 
       # Subsequent steps inherit the implicit `if: success()` — they only
       # run when every preceding step succeeded. A failed memory_pressure
