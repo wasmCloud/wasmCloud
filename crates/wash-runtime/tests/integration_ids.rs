@@ -11,7 +11,7 @@ use wash_runtime::host::HostBuilder;
 fn generators_do_not_use_the_applications_prng() {
     fastrand::seed(5924);
     let seed = fastrand::get_seed();
-    // Cross multiple entropy and counter batch boundaries.
+    // Exercise initialization and multiple counter reservations.
     for _ in 0..130 {
         wash_runtime::ids::now_v7();
         assert_eq!(

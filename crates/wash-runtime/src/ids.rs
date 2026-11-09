@@ -13,11 +13,16 @@
 //!   are monotonic per thread. A clock step on one thread does not hold back
 //!   the timestamps of other threads.
 //!
-//! Counter seeds and batched tails come from the OS. Application PRNGs can
-//! repeat after explicit seeding, and time/thread-based seeds can repeat across
-//! processes; neither provides independent cross-process entropy. Randomness
-//! only reduces cross-process collision probability: the deterministic
-//! uniqueness guarantee here is confined to one process lifetime.
+//! The counter and each thread's private tail PRNG are seeded independently
+//! from the OS. Application seeding cannot steer either, and OS reads happen
+//! only during initialization, not on counter renewal or each random draw.
+//! Time/thread-based seeds can repeat across processes; matching application
+//! PRNG state can reproduce both counters and tails.
+//!
+//! The tails remain non-cryptographic: these IDs are not bearer secrets.
+//! Randomness only reduces cross-process collision probability; deterministic
+//! uniqueness is confined to one allocator's process lifetime. Forks or
+//! snapshots of initialized state can duplicate the allocator and PRNG.
 
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -113,9 +118,9 @@ struct Block {
     end: u64,
     /// The timestamp assigned to every counter in this reservation.
     millis: u64,
-    /// Independent of counter reservations: a millisecond tick must not waste
-    /// the rest of the entropy batch or require another OS read.
-    tails: Option<std::array::IntoIter<[u8; 4], 64>>,
+    /// Seeded once per thread, independently of the counter and application
+    /// PRNG. Renewing a counter reservation does not reseed this generator.
+    rng: Option<fastrand::Rng>,
 }
 
 impl Block {
@@ -124,7 +129,7 @@ impl Block {
             next: 0,
             end: 0,
             millis: 0,
-            tails: None,
+            rng: None,
         }
     }
 
@@ -137,20 +142,23 @@ impl Block {
         let counter = self.next;
         self.next += 1;
         // The (timestamp, counter) pair ensures process-local uniqueness;
-        // independent OS entropy reduces collisions between processes.
+        // independent OS seeds reduce collisions between processes.
         build(self.millis, counter, self.random_tail())
     }
 
+    #[inline]
     fn random_tail(&mut self) -> u32 {
-        loop {
-            if let Some(tail) = self.tails.as_mut().and_then(Iterator::next) {
-                return u32::from_ne_bytes(tail);
-            }
-            let mut tails = [[0; 4]; 64];
-            random_bytes(tails.as_flattened_mut());
-            self.tails = Some(tails.into_iter());
-        }
+        self.rng.get_or_insert_with(private_rng).u32(..)
     }
+}
+
+/// Do not use `Rng::new`: it draws its seed from the application's thread-local
+/// generator, which an embedder can seed for reproducible application behavior.
+#[cold]
+fn private_rng() -> fastrand::Rng {
+    let mut seed = [0; 8];
+    random_bytes(&mut seed);
+    fastrand::Rng::with_seed(u64::from_ne_bytes(seed))
 }
 
 /// Lay out the counter above the random tail, as uuid's `ContextV7` does.
@@ -218,6 +226,23 @@ mod tests {
     fn ids_are_monotonic_on_one_thread() {
         let ids: Vec<Uuid> = (0..10_000).map(|_| now_v7()).collect();
         assert!(ids.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn application_rng_cannot_steer_private_tails() {
+        let rng = private_rng();
+        let mut expected = rng.clone();
+        let mut block = Block::new();
+        block.rng = Some(rng);
+        for seed in 0..130 {
+            // Both reseeding and consuming the application's generator must
+            // leave the already-initialized private sequence untouched.
+            fastrand::seed(seed);
+            let _ = fastrand::u64(..);
+            let application_seed = fastrand::get_seed();
+            assert_eq!(block.random_tail(), expected.u32(..));
+            assert_eq!(fastrand::get_seed(), application_seed);
+        }
     }
 
     #[test]
