@@ -433,7 +433,24 @@ pub async fn start_host_with_tls(
 pub async fn start_host_with_p3_http_handler(
     addr: &str,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = Engine::builder().build()?;
+    start_host_with_p3_http_handler_and_host_paths(addr, []).await
+}
+
+/// [`start_host_with_p3_http_handler`], on a host whose workloads may mount
+/// hostPath volumes under `allowed_host_paths`.
+#[cfg(all(
+    feature = "wasi-blobstore",
+    feature = "wasi-config",
+    feature = "wasi-keyvalue",
+    feature = "wasi-logging"
+))]
+pub async fn start_host_with_p3_http_handler_and_host_paths(
+    addr: &str,
+    allowed_host_paths: impl IntoIterator<Item = std::path::PathBuf>,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let engine = Engine::builder()
+        .with_allowed_host_paths(allowed_host_paths)
+        .build()?;
     let ingress = Ingress::new(DevRouter::default(), addr.parse()?).await?;
     let bound_addr = ingress.addr();
     let host = with_standard_plugins(

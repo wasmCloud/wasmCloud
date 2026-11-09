@@ -31,6 +31,8 @@ pub(crate) const P2_FIXTURES: &[&str] = &[
     "feeds-callee-b",
     "feeds-caller",
     "http-relay",
+    "lend-caller-p2",
+    "lend-callee-p2",
 ];
 
 pub(crate) const P3_FIXTURES: &[&str] = &[
@@ -60,6 +62,9 @@ pub(crate) const P3_FIXTURES: &[&str] = &[
     "borrow-consumer-p3",
     "borrow-middleware-p3",
     "borrow-caller-p3",
+    "companion-owner-p3",
+    "companion-adopter-p3",
+    "companion-caller-p3",
     "ephemeral-callee-p3",
     "ephemeral-caller-p3",
     "blobstore-implements-p3",

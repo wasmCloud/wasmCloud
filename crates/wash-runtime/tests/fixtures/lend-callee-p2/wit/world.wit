@@ -1,0 +1,37 @@
+package wasmcloud:lend-test@0.1.0;
+
+/// Takes host resources from a linked component. Every function is sync, so
+/// the component serving this runs in a store of its own.
+interface relay {
+    use wasi:io/streams@0.2.2.{input-stream, output-stream};
+    use wasi:http/types@0.2.2.{fields, incoming-request};
+
+    /// Reads up to `len` bytes of a stream its caller keeps.
+    peek: func(data: borrow<input-stream>, len: u64) -> string;
+
+    /// Takes a stream for good and reads it to its end.
+    drain: func(data: input-stream) -> string;
+
+    /// Takes a stream and hands it straight back.
+    pass: func(data: input-stream) -> input-stream;
+
+    /// Writes to a stream its caller keeps.
+    write: func(out: borrow<output-stream>, text: string);
+
+    /// Takes a stream for good and writes to it.
+    finish: func(out: output-stream, text: string);
+
+    /// Reads a header from fields its caller keeps.
+    header: func(headers: borrow<fields>, name: string) -> string;
+
+    /// Reads a header from each of two fields its caller keeps, which may be
+    /// the same fields.
+    both: func(first: borrow<fields>, second: borrow<fields>, name: string) -> string;
+
+    /// Takes a whole request and reports its method, path and body.
+    describe: func(request: incoming-request) -> string;
+}
+
+world callee {
+    export relay;
+}

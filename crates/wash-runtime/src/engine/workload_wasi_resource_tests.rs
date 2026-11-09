@@ -215,10 +215,11 @@ async fn link_imports(
             &mut importer.metadata,
             &exports,
             &bound,
+            &HashSet::new(),
             Some(&id),
         )
         .await?;
-    assert!(linked.is_empty());
+    assert!(linked.all.is_empty());
     Ok(())
 }
 
