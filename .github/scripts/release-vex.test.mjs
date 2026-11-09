@@ -122,6 +122,17 @@ test('a fixed statement carries with the versions the release ships', () => {
   assert.equal(doc.statements[0].status, 'fixed');
   assert.deepEqual(doc.statements[0].products, releaseProducts('2.0.2', ARTIFACTS)
     .map((id) => ({ '@id': id, subcomponents: [{ '@id': 'pkg:cargo/zstd@0.13.5' }] })));
+  assert.match(doc.statements[0].status_notes, /Fixed in v2\.0\.1 /);
+  assert.match(doc.statements[0].status_notes, /the v2\.0\.1 Cargo\.lock has zstd@0\.13\.4\./);
+  assert.doesNotMatch(doc.statements[0].status_notes, /Cargo\.lock now has/);
+});
+
+test('a later release dropping a fixed dependency keeps explicitly historical notes', () => {
+  const fixed = carryVex(document(), '2.0.0', '2.0.1', ARTIFACTS, lock({ zstd: ['0.13.4'] }), NOW, []).doc;
+  const { doc } = carryVex(fixed, '2.0.1', '2.0.2', ARTIFACTS, lock({}), NOW, []);
+  checkVex(doc, [], '2.0.2', ARTIFACTS);
+  assert.deepEqual(doc.statements[0].products, releaseProducts('2.0.2', ARTIFACTS).map((id) => ({ '@id': id })));
+  assert.match(doc.statements[0].status_notes, /the v2\.0\.1 Cargo\.lock has zstd@0\.13\.4\./);
 });
 
 function repo(version, lockVersion, ignored = [ADVISORY]) {

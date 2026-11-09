@@ -53,7 +53,7 @@ function retire(statement, from, to, toIds, lock) {
   delete statement.justification;
   delete statement.impact_statement;
   delete statement.action_statement;
-  statement.status_notes = `Fixed in v${to} by a dependency update; Cargo.lock now has ${now}. The v${from} release assets keep the earlier assessment.`;
+  statement.status_notes = `Fixed in v${to} by a dependency update; the v${to} Cargo.lock has ${now}. The v${from} release assets keep the earlier assessment.`;
   statement.products = toIds.map((id) => (subcomponents.length ? { '@id': id, subcomponents } : { '@id': id }));
 }
 
@@ -78,6 +78,7 @@ export function carryVex(doc, from, to, artifacts, lock, now, ignored) {
     }
     if (statement.status === 'fixed') {
       // A fix stays fixed; record the dependency versions this release ships.
+      // Keep status_notes as the history of the release that first fixed it.
       const subcomponents = lockedSubcomponents(cargoNames(statement), lock);
       statement.products = toIds.map((id) => (subcomponents.length ? { '@id': id, subcomponents } : { '@id': id }));
       carried.push({ name, status: statement.status });
