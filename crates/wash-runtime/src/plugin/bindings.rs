@@ -1574,7 +1574,7 @@ impl PluginBindingSet {
     pub fn reject_unknown_keys(&self, schema: &BindingSchema) -> anyhow::Result<()> {
         let entry = format!("`host.plugins` entry `{}`", self.plugin_id);
         reject_conflicting_spellings(&self.base, schema, &entry)?;
-        reject_secret_clashes(&self.base, &self.base_secrets, schema, &entry)?;
+        reject_config_source_clashes(&self.base, &self.base_secrets, schema, &entry)?;
         schema
             .reject_unknown_key_names(self.base.keys().chain(self.base_secrets.keys()), &entry)?;
         let no_secrets = HashMap::new();
@@ -1582,7 +1582,7 @@ impl PluginBindingSet {
             let owner = format!("{entry} binding `{name}`");
             let secrets = self.binding_secrets.get(name).unwrap_or(&no_secrets);
             reject_conflicting_spellings(config, schema, &owner)?;
-            reject_secret_clashes(config, secrets, schema, &owner)?;
+            reject_config_source_clashes(config, secrets, schema, &owner)?;
             schema.reject_unknown_key_names(config.keys().chain(secrets.keys()), &owner)?;
         }
         // `hostOwnedKeys` too: a typo there locks nothing, which is the inert
@@ -1617,8 +1617,9 @@ fn config_secret(value: SecretValue, secret: &PluginSecretRef) -> anyhow::Result
 }
 
 /// Refuse a layer that sets a key both in its config and from a plugin secret,
-/// in any spelling the plugin reads it under.
-fn reject_secret_clashes(
+/// in any spelling the plugin reads it under. This checks configuration source
+/// metadata and returns no values, like `validate_plugin_config_sources`.
+fn reject_config_source_clashes(
     config: &Config,
     secrets: &HashMap<String, PluginSecretRef>,
     schema: &BindingSchema,

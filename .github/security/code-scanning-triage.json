@@ -343,8 +343,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/benches/common/mod.rs",
       "line": 213,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 760,
@@ -352,8 +352,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/common/mod.rs",
       "line": 685,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 761,
@@ -361,8 +361,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/common/mod.rs",
       "line": 704,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 762,
@@ -370,8 +370,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
       "line": 234,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 763,
@@ -379,8 +379,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
       "line": 828,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 764,
@@ -388,8 +388,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
       "line": 885,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 765,
@@ -397,8 +397,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
       "line": 939,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 766,
@@ -406,8 +406,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
       "line": 992,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 767,
@@ -415,8 +415,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
       "line": 1005,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 768,
@@ -424,8 +424,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
       "line": 1058,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 769,
@@ -433,8 +433,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_guest_memory_budget.rs",
       "line": 136,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 770,
@@ -442,8 +442,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_call_timeout.rs",
       "line": 61,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 771,
@@ -451,8 +451,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
       "line": 185,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 772,
@@ -460,8 +460,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
       "line": 204,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 773,
@@ -469,8 +469,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_call_timeout.rs",
       "line": 89,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 774,
@@ -478,8 +478,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
       "line": 239,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 775,
@@ -487,8 +487,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
       "line": 263,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 776,
@@ -496,8 +496,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
       "line": 299,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 777,
@@ -505,8 +505,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
       "line": 332,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 778,
@@ -514,8 +514,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
       "line": 369,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 779,
@@ -523,8 +523,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_ip_name_lookup.rs",
       "line": 111,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 780,
@@ -532,8 +532,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_egress_pooling.rs",
       "line": 223,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 781,
@@ -541,8 +541,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_ip_name_lookup.rs",
       "line": 243,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 782,
@@ -550,8 +550,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_local_routing.rs",
       "line": 174,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 783,
@@ -559,8 +559,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_instance_concurrency.rs",
       "line": 151,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 784,
@@ -568,8 +568,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_keyvalue_implements.rs",
       "line": 137,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 785,
@@ -577,8 +577,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_messaging_async.rs",
       "line": 160,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 786,
@@ -586,8 +586,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_messaging_async.rs",
       "line": 277,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 787,
@@ -595,8 +595,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_messaging_concurrency.rs",
       "line": 205,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 788,
@@ -604,8 +604,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_borrow_passing.rs",
       "line": 82,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 789,
@@ -613,8 +613,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
       "line": 89,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 790,
@@ -622,8 +622,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
       "line": 143,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 791,
@@ -631,8 +631,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_borrow_passing.rs",
       "line": 82,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 792,
@@ -640,8 +640,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
       "line": 355,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 793,
@@ -649,8 +649,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_ephemeral.rs",
       "line": 89,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 794,
@@ -658,8 +658,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_ephemeral.rs",
       "line": 112,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 795,
@@ -667,8 +667,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
       "line": 435,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 796,
@@ -676,8 +676,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
       "line": 511,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 797,
@@ -685,8 +685,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_resources.rs",
       "line": 87,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 798,
@@ -694,8 +694,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_loopback_service.rs",
       "line": 82,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 799,
@@ -703,8 +703,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
       "line": 570,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 800,
@@ -712,8 +712,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
       "line": 637,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 801,
@@ -721,8 +721,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_streams.rs",
       "line": 97,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 802,
@@ -730,8 +730,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_streams.rs",
       "line": 176,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 803,
@@ -739,8 +739,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_p3_streams.rs",
       "line": 274,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 804,
@@ -748,8 +748,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_postgres_async.rs",
       "line": 49,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 805,
@@ -757,8 +757,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_postgres_streaming.rs",
       "line": 51,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 806,
@@ -766,8 +766,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_postgres_streaming.rs",
       "line": 90,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 807,
@@ -775,8 +775,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_postgres_streaming.rs",
       "line": 137,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 808,
@@ -784,8 +784,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_service_no_cli_run.rs",
       "line": 73,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 809,
@@ -793,8 +793,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_service_http.rs",
       "line": 261,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 810,
@@ -802,8 +802,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_socket_name_grant.rs",
       "line": 192,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 811,
@@ -811,8 +811,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_trigger_service_messaging.rs",
       "line": 138,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 812,
@@ -820,8 +820,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_warm_instances.rs",
       "line": 199,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 813,
@@ -829,8 +829,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_warm_instances.rs",
       "line": 228,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 814,
@@ -838,8 +838,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_wasip3.rs",
       "line": 165,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 815,
@@ -847,8 +847,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_http_counter.rs",
       "line": 158,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 816,
@@ -856,8 +856,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 221,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 817,
@@ -865,8 +865,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 247,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 818,
@@ -874,8 +874,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 561,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 819,
@@ -883,8 +883,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_nats_messaging_fault.rs",
       "line": 295,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 820,
@@ -892,8 +892,8 @@
       "rule": "rust/cleartext-transmission",
       "path": "crates/wash-runtime/tests/integration_nats_messaging.rs",
       "line": 330,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 821,
@@ -946,8 +946,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/tests/integration_guest_memory_budget.rs",
       "line": 247,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 827,
@@ -955,8 +955,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/tests/integration_guest_memory_budget.rs",
       "line": 313,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 828,
@@ -964,8 +964,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 521,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 829,
@@ -973,8 +973,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 525,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 830,
@@ -982,8 +982,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 385,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 831,
@@ -991,8 +991,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 492,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     },
     {
       "number": 832,
@@ -1000,8 +1000,8 @@
       "rule": "rust/cleartext-logging",
       "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
       "line": 520,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     }
   ]
 }
