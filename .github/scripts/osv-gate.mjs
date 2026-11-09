@@ -2,10 +2,9 @@
 // Decides whether an `osv-scanner --format json` report fails gate-audit.
 //
 // RustSec informational advisories (unmaintained, unsound, notice) are
-// warnings, as they are for cargo-audit, so a new one in an example or
-// template lockfile doesn't block every open pull request. Every other
-// finding fails the gate, and so does any OSV malicious-package (`MAL-`)
-// entry, whatever its metadata says.
+// warnings, as they are for cargo-audit. Every other finding fails the gate,
+// and so does any OSV malicious-package (`MAL-`) entry, whatever its metadata
+// says.
 
 import { readFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';

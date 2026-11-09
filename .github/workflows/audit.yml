@@ -155,12 +155,11 @@ jobs:
           cargo deny --manifest-path fuzz-source/fuzz/Cargo.toml --workspace --config deny.toml --locked check licenses
 
   # OSV, which also carries the OpenSSF malicious-packages feed, over every
-  # lockfile in the repository: Cargo, Go and npm. Runs on every change, not
-  # only dependency changes, so a newly published advisory or malicious
-  # package blocks merges until it is fixed or assessed (OSPS-VM-05.03).
+  # lockfile in the repository: Cargo, Go and npm. Runs on every change, so a
+  # newly published advisory or malicious package blocks merges until it is
+  # fixed or assessed (OSPS-VM-05.03).
   # Findings that don't affect wasmCloud are ignored in osv-scanner.toml.
-  # RustSec informational advisories (unmaintained, unsound) are warnings, as
-  # they are for cargo-audit; osv-gate.mjs decides what blocks.
+  # osv-gate.mjs decides which findings block.
   osv-scanner:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -171,8 +170,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The release binary, pinned by the SHA-256 digest GitHub records for
-      # the v2.7.0 release asset, rather than compiling it on every run.
       - name: Install osv-scanner
         env:
           OSV_SCANNER_VERSION: v2.7.0
@@ -180,7 +177,7 @@ jobs:
         run: |
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/osv-scanner" \
             "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
-          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum --check --strict
           chmod +x "$RUNNER_TEMP/osv-scanner"
       - name: Scan every lockfile
         run: |
