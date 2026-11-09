@@ -126,7 +126,7 @@ jobs:
           else
             args+=(--build-local)
           fi
-          ./scripts/bench/box-lock.sh bash -ec '
+          .bench-publish-tools/.github/scripts/bench-box-lock.sh bash -ec '
             node .bench-publish-tools/.github/scripts/bench-preflight.mjs
             unset WASMCLOUD_BENCH_REPO_VARS
             exec ./scripts/k6bench/run.sh "$@"' _ "${args[@]}"

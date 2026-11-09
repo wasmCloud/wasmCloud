@@ -3,7 +3,11 @@
 # shared box takes it, wasmCloud's and Cosmonic Control's alike, so two
 # benches never share the machine.
 #
-#   scripts/bench/box-lock.sh <command> [args...]
+#   .github/scripts/bench-box-lock.sh <command> [args...]
+#
+# It lives beside bench-preflight.mjs, not under scripts/, so a workflow runs
+# its own copy from the workflow-tools checkout: a benched ref older than the
+# lock has no copy of its own, and a benched ref is not trusted to take it.
 
 set -euo pipefail
 

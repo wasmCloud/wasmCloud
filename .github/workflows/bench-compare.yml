@@ -96,7 +96,7 @@ jobs:
           # Expected hostnames are repo variables; see bench-run.yml.
           WASMCLOUD_BENCH_REPO_VARS: ${{ toJSON(vars) }}
         run: |
-          ./scripts/bench/box-lock.sh bash -ec '
+          .github/scripts/bench-box-lock.sh bash -ec '
             node .github/scripts/bench-preflight.mjs
             unset WASMCLOUD_BENCH_REPO_VARS
             exec ./scripts/bench/compare-bench.sh "$@"' _ \

@@ -150,7 +150,7 @@ jobs:
         # Split on spaces into separate words, never through eval.
         run: |
           read -ra args <<< "$BENCH_ARGS"
-          ./scripts/bench/box-lock.sh bash -ec '
+          .bench-publish-tools/.github/scripts/bench-box-lock.sh bash -ec '
             node .bench-publish-tools/.github/scripts/bench-preflight.mjs
             unset WASMCLOUD_BENCH_REPO_VARS
             exec ./scripts/bench/run-bench.sh "$@"' _ \
