@@ -1148,7 +1148,7 @@ async fn link_native_imports(
     engine: &Engine,
     id: &str,
     component: &Component,
-    mut linker: Linker<SharedCtx>,
+    linker: Linker<SharedCtx>,
     already_linked: &std::collections::HashSet<Arc<str>>,
     native_plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
     config: &HashMap<String, String>,
@@ -1170,7 +1170,9 @@ async fn link_native_imports(
             continue;
         }
         if type_only.contains(imported.name.as_ref()) {
-            linker.instance(&imported.name)?;
+            // Wasmtime needs no definition for structural types. An empty
+            // instance here could shadow a native's compatible version when
+            // another import needs functions from the same interface.
             continue;
         }
         merged
