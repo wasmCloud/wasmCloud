@@ -168,13 +168,14 @@ mod tests {
     /// crate builds one.
     #[test]
     fn each_setter_sets_its_field() {
+        let password = rand::random::<u128>().to_string();
         let auth = NatsAuth::default()
             .with_credentials("a.creds")
             .with_nkey("a.nk")
             .with_token("t")
             .with_token_file("t.file")
             .with_user("u")
-            .with_password("p")
+            .with_password(password.clone())
             .with_password_file("p.file")
             .with_hook(AuthHook::jwt_as_token());
         assert_eq!(auth.credentials, Some("a.creds".into()));
@@ -182,7 +183,7 @@ mod tests {
         assert_eq!(auth.token.as_deref(), Some("t"));
         assert_eq!(auth.token_file, Some("t.file".into()));
         assert_eq!(auth.user.as_deref(), Some("u"));
-        assert_eq!(auth.password.as_deref(), Some("p"));
+        assert!(auth.password.as_deref() == Some(password.as_str()));
         assert_eq!(auth.password_file, Some("p.file".into()));
         assert!(auth.hook.is_some());
     }
@@ -193,7 +194,7 @@ mod tests {
         assert!(token.into_connect_options().is_err());
         let password = NatsAuth::default()
             .with_user("u")
-            .with_password("p")
+            .with_password(rand::random::<u128>().to_string())
             .with_password_file("p");
         assert!(password.into_connect_options().is_err());
     }
@@ -208,13 +209,15 @@ mod tests {
 
     #[test]
     fn secrets_stay_out_of_debug_output() {
+        let token = rand::random::<u128>().to_string();
+        let password = rand::random::<u128>().to_string();
         let auth = NatsAuth::default()
-            .with_token("s3cr3t-token")
+            .with_token(token.clone())
             .with_user("derek")
-            .with_password("s3cr3t-pass");
+            .with_password(password.clone());
         let debug = format!("{auth:?}");
         assert!(
-            !debug.contains("s3cr3t"),
+            !debug.contains(&token) && !debug.contains(&password),
             "debug output exposed a credential"
         );
         assert!(debug.contains("derek"), "debug output omitted the username");

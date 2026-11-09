@@ -136,8 +136,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 603,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 737,
@@ -145,8 +145,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 628,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 738,
@@ -154,8 +154,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 645,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 739,
@@ -163,8 +163,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 738,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 740,
@@ -172,8 +172,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 839,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 741,
@@ -181,8 +181,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 844,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 742,
@@ -190,8 +190,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 851,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 743,
@@ -199,8 +199,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 867,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 744,
@@ -208,8 +208,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 871,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 745,
@@ -217,8 +217,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/nats_credentials.rs",
       "line": 899,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 746,
@@ -226,8 +226,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
       "line": 725,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 747,
@@ -235,8 +235,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
       "line": 731,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 748,
@@ -244,8 +244,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
       "line": 832,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 749,
@@ -253,8 +253,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
       "line": 839,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 750,
@@ -262,8 +262,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
       "line": 177,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 751,
@@ -271,8 +271,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
       "line": 196,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 752,
@@ -280,8 +280,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
       "line": 214,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 753,
@@ -289,8 +289,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/washlet/mod.rs",
       "line": 3232,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 754,
@@ -298,8 +298,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/washlet/mod.rs",
       "line": 3242,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 755,
@@ -307,8 +307,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/washlet/mod.rs",
       "line": 3256,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 756,
@@ -325,8 +325,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/oci.rs",
       "line": 1014,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 758,
@@ -334,8 +334,8 @@
       "rule": "rust/hard-coded-cryptographic-value",
       "path": "crates/wash-runtime/src/plugin/wasi_blobstore/nats_contract_tests.rs",
       "line": 16,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Test fixtures only: generated passwords and signing challenges at runtime. The shared fake NATS server now generates a fresh challenge for every connection, removing fixed nonces for all its callers. Signing tests still verify signatures against the exact challenge used. Awaiting CodeQL rescan."
     },
     {
       "number": 759,

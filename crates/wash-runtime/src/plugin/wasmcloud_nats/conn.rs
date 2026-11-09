@@ -722,13 +722,13 @@ mod tests {
 
         let registry = ConnectionRegistry::default();
         let (first, _handle) = tokio::try_join!(
-            accept_connect(&listener, "first-nonce"),
+            accept_connect(&listener),
             registry.acquire("wl", UNNAMED_BINDING, &config, Vec::new(), true),
         )?;
         assert_eq!(first["auth_token"], "first");
 
         std::fs::write(&token, "second\n")?;
-        let second = accept_connect(&listener, "second-nonce").await?;
+        let second = accept_connect(&listener).await?;
         assert_eq!(second["auth_token"], "second");
         Ok(())
     }
@@ -829,14 +829,14 @@ mod tests {
 
         let registry = ConnectionRegistry::default();
         let (first, _handle) = tokio::try_join!(
-            accept_connect(&listener, "first-nonce"),
+            accept_connect(&listener),
             registry.acquire("wl", UNNAMED_BINDING, &config, Vec::new(), true),
         )?;
         assert_eq!(first["jwt"], "first.jwt");
         assert_eq!(first["auth_token"], "first.jwt");
 
         std::fs::write(&creds, creds_file("rotated.jwt", &key.seed()?))?;
-        let second = accept_connect(&listener, "second-nonce").await?;
+        let second = accept_connect(&listener).await?;
         assert_eq!(second["jwt"], "rotated.jwt");
         assert_eq!(second["auth_token"], "rotated.jwt");
         Ok(())
