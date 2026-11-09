@@ -118,15 +118,6 @@ jobs:
       - name: exclude workflow tools
         run: echo '/.bench-publish-tools/' >> .git/info/exclude
 
-      - name: pre-flight host checks
-        env:
-          # Each host's expected hostname is a repo variable (Settings →
-          # Secrets and variables → Actions → Variables) named by
-          # bench-host.mjs's hostnameVar. Kept out of the repo so no box's
-          # identity is broadcast.
-          WASMCLOUD_BENCH_REPO_VARS: ${{ toJSON(vars) }}
-        run: node .bench-publish-tools/.github/scripts/bench-preflight.mjs
-
       - name: preset environment
         if: ${{ inputs.env != '{}' }}
         env:
@@ -144,14 +135,26 @@ jobs:
               console.log(`${name}=${value}`);
             }'
 
-      - name: run cargo bench
+      # Pre-flight runs under the box lock with the bench: another runner's
+      # bench would fail its load check, and the lock must not be released
+      # between the check and the measurement.
+      - name: pre-flight host checks + run cargo bench
         id: run
         env:
+          # Each host's expected hostname is a repo variable (Settings →
+          # Secrets and variables → Actions → Variables) named by
+          # bench-host.mjs's hostnameVar. Kept out of the repo so no box's
+          # identity is broadcast.
+          WASMCLOUD_BENCH_REPO_VARS: ${{ toJSON(vars) }}
           BENCH_ARGS: ${{ inputs.args }}
         # Split on spaces into separate words, never through eval.
         run: |
           read -ra args <<< "$BENCH_ARGS"
-          ./scripts/bench/run-bench.sh "${WASMCLOUD_BENCH_NAME}" "${args[@]}"
+          .bench-publish-tools/.github/scripts/bench-box-lock.sh bash -ec '
+            node .bench-publish-tools/.github/scripts/bench-preflight.mjs
+            unset WASMCLOUD_BENCH_REPO_VARS
+            exec ./scripts/bench/run-bench.sh "$@"' _ \
+            "${WASMCLOUD_BENCH_NAME}" "${args[@]}"
 
       # Subsequent steps inherit the implicit `if: success()` — they only
       # run when every preceding step succeeded. A failed memory_pressure

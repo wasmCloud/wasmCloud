@@ -236,7 +236,9 @@ users only ever pull tagged releases, so attesting every main commit's canary wo
 noise (and a pointless mint of Sigstore certificates). When `release-tag.yml` retags the
 canary digest as `X.Y.Z`, it mints a fresh SLSA provenance attestation against the promoted
 manifest digest, signed via Fulcio, linking that digest to the workflow run, source commit,
-and runner.
+and runner. The binaries' provenance bundle is attached to each GitHub Release twice: as
+`wash.sigstore.json`, and as `wash.intoto.jsonl` for tools that look for in-toto provenance by
+that name, such as OpenSSF Scorecard.
 
 User-facing verification instructions live in the
 [release verification guide](https://wasmcloud.com/docs/verify-releases). It covers binary

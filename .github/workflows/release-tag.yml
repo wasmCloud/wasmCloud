@@ -378,6 +378,10 @@ jobs:
       #     --certificate-identity https://github.com/wasmCloud/wasmCloud/.github/workflows/release-tag.yml@refs/heads/main \
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
       #     wash-x86_64-unknown-linux-gnu
+      #
+      # wash.intoto.jsonl is the same SLSA provenance bundle on one line, the
+      # in-toto JSONL name that slsa-verifier and OpenSSF Scorecard look for
+      # (Scorecard only counts provenance attached under that suffix).
       - name: Stage attestation bundle for release upload
         env:
           BUNDLE_PATH: ${{ steps.attest_bins.outputs.bundle-path }}
@@ -385,6 +389,9 @@ jobs:
           set -euo pipefail
           mkdir -p ./artifacts/attestations
           cp "${BUNDLE_PATH}" ./artifacts/attestations/wash.sigstore.json
+          jq -ce . "${BUNDLE_PATH}" > ./artifacts/attestations/wash.intoto.jsonl
+          jq -e '.dsseEnvelope.payloadType == "application/vnd.in-toto+json"' \
+            ./artifacts/attestations/wash.intoto.jsonl > /dev/null
           ls -la ./artifacts/attestations/
 
       - name: Attest release VEX
