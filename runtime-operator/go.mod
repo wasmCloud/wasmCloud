@@ -36,7 +36,7 @@ require (
 	cel.dev/expr v0.25.2 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/air-verse/air v1.65.2 // indirect
-	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/andybalholm/brotli v1.2.8 // indirect
 	github.com/antithesishq/antithesis-sdk-go v0.8.0-default-no-op // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -131,7 +131,7 @@ require (
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
