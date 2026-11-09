@@ -178,8 +178,39 @@ async fn shared_types_do_not_satisfy_capability_imports() -> anyhow::Result<()> 
             .engine(Engine::builder().with_pooling_allocator(false).build()?)
             .build()
             .await;
-        let error = result.err().context("a capability needs a provider")?;
-        assert!(format!("{error:#}").contains(name), "{error:#}");
+        let error = format!(
+            "{:#}",
+            result.err().context("a capability needs a provider")?
+        );
+        // The host lists unmatched imports by their `Debug` form,
+        // which quotes each interface name.
+        assert!(error.contains("not available on this host"), "{error}");
+        assert!(error.contains(&format!("\"{name}\"")), "{error}");
+    }
+    Ok(())
+}
+
+/// A label changes how an import is routed, not what it needs:
+/// a type-only import under an `(implements ..)` label needs no provider,
+/// and is not refused as a workload callback with no label to route by.
+#[cfg(feature = "wasm_component_model_implements")]
+#[tokio::test]
+async fn labelled_shared_types_load_without_a_native_provider() -> anyhow::Result<()> {
+    for workload_calls in [false, true] {
+        let wasm = fixture(&format!(
+            r#"{}
+            (import "audit-records" (implements "example:shared/records@1.2.3") (instance
+                (type $text string) (export "text" (type (eq $text)))))
+            "#,
+            imports(workload_calls)
+        ))?;
+        let plugin = ComponentHostPlugin::builder()
+            .id("labelled-shared-types")
+            .wasm(&wasm)
+            .engine(Engine::builder().with_pooling_allocator(false).build()?)
+            .build()
+            .await?;
+        assert!(plugin.world().imports.iter().all(|i| i.package != "shared"));
     }
     Ok(())
 }
