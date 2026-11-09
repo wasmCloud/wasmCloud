@@ -515,9 +515,11 @@ A box can run another repository's bench runner beside this one. The
 aws-c9g-16xlarge box also runs Cosmonic Control's agent density bench, as
 the `cbench` user. Every measuring step takes `/var/lock/bench-box.lock`
 through [`box-lock.sh`](./box-lock.sh), and Control's run script takes the
-same lock, so two benches never share the machine. A job waits for the lock
-rather than failing. Since `/var/lock` is a tmpfs, the script makes the
-file again after a reboot.
+same lock, so two benches never share the machine. The pre-flight host
+checks run inside the same lock, since another bench's load would fail
+their load check. A job waits for the lock rather than failing, but the
+wait counts toward the job's `timeout-minutes`. Since `/var/lock` is a
+tmpfs, the script makes the file again after a reboot.
 
 ## 7. Pipeline architecture
 
