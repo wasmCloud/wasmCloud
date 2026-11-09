@@ -8,7 +8,6 @@ name: codeql
 on:
   # Every pull request and merge queue run is analysed so the `code_scanning`
   # rule on `main` can block new alerts before they merge (OSPS-VM-06.02).
-  # Rust takes about 40 minutes, in line with wash.yml.
   pull_request:
     branches:
       - main
@@ -23,9 +22,8 @@ on:
   workflow_dispatch:
 
 # A pull request's new push cancels its previous analysis. Every other run
-# (merge queue, push to main, schedule, dispatch) gets its own group: a shared
-# group keeps only one pending run, so with a 40-minute Rust analysis, commits
-# landing in a burst would lose their main-branch baseline, or the weekly run.
+# (merge queue, push to main, schedule, dispatch) gets its own group, so none
+# replaces another that is still pending.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
