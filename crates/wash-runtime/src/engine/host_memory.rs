@@ -1540,30 +1540,23 @@ fn user_address_space() -> u64 {
     static SPACE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *SPACE.get_or_init(|| {
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-        if let Some(space) = std::fs::read_to_string("/proc/self/maps")
-            .ok()
-            .and_then(|maps| user_address_space_from_maps(&maps))
-        {
-            return space;
+        match super::address_space::read() {
+            Ok(space) => {
+                tracing::debug!(
+                    user_address_space = %render_bytes(space),
+                    source = "/proc/self/maps initial stack",
+                    "detected user address space"
+                );
+                return space;
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                user_address_space = %render_bytes(USER_ADDRESS_SPACE),
+                "cannot detect user address space; using the platform assumption"
+            ),
         }
         USER_ADDRESS_SPACE
     })
-}
-
-/// [`user_address_space`] from a `/proc/self/maps` already read.
-#[cfg_attr(
-    not(all(target_os = "linux", target_pointer_width = "64")),
-    allow(dead_code)
-)]
-fn user_address_space_from_maps(maps: &str) -> Option<u64> {
-    let line = maps
-        .lines()
-        .find(|line| line.trim_end().ends_with("[stack]"))?;
-    let (_, end) = line.split_whitespace().next()?.split_once('-')?;
-    let space = u64::from_str_radix(end, 16)
-        .ok()?
-        .checked_next_power_of_two()?;
-    (1 << 32..=1 << 57).contains(&space).then_some(space)
 }
 
 /// Linux applies `RLIMIT_DATA` to anonymous writable mappings, including
@@ -2870,23 +2863,6 @@ mod tests {
             Some(8 * 1024 * MIB)
         );
         assert!(usable_address_space() <= user_address_space());
-    }
-
-    #[test]
-    fn user_address_space_is_read_from_the_stack_mapping() {
-        let x86_64 = "55d0c0a00000-55d0c0a21000 rw-p 00000000 00:00 0  [heap]\n\
-                      7ffd1c3a1000-7ffd1c3c2000 rw-p 00000000 00:00 0  [stack]\n";
-        assert_eq!(user_address_space_from_maps(x86_64), Some(1 << 47));
-        let aarch64 =
-            "ffffc1300000-ffffc1321000 rw-p 00000000 00:00 0                          [stack]\n";
-        assert_eq!(user_address_space_from_maps(aarch64), Some(1 << 48));
-        let aarch64_39_bit = "7fd5a1e000-7fd5a3f000 rw-p 00000000 00:00 0  [stack]\n";
-        assert_eq!(user_address_space_from_maps(aarch64_39_bit), Some(1 << 39));
-        assert_eq!(user_address_space_from_maps("no stack here\n"), None);
-        assert_eq!(
-            user_address_space_from_maps("1000-2000 rw-p 00000000 00:00 0  [stack]\n"),
-            None
-        );
     }
 
     #[test]
