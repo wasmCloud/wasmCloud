@@ -12,6 +12,12 @@
 //! - Each thread keeps its own last millisecond through clock rollback, so IDs
 //!   are monotonic per thread. A clock step on one thread does not hold back
 //!   the timestamps of other threads.
+//!
+//! Counter seeds and batched tails come from the OS. Application PRNGs can
+//! repeat after explicit seeding, and time/thread-based seeds can repeat across
+//! processes; neither provides independent cross-process entropy. Randomness
+//! only reduces cross-process collision probability: the deterministic
+//! uniqueness guarantee here is confined to one process lifetime.
 
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -37,7 +43,21 @@ pub fn now_v7() -> Uuid {
 /// processes don't walk the same counters.
 fn sequence() -> &'static Mutex<Sequence> {
     static SEQUENCE: OnceLock<Mutex<Sequence>> = OnceLock::new();
-    SEQUENCE.get_or_init(|| Mutex::new(Sequence::new(fastrand::u64(..))))
+    SEQUENCE.get_or_init(|| {
+        let mut seed = [0; 8];
+        random_bytes(&mut seed);
+        Mutex::new(Sequence::new(u64::from_ne_bytes(seed)))
+    })
+}
+
+/// Like `Uuid::new_v4`, fail closed if the OS cannot provide randomness.
+/// Never substitute time, a fixed seed, or partially filled bytes.
+fn random_bytes(bytes: &mut [u8]) {
+    let result = getrandom::fill(bytes);
+    assert!(
+        result.is_ok(),
+        "OS randomness unavailable for runtime IDs: {result:?}"
+    );
 }
 
 /// Allocates disjoint counter ranges. A reserved range keeps its timestamp,
@@ -93,6 +113,9 @@ struct Block {
     end: u64,
     /// The timestamp assigned to every counter in this reservation.
     millis: u64,
+    /// Independent of counter reservations: a millisecond tick must not waste
+    /// the rest of the entropy batch or require another OS read.
+    tails: Option<std::array::IntoIter<[u8; 4], 64>>,
 }
 
 impl Block {
@@ -101,6 +124,7 @@ impl Block {
             next: 0,
             end: 0,
             millis: 0,
+            tails: None,
         }
     }
 
@@ -112,9 +136,20 @@ impl Block {
         }
         let counter = self.next;
         self.next += 1;
-        // Uniqueness within the process comes from the counter alone; the
-        // tail separates IDs minted by different processes.
-        build(self.millis, counter, fastrand::u32(..))
+        // The (timestamp, counter) pair ensures process-local uniqueness;
+        // independent OS entropy reduces collisions between processes.
+        build(self.millis, counter, self.random_tail())
+    }
+
+    fn random_tail(&mut self) -> u32 {
+        loop {
+            if let Some(tail) = self.tails.as_mut().and_then(Iterator::next) {
+                return u32::from_ne_bytes(tail);
+            }
+            let mut tails = [[0; 4]; 64];
+            random_bytes(tails.as_flattened_mut());
+            self.tails = Some(tails.into_iter());
+        }
     }
 }
 
