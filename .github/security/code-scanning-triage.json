@@ -1,0 +1,1007 @@
+{
+  "repository": "wasmCloud/wasmCloud",
+  "retrieved_at": "2026-11-09",
+  "base_commit": "00cb35c281c2e92feaa4be134181b65da9add087",
+  "scope": "111 open alerts; oldest first, grouped only when one fix covers multiple alerts. No GitHub alerts dismissed or repository settings changed. Local changes need a future scan after publication to confirm closure.",
+  "alerts": [
+    {
+      "number": 33,
+      "created_at": "2023-09-15T22:02:27Z",
+      "rule": "SASTID",
+      "path": "no file associated with this alert",
+      "line": 1,
+      "status": "already-addressed",
+      "notes": "CodeQL runs on every main push, pull request and merge group without path filters. Current upstream also reduces Rust scan disk usage. Scorecard must resample successful scans; no further local change indicated."
+    },
+    {
+      "number": 34,
+      "created_at": "2023-09-18T15:33:55Z",
+      "rule": "VulnerabilitiesID",
+      "path": "no file associated with this alert",
+      "line": 1,
+      "status": "partially-addressed-upstream",
+      "notes": "Cargo.lock already has zstd 0.13.4 and zstd-safe 7.4.0; runtime-operator/go.mod has the fixed golang.org/x/crypto pseudo-version. cargo audit found zero vulnerabilities on 2026-11-09. RUSTSEC-2024-0384 remains: instant has no fixed version and latest wstd 0.6.8 still requires futures-lite 1.x. Existing example/fixture-only OSV exception applies; an upstream migration is needed."
+    },
+    {
+      "number": 61,
+      "created_at": "2023-10-06T17:32:38Z",
+      "rule": "BranchProtectionID",
+      "path": "no file associated with this alert",
+      "line": 1,
+      "status": "requires-repository-settings",
+      "notes": "Current main rules require up-to-date status checks, one code-owner approval and last-push approval. Two approvals and removal of administrator/team bypasses require repository settings changes, outside this local-commit task."
+    },
+    {
+      "number": 62,
+      "created_at": "2023-10-11T18:09:33Z",
+      "rule": "CodeReviewID",
+      "path": "no file associated with this alert",
+      "line": 1,
+      "status": "requires-review-history",
+      "notes": "A local source change cannot retroactively add independent review to past changesets. Current main requires code-owner and last-push approval; subsequent reviewed merges must age into the Scorecard sample."
+    },
+    {
+      "number": 622,
+      "created_at": "2026-05-06T09:53:17Z",
+      "rule": "PinnedDependenciesID",
+      "path": "Dockerfile",
+      "line": 3,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 625,
+      "created_at": "2026-05-06T09:53:17Z",
+      "rule": "PinnedDependenciesID",
+      "path": "runtime-gateway/Dockerfile",
+      "line": 14,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 627,
+      "created_at": "2026-05-06T09:53:17Z",
+      "rule": "PinnedDependenciesID",
+      "path": "runtime-operator/Dockerfile",
+      "line": 14,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 722,
+      "created_at": "2026-10-28T09:13:04Z",
+      "rule": "PinnedDependenciesID",
+      "path": "runtime-gateway/Dockerfile",
+      "line": 3,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 723,
+      "created_at": "2026-10-28T09:13:04Z",
+      "rule": "PinnedDependenciesID",
+      "path": "runtime-operator/Dockerfile",
+      "line": 3,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 729,
+      "created_at": "2026-10-29T16:41:45Z",
+      "rule": "zizmor/ref-version-mismatch",
+      "path": ".github/workflows/release-tag.yml",
+      "line": 111,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 730,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/config.rs",
+      "line": 1467,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 731,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/config.rs",
+      "line": 1468,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 734,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
+      "line": 216,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 735,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
+      "line": 217,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 736,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 603,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 737,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 628,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 738,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 645,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 739,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 738,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 740,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 839,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 741,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 844,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 742,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 851,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 743,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 867,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 744,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 871,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 745,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/nats_credentials.rs",
+      "line": 899,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 746,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
+      "line": 725,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 747,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
+      "line": 731,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 748,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
+      "line": 832,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 749,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/conn.rs",
+      "line": 839,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 750,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
+      "line": 177,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 751,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
+      "line": 196,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 752,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/washlet/nats_auth.rs",
+      "line": 214,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 753,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/washlet/mod.rs",
+      "line": 3232,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 754,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/washlet/mod.rs",
+      "line": 3242,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 755,
+      "created_at": "2026-11-02T09:58:36Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/washlet/mod.rs",
+      "line": 3256,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 756,
+      "created_at": "2026-11-04T09:10:55Z",
+      "rule": "PinnedDependenciesID",
+      "path": "Dockerfile",
+      "line": 34,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 757,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/oci.rs",
+      "line": 1014,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 758,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/hard-coded-cryptographic-value",
+      "path": "crates/wash-runtime/src/plugin/wasi_blobstore/nats_contract_tests.rs",
+      "line": 16,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 759,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/benches/common/mod.rs",
+      "line": 213,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 760,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/common/mod.rs",
+      "line": 685,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 761,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/common/mod.rs",
+      "line": 704,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 762,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
+      "line": 234,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 763,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
+      "line": 828,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 764,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
+      "line": 885,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 765,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
+      "line": 939,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 766,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
+      "line": 992,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 767,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
+      "line": 1005,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 768,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_abandoned_calls.rs",
+      "line": 1058,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 769,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_guest_memory_budget.rs",
+      "line": 136,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 770,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_call_timeout.rs",
+      "line": 61,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 771,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
+      "line": 185,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 772,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
+      "line": 204,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 773,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_call_timeout.rs",
+      "line": 89,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 774,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
+      "line": 239,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 775,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
+      "line": 263,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 776,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
+      "line": 299,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 777,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
+      "line": 332,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 778,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_allowed_hosts.rs",
+      "line": 369,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 779,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_ip_name_lookup.rs",
+      "line": 111,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 780,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_egress_pooling.rs",
+      "line": 223,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 781,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_ip_name_lookup.rs",
+      "line": 243,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 782,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_local_routing.rs",
+      "line": 174,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 783,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_instance_concurrency.rs",
+      "line": 151,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 784,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_keyvalue_implements.rs",
+      "line": 137,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 785,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_messaging_async.rs",
+      "line": 160,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 786,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_messaging_async.rs",
+      "line": 277,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 787,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_messaging_concurrency.rs",
+      "line": 205,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 788,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_borrow_passing.rs",
+      "line": 82,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 789,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
+      "line": 89,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 790,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
+      "line": 143,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 791,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_borrow_passing.rs",
+      "line": 82,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 792,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
+      "line": 355,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 793,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_ephemeral.rs",
+      "line": 89,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 794,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_ephemeral.rs",
+      "line": 112,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 795,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
+      "line": 435,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 796,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
+      "line": 511,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 797,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_resources.rs",
+      "line": 87,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 798,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_loopback_service.rs",
+      "line": 82,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 799,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
+      "line": 570,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 800,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p2_p3_matrix.rs",
+      "line": 637,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 801,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_streams.rs",
+      "line": 97,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 802,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_streams.rs",
+      "line": 176,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 803,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_p3_streams.rs",
+      "line": 274,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 804,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_postgres_async.rs",
+      "line": 49,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 805,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_postgres_streaming.rs",
+      "line": 51,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 806,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_postgres_streaming.rs",
+      "line": 90,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 807,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_postgres_streaming.rs",
+      "line": 137,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 808,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_service_no_cli_run.rs",
+      "line": 73,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 809,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_service_http.rs",
+      "line": 261,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 810,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_socket_name_grant.rs",
+      "line": 192,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 811,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_trigger_service_messaging.rs",
+      "line": 138,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 812,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_warm_instances.rs",
+      "line": 199,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 813,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_warm_instances.rs",
+      "line": 228,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 814,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_wasip3.rs",
+      "line": 165,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 815,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_http_counter.rs",
+      "line": 158,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 816,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 221,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 817,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 247,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 818,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 561,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 819,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_nats_messaging_fault.rs",
+      "line": 295,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 820,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-transmission",
+      "path": "crates/wash-runtime/tests/integration_nats_messaging.rs",
+      "line": 330,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 821,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/config_source.rs",
+      "line": 1029,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 822,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_nats/config.rs",
+      "line": 1730,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 823,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_postgres/async_p3.rs",
+      "line": 83,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 824,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/plugin/wasmcloud_postgres/mod.rs",
+      "line": 28,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 825,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/src/wit/config.rs",
+      "line": 408,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 826,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/tests/integration_guest_memory_budget.rs",
+      "line": 247,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 827,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/tests/integration_guest_memory_budget.rs",
+      "line": 313,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 828,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 521,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 829,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 525,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 830,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 385,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 831,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 492,
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "number": 832,
+      "created_at": "2026-11-09T10:08:01Z",
+      "rule": "rust/cleartext-logging",
+      "path": "crates/wash-runtime/tests/integration_nats_blobstore.rs",
+      "line": 520,
+      "status": "pending",
+      "notes": ""
+    }
+  ]
+}
