@@ -153,7 +153,8 @@ build can take ten minutes or more. Each run writes its JSON
 report and a log to `<target>/scale-density/`, or to `--out` (relative to the
 current directory), so it refuses a `WASH_SCALE_REPORT_JSON` you set. A log records the commit, whether the tree had uncommitted
 or untracked changes, the fixture's SHA-256, and the host's OS version, CPU
-and core count. A failed flavour does
+and core count. Before each run, its previous JSON report is removed so a
+failure cannot leave old results beside the new log. A failed flavour does
 not skip the next one, but the task still fails. Every preset runs the P3
 fixture and refuses another `WASH_SCALE_FIXTURE`.
 
@@ -192,8 +193,9 @@ Reading the preset runs:
   with a fixed cap.
 - The runtime bounds a derived count by its bookkeeping, about 512 bytes a
   memory within 1% of the memory limit (a cgroup's, else physical memory):
-  1.3 million at 2 MiB slots at 64 GiB. The cap pins it at 300k, so machines of different sizes
-  derive alike. Retained table pages still consume real memory.
+  1.3 million at 2 MiB slots at 64 GiB. The cap limits it to at most 300k;
+  machines with tighter memory, address-space or mapping limits still derive
+  fewer. Retained table pages still consume real memory.
 - Off Linux, the core sweep changes host runtime workers, not CPU affinity. The
   load generator shares the machine and its CPU is in the process total, so
   throughput is not host-only capacity.
