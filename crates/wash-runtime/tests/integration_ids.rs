@@ -63,9 +63,9 @@ fn equally_seeded_processes_have_independent_ids() -> Result<()> {
         // Ignore the timestamp so wall-clock scheduling cannot conceal replay
         // of a process's first counter and random tail.
         assert!(runtime_ids.insert(runtime.as_u128() & ((1_u128 << 80) - 1)));
-        assert!(host_ids.insert(host));
+        assert!(host_ids.insert(host.as_u128() & ((1_u128 << 80) - 1)));
         assert_eq!(runtime.get_version_num(), 7);
-        assert_eq!(host.get_version_num(), 4);
+        assert_eq!(host.get_version_num(), 7);
     }
     Ok(())
 }
