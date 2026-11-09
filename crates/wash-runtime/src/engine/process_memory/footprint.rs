@@ -152,21 +152,25 @@ fn read_footprint(pid: u32) -> Option<u64> {
 /// same per-mapping overcount back.
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn linux_footprint(status: &str) -> Option<u64> {
-    let kib = |name: &str| {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .and_then(|rest| rest.trim().strip_suffix("kB"))
-            .and_then(|n| n.trim().parse::<u64>().ok())
+    // Absence is distinct from corruption: optional fields may be absent,
+    // but a present field must parse or the entire sample is unavailable.
+    let kib = |name: &str| -> Option<Option<u64>> {
+        let Some(rest) = status.lines().find_map(|line| line.strip_prefix(name)) else {
+            return Some(None);
+        };
+        Some(Some(rest.trim().strip_suffix("kB")?.trim().parse().ok()?))
     };
-    let resident = kib("RssAnon:").or_else(|| kib("VmRSS:"))?;
-    // Swap is absent on kernels built without it, which means none, and
-    // `VmPMD` on kernels from 4.15, which fold it into `VmPTE`. `VmPTE` is
-    // reported by every kernel this reads, but treat a missing line the same
-    // way rather than fail the reading over it.
+    let resident = match kib("RssAnon:")? {
+        Some(anon) => anon,
+        None => kib("VmRSS:")??,
+    };
+    // VmPTE is mandatory on supported Linux kernels. Missing or malformed
+    // accounting must not silently restore the page-table undercount.
+    let page_tables = kib("VmPTE:")??;
+    // Swap may be absent without CONFIG_SWAP; modern kernels omit VmPMD.
     let kib_total = resident
-        .saturating_add(kib("VmSwap:").unwrap_or(0))
-        .saturating_add(kib("VmPTE:").unwrap_or(0))
-        .saturating_add(kib("VmPMD:").unwrap_or(0));
+        .saturating_add(kib("VmSwap:")?.unwrap_or(0))
+        .saturating_add(page_tables)
+        .saturating_add(kib("VmPMD:")?.unwrap_or(0));
     Some(kib_total.saturating_mul(1024))
 }

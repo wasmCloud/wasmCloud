@@ -2590,6 +2590,9 @@ mod tests {
         let guard = Arc::new(crate::engine::process_memory::ProcessMemoryGuard::new(
             1 << 30,
         ));
+        // This guard is deliberately unsampled; admit the initial reservation
+        // before the test moves memory pressure above the limit while queued.
+        guard.observe(0);
         let engine = crate::engine::Engine::builder()
             .without_max_process_memory()
             .build()?
