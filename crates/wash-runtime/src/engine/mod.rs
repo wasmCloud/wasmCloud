@@ -246,10 +246,13 @@ pub(crate) mod instance_pool;
 pub(crate) mod lent_reply;
 pub mod stream_payload;
 pub use instance_pool::{InstancePolicy, ReclaimPolicy};
+#[cfg(any(test, all(target_os = "linux", target_pointer_width = "64")))]
+mod address_space;
 pub mod host_memory;
 pub(crate) mod linked_call;
 mod pool_gc;
 pub mod pool_share;
+mod pool_startup;
 pub mod pool_usage;
 pub mod process_memory;
 mod scratch;
@@ -1683,6 +1686,10 @@ impl EngineBuilder {
     /// For a host process that runs one engine: each engine in a process
     /// reserves address space for its whole pool. Stacks are costed at
     /// wasmtime's default size, which a base [`Self::with_config`] can raise.
+    /// If allocating the derived pool fails, construction retries once at
+    /// the default 1000 memories, preserving explicit overrides and memory
+    /// protection. A named memory count or full pooling config disables this
+    /// fallback.
     pub fn with_derived_max_memories(
         mut self,
         derivation: host_memory::MaxMemoriesDerivation,
@@ -2012,6 +2019,7 @@ impl EngineBuilder {
             );
         }
         let mut installed_pool: Option<InstalledPool> = None;
+        let mut fallback_pool = None;
         let sized_to_commit_limit = self.sized_to_commit_limit();
         if use_pooling_allocator
             && let Ok(true) = on_signal_quiet_thread(is_pooling_allocator_supported)
@@ -2037,7 +2045,14 @@ impl EngineBuilder {
                 {
                     tracing::warn!("{advisory}");
                 }
-                new_pooling_config(memories, core_instances, heap_ceiling)
+                let pooling = new_pooling_config(memories, core_instances, heap_ceiling);
+                fallback_pool = pool_startup::derived_fallback(
+                    &pooling,
+                    matches!(self.max_memories, Some(MaxMemories::Derived(_))),
+                    self.max_core_instances.is_some(),
+                    |key| pooling_env_total_quiet(key).is_some(),
+                );
+                pooling
             });
             installed_pool = Some(InstalledPool {
                 max_memory_size: u64::try_from(pooling.get_max_memory_size()).unwrap_or(u64::MAX),
@@ -2049,18 +2064,6 @@ impl EngineBuilder {
         } else if use_pooling_allocator {
             tracing::warn!("pooling allocator requested but not supported");
         }
-        let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
-        let pool_totals = installed_pool.map(|pool| pool.totals);
-        // The counts the pool installed, which the builder's own knobs, the
-        // environment or a caller's pooling config may have moved.
-        let host_memory = match pool_totals {
-            Some(totals) => host_memory::HostMemoryBudgets {
-                max_memories: totals.memories,
-                core_instances: totals.core_instances,
-                ..host_memory
-            },
-            None => host_memory,
-        };
         // Before the engine is built, so a pool that makes the build fail is
         // explained on the very start that fails. Against the pool that was
         // installed, not the knobs: the environment or a caller's own pooling
@@ -2084,31 +2087,6 @@ impl EngineBuilder {
                 tracing::warn!("{advisory}");
             }
         }
-        // Reported here so every embedder says what it built. The reservation
-        // is `total_memories x slot_size`, not the instance count, and the slot
-        // does not shrink with the heap ceiling.
-        match installed_pool {
-            Some(pool) => tracing::info!(
-                %max_process_memory,
-                max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
-                guest_memory_mode = self.guest_memory_mode.as_str(),
-                default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
-                core_instances = pool.totals.core_instances,
-                memories = pool.totals.memories,
-                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size, pool.layout)),
-                pool_reservation = %host_memory::render_bytes(pool.reservation()),
-                "host memory resolved"
-            ),
-            // No pool, so no reservation and no installed ceiling to name.
-            None => tracing::info!(
-                %max_process_memory,
-                max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
-                guest_memory_mode = self.guest_memory_mode.as_str(),
-                pooling = false,
-                "host memory resolved"
-            ),
-        }
-
         // Only override fuel consumption when the caller explicitly set it, so a
         // custom base config's setting is otherwise preserved.
         if let Some(fuel) = self.fuel_consumption {
@@ -2185,7 +2163,15 @@ impl EngineBuilder {
         // Where mappings are committed the table pool is charged here as
         // well, and it is a multiple of the memory count, so a build that
         // fails there must not send the operator to the reservation alone.
-        let inner = on_signal_quiet_thread(|| Ok(wasmtime::Engine::new(&config)?));
+        let inner = pool_startup::build_with_fallback(&mut config, fallback_pool, |config| {
+            on_signal_quiet_thread(|| Ok(wasmtime::Engine::new(config)?))
+        });
+        if let Ok(inner) = &inner
+            && let Some(pool) = &mut installed_pool
+            && let Some(pooling) = inner.get_pooling_config()
+        {
+            pool.totals = pool_usage::PoolTotals::of(pooling);
+        }
         let inner = inner.map_err(|e| match installed_pool {
             Some(pool) if pool.max_memory_size > pool.layout.reservation => e.context(format!(
                 "building the engine failed with a pooling allocator whose heap ceiling \
@@ -2213,6 +2199,43 @@ impl EngineBuilder {
             )),
             None => e,
         })?;
+        let installed_heap_memory = installed_pool.map(|pool| pool.max_memory_size);
+        let pool_totals = installed_pool.map(|pool| pool.totals);
+        // The counts the pool installed, which the builder's own knobs, the
+        // environment or a caller's pooling config may have moved.
+        let host_memory = match pool_totals {
+            Some(totals) => host_memory::HostMemoryBudgets {
+                max_memories: totals.memories,
+                core_instances: totals.core_instances,
+                ..host_memory
+            },
+            None => host_memory,
+        };
+        // Reported here so every embedder says what it built. The reservation
+        // is `total_memories x slot_size`, not the instance count, and the slot
+        // does not shrink with the heap ceiling.
+        match installed_pool {
+            Some(pool) => tracing::info!(
+                %max_process_memory,
+                max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
+                guest_memory_mode = self.guest_memory_mode.as_str(),
+                default_heap_memory = %host_memory::render_bytes(pool.max_memory_size),
+                core_instances = pool.totals.core_instances,
+                memories = pool.totals.memories,
+                slot_size = %host_memory::render_bytes(host_memory::pool_slot_bytes(pool.max_memory_size, pool.layout)),
+                pool_reservation = %host_memory::render_bytes(pool.reservation()),
+                "host memory resolved"
+            ),
+            // No pool, so no reservation and no installed ceiling to name.
+            None => tracing::info!(
+                %max_process_memory,
+                max_guest_memory = %host_memory::render_bytes(host_memory.max_guest_memory),
+                guest_memory_mode = self.guest_memory_mode.as_str(),
+                pooling = false,
+                "host memory resolved"
+            ),
+        }
+
         // The advisories deferred above: with a base config only the engine
         // knows its stack size and copy-on-write setting. The mapping count
         // was checked before the build at its lower bound, without images;
