@@ -21,11 +21,11 @@
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0384"
 # `instant` is unmaintained, with no fixed version. It is pulled in only on the
-# wasm target via wstd 0.6.8 -> futures-lite 1.x -> fastrand 1.x -> instant.
+# wasm target via wstd 0.6.x -> futures-lite 1.x -> fastrand 1.x -> instant.
 # wstd 0.6.8 is the latest published release and pins `futures-lite = "1.12.0"`,
 # so the dependency cannot be removed until wstd migrates to futures-lite 2.x
 # upstream (futures-lite 2.0 / fastrand 2.0 dropped `instant`).
-reason = "Unmaintained-crate advisory, no fix; transitive (examples/templates only) via wstd 0.6.8 pinning futures-lite 1.x. Blocked on upstream wstd migration to futures-lite 2.x."
+reason = "Unmaintained-crate advisory, no fix; transitive (examples/templates only) via wstd 0.6.x requiring futures-lite 1.x. Blocked on upstream wstd migration to futures-lite 2.x."
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0436"

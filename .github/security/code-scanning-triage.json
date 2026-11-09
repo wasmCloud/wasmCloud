@@ -1003,5 +1003,57 @@
       "status": "fixed-locally",
       "notes": "False-positive source classification: CodeQL SensitiveDataCall uses function-name heuristics without checking return types. Renamed metadata-only Result<()> validators to validate_plugin_config_sources and reject_config_source_clashes; validation, diagnostics and runtime behavior are unchanged. These two names were the only sources in all 62 transmission and seven associated logging traces. No queries or paths excluded; awaiting CodeQL rescan."
     }
-  ]
+  ],
+  "validation": {
+    "rustfmt": {
+      "command": "cargo fmt --all -- --check",
+      "result": "passed"
+    },
+    "diff": {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    "authentication_tests": {
+      "command": "cargo test --offline --manifest-path /tmp/wasmcloud-scanning-tests/Cargo.toml --lib",
+      "result": "17 passed",
+      "scope": "Temporary standalone harness imports the actual nats_credentials.rs and washlet/nats_auth.rs source modules with dependencies resolved from the workspace lockfile. This is not a full wash-runtime build."
+    },
+    "workflow_tests": {
+      "command": "node --test .github/scripts/*.test.mjs",
+      "result": "84 passed, 1 skipped; rerun outside sandbox after child processes were blocked with EPERM"
+    },
+    "workflow_security": {
+      "command": "zizmor .github/workflows/release-tag.yml (v1.32.0, online audits enabled)",
+      "result": "passed; no findings, 2 existing ignored and 8 suppressed"
+    },
+    "cargo_audit": {
+      "command": "cargo audit --json",
+      "result": "0 vulnerabilities; informational warning RUSTSEC-2026-0440 for unmaintained astral-tokio-tar (not in the retrieved alert snapshot)"
+    },
+    "image_pins": {
+      "result": "Verified manifest SHA-256 against registry response bodies and confirmed linux/amd64 and linux/arm64 entries in each index"
+    },
+    "not_run": [
+      "Full workspace build/tests and local CodeQL analysis: only approximately 640 MiB free at start, insufficient for the Wasmtime workspace and CodeQL database; CodeQL CLI unavailable.",
+      "Docker builds: Docker unavailable."
+    ],
+    "actionlint": {
+      "result": "Installed actionlint cannot parse existing $/.github/actions/... references. Online zizmor passed the changed workflow; no workflow syntax was changed."
+    }
+  },
+  "references": {
+    "alerts": "https://github.com/wasmCloud/wasmCloud/security/code-scanning",
+    "codeql_analysis": "https://api.github.com/repos/wasmCloud/wasmCloud/code-scanning/analyses/2128234004",
+    "codeql_sensitive_data_heuristic": "https://github.com/github/codeql/blob/main/rust/ql/lib/codeql/rust/security/SensitiveData.qll",
+    "main_ruleset": "https://github.com/wasmCloud/wasmCloud/rules/15801554",
+    "wstd_releases": "https://index.crates.io/ws/td/wstd",
+    "go_advisory": "https://api.osv.dev/v1/vulns/GO-2026-5932"
+  },
+  "summary": {
+    "already-addressed": 1,
+    "partially-addressed-upstream": 1,
+    "requires-repository-settings": 1,
+    "requires-review-history": 1,
+    "fixed-locally": 107
+  }
 }
