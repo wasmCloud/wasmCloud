@@ -199,7 +199,7 @@ function composeBody({ pinned, latest, releaseUrl, releaseDate, releaseBody }) {
     '',
     '### To accept the bump',
     '',
-    '1. Bump `RUNNER_VERSION` and `RUNNER_SHA256` in `scripts/bench/install-runner.sh`. The SHA-256 is on the release page under "Assets" — use the `actions-runner-linux-x64-<version>.tar.gz` checksum.',
+    '1. Bump `RUNNER_VERSION`, `RUNNER_SHA256_X64` and `RUNNER_SHA256_ARM64` in `scripts/bench/install-runner.sh`. The SHA-256s are on the release page under "Assets": the `actions-runner-linux-x64-<version>.tar.gz` and `actions-runner-linux-arm64-<version>.tar.gz` checksums.',
     '2. On the bench host: stop the systemd service, deregister with a fresh removal token, `rm -rf /opt/actions-runner`, then re-run `install-runner.sh` with a fresh registration token. See [scripts/bench/README.md §6](../blob/main/scripts/bench/README.md#6-self-hosted-github-actions-runner).',
     '3. Reference this issue in the PR (`Closes #N`) so it auto-closes — or just leave it: the next monthly check auto-closes this issue once `RUNNER_VERSION` matches upstream.',
     '',

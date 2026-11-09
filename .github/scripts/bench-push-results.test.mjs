@@ -202,6 +202,50 @@ test('validates the host label of the artifact and every row', () => {
   }
 });
 
+test("validates a preset's publish group on every row", () => {
+  const root = mkdtempSync(join(tmpdir(), 'bench-group-test-'));
+  try {
+    const metadata = {
+      bench: 'scale_density', ref: 'main', sha: 'e'.repeat(40), short_sha: 'e'.repeat(12),
+      run_id: '790', run_attempt: '1', timestamp: '2026-11-08T12:00:00Z', host_label: 'aws-c9g-16xlarge',
+    };
+    const row = {
+      bench: 'scale_density', group: 'density-max', param: 'warm', metric: 'served_workloads',
+      sha: metadata.sha, short_sha: metadata.short_sha, ref: metadata.ref,
+      run_id: metadata.run_id, run_attempt: metadata.run_attempt, host_label: metadata.host_label,
+    };
+    const ramp = { ...row, metric: 'ramp', steps: { workloads: [10000, 20000] } };
+    const env = {
+      ...process.env,
+      WASMCLOUD_BENCH_NAME: metadata.bench,
+      WASMCLOUD_BENCH_REF: metadata.ref,
+      WASMCLOUD_BENCH_SHA: metadata.sha,
+      WASMCLOUD_BENCH_HOST_LABEL: metadata.host_label,
+      WASMCLOUD_BENCH_GROUP: 'density-max',
+      GITHUB_RUN_ID: metadata.run_id,
+      GITHUB_RUN_ATTEMPT: metadata.run_attempt,
+    };
+    const validate = (rows, environment = env) => {
+      writeFileSync(join(root, 'metadata.json'), JSON.stringify(metadata));
+      writeFileSync(join(root, 'results.jsonl'), rows.map((r) => JSON.stringify(r) + '\n').join(''));
+      return spawnSync(process.execPath, [script, 'validate', root], { env: environment, encoding: 'utf8' });
+    };
+
+    const valid = validate([row, ramp]);
+    assert.equal(valid.status, 0, valid.stderr);
+    // A row left in the bench's own group would land in its default series.
+    const stray = validate([row, { ...ramp, group: 'density' }]);
+    assert.match(stray.stderr, /artifact row does not match/);
+    const { WASMCLOUD_BENCH_GROUP: _, ...noGroup } = env;
+    const unset = validate([{ ...row, group: 'density' }], noGroup);
+    assert.equal(unset.status, 0, unset.stderr);
+    const bad = validate([row], { ...env, WASMCLOUD_BENCH_GROUP: 'Density Max' });
+    assert.match(bad.stderr, /invalid publish group/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('prepares a gpubench run portably', (t) => {
   if (spawnSync('sh', ['-c', 'command -v zstd'], { stdio: 'ignore' }).status !== 0) {
     t.skip('zstd not installed');

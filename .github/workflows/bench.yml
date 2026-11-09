@@ -19,6 +19,7 @@ on:
           - memory_pressure
           # scale_density with the settings in BENCH_VARIANTS below.
           - max_scale
+          - million_warm
       ref:
         description: "git ref to bench (branch, tag, sha, or #PR; default = the workflow ref)"
         type: string
@@ -64,7 +65,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      # One entry per bench job: {name, bench, env, publish}.
+      # One entry per bench job: {name, bench, env, publish, group}.
       runs: ${{ steps.set.outputs.runs }}
       # `ref` labels each data row; the matrix checkout resolves the commit.
       # Pull-request labels use `pull/123`, while checkout uses the full ref.
@@ -83,20 +84,45 @@ jobs:
       #
       # - `bench` is the bench that runs, `env` what it runs with.
       # - Available to both dispatch and the release subset.
-      # - Never published. On a ref whose bench ignores the variables, the
-      #   rows would be indistinguishable from the bench's own series.
+      # - Not published unless the preset names a `publish_group`: its rows
+      #   then enter history under that group instead of the bench's own
+      #   (`density` for scale_density), so they never mix with the bench's
+      #   default series. Only density benches take a group. A preset
+      #   without one stays unpublished: on a ref whose bench ignores the
+      #   variables, its rows would be indistinguishable from the bench's.
       #
       # max_scale: warm and scale-to-zero with each guest memory's
       # reservation and guard shrunk, in growth mode, past
       # the ~16,000 warm instances the address space holds at wasmtime's
       # 4 GiB + 32 MiB (WASH_SCALE_MEMORY_RESERVATION and
       # WASH_SCALE_MEMORY_GUARD; a ref without them runs plain scale_density).
+      #
+      # million_warm: the densest settings measured on aws-c9g-16xlarge
+      # (64 cores, 123 GiB, arm64's 256 TiB address space), for that host
+      # only: about 1.4M warm workloads. Process memory raised from the
+      # bench's 2 GiB default to 100 GiB, a 64 MiB + 64 KiB layout, a pool of
+      # 1.6M memories, and growth mode with the uncharged-initial-memory cap
+      # raised past 4x the guest budget. 100 GiB, not more, because the guard
+      # leaves out page tables (~9 KiB a warm workload here) until the
+      # footprint counts VmPTE; past it the kernel OOM-kills the bench. Needs
+      # vm.max_map_count >= ~10M (provision.yml -e vm_max_map_count=16777216).
+      # Published as group density-max, the record the density page shows.
       BENCH_VARIANTS: >-
         {"max_scale": {"bench": "scale_density",
                        "env": {"WASH_SCALE_MEMORY_RESERVATION": "256MiB",
                                "WASH_SCALE_MEMORY_GUARD": "64KiB",
                                "WASH_SCALE_GUEST_MEMORY_MODE": "growth",
-                               "WASH_SCALE_MEMORY_LIMIT": "2GiB"}}}
+                               "WASH_SCALE_MEMORY_LIMIT": "2GiB"}},
+         "million_warm": {"bench": "scale_density",
+                          "env": {"WASH_SCALE_MEMORY_RESERVATION": "64MiB",
+                                  "WASH_SCALE_MEMORY_GUARD": "64KiB",
+                                  "WASH_SCALE_GUEST_MEMORY_MODE": "growth",
+                                  "WASH_SCALE_INITIAL_GUEST_MEMORY": "4TiB",
+                                  "WASH_SCALE_MEMORY_LIMIT": "100GiB",
+                                  "WASH_SCALE_MAX_MEMORIES": "1600000",
+                                  "WASH_SCALE_STEP": "10000",
+                                  "WASH_SCALE_MAX_SECS": "1800"},
+                          "publish_group": "density-max"}}
       # Dispatch-only diagnostics whose results never enter the public
       # history. memory_pressure checks pass/fail outcomes; it has no trend.
       DIAGNOSTIC_BENCHES: '["memory_pressure"]'
@@ -171,10 +197,12 @@ jobs:
             [$benches[] as $name |
               if $variants[$name] then
                 {name: $name, bench: $variants[$name].bench,
-                 env: $variants[$name].env, publish: false}
+                 env: $variants[$name].env,
+                 publish: ($variants[$name].publish_group != null),
+                 group: ($variants[$name].publish_group // "")}
               else
                 {name: $name, bench: $name, env: {},
-                 publish: ($diagnostics | any(. == $name) | not)}
+                 publish: ($diagnostics | any(. == $name) | not), group: ""}
               end]')"
           {
             echo "runs=${runs}"
@@ -208,6 +236,7 @@ jobs:
       name: ${{ matrix.run.name }}
       env: ${{ toJSON(matrix.run.env) }}
       publish: ${{ matrix.run.publish }}
+      group: ${{ matrix.run.group }}
       host: ${{ needs.matrix.outputs.host }}
       ref: ${{ needs.matrix.outputs.ref }}
       commit_sha: ${{ needs.matrix.outputs.sha }}

@@ -163,6 +163,11 @@ function validate(bundle) {
   const expectedRef = required('WASMCLOUD_BENCH_REF');
   const expectedSha = required('WASMCLOUD_BENCH_SHA');
   const expectedRowBench = process.env.WASMCLOUD_BENCH_ROW_NAME ?? expectedBench;
+  // A preset published as its own series: every row carries its group.
+  const expectedGroup = process.env.WASMCLOUD_BENCH_GROUP || null;
+  if (expectedGroup && !/^[a-z0-9]+([_-][a-z0-9]+)*$/.test(expectedGroup)) {
+    throw new Error('invalid publish group');
+  }
   if (metadata.bench !== expectedBench || !/^[a-z0-9][a-z0-9_-]*$/.test(expectedBench)) {
     throw new Error('artifact bench does not match this job');
   }
@@ -195,6 +200,7 @@ function validate(bundle) {
         row.bench !== expectedRowBench || row.sha !== metadata.sha ||
         row.short_sha !== metadata.short_sha || row.ref !== metadata.ref ||
         row.run_id !== metadata.run_id || row.run_attempt !== metadata.run_attempt ||
+        (expectedGroup && row.group !== expectedGroup) ||
         rowHostLabel(row) !== hostLabel) {
       throw new Error('artifact row does not match this job');
     }

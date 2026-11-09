@@ -329,10 +329,29 @@ fn density_exports_publish_clean_measurements_and_preserve_sparse_reports() -> R
         &repo.target().join("density/scale_density.json"),
         serde_json::to_vec(&reports)?,
     )?;
-    let data = rows(&success(
+    let all = rows(&success(
         repo.command("jsonl").args(["--bench", "scale_density"]),
     )?)?;
+    // The metric rows, then one ramp for the flavour that took steps.
+    let (ramps, data): (Vec<Value>, Vec<Value>) =
+        all.into_iter().partition(|r| r["metric"] == "ramp");
     assert_eq!(data.len(), 10);
+    let [ramp] = ramps.as_slice() else {
+        anyhow::bail!("expected one ramp row, got {ramps:?}");
+    };
+    provenance(ramp, &repo, "bench-fixture")?;
+    assert_eq!(ramp["group"], "density");
+    assert_eq!(ramp["param"], "warm");
+    assert_eq!(ramp["value"], 3.0);
+    assert_eq!(ramp["unit"], "steps");
+    assert!(ramp.get("better").is_none());
+    assert_eq!(ramp["stop"], "memory");
+    assert_eq!(ramp["marginal_bytes_per_workload"], 1024);
+    assert_eq!(ramp["peak_starts_per_sec"], 100.0);
+    assert_eq!(ramp["steps"]["workloads"], json!([10, 20, 30]));
+    assert_eq!(ramp["steps"]["request_p99_ms"], json!([1.0, 3.0, 999.0]));
+    assert_eq!(ramp["steps"]["request_p50_ms"], json!([null, null, null]));
+    assert_eq!(ramp["steps"]["clean"], json!([true, true, false]));
     for row in &data {
         provenance(row, &repo, "bench-fixture")?;
         assert_eq!(row["group"], "density");
@@ -368,6 +387,67 @@ fn density_exports_publish_clean_measurements_and_preserve_sparse_reports() -> R
         "| scale-to-zero@2cpu | served_workloads | 0.00 | workloads | higher | unmeasured |"
     ));
     assert!(!summary.contains("| warm | request_p99_ms | 999.00 |"));
+    Ok(())
+}
+
+#[test]
+fn a_density_preset_publishes_under_its_own_group() -> Result<()> {
+    let repo = Repository::new()?;
+    let steps: Vec<Value> = (1..=500u64)
+        .map(|n| {
+            json!({"workloads": n * 1000, "starts_per_sec": 30000.5,
+                        "footprint_bytes": n * 84_000_000, "request_p50_ms": 0.5,
+                        "request_p99_ms": 1.0, "requests_per_sec": 150000.0, "clean": true})
+        })
+        .collect();
+    let reports = json!([
+        {"bench":"scale_density","flavour":"warm","label":"warm-growth","stop":"max-process-memory",
+         "guest_memory_mode":"growth","memory_limit_bytes":107374182400u64,"steps":steps}
+    ]);
+    write(
+        &repo.target().join("density/scale_density.json"),
+        serde_json::to_vec(&reports)?,
+    )?;
+    let data = rows(&success(
+        repo.command("jsonl")
+            .args(["--bench", "scale_density"])
+            .env("WASMCLOUD_BENCH_GROUP", "density-max"),
+    )?)?;
+    assert!(data.iter().all(|r| r["group"] == "density-max"));
+    assert!(
+        data.iter()
+            .any(|r| r["metric"] == "served_workloads" && r["value"] == 500_000.0)
+    );
+    let ramp = data
+        .iter()
+        .find(|r| r["metric"] == "ramp")
+        .ok_or_else(|| anyhow::anyhow!("no ramp row"))?;
+    assert_eq!(ramp["value"], 500.0);
+    assert_eq!(ramp["flavour"], "warm");
+    assert_eq!(ramp["guest_memory_mode"], "growth");
+    let workloads = ramp["steps"]["workloads"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("no workloads column"))?;
+    assert_eq!(workloads.len(), 80);
+    assert_eq!(workloads.last(), Some(&json!(500_000)));
+    assert_eq!(ramp["steps"]["starts_per_sec"][0], 30001.0);
+    // Small enough to publish every run: well under 10 KB per flavour.
+    assert!(serde_json::to_string(ramp)?.len() < 10_000);
+
+    // A group is for density rows only, and must look like a bench name.
+    let error =
+        failure(
+            repo.command("jsonl")
+                .args(["--bench", "http_invoke", "--group", "density-max"]),
+        )?;
+    assert!(error.contains("density benches only"));
+    let error = failure(repo.command("jsonl").args([
+        "--bench",
+        "scale_density",
+        "--group",
+        "Density Max",
+    ]))?;
+    assert!(error.contains("invalid group"));
     Ok(())
 }
 
