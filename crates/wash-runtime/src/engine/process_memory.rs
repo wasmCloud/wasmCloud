@@ -76,9 +76,10 @@
 //! reminder each time the same period passes, because letting guests grow
 //! there is what an OOM kill follows.
 //!
-//! A footprint that stops being readable cannot hold refusals in place either:
-//! after [`MAX_FAILED_READS`] failed samples in a row the guard goes back to
-//! normal and says the limit is not being enforced until a reading returns.
+//! If the initial footprint is unavailable, or [`MAX_FAILED_READS`] periodic
+//! samples fail consecutively, new starts and growth are refused until a valid
+//! reading returns. The last measured pressure state is retained; availability
+//! of accounting is exposed separately by [`ProcessMemoryGuard::is_readable`].
 
 mod footprint;
 mod metrics;
@@ -129,8 +130,8 @@ const OVER_RECHECK_SAMPLES: u32 = 60;
 /// over, so allocator noise does not keep the recheck from ever running.
 const OVER_GROWTH_PERCENT: u64 = 1;
 
-/// Failed footprint reads in a row after which the guard stops acting on its
-/// last reading.
+/// Failed footprint reads in a row after which admission is blocked until
+/// accounting recovers.
 const MAX_FAILED_READS: u32 = 5;
 
 /// Where the footprint stands against the limit.
@@ -206,7 +207,7 @@ impl ProcessMemoryGuard {
             footprint: AtomicU64::new(0),
             high_water: AtomicU64::new(0),
             state: AtomicU8::new(ProcessMemoryState::Normal as u8),
-            blind: AtomicBool::new(false),
+            blind: AtomicBool::new(true),
             over: Mutex::new(OverEpisode::default()),
             refused_starts: AtomicU64::new(0),
         }
@@ -217,8 +218,8 @@ impl ProcessMemoryGuard {
         self.limit
     }
 
-    /// The footprint at the last sample, in bytes. Zero before the first, or where the
-    /// footprint cannot be read.
+    /// The last successful footprint in bytes, or zero before the first reading.
+    /// Check [`Self::is_readable`] before using it for current accounting.
     pub fn footprint_bytes(&self) -> u64 {
         self.footprint.load(Ordering::Relaxed)
     }
@@ -232,9 +233,14 @@ impl ProcessMemoryGuard {
         ProcessMemoryState::from_u8(self.state.load(Ordering::Relaxed))
     }
 
-    /// Whether the host is past its limit and refusing guest growth.
+    /// Whether a valid footprint is available for admission decisions.
+    pub fn is_readable(&self) -> bool {
+        !self.blind.load(Ordering::Acquire)
+    }
+
+    /// Whether growth is refused because of pressure or unavailable accounting.
     pub fn is_over(&self) -> bool {
-        self.state() == ProcessMemoryState::Over
+        !self.is_readable() || self.state() == ProcessMemoryState::Over
     }
 
     /// Workload starts [`Self::admit_start`] refused.
@@ -284,18 +290,21 @@ impl ProcessMemoryGuard {
             .refused_starts
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
-        let message = format!(
-            "this host is past max-process-memory ({} of {}) and accepts no new workloads until \
+        let message = if !self.is_readable() {
+            "this host cannot read its memory footprint and accepts no new workloads until accounting recovers".to_string()
+        } else {
+            format!(
+                "this host is past max-process-memory ({} of {}) and accepts no new workloads until \
              it falls back below {RECOVER_PERCENT}% of it",
-            render_bytes(self.footprint_bytes()),
-            render_bytes(self.limit),
-        );
+                render_bytes(self.footprint_bytes()),
+                render_bytes(self.limit),
+            )
+        };
         if let Some(suppressed) = START_REFUSAL_WARN.admit() {
             tracing::warn!(
                 refused_starts = refused,
                 suppressed,
-                "refused a workload start: {message}. Give this host fewer workloads, or raise \
-                 max-process-memory if the machine can back it"
+                "refused a workload start: {message}. Check memory accounting and capacity before retrying"
             );
         }
         Err(message)
@@ -309,6 +318,7 @@ impl ProcessMemoryGuard {
         if (next as u8) > (previous as u8) {
             self.transition(previous, next, footprint_bytes);
         }
+        self.mark_readable();
     }
 
     /// Divided before multiplied so a `u64::MAX` limit cannot overflow.
@@ -320,11 +330,15 @@ impl ProcessMemoryGuard {
         self.footprint.store(footprint_bytes, Ordering::Relaxed);
         self.high_water
             .fetch_max(footprint_bytes, Ordering::Relaxed);
-        if self.blind.swap(false, Ordering::Relaxed) {
+    }
+
+    // Publish readable only after the pressure decision. A caller recovering
+    // from failed reads must not see the old state with the new availability.
+    fn mark_readable(&self) {
+        if self.blind.swap(false, Ordering::Release) {
             tracing::info!(
-                footprint = %render_bytes(footprint_bytes),
-                "this process's memory footprint is readable again; max-process-memory is \
-                 enforced again"
+                footprint = %render_bytes(self.footprint_bytes()),
+                "this process's memory footprint is readable again; admission uses measured pressure"
             );
         }
     }
@@ -353,26 +367,25 @@ impl ProcessMemoryGuard {
                     max_process_memory = %render_bytes(self.limit),
                     "this process is still past max-process-memory and has not shrunk in \
                      {OVER_RECHECK_SAMPLES} samples. Guest memory growth and new instances \
-                     stay refused; whatever holds the memory is not a guest"
+                     stay refused. Drain workloads and reclaim retained memory; if pressure \
+                     persists, recreate the engine/pool or restart the drained host"
                 );
             }
         }
         self.transition(previous, next, footprint_bytes);
+        self.mark_readable();
     }
 
     /// Note that a sample could not be read. After [`MAX_FAILED_READS`] in a
-    /// row the guard stops acting on its last reading, which would otherwise
-    /// hold whatever state it left behind for as long as reads keep failing.
+    /// row the guard refuses admission until a valid reading returns.
     fn lose_reading(&self) {
         if self.blind.swap(true, Ordering::Relaxed) {
             return;
         }
         tracing::warn!(
             "cannot read this process's memory footprint ({MAX_FAILED_READS} samples in a row); \
-             max-process-memory is not being enforced until it can be read again"
+             new workloads and guest growth are refused until a valid reading returns"
         );
-        let previous = self.state();
-        self.transition(previous, ProcessMemoryState::Normal, self.footprint_bytes());
     }
 
     /// Whether this sample ends [`OVER_RECHECK_SAMPLES`] of being over without
@@ -517,7 +530,7 @@ impl ProcessMemoryGuard {
                 self.blind.store(true, Ordering::Relaxed);
                 tracing::warn!(
                     "cannot read this process's initial memory footprint; \
-                     max-process-memory is not enforced until a sample succeeds"
+                     new workloads and guest growth are refused until a sample succeeds"
                 );
             }
         }
@@ -586,7 +599,8 @@ mod tests {
                 std::collections::BTreeSet::from([
                     "process_memory.footprint",
                     "process_memory.high_water",
-                    "process_memory.limit"
+                    "process_memory.limit",
+                    "process_memory.readable"
                 ])
             );
             provider.shutdown()?;
@@ -615,25 +629,33 @@ mod tests {
 
     #[test]
     fn the_footprint_of_this_process_is_readable() {
+        let resident = std::hint::black_box(vec![42u8; 2 * MIB as usize]);
         let footprint = process_footprint().expect("the test platforms all have a reading");
         assert!(
             footprint > MIB,
-            "a test binary is larger than 1 MiB: {footprint}"
+            "the touched allocation is larger than 1 MiB: {footprint}"
         );
+        std::hint::black_box(resident);
     }
 
     #[test]
     fn another_process_reads_like_this_one() {
+        let resident = std::hint::black_box(vec![42u8; 2 * MIB as usize]);
         let by_pid = pid_footprint(std::process::id()).expect("this process is readable");
-        assert!(by_pid > MIB, "a test binary is larger than 1 MiB: {by_pid}");
+        assert!(
+            by_pid > MIB,
+            "the touched allocation is larger than 1 MiB: {by_pid}"
+        );
         assert_eq!(pid_footprint(u32::MAX), None);
+        std::hint::black_box(resident);
     }
 
     #[test]
     fn linux_counts_swapped_pages() {
-        let status = "Name:\tx\nVmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\nVmSwap:\t  1024 kB\n";
+        let status =
+            "VmPTE: 0 kB\nName:\tx\nVmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(status), Some(3 * MIB));
-        let no_swap = "VmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\n";
+        let no_swap = "VmPTE: 0 kB\nVmRSS:\t  4096 kB\nRssAnon:\t  2048 kB\n";
         assert_eq!(linux_footprint(no_swap), Some(2 * MIB));
         assert_eq!(linux_footprint("Name:\tx\n"), None);
     }
@@ -642,7 +664,7 @@ mod tests {
     /// however many times `VmRSS` counts them.
     #[test]
     fn linux_leaves_out_shared_file_and_shmem_pages() {
-        let status = "VmRSS:\t 4196352 kB\nRssAnon:\t  2048 kB\nRssFile:\t  4096 kB\n\
+        let status = "VmPTE: 0 kB\nVmRSS:\t 4196352 kB\nRssAnon:\t  2048 kB\nRssFile:\t  4096 kB\n\
                       RssShmem:\t 4190208 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(status), Some(3 * MIB));
     }
@@ -667,10 +689,52 @@ mod tests {
 
     #[test]
     fn linux_without_rss_anon_falls_back_to_vm_rss() {
-        let status = "VmRSS:\t  2048 kB\nVmSwap:\t  1024 kB\n";
+        let status = "VmPTE: 0 kB\nVmRSS:\t  2048 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(status), Some(3 * MIB));
         let with_page_tables = "VmRSS:\t  2048 kB\nVmPTE:\t  1024 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(with_page_tables), Some(4 * MIB));
+    }
+
+    #[test]
+    fn invalid_or_missing_accounting_is_unavailable() {
+        assert_eq!(linux_footprint("RssAnon: 1 kB\n"), None);
+        for field in ["RssAnon", "VmPTE", "VmPMD", "VmSwap"] {
+            for bad in ["garbage", "-1", "18446744073709551616"] {
+                let mut status = format!("{field}: {bad} kB\n");
+                if field != "RssAnon" {
+                    status.push_str("RssAnon: 1 kB\n");
+                }
+                if field != "VmPTE" {
+                    status.push_str("VmPTE: 1 kB\n");
+                }
+                status.push_str("VmRSS: 100 kB\n");
+                assert_eq!(linux_footprint(&status), None, "{status}");
+            }
+        }
+    }
+
+    #[test]
+    fn page_table_arithmetic_saturates() {
+        for field in ["VmPTE", "VmPMD"] {
+            let mut status = format!("RssAnon: 1 kB\n{field}: {} kB\n", u64::MAX);
+            if field != "VmPTE" {
+                status.push_str("VmPTE: 1 kB\n");
+            }
+            assert_eq!(linux_footprint(&status), Some(u64::MAX));
+        }
+    }
+
+    #[test]
+    fn missing_accounting_blocks_even_a_previously_healthy_guard() {
+        let guard = ProcessMemoryGuard::new(1000 * MIB);
+        assert!(guard.is_over(), "no initial reading yet");
+        guard.observe(100 * MIB);
+        guard.lose_reading();
+        assert!(guard.is_over());
+        assert!(guard.admit_start().unwrap_err().contains("cannot read"));
+        guard.observe(100 * MIB);
+        assert!(guard.is_readable());
+        assert!(!guard.is_over());
     }
 
     #[test]
@@ -756,10 +820,12 @@ mod tests {
 
     #[test]
     fn the_reader_can_be_read_again_and_again() {
+        let resident = std::hint::black_box(vec![42u8; 2 * MIB as usize]);
         let mut reader = FootprintReader::new();
         for _ in 0..3 {
             assert!(reader.read().is_some_and(|footprint| footprint > MIB));
         }
+        std::hint::black_box(resident);
     }
 
     #[test]
@@ -827,12 +893,25 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_footprint_stops_refusing() {
+    fn retained_page_tables_require_reclaiming_before_admission_recovers() {
+        let guard = ProcessMemoryGuard::new(100 * MIB);
+        let retained = linux_footprint("RssAnon: 0 kB\nVmPTE: 104000 kB\n").unwrap();
+        for _ in 0..OVER_RECHECK_SAMPLES * 3 {
+            guard.observe(retained);
+            assert!(guard.is_over());
+        }
+        guard.observe(10 * MIB);
+        assert!(!guard.is_over());
+    }
+
+    #[test]
+    fn an_unreadable_footprint_keeps_refusing() {
         let guard = ProcessMemoryGuard::new(1000 * MIB);
         guard.observe(1001 * MIB);
         assert!(guard.is_over());
         guard.lose_reading();
-        assert_eq!(guard.state(), ProcessMemoryState::Normal);
+        assert!(!guard.is_readable());
+        assert!(guard.is_over());
         guard.observe(1001 * MIB);
         assert!(guard.is_over(), "a reading that returns is acted on again");
     }

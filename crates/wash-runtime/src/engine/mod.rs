@@ -1465,6 +1465,7 @@ pub struct EngineBuilder {
     host_memory: Option<host_memory::HostMemoryBudgets>,
     max_process_memory_bytes: Option<u64>,
     max_process_memory_off: bool,
+    strict_process_memory: bool,
     guest_memory_mode: guest_memory::GuestMemoryMode,
     max_initial_guest_memory_bytes: Option<u64>,
     hostcall_fuel: Option<std::num::NonZeroUsize>,
@@ -1565,6 +1566,14 @@ impl EngineBuilder {
     pub fn with_max_process_memory_bytes(mut self, bytes: u64) -> Self {
         self.max_process_memory_bytes = Some(bytes);
         self.max_process_memory_off = false;
+        self
+    }
+
+    /// Require a detectable capacity and a process threshold below it.
+    /// This validates configuration; it does not make sampling a hard cap.
+    #[must_use]
+    pub fn with_strict_process_memory(mut self, strict: bool) -> Self {
+        self.strict_process_memory = strict;
         self
     }
 
@@ -1948,11 +1957,22 @@ impl EngineBuilder {
         {
             tracing::warn!("{advisory}");
         }
-        let max_process_memory_bytes = (!self.max_process_memory_off).then(|| {
-            self.max_process_memory_bytes.unwrap_or_else(|| {
-                host_memory::derive_max_process_memory_bytes_within(memory_limit)
-            })
-        });
+        anyhow::ensure!(
+            !(self.strict_process_memory && self.max_process_memory_off),
+            "strict process memory cannot be combined with disabling max-process-memory"
+        );
+        let max_process_memory_bytes = if self.max_process_memory_off {
+            None
+        } else {
+            Some(
+                host_memory::resolve_process_memory_limit(
+                    self.max_process_memory_bytes,
+                    memory_limit,
+                    self.strict_process_memory,
+                )
+                .map_err(anyhow::Error::msg)?,
+            )
+        };
         // Only for a limit the operator named: a derived one is a share of the
         // very limit this checks against.
         if !self.max_process_memory_off

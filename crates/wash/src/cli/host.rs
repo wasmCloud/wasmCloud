@@ -429,13 +429,20 @@ pub struct HostCommand {
     /// there is no cgroup, so the host never sets out to use more memory than
     /// the machine has. That matters most where nothing else stops it: macOS
     /// does not OOM-kill an ordinary process, it swaps until the machine
-    /// stalls. `off` (or `none`) holds the process to no limit at all.
+    /// stalls. Failed capacity detection requires an explicit limit or `off`.
+    /// `off` (or `none`) holds the process to no limit at all.
     ///
     /// Swap is not part of the derived limit, though the footprint counts
     /// swapped pages. To let the host use swap before refusing guests, set
     /// this explicitly, e.g. to RAM plus the share of swap it may take.
     #[arg(long = "max-process-memory", env = "WASH_HOST_MAX_PROCESS_MEMORY")]
     pub max_process_memory: Option<String>,
+
+    /// Require detectable capacity and a process threshold below it.
+    /// Rejects `--max-process-memory off`. This is configuration validation;
+    /// OS/container limits are still needed for a hard memory boundary.
+    #[arg(long, env = "WASH_HOST_STRICT_PROCESS_MEMORY")]
+    pub strict_process_memory: bool,
 
     /// How `--max-guest-memory` is applied.
     ///
@@ -1529,6 +1536,7 @@ impl CliCommand for HostCommand {
         if let Some(fuel) = hostcall_fuel {
             engine_builder = engine_builder.with_hostcall_fuel(fuel);
         }
+        engine_builder = engine_builder.with_strict_process_memory(self.strict_process_memory);
         match process_memory_policy {
             ProcessMemoryPolicy::Limit(bytes) => {
                 engine_builder = engine_builder.with_max_process_memory_bytes(bytes);
@@ -2854,6 +2862,25 @@ impl ProcessMemoryPolicy {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod process_memory_policy_tests {
     use super::*;
+    #[test]
+    fn strict_process_memory_is_exposed_by_the_cli() -> anyhow::Result<()> {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            host: HostCommand,
+        }
+        let cli = TestCli::try_parse_from([
+            "wash-host",
+            "--strict-process-memory",
+            "--max-process-memory",
+            "1GiB",
+        ])?;
+        assert!(cli.host.strict_process_memory);
+        assert_eq!(cli.host.max_process_memory.as_deref(), Some("1GiB"));
+        Ok(())
+    }
+
     #[test]
     fn distinguishes_automatic_disabled_and_explicit_limits() -> anyhow::Result<()> {
         for raw in [None, Some(""), Some("  ")] {
