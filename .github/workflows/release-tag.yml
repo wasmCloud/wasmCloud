@@ -108,7 +108,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up gitsign
-        uses: chainguard-dev/actions/setup-gitsign@eb7c4e394b1b658178e6d5236e055364fd1bcc22 # main
+        uses: chainguard-dev/actions/setup-gitsign@a25ce483d875a46f4c837e85e32e0fda602693f5 # v1.8.1
 
       - name: Configure git
         run: |
