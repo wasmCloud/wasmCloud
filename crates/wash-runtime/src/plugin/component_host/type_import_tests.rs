@@ -91,6 +91,62 @@ async fn shared_types_do_not_depend_on_native_claims() -> anyhow::Result<()> {
     Ok(())
 }
 
+struct CompatibleSharedApi;
+
+#[async_trait::async_trait]
+impl HostPlugin for CompatibleSharedApi {
+    fn id(&self) -> &'static str {
+        "compatible-shared-api"
+    }
+
+    fn world(&self) -> WitWorld {
+        WitWorld {
+            imports: std::collections::HashSet::from([WitInterface::from(
+                "example:shared/api@1.2.0",
+            )]),
+            exports: Default::default(),
+        }
+    }
+
+    async fn on_workload_item_bind<'a>(
+        &self,
+        item: &mut WorkloadItem<'a>,
+        _interfaces: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        item.linker()?
+            .instance("example:shared/api@1.2.0")?
+            .func_wrap("read", |_, (): ()| Ok(()))?;
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn shared_types_do_not_shadow_a_compatible_native_provider() -> anyhow::Result<()> {
+    // Neither import exactly matches the native's version. Registering an
+    // empty instance for 1.2.3 would make it the preferred compatible match
+    // for the 1.2.2 import, hiding the native's `read` function.
+    for workload_calls in [false, true] {
+        let wasm = fixture(&format!(
+            r#"{}
+            (import "example:shared/api@1.2.3" (instance
+                (type $text string) (export "text" (type (eq $text)))))
+            (import "example:shared/api@1.2.2" (instance
+                (export "read" (func))))
+            "#,
+            imports(workload_calls)
+        ))?;
+        let native: Arc<dyn HostPlugin> = Arc::new(CompatibleSharedApi);
+        ComponentHostPlugin::builder()
+            .id("shared-types-with-compatible-native")
+            .wasm(&wasm)
+            .engine(Engine::builder().with_pooling_allocator(false).build()?)
+            .native_plugins(HashMap::from([(native.id(), native)]))
+            .build()
+            .await?;
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn shared_types_do_not_satisfy_capability_imports() -> anyhow::Result<()> {
     for (name, import) in [
