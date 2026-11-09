@@ -30,6 +30,13 @@ jobs:
     name: CodeQL (Rust)
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      # Leave room for the CodeQL database alongside the all-targets build.
+      # Keep proc-macro artifacts and line tables, but omit full DWARF and
+      # incremental caches, as in wash.yml.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: "0"
     permissions:
       security-events: write
       contents: read
