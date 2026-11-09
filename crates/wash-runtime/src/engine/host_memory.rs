@@ -336,7 +336,7 @@ pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
         bound,
         PoolCommitShape::from_env(),
         mappings_per_warm_component(memory_init_cow),
-        derived_slot_bytes(options.memory_layout.unwrap_or_default()),
+        options.memory_layout.unwrap_or_default(),
         memory_limit.map(|limit| share_of(limit, DERIVED_POOL_BOOKKEEPING_PERCENT)),
     )
 }
@@ -369,7 +369,7 @@ fn derive_max_memories_within(
     commit: CommitBound,
     shape: PoolCommitShape,
     mappings_per_warm_component: u64,
-    slot_bytes: u64,
+    layout: MemoryLayout,
     bookkeeping: Option<u64>,
 ) -> u32 {
     if cfg!(not(target_pointer_width = "64")) {
@@ -382,7 +382,10 @@ fn derive_max_memories_within(
     };
     let by_address_space = share_of(address_space, DERIVED_POOL_ADDRESS_SPACE_PERCENT)
         .saturating_sub(shape.fixed)
-        / slot_bytes.saturating_add(shape.per_memory).max(1);
+        .saturating_sub(round_to_pool_page(layout.guard))
+        / derived_slot_bytes(layout)
+            .saturating_add(shape.per_memory)
+            .max(1);
     let by_map_count = max_map_count.map_or(u64::MAX, |limit| {
         share_of(limit, POOL_MAP_COUNT_PERCENT) / mappings_per_warm_component
     });
@@ -2019,7 +2022,7 @@ mod tests {
             commit,
             PoolCommitShape::defaults(),
             mappings_per_warm_component(true),
-            derived_slot_bytes(MemoryLayout::default()),
+            MemoryLayout::default(),
             None,
         )
     }
@@ -2037,7 +2040,7 @@ mod tests {
                 CommitBound::Unaccounted,
                 PoolCommitShape::defaults(),
                 mappings_per_warm_component(true),
-                derived_slot_bytes(layout),
+                layout,
                 None,
             )
         };
@@ -2067,9 +2070,8 @@ mod tests {
         assert!((63_000..64_000).contains(&at(reduced)));
     }
 
-    /// At a 2 MiB slot the stack outweighs the memory, so the address-space
-    /// bound counts both: the slab, stacks and tables a derived count maps
-    /// all fit in the share.
+    /// The slab, stacks and tables a derived count maps all fit in the
+    /// address-space share, including platforms that map only tables at startup.
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn a_small_slot_count_maps_its_stacks_and_tables_too() {
@@ -2084,15 +2086,54 @@ mod tests {
             CommitBound::Unaccounted,
             shape,
             mappings_per_warm_component(true),
-            derived_slot_bytes(small),
+            small,
             None,
         );
         let share = share_of(USER_ADDRESS_SPACE, DERIVED_POOL_ADDRESS_SPACE_PERCENT);
         let mapped = |n: u64| n * (derived_slot_bytes(small) + shape.per_memory) + shape.fixed;
         assert!(mapped(u64::from(count)) <= share);
         assert!(mapped(u64::from(count) + 1) > share);
-        // The memory slots alone would admit 33.5 million, over twice as many.
-        assert!(2 * u64::from(count) < share / derived_slot_bytes(small));
+        let slots_only = share / derived_slot_bytes(small);
+        assert!(u64::from(count) < slots_only);
+        // Only Unix maps the stacks at startup. There they outweigh the
+        // 2 MiB slots, so slots alone would admit over twice as many.
+        if STACK_POOL_MAPPED_AT_STARTUP {
+            assert!(2 * u64::from(count) < slots_only);
+        }
+    }
+
+    /// The leading slab guard consumes address space in addition to each
+    /// slot's guard, even when the stack and table totals are pinned.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_address_space_bound_includes_the_leading_guard() {
+        let layout = MemoryLayout {
+            reservation: 2 * MIB,
+            guard: MIB,
+        };
+        for shape in [
+            PoolCommitShape::defaults(),
+            PoolCommitShape::new(WASMTIME_DEFAULT_TABLE_ELEMENTS, Some(500), Some(2000)),
+        ] {
+            let mapped = |count: u32| {
+                pool_slab_bytes(layout.reservation, count, layout)
+                    + u64::from(count) * shape.per_memory
+                    + shape.fixed
+            };
+            let share = mapped(2000) - 1;
+            let count = derive_max_memories_within(
+                share * 2,
+                None,
+                CommitBound::Unaccounted,
+                shape,
+                mappings_per_warm_component(true),
+                layout,
+                None,
+            );
+            assert_eq!(count, 1999);
+            assert!(mapped(count) <= share);
+            assert!(mapped(count + 1) > share);
+        }
     }
 
     /// A named count whose slots fit but whose stacks and tables push the
@@ -2157,7 +2198,7 @@ mod tests {
                 CommitBound::Unaccounted,
                 PoolCommitShape::defaults(),
                 mappings_per_warm_component(true),
-                derived_slot_bytes(layout),
+                layout,
                 memory_limit.map(|limit| share_of(limit, DERIVED_POOL_BOOKKEEPING_PERCENT)),
             )
         };
@@ -2915,7 +2956,7 @@ mod tests {
                 CommitBound::Within(bytes),
                 shape,
                 mappings_per_warm_component(true),
-                derived_slot_bytes(MemoryLayout::default()),
+                MemoryLayout::default(),
                 None,
             )
         };
@@ -2993,7 +3034,7 @@ mod tests {
                 CommitBound::Unaccounted,
                 PoolCommitShape::defaults(),
                 mappings_per_warm_component(false),
-                derived_slot_bytes(MemoryLayout::default()),
+                MemoryLayout::default(),
                 None,
             ),
             14_744

@@ -156,6 +156,15 @@ fn run_presets(
         header.push_str(&provenance);
         print!("{header}");
         let log_path = out.join(format!("{}.log", run.name));
+        let report_path = out.join(format!("{}.json", run.name));
+        // A failed rerun must not leave an older report beside its new log.
+        match fs::remove_file(&report_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("removing {}", report_path.display()));
+            }
+        }
         let mut log =
             File::create(&log_path).with_context(|| format!("creating {}", log_path.display()))?;
         log.write_all(header.as_bytes())?;
@@ -166,10 +175,7 @@ fn run_presets(
             .args(["--bench", "scale_density", "--"])
             .args(run.flavour)
             .envs(run.env.iter().map(|(key, value)| (*key, value.as_str())))
-            .env(
-                "WASH_SCALE_REPORT_JSON",
-                out.join(format!("{}.json", run.name)),
-            )
+            .env("WASH_SCALE_REPORT_JSON", &report_path)
             .current_dir(workspace);
         // A failed flavour does not skip the next; the task still fails.
         if let Err(error) = crate::coverage::execute(command, Some(log), true) {
@@ -396,9 +402,12 @@ mod tests {
     fn a_failed_run_does_not_skip_the_next_but_the_task_fails() {
         let (dir, cargo) = stub_workspace("-- warm");
         let out = dir.path().join("out");
+        fs::create_dir_all(&out).unwrap();
+        fs::write(out.join("density-warm.json"), b"old successful report").unwrap();
         let error = run_presets(dir.path(), Preset::Density, &out, none, cargo).unwrap_err();
         assert!(error.to_string().contains("density-warm failed"), "{error}");
         assert!(!error.to_string().contains("density-s2z"), "{error}");
+        assert!(!out.join("density-warm.json").exists());
 
         let out = fs::canonicalize(&out).unwrap();
         let calls = fs::read_to_string(dir.path().join("calls")).unwrap();
