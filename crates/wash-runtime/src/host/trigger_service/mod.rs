@@ -476,20 +476,18 @@ impl PreparedIngress {
                 }
                 registry.replay_complete();
 
+                // Without a registry nothing is ever staged, and this never fires.
                 let late_drops = accessor.with(|mut access| {
                     let registry = access.data_mut().resource_registry.as_ref();
-                    registry.map(|registry| registry.late_drops())
+                    registry
+                        .map(|registry| registry.late_drops())
+                        .unwrap_or_default()
                 });
                 loop {
                     let job = tokio::select! {
                         biased;
                         // A call ending staged a drop its borrow had held back.
-                        () = async {
-                            match &late_drops {
-                                Some(late_drops) => late_drops.notified().await,
-                                None => std::future::pending().await,
-                            }
-                        } => return ServeOutcome::FlushDrops,
+                        () = late_drops.notified() => return ServeOutcome::FlushDrops,
                         job = rx.recv() => job,
                     };
                     let Some(job) = job else { break };

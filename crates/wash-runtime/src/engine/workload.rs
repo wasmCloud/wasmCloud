@@ -2127,23 +2127,26 @@ impl ResolvedWorkload {
                                 // A sync import is served by a host function, which
                                 // cannot re-enter its own store, so its callee runs
                                 // beside it in a companion.
-                                let sync_callee = if export_is_async {
-                                    None
-                                } else {
-                                    ensure!(
-                                        crosses,
-                                        "{import_name}.{export_name} is a sync function a linked \
-                                         component cannot serve: its signature carries a host \
-                                         resource, an `error-context`, or a `stream`/`future` \
-                                         that cannot be moved, and a sync call is served from a \
-                                         store of the callee's own, which those cannot enter"
-                                    );
-                                    Some((callee(), Signature::of(&func_ty)))
-                                };
-                                let target = if let Some((callee, signature)) = &sync_callee {
+                                ensure!(
+                                    export_is_async || crosses,
+                                    "{import_name}.{export_name} is a sync function a linked \
+                                     component cannot serve: its signature carries a host \
+                                     resource, an `error-context`, or a `stream`/`future` \
+                                     that cannot be moved, and a sync call is served from a \
+                                     store of the callee's own, which those cannot enter"
+                                );
+                                // An async call carrying a resource follows a
+                                // companioned component to its companion, where
+                                // that resource lives.
+                                let target = if !export_is_async
+                                    || (companioned
+                                        && crosses
+                                        && func_carries_resource(&func_ty, |resource| {
+                                            !host_resources.contains(resource)
+                                        })) {
                                     LinkedTarget::Companion {
-                                        callee: Arc::clone(callee),
-                                        signature: signature.clone(),
+                                        callee: callee(),
+                                        signature: Signature::of(&func_ty),
                                     }
                                 } else if plain_safe {
                                     // Plain-value async calls always run
@@ -2151,19 +2154,6 @@ impl ResolvedWorkload {
                                     LinkedTarget::Ephemeral {
                                         call: callee(),
                                         mode: EphemeralCallMode::PlainValue,
-                                    }
-                                } else if companioned
-                                    && crosses
-                                    && func_carries_resource(&func_ty, |resource| {
-                                        !host_resources.contains(resource)
-                                    })
-                                {
-                                    // A call carrying a resource follows a
-                                    // companioned component to its companion,
-                                    // where that resource lives.
-                                    LinkedTarget::Companion {
-                                        callee: callee(),
-                                        signature: Signature::of(&func_ty),
                                     }
                                 } else if func_carries_resource(&func_ty, |resource| {
                                     own_resources
@@ -2208,12 +2198,13 @@ impl ResolvedWorkload {
                                 }
 
                                 let export_name = inv.export_name.clone();
-                                match sync_callee {
-                                    None => linker_instance
+                                let inv = Arc::new(inv);
+                                if export_is_async {
+                                    linker_instance
                                         .func_new_concurrent(
                                             export_name.as_ref(),
                                             move |accessor, _func_ty, params, results| {
-                                                let inv = inv.clone();
+                                                let inv = Arc::clone(&inv);
                                                 Box::pin(async move {
                                                     invoke_linked_async_export(
                                                         accessor, params, results, &inv,
@@ -2224,18 +2215,19 @@ impl ResolvedWorkload {
                                         )
                                         .map_err(|e| {
                                             e.context("failed to create concurrent func")
-                                        })?,
-                                    Some((callee, signature)) => linker_instance
+                                        })?
+                                } else {
+                                    // A sync import is served by a host function,
+                                    // which cannot re-enter its own store, so its
+                                    // callee runs beside it in a companion.
+                                    linker_instance
                                         .func_new_async(
                                             export_name.as_ref(),
                                             move |store, _func_ty, params, results| {
-                                                let inv = inv.clone();
-                                                let callee = Arc::clone(&callee);
-                                                let signature = signature.clone();
+                                                let inv = Arc::clone(&inv);
                                                 Box::new(async move {
                                                     companion::invoke_sync(
-                                                        store, params, results, &inv, &callee,
-                                                        &signature,
+                                                        store, params, results, &inv,
                                                     )
                                                     .await
                                                 })
@@ -2243,7 +2235,7 @@ impl ResolvedWorkload {
                                         )
                                         .map_err(|e| {
                                             e.context("failed to wrap sync func in async func")
-                                        })?,
+                                        })?
                                 }
                             }
                             ComponentItem::Resource(resource_ty) => {
@@ -2295,23 +2287,22 @@ impl ResolvedWorkload {
                                         .metadata
                                         .proxied_imports
                                         .contains(&exported_ty);
-                                if proxied {
+                                type Dtor = fn(
+                                    wasmtime::StoreContextMut<'_, SharedCtx>,
+                                    u32,
+                                )
+                                    -> wasmtime::Result<()>;
+                                let (ty, dtor): (ResourceType, Dtor) = if proxied {
                                     links.proxied.push(resource_ty);
-                                }
-                                let defined = if proxied {
-                                    linker_instance.resource(
-                                        export_name,
+                                    (
                                         resource_bridge::proxy_resource_type(),
                                         companion::drop_proxy,
                                     )
                                 } else {
-                                    linker_instance.resource(
-                                        export_name,
-                                        ResourceType::host::<ResourceAny>(),
-                                        |_, _| Ok(()),
-                                    )
+                                    (ResourceType::host::<ResourceAny>(), |_, _| Ok(()))
                                 };
-                                defined
+                                linker_instance
+                                        .resource(export_name, ty, dtor)
                                         .map_err(|e| {
                                             e.context(format!(
                                                 "failed to define resource import: {import_name}.{export_name}"

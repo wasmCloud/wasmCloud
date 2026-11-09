@@ -568,10 +568,10 @@ fn extract(
 
 /// Undo taking `values` out of `store` for a call that will not be made, and
 /// return what still owns a resource in another store.
-fn give_back(mut store: StoreContextMut<SharedCtx>, mut values: Vec<Relocated>) -> Vec<Relocated> {
+fn give_back(mut store: StoreContextMut<SharedCtx>, values: Vec<Relocated>) -> Vec<Relocated> {
     let mut stranded = Vec::new();
     let mut lent = Vec::new();
-    while let Some(value) = values.pop() {
+    for value in Relocated::leaves(values) {
         match value {
             Relocated::Resource {
                 owner,
@@ -595,26 +595,37 @@ fn give_back(mut store: StoreContextMut<SharedCtx>, mut values: Vec<Relocated>) 
                 }
             }
             Relocated::Host(carried) if carried.lent() => lent.push(carried),
-            Relocated::List(inner)
-            | Relocated::FixedLengthList(inner)
-            | Relocated::Tuple(inner) => values.extend(inner),
-            Relocated::Record(fields) => values.extend(fields.into_iter().map(|(_, v)| v)),
-            Relocated::Variant(_, inner) | Relocated::Option(inner) => values.push(*inner),
-            Relocated::Result(Ok(inner) | Err(inner)) => values.push(*inner),
-            Relocated::Map(entries) => values.extend(entries.into_iter().flat_map(|(k, v)| [k, v])),
             // A pump stops when its far end is dropped, a host resource given
             // away is dropped as its new store would have dropped it, and a
             // `borrow` took nothing from the store.
-            Relocated::Val(_)
-            | Relocated::Stream(_)
-            | Relocated::Future(_)
-            | Relocated::Host(_)
-            | Relocated::HostAgain(_)
-            | Relocated::Resource { owned: false, .. } => {}
+            _ => {}
         }
     }
     let _ = host_move::restore(store, lent);
     stranded
+}
+
+impl Relocated {
+    /// Every value in `values` that is not made of others, however deeply
+    /// they are nested.
+    pub(crate) fn leaves(mut values: Vec<Relocated>) -> Vec<Relocated> {
+        let mut leaves = Vec::new();
+        while let Some(value) = values.pop() {
+            match value {
+                Relocated::List(inner)
+                | Relocated::FixedLengthList(inner)
+                | Relocated::Tuple(inner) => values.extend(inner),
+                Relocated::Record(fields) => values.extend(fields.into_iter().map(|(_, v)| v)),
+                Relocated::Variant(_, inner) | Relocated::Option(inner) => values.push(*inner),
+                Relocated::Result(Ok(inner) | Err(inner)) => values.push(*inner),
+                Relocated::Map(entries) => {
+                    values.extend(entries.into_iter().flat_map(|(k, v)| [k, v]))
+                }
+                leaf => leaves.push(leaf),
+            }
+        }
+        leaves
+    }
 }
 
 /// Prepare every one of `vals` to leave `store`, as the arguments of a call
@@ -772,15 +783,12 @@ pub(crate) fn finish_call(
     result_tys: &[Type],
     host: HostHandles,
 ) -> Result<Finished, RelocateError> {
-    let returned = match lent.release(store.as_context_mut()) {
-        Ok(returned) => returned,
-        Err(error) => {
-            return Err(RelocateError {
-                error,
-                stranded: Vec::new(),
-            });
-        }
-    };
+    let returned = lent
+        .release(store.as_context_mut())
+        .map_err(|error| RelocateError {
+            error,
+            stranded: Vec::new(),
+        })?;
     let results = extract_all(store, results, result_tys, host, &mut Vec::new())?;
     Ok(Finished { results, returned })
 }

@@ -378,11 +378,7 @@ pub(super) async fn drain_plugin_resources(store: &mut Store<SharedCtx>) {
         .as_mut()
         .map(crate::engine::store::resource_bridge::ResourceRegistry::drain_all)
         .unwrap_or_default();
-    for real in all {
-        if let Err(e) = real.resource_drop_async(&mut *store).await {
-            tracing::warn!(err = %e, "failed to drop a proxied resource on teardown");
-        }
-    }
+    crate::engine::store::resource_bridge::drop_reals(store, all).await;
 }
 
 impl AccessorTask<SharedCtx> for CapabilityTask {

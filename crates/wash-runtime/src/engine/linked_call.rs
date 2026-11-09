@@ -310,11 +310,11 @@ fn type_crosses_to_companion(
 ) -> bool {
     !any_leaf(ty, &|leaf| match leaf {
         Type::Own(resource) => host.keeps(resource, Reach::Own),
-        Type::Borrow(resource) => match lends {
-            true => host.keeps(resource, Reach::OwnOrBorrow),
-            false => host.contains(resource),
-        },
+        Type::Borrow(resource) if lends => host.keeps(resource, Reach::OwnOrBorrow),
+        Type::Borrow(resource) => host.contains(resource),
         Type::ErrorContext => true,
+        // A caller that lends is blocked, so nothing there can feed a pump.
+        Type::Stream(_) | Type::Future(_) if lends => true,
         other => is_unbridgeable_pump(other, payloads),
     })
 }
@@ -330,16 +330,12 @@ pub(crate) fn func_crosses_to_companion(
     payloads: &super::stream_payload::StreamPayloads,
     sync: bool,
 ) -> bool {
-    let carries_pump = |ty: &Type| {
-        any_leaf(ty, &|leaf| {
-            matches!(leaf, Type::Stream(_) | Type::Future(_))
-        })
-    };
-    func_ty.params().all(|(_, ty)| {
-        type_crosses_to_companion(&ty, host, payloads, sync) && !(sync && carries_pump(&ty))
-    }) && func_ty
-        .results()
-        .all(|ty| type_crosses_to_companion(&ty, host, payloads, false))
+    func_ty
+        .params()
+        .all(|(_, ty)| type_crosses_to_companion(&ty, host, payloads, sync))
+        && func_ty
+            .results()
+            .all(|ty| type_crosses_to_companion(&ty, host, payloads, false))
 }
 
 /// Whether a value of this type carries a resource `is_one` picks out, as a
@@ -478,25 +474,17 @@ pub(crate) async fn new_store_from_templates(
         active,
         linked,
         linked_instances,
-        StoreKind {
-            is_service,
-            // Services included: trapping one means a supervisor restart,
-            // which beats carrying a wedged call forever.
-            abandoned: AbandonedCallPolicy::Trap,
-        },
+        is_service,
+        // Services included: trapping one means a supervisor restart, which
+        // beats carrying a wedged call forever.
+        AbandonedCallPolicy::Trap,
         |_| {},
     )
     .await
 }
 
-/// What kind of store [`new_store_from_templates_with`] builds.
-#[derive(Clone, Copy)]
-struct StoreKind {
-    is_service: bool,
-    /// What the store does about an abandoned call that has wedged it.
-    abandoned: AbandonedCallPolicy,
-}
-
+/// [`new_store_from_templates`], with `abandoned` saying what the store does
+/// about an abandoned call that has wedged it.
 #[allow(clippy::too_many_arguments)]
 async fn new_store_from_templates_with(
     engine: &wasmtime::Engine,
@@ -505,13 +493,10 @@ async fn new_store_from_templates_with(
     active: &ComponentCtxTemplate,
     linked: &[ComponentCtxTemplate],
     linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
-    kind: StoreKind,
+    is_service: bool,
+    abandoned: AbandonedCallPolicy,
     configure: impl FnOnce(&mut SharedCtx),
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    let StoreKind {
-        is_service,
-        abandoned,
-    } = kind;
     let store_id = crate::ids::now_v7().to_string();
     let active_ctx = build_ctx_from_template(active, http_handler, &store_id, is_service).await?;
     let mut shared_ctx = SharedCtx::new(active_ctx).with_guest_memory(&active.guest_memory);
@@ -591,7 +576,7 @@ pub(crate) async fn linked_attributes(
     Arc::clone(inv.attributes.get_or_init(|| attributes))
 }
 
-pub(crate) async fn new_ephemeral_store(
+async fn new_ephemeral_store(
     call: &EphemeralLinkedCall,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
     new_ephemeral_store_with(call, AbandonedCallPolicy::Trap, |_| {}).await
@@ -660,10 +645,8 @@ pub(crate) async fn new_ephemeral_store_with(
         &active,
         &linked,
         &linked_instances,
-        StoreKind {
-            is_service: false,
-            abandoned,
-        },
+        false,
+        abandoned,
         configure,
     )
     .await?;

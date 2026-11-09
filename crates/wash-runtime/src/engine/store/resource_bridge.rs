@@ -220,7 +220,12 @@ pub(crate) async fn flush_drops(store: &mut Store<SharedCtx>) {
         .as_mut()
         .map(ResourceRegistry::take_pending_drops)
         .unwrap_or_default();
-    for real in pending {
+    drop_reals(store, pending).await;
+}
+
+/// Drop each of `reals`, resources this store owns.
+pub(crate) async fn drop_reals(store: &mut Store<SharedCtx>, reals: Vec<ResourceAny>) {
+    for real in reals {
         if let Err(e) = real.resource_drop_async(&mut *store).await {
             tracing::warn!(err = %e, "failed to drop a proxied resource");
         }

@@ -40,7 +40,7 @@ use crate::engine::abandon::{
 use crate::engine::ctx::SharedCtx;
 use crate::engine::instance_driver::InvocationSample;
 use crate::engine::linked_call::{
-    EphemeralLinkedCall, LinkedExportInvocation, Signature, linked_attributes,
+    EphemeralLinkedCall, LinkedExportInvocation, LinkedTarget, Signature, linked_attributes,
     new_ephemeral_store_with, write_results,
 };
 use crate::engine::store::host_move::{self, Carried};
@@ -363,47 +363,20 @@ impl LinkGroup {
     /// anywhere: a companion is told to drop each of its resources they
     /// carried. (A host component plugin's is not reachable from here, and is
     /// released when the plugin's store is.)
+    ///
+    /// Dropping a pump's far end is what stops it, and dropping a host
+    /// resource is all its own drop would do.
     fn dispose(&self, relocated: Vec<Relocated>) {
-        for value in relocated {
-            self.dispose_one(value);
-        }
-    }
-
-    fn dispose_one(&self, value: Relocated) {
-        match value {
-            Relocated::Resource {
+        for value in Relocated::leaves(relocated) {
+            if let Relocated::Resource {
                 owner: Owner::Component(owner),
                 proxy_id,
                 owned: true,
-            } => {
-                if let Some(route) = self.route(&owner) {
-                    let _ = route.jobs.send(Job::Drop(proxy_id));
-                }
+            } = value
+                && let Some(route) = self.route(&owner)
+            {
+                let _ = route.jobs.send(Job::Drop(proxy_id));
             }
-            Relocated::List(values)
-            | Relocated::FixedLengthList(values)
-            | Relocated::Tuple(values) => self.dispose(values),
-            Relocated::Record(fields) => {
-                for (_, value) in fields {
-                    self.dispose_one(value);
-                }
-            }
-            Relocated::Variant(_, value) | Relocated::Option(value) => self.dispose_one(*value),
-            Relocated::Result(Ok(value) | Err(value)) => self.dispose_one(*value),
-            Relocated::Map(entries) => {
-                for (key, value) in entries {
-                    self.dispose_one(key);
-                    self.dispose_one(value);
-                }
-            }
-            // Dropping a pump's far end is what stops it, and dropping a host
-            // resource is all its own drop would do.
-            Relocated::Val(_)
-            | Relocated::Stream(_)
-            | Relocated::Future(_)
-            | Relocated::Host(_)
-            | Relocated::HostAgain(_)
-            | Relocated::Resource { .. } => {}
         }
     }
 }
@@ -622,6 +595,13 @@ fn known_route(links: &LinkState, callee: &EphemeralLinkedCall) -> Option<Route>
     links.routes.get(&callee.active_component_id).cloned()
 }
 
+/// Keep the route to `callee`'s companion for the store whose links are `links`.
+fn remember_route(links: &mut LinkState, callee: &EphemeralLinkedCall, route: &Route) {
+    links
+        .routes
+        .insert(Arc::clone(&callee.active_component_id), route.clone());
+}
+
 /// Rebuild a call's results in the caller's store and write them into its
 /// result slots. Results that cannot all be rebuilt are given back to their
 /// owners.
@@ -646,9 +626,14 @@ pub(crate) async fn invoke_sync(
     params: &[Val],
     results: &mut [Val],
     inv: &LinkedExportInvocation,
-    callee: &EphemeralLinkedCall,
-    signature: &Signature,
 ) -> wasmtime::Result<()> {
+    let LinkedTarget::Companion { callee, signature } = &inv.target else {
+        wasmtime::bail!(
+            "{}.{} is not served by a companion",
+            inv.import_name,
+            inv.export_name
+        );
+    };
     let deadline = crate::timeouts::shared_store_call();
     let route = match known_route(&store.data().links, callee) {
         Some(route) => route,
@@ -662,10 +647,7 @@ pub(crate) async fn invoke_sync(
                         callee.active_component_id
                     )
                 })??;
-            let links = &mut store.data_mut().links;
-            links
-                .routes
-                .insert(Arc::clone(&callee.active_component_id), route.clone());
+            remember_route(&mut store.data_mut().links, callee, &route);
             route
         }
     };
@@ -705,12 +687,8 @@ pub(crate) async fn invoke_async(
         None => {
             let group = accessor.with(|mut access| access.data_mut().links.group())?;
             let route = group.companion(callee).await?;
-            accessor.with(|mut access| {
-                let links = &mut access.data_mut().links;
-                links
-                    .routes
-                    .insert(Arc::clone(&callee.active_component_id), route.clone());
-            });
+            accessor
+                .with(|mut access| remember_route(&mut access.data_mut().links, callee, &route));
             route
         }
     };
