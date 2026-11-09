@@ -22,8 +22,12 @@ on:
     - cron: "0 9 * * 1"
   workflow_dispatch:
 
+# A pull request's new push cancels its previous analysis. Every other run
+# (merge queue, push to main, schedule, dispatch) gets its own group: a shared
+# group keeps only one pending run, so with a 40-minute Rust analysis, commits
+# landing in a burst would lose their main-branch baseline, or the weekly run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}

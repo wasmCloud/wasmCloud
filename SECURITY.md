@@ -156,8 +156,13 @@ Findings come from:
 - [OSV-Scanner](https://google.github.io/osv-scanner/) over every Cargo, Go and npm lockfile in
   the repository, in `audit.yml` on every pull request, merge queue run, push to `main` and daily.
   OSV includes the [OpenSSF malicious packages](https://github.com/ossf/malicious-packages) feed.
-- CodeQL on every pull request, merge queue run and push to `main`, plus weekly, and zizmor on
-  every pull request. Both report to the repository's Security tab.
+  RustSec informational advisories (unmaintained or unsound crates) are warnings, as they are for
+  `cargo audit`; every other finding fails `gate-audit`.
+- CodeQL on every pull request, merge queue run and push to `main`, plus weekly. It reports to the
+  repository's Security tab.
+- zizmor in [`lint-workflows.yml`](.github/workflows/lint-workflows.yml), on pull requests,
+  merge queue runs and pushes to `main` that change workflows, composite actions or CI scripts.
+  It reports to the repository's Security tab.
 - Parser fuzzing in the private `wasmCloud/security-fuzz` repository. Release
   trains dispatch every target on the exact merged release commit; longer
   campaigns run weekly. Campaign results do not gate promotion.
@@ -229,7 +234,10 @@ The security team and the relevant component maintainers review assessments thro
 request. Each statement identifies the advisory, release binaries and images using package URLs,
 `not_affected` status, an OpenVEX justification, and an impact statement explaining why it is
 not exploitable. All advisories ignored in `.cargo/audit.toml` require a matching statement
-and the same ignore in `osv-scanner.toml`; the audit workflow enforces both. The other
+and the same ignore in `osv-scanner.toml`, with a reason that starts with `VEX not_affected:`
+and links the statement. When an ignore leaves `.cargo/audit.toml`, its `osv-scanner.toml`
+ignore goes too. The audit workflow and the release train require the statement and keep both
+files in step. The other
 `osv-scanner.toml` ignores cover only examples, templates, and test fixtures, which are outside
 released code and do not need statements.
 
