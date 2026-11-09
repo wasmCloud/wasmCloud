@@ -46,8 +46,8 @@
       "rule": "PinnedDependenciesID",
       "path": "Dockerfile",
       "line": 3,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Pinned all release Dockerfile base images to registry-verified multi-platform SHA-256 indexes. Existing Dependabot docker configuration maintains digest updates. Docker build not run: Docker is unavailable."
     },
     {
       "number": 625,
@@ -55,8 +55,8 @@
       "rule": "PinnedDependenciesID",
       "path": "runtime-gateway/Dockerfile",
       "line": 14,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Pinned all release Dockerfile base images to registry-verified multi-platform SHA-256 indexes. Existing Dependabot docker configuration maintains digest updates. Docker build not run: Docker is unavailable."
     },
     {
       "number": 627,
@@ -64,8 +64,8 @@
       "rule": "PinnedDependenciesID",
       "path": "runtime-operator/Dockerfile",
       "line": 14,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Pinned all release Dockerfile base images to registry-verified multi-platform SHA-256 indexes. Existing Dependabot docker configuration maintains digest updates. Docker build not run: Docker is unavailable."
     },
     {
       "number": 722,
@@ -73,8 +73,8 @@
       "rule": "PinnedDependenciesID",
       "path": "runtime-gateway/Dockerfile",
       "line": 3,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Pinned all release Dockerfile base images to registry-verified multi-platform SHA-256 indexes. Existing Dependabot docker configuration maintains digest updates. Docker build not run: Docker is unavailable."
     },
     {
       "number": 723,
@@ -82,8 +82,8 @@
       "rule": "PinnedDependenciesID",
       "path": "runtime-operator/Dockerfile",
       "line": 3,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Pinned all release Dockerfile base images to registry-verified multi-platform SHA-256 indexes. Existing Dependabot docker configuration maintains digest updates. Docker build not run: Docker is unavailable."
     },
     {
       "number": 729,
@@ -316,8 +316,8 @@
       "rule": "PinnedDependenciesID",
       "path": "Dockerfile",
       "line": 34,
-      "status": "pending",
-      "notes": ""
+      "status": "fixed-locally",
+      "notes": "Pinned all release Dockerfile base images to registry-verified multi-platform SHA-256 indexes. Existing Dependabot docker configuration maintains digest updates. Docker build not run: Docker is unavailable."
     },
     {
       "number": 757,
