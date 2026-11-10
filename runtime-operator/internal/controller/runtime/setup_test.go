@@ -107,7 +107,7 @@ var controllerSetups = []controllerSetup{
 	},
 	{
 		name:       "workload-replicaset",
-		indexes:    []string{workloadReplicaSetOwnerIndex, workloadReplicaSetHashIndex},
+		indexes:    []string{workloadReplicaSetOwnerIndex, workloadReplicaSetRevisionIndex},
 		needsKinds: true,
 		setup: func(m *recordingManager, s *runtime.Scheme) error {
 			return (&WorkloadReplicaSetReconciler{Client: m.GetClient(), Scheme: schemeOr(m, s)}).SetupWithManager(m)

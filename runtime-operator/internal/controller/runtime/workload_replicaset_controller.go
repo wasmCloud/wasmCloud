@@ -28,7 +28,7 @@ const (
 	workloadReplicaSetReconcileInterval    = 1 * time.Minute
 	workloadReplicaSetReplicaGracePeriod   = 1 * time.Minute
 	workloadReplicaSetOwnerIndex           = "workload.replicaset.owner"
-	workloadReplicaSetHashIndex            = "workload.replicaset.hash"
+	workloadReplicaSetRevisionIndex        = "workload.replicaset.revision"
 	workloadReplicaSetGenerationAnnotation = "runtime.wasmcloud.dev/workload-replica-set-generation"
 	workloadReplicaSetNameAnnotation       = "runtime.wasmcloud.dev/workload-replicaset-name"
 	workloadDeploymentNameAnnotation       = "runtime.wasmcloud.dev/workload-deployment"
@@ -82,14 +82,14 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		return nil
 	}
 
+	templateHash := replicaSet.Spec.Template.Hash()
 	workloads := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(
 		ctx,
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
-			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetRevisionIndex: replicaSetRevisionKey(string(replicaSet.UID), templateHash),
 		},
 	); err != nil {
 		return err
@@ -104,7 +104,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 	missing := expectedReplicas - len(workloads.Items)
 	for slot, added := 0, 0; added < missing; slot++ {
 		name := rolloutChildName(replicaSet.Name, fmt.Sprintf("%s:%s:%d",
-			replicaSet.UID, replicaSet.Spec.Template.Hash(), slot))
+			replicaSet.UID, templateHash, slot))
 		if names[name] {
 			continue
 		}
@@ -118,7 +118,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 			}
 			annotations[k] = v
 		}
-		annotations[workloadReplicaSetGenerationAnnotation] = replicaSet.Spec.Template.Hash()
+		annotations[workloadReplicaSetGenerationAnnotation] = templateHash
 		annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
 		if replicaSet.Labels != nil && replicaSet.Labels[workloadDeploymentNameLabel] != "" {
 			annotations[workloadDeploymentNameAnnotation] = replicaSet.Labels[workloadDeploymentNameLabel]
@@ -195,8 +195,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
-			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetRevisionIndex: replicaSetRevisionKey(string(replicaSet.UID), replicaSet.Spec.Template.Hash()),
 		},
 	); err != nil {
 		return err
@@ -234,8 +233,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
-			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetRevisionIndex: replicaSetRevisionKey(string(replicaSet.UID), replicaSet.Spec.Template.Hash()),
 		},
 	); err != nil {
 		return err
@@ -342,8 +340,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 		workloads,
 		client.InNamespace(replicaSet.Namespace),
 		client.MatchingFields{
-			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
-			workloadReplicaSetHashIndex:  replicaSet.Spec.Template.Hash(),
+			workloadReplicaSetRevisionIndex: replicaSetRevisionKey(string(replicaSet.UID), replicaSet.Spec.Template.Hash()),
 		},
 	); err != nil {
 		return err
@@ -430,7 +427,7 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		return err
 	}
 
-	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, replicaSetHashIndexValue(replicaSetGvk))
+	err = mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(replicaSetGvk))
 	if err != nil {
 		return err
 	}
@@ -453,18 +450,19 @@ func replicaSetOwnerIndexValue(replicaSetGvk schema.GroupVersionKind) client.Ind
 	}
 }
 
-// replicaSetHashIndexValue indexes a ReplicaSet's Workload by the template hash
-// it was created from.
-func replicaSetHashIndexValue(replicaSetGvk schema.GroupVersionKind) client.IndexerFunc {
+func replicaSetRevisionKey(ownerUID, templateHash string) string {
+	return ownerUID + ":" + templateHash
+}
+
+// replicaSetRevisionIndexValue combines the owner UID and template hash.
+// A cache query with both separate indexes can select the hash first and
+// scan every Workload that uses the template, even for a single replica.
+func replicaSetRevisionIndexValue(replicaSetGvk schema.GroupVersionKind) client.IndexerFunc {
 	return func(rawObj client.Object) []string {
-		if _, ok := controllerUID(rawObj, replicaSetGvk); !ok {
-			return []string{}
+		ownerUID, owned := controllerUID(rawObj, replicaSetGvk)
+		if generation, stamped := rawObj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]; owned && stamped {
+			return []string{replicaSetRevisionKey(ownerUID, generation)}
 		}
-
-		if generation, ok := rawObj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]; ok {
-			return []string{generation}
-		}
-
-		return []string{}
+		return nil
 	}
 }

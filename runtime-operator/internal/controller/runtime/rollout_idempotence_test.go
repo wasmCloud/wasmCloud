@@ -41,7 +41,7 @@ func TestReplicaSetScaleUpWithLaggingCacheAndMissingSlot(t *testing.T) {
 	}
 	server := fake.NewClientBuilder().WithScheme(scheme).
 		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, replicaSetOwnerIndexValue(gvk)).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, replicaSetHashIndexValue(gvk)).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(gvk)).
 		Build()
 	cached := interceptor.NewClient(server, interceptor.Funcs{
 		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
