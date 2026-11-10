@@ -25,9 +25,9 @@
 //! - 15 concurrent starts of the *same* workload id: exactly one is admitted
 //!   and the other fourteen are refused, with nothing left half-started.
 //!
-//! Every herd here carries no digest, so no two members share a compile: this
-//! is the cost of a herd whose components are all different, which is the
-//! worse of the two shapes by a wide margin. The other shape — N replicas of
+//! Every herd member's bytes differ, so no two share a compile: this is the
+//! cost of a herd whose components are all different, which is the worse of
+//! the two shapes by a wide margin. The other shape — N replicas of
 //! one image, which share one compile through the digest-keyed cache — is
 //! pinned by `engine::tests::a_herd_of_replicas_shares_one_compiled_component`.
 
@@ -72,16 +72,47 @@ fn herd_host(i: usize) -> String {
     format!("herd-{i}.local")
 }
 
-/// A member of the herd carrying no digest, so it compiles on its own — the
-/// cost of a herd whose components are all different.
+/// A member of the herd with bytes of its own, so it compiles on its own — the
+/// cost of a herd whose components are all different. The runtime shares one
+/// compile among identical bytes, digest or not.
 fn herd_request(host_header: &str) -> WorkloadStartRequest {
-    component_workload_request(
+    let mut request = component_workload_request(
         "http-counter.wasm",
         "herd-workload",
         HTTP_COUNTER_WASM,
         default_counter_resources(),
         http_counter_host_interfaces(host_header),
-    )
+    );
+    for component in &mut request.workload.components {
+        component.bytes = tagged(HTTP_COUNTER_WASM, host_header).into();
+    }
+    request
+}
+
+/// `wasm` with a custom section naming `tag` appended, which changes its bytes
+/// and nothing it does.
+fn tagged(wasm: &[u8], tag: &str) -> Vec<u8> {
+    let mut body = Vec::new();
+    leb128(&mut body, "herd-member".len());
+    body.extend_from_slice(b"herd-member");
+    body.extend_from_slice(tag.as_bytes());
+    let mut bytes = wasm.to_vec();
+    bytes.push(0);
+    leb128(&mut bytes, body.len());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+fn leb128(out: &mut Vec<u8>, mut value: usize) {
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
 }
 
 /// Report every start that did not reach `Running`, named by its position in
