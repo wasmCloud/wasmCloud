@@ -135,7 +135,7 @@ impl HostProcess {
 
 /// Runs a host on a throwaway NATS, waits until it is up, and signals it.
 async fn running_host_signalled_with(signal: &str) -> Result<(Option<i32>, String)> {
-    let nats = GenericImage::new("nats", "2.12.8-alpine")
+    let nats = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_cmd(["-js"])

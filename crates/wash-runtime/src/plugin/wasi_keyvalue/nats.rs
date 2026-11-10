@@ -675,7 +675,7 @@ mod tests {
 
     async fn start_nats_jetstream()
     -> anyhow::Result<(ContainerAsync<GenericImage>, async_nats::Client)> {
-        let container = GenericImage::new("nats", "2.12.8-alpine")
+        let container = GenericImage::new("nats", "2.12.15-alpine")
             .with_exposed_port(4222.tcp())
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
             .with_cmd(["-js"])

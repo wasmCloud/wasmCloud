@@ -31,7 +31,7 @@ impl NatsServer {
 
     /// Always a server of its own, for a test that needs two distinct servers.
     pub(super) async fn container() -> anyhow::Result<Self> {
-        let container = GenericImage::new("nats", "2.12.8-alpine")
+        let container = GenericImage::new("nats", "2.12.15-alpine")
             .with_exposed_port(4222.tcp())
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
             .with_cmd(["-js"])

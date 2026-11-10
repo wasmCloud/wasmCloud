@@ -50,7 +50,7 @@ fn err(e: impl std::fmt::Debug) -> anyhow::Error {
 /// Start a fresh single-node NATS cluster in a container, returning the guard
 /// (kept alive for the test's duration) and its `nats://` url.
 async fn start_nats() -> Result<(ContainerAsync<GenericImage>, String)> {
-    let container = GenericImage::new("nats", "2.12.8-alpine")
+    let container = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .start()

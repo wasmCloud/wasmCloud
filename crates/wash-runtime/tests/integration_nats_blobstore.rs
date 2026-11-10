@@ -75,7 +75,7 @@ async fn start_nats(
         .try_init()
         .ok();
 
-    let image = GenericImage::new("nats", "2.12.8-alpine")
+    let image = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
     let container = match config {
@@ -453,7 +453,7 @@ accounts {
   NODE: { jetstream: enabled, users: [{ user: node }] }
 }
 "#;
-    let container = GenericImage::new("nats", "2.12.8-alpine")
+    let container = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_copy_to("/etc/nats/test.conf", config.as_bytes().to_vec())
