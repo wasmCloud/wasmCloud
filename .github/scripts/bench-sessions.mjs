@@ -151,8 +151,9 @@ export function findLeftovers(
 
 // findLeftovers, re-scanned up to `attempts` times `delayMs` apart while
 // any are found. logind leaves a session "closing" while it stops the
-// scope (up to its 90 s stop timeout), so a job dispatched just after an
-// operator logs out shouldn't fail on work that is already being killed.
+// scope, so a job dispatched just after an operator logs out shouldn't fail
+// on work already being killed. This covers work that exits promptly on
+// SIGTERM, not work that holds out to the scope's 90 s stop timeout.
 export function settledLeftovers(scan, opts, { attempts = 4, delayMs = 5_000, sleep }) {
   let leftovers = findLeftovers(scan(), opts);
   for (let i = 1; i < attempts && leftovers.length > 0; i++) {

@@ -478,6 +478,21 @@
       notify: restart systemd-logind
       tags: [logind]
 
+    # sshd only ends a session whose client vanished (laptop sleep, network
+    # drop) once TCP keepalive notices, about 2 h by default. Probe the client
+    # instead, so the session closes, and logind kills its work, within ~2 min.
+    # sshd re-reads its config for each new connection, so no reload is needed.
+    - name: sshd drop-in ending sessions whose client is gone
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/50-bench-keepalive.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          ClientAliveInterval 30
+          ClientAliveCountMax 4
+      tags: [logind]
+
     # ── Provisioning marker ───────────────────────────────────────────────
     - name: Stamp /etc/wasmcloud-bench-stage
       ansible.builtin.copy:

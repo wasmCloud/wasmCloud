@@ -128,7 +128,7 @@ test('tells a session logind forgot from loginctl itself failing', () => {
     user: 'root',
   });
   assert.equal(
-    loginctlSession('12', run({ status: 1, stderr: "Failed to get session path: No session '12' known\n" })),
+    loginctlSession('12', run({ status: 1, stderr: "Failed to get path for session '12': No session '12' known\n" })),
     null,
   );
   assert.throws(

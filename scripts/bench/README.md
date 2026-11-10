@@ -87,7 +87,11 @@ Host wasmcloud-bench
 When an SSH session closes, systemd-logind kills every process the session
 started, root's included. `provision.yml --tags logind` sets this with the
 drop-in `/etc/systemd/logind.conf.d/50-bench.conf` (`KillUserProcesses=yes`,
-and an empty `KillExcludeUsers=` because the default exempts root).
+and an empty `KillExcludeUsers=` because the default exempts root). The same
+tag sets `ClientAliveInterval 30` / `ClientAliveCountMax 4` in
+`/etc/ssh/sshd_config.d/50-bench-keepalive.conf`, so a connection that drops
+without closing (laptop sleep, network loss) ends its session within about two
+minutes instead of the ~2 h TCP keepalive takes.
 
 Without it, a dropped connection leaves its work running. A root `bash -s`
 polling `docker ps` once ran for 43 hours this way. It barely registered in
