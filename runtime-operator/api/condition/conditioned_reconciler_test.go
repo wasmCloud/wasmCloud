@@ -3,6 +3,7 @@ package condition
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -642,5 +643,53 @@ func TestConditionedReconcilerTrackGeneration(t *testing.T) {
 	}
 	if got := stored.Status.GetCondition(testCondition).LastTransitionTime; !got.Equal(&transitioned) {
 		t.Errorf("a restamp moved LastTransitionTime from %v to %v", transitioned, got)
+	}
+}
+
+func TestForcedStatusUpdateSkipsEmptyPatch(t *testing.T) {
+	for _, locked := range []bool{false, true} {
+		for _, changed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("locked=%v/changed=%v", locked, changed), func(t *testing.T) {
+				scheme := runtime.NewScheme()
+				scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+				obj := &conditionedResource{
+					ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName},
+				}
+				obj.Status.SetConditions(ReadyCondition(testCondition))
+				patches := 0
+				c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).
+					WithStatusSubresource(obj).WithInterceptorFuncs(interceptor.Funcs{
+					SubResourcePatch: func(ctx context.Context, c client.Client, subresource string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+						patches++
+						return c.SubResource(subresource).Patch(ctx, obj, patch, opts...)
+					},
+				}).Build()
+				r := NewConditionedReconciler(c, scheme, obj, time.Minute)
+				r.SetCondition(testCondition, func(ctx context.Context, obj *conditionedResource) error {
+					ForceStatusUpdate(ctx)
+					if locked {
+						RequireOptimisticLock(ctx)
+					}
+					if changed {
+						obj.Status.SetConditions(UnknownCondition(testCondition, "Waiting", "replicas pending"))
+					}
+					return ErrNoop()
+				})
+				result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := 0
+				if changed {
+					want = 1
+				}
+				if patches != want {
+					t.Fatalf("status patches = %d, want %d", patches, want)
+				}
+				if result.RequeueAfter != time.Minute {
+					t.Fatalf("requeue = %s, want one minute", result.RequeueAfter)
+				}
+			})
+		}
 	}
 }
