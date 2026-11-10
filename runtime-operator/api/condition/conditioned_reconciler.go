@@ -334,6 +334,16 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	if reconcilerCtx.ForceUpdate {
+		patch, err := client.MergeFrom(originalObject).Data(obj)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		// Scale counters are recomputed on every pass. Sending an empty
+		// status patch still consumes API capacity for each Ready workload.
+		reconcilerCtx.ForceUpdate = string(patch) != "{}"
+	}
+
+	if reconcilerCtx.ForceUpdate {
 		patch := client.MergeFrom(originalObject)
 		if reconcilerCtx.OptimisticLock {
 			patch = client.MergeFromWithOptions(originalObject, client.MergeFromWithOptimisticLock{})
