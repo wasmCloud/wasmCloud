@@ -105,25 +105,25 @@ use wash_runtime::types::{
 };
 
 // Opt-in global allocator, chosen the same way as `wash`'s: see the
-// `mimalloc` and `jemalloc` features in this crate's Cargo.toml. mimalloc wins
-// when both are enabled, and jemalloc is skipped on MSVC, which it does not
-// support.
-#[cfg(feature = "mimalloc")]
+// `bench-mimalloc` and `bench-jemalloc` features in this crate's Cargo.toml.
+// mimalloc wins when both are enabled, and jemalloc is skipped on MSVC, which
+// it does not support.
+#[cfg(feature = "bench-mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[cfg(all(
-    feature = "jemalloc",
-    not(feature = "mimalloc"),
+    feature = "bench-jemalloc",
+    not(feature = "bench-mimalloc"),
     not(target_env = "msvc")
 ))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 /// The allocator the block above selected, printed so a log says what it measured.
-const ALLOCATOR: &str = if cfg!(feature = "mimalloc") {
+const ALLOCATOR: &str = if cfg!(feature = "bench-mimalloc") {
     "mimalloc"
-} else if cfg!(all(feature = "jemalloc", not(target_env = "msvc"))) {
+} else if cfg!(all(feature = "bench-jemalloc", not(target_env = "msvc"))) {
     "jemalloc"
 } else {
     "system"

@@ -2,3 +2,11 @@
 # cargo-xtask pattern: https://github.com/matklad/cargo-xtask
 [alias]
 xtask = "run --package xtask --"
+
+# jemalloc (the opt-in `jemalloc` feature on wash) fixes its page size at
+# build time and aborts on a kernel with larger pages. 2^16 = 64 KiB runs on
+# 4K, 16K and 64K arm64 kernels (Asahi, Raspberry Pi 5, RHEL/Ampere 64K), for
+# a little more memory on 4K ones. Scoped to these targets by jemalloc-sys.
+[env]
+AARCH64_UNKNOWN_LINUX_GNU_JEMALLOC_SYS_WITH_LG_PAGE = "16"
+AARCH64_UNKNOWN_LINUX_MUSL_JEMALLOC_SYS_WITH_LG_PAGE = "16"

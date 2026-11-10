@@ -31,7 +31,9 @@ wasi-webgpu = ["wash-runtime/wasi-webgpu"]
 # arm64 host, for about 1% (jemalloc) or 5% (mimalloc) more host memory per
 # workload. See "The allocator" in `crates/wash-runtime/benches/scale_density.md`.
 # jemalloc does not build for MSVC, so on MSVC targets `jemalloc` is accepted and
-# does nothing. With both enabled, mimalloc wins.
+# does nothing. With both enabled, mimalloc wins. `wash --version` names the
+# allocator a build got. arm64 Linux builds of jemalloc use 64 KiB pages; see
+# `.cargo/config.toml`.
 mimalloc = ["dep:mimalloc"]
 jemalloc = ["dep:tikv-jemallocator"]
 

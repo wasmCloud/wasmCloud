@@ -216,16 +216,19 @@ Starting a warm workload makes many small host allocations from every start
 worker at once. On the 64-core host measured below, the glibc run used about
 20% CPU while starting (`cpu max starts/s` was five times `starts/s`). The
 improvement with alternative allocators is consistent with allocator contention;
-these measurements alone do not establish the bottleneck. The bench takes the same
-`mimalloc` and `jemalloc` features as `wash`, so it measures the allocator
-a `wash` built with that feature runs on:
+these measurements alone do not establish the bottleneck. The bench's
+`bench-mimalloc` and `bench-jemalloc` features select the same allocator as
+`wash`'s `mimalloc` and `jemalloc`, so it measures the allocator a `wash` built
+with that feature runs on. They are internal to the bench, not API for crates
+that depend on `wash-runtime`:
 
 ```text
-cargo bench -p wash-runtime --features mimalloc --bench scale_density -- warm
-cargo bench -p wash-runtime --features jemalloc --bench scale_density -- warm
+cargo bench -p wash-runtime --features bench-mimalloc --bench scale_density -- warm
+cargo bench -p wash-runtime --features bench-jemalloc --bench scale_density -- warm
 ```
 
-The run prints `global allocator: <name>` before its first flavour.
+The run prints `global allocator: <name>` before its first flavour, and a
+`wash` built with either feature names it in `wash --version`.
 Measured on aws-c9g-16xlarge (arm64, 63 cores, glibc) with the
 `million_warm` settings capped at 300,000 warm workloads, two runs each:
 
@@ -246,4 +249,22 @@ Measured on aws-c9g-16xlarge (arm64, 63 cores, glibc) with the
   a `make` and an `ar` for the target. Cross-building it from macOS with
   `cargo zigbuild` needs `ar` on `PATH` to be one that writes ELF archives
   (for example a wrapper that runs `zig ar`), or it links with no
-  allocator symbols. mimalloc builds with `cc` alone.
+  allocator symbols. mimalloc builds with `cc` alone. CI's `allocators` job in
+  `wash.yml` cross-builds both with zigbuild and checks the binary links the
+  allocator.
+- jemalloc fixes its page size at build time and aborts at startup on a kernel
+  with larger pages. `.cargo/config.toml` builds it for 64 KiB pages on
+  `aarch64-unknown-linux-{gnu,musl}` (`<TARGET>_JEMALLOC_SYS_WITH_LG_PAGE=16`),
+  so one arm64 binary runs on 4K, 16K and 64K kernels. The table above was
+  measured before that setting, at the host's 4 KiB pages.
+- The table measures warm starts, not memory returned after workloads stop.
+  Both allocators hold freed memory longer than glibc: mimalloc until its
+  purge delay passes, jemalloc until its decay does, and with jemalloc's
+  `background_threads_runtime_support` off (`default-features = false`) an
+  idle process may keep dirty pages. Since max-process-memory is held against
+  the process footprint, measure a start/stop churn run before recommending
+  either for production.
+- mimalloc's `secure` mode (libmimalloc-sys feature: guard pages, encoded
+  free lists, about 10% slower) hardens the host heap against corruption.
+  Guest linear memory is mapped by wasmtime and unaffected either way. It is
+  not enabled here.
