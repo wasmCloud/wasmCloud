@@ -62,7 +62,7 @@ nats:
     registry: docker.io
     repository: nats
     pull_policy: Always
-    tag: "2.12.8-alpine"
+    tag: "2.12.15-alpine"
   # -- Compute resources for the NATS container. Idle ~6Mi (profiled); the
   # bundled NATS is light control-plane use, so the limit is sized accordingly.
   resources:

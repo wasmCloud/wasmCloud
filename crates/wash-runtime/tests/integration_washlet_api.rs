@@ -73,7 +73,7 @@ async fn nats_endpoint() -> Result<(Option<ContainerAsync<GenericImage>>, String
     Ok(match std::env::var("NATS_URL") {
         Ok(url) => (None, url),
         Err(_) => {
-            let container = GenericImage::new("nats", "2.12.8-alpine")
+            let container = GenericImage::new("nats", "2.12.15-alpine")
                 .with_exposed_port(4222.tcp())
                 .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
                 .start()
