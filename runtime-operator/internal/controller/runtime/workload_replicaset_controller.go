@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -42,6 +44,7 @@ const (
 // WorkloadReplicaSetReconciler reconciles a WorkloadReplicaSet object
 type WorkloadReplicaSetReconciler struct {
 	client.Client
+	APIReader  client.Reader
 	Scheme     *runtime.Scheme
 	Recorder   events.EventRecorder
 	reconciler condition.AnyConditionedReconciler
@@ -93,7 +96,18 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 
 	expectedReplicas := int(*replicaSet.Spec.Replicas)
 
-	for i := len(workloads.Items); i < expectedReplicas; i++ {
+	names := make(map[string]bool, len(workloads.Items))
+	for _, workload := range workloads.Items {
+		names[workload.Name] = true
+	}
+	missing := expectedReplicas - len(workloads.Items)
+	for slot, added := 0, 0; added < missing; slot++ {
+		name := rolloutChildName(replicaSet.Name, fmt.Sprintf("%s:%s:%d",
+			replicaSet.UID, replicaSet.Spec.Template.Hash(), slot))
+		if names[name] {
+			continue
+		}
+		added++
 		annotations := make(map[string]string, len(replicaSet.Spec.Template.Annotations)+3)
 		for k, v := range replicaSet.Spec.Template.Annotations {
 			if k == workloadReplicaSetGenerationAnnotation ||
@@ -118,7 +132,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 
 		workload := &runtimev1alpha1.Workload{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:        fmt.Sprintf("%s-%s", replicaSet.Name, randHash()),
+				Name:        name,
 				Namespace:   replicaSet.Namespace,
 				Labels:      workloadLabels,
 				Annotations: annotations,
@@ -131,7 +145,22 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		}
 
 		if err := r.Create(ctx, workload); err != nil {
-			// Each attempt names a new Workload, and a refusal may mention the
+			if apierrors.IsAlreadyExists(err) {
+				reader := r.APIReader
+				if reader == nil {
+					reader = r.Client
+				}
+				existing := &runtimev1alpha1.Workload{}
+				if err := reader.Get(ctx, client.ObjectKeyFromObject(workload), existing); err != nil {
+					return err
+				}
+				if !existing.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(existing, replicaSet) ||
+					!apiequality.Semantic.DeepDerivative(workload.Spec, existing.Spec) {
+					return fmt.Errorf("workload %s exists with different ownership or spec, or is terminating", name)
+				}
+				continue
+			}
+			// A refusal may mention the Workload
 			// name: the API server quotes it, a webhook may use it anywhere.
 			// Left in, the ScaleUp message would change every pass, and a
 			// changed condition is requeued a second later: the create, and its
@@ -371,6 +400,7 @@ func isFailedPastGracePeriod(workload *runtimev1alpha1.Workload, notBefore time.
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloadreplicasets/finalizers,verbs=update
 
 func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,
