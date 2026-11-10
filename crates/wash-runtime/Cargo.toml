@@ -78,6 +78,7 @@ etcetera = { workspace = true }
 fastrand = { workspace = true }
 rand = { workspace = true, features = ["std", "thread_rng"] }
 futures = { workspace = true }
+getrandom = { workspace = true }
 hmac = { workspace = true, optional = true }
 hostname = { workspace = true }
 http = { workspace = true }
@@ -190,6 +191,7 @@ tikv-jemallocator = { workspace = true, optional = true }
 wasi-webgpu-wasmtime = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
+sha2 = { workspace = true }
 bench-tools = { path = "../bench-tools" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 # `testing` brings in `InMemoryMetricExporter`, which is how the guest memory
