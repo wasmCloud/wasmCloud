@@ -213,9 +213,10 @@ Reading the preset runs:
 ## The allocator
 
 Starting a warm workload makes many small host allocations from every start
-worker at once, and glibc's malloc serializes them: on a 64-core host the
-start rate stops at about a fifth of the CPU the bench could use (`cpu%`
-about 20, `cpu max starts/s` five times `starts/s`). The bench takes the same
+worker at once. On the 64-core host measured below, the glibc run used about
+20% CPU while starting (`cpu max starts/s` was five times `starts/s`). The
+improvement with alternative allocators is consistent with allocator contention;
+these measurements alone do not establish the bottleneck. The bench takes the same
 `mimalloc` and `jemalloc` features as `wash`, so it measures the allocator
 a `wash` built with that feature runs on:
 
@@ -239,7 +240,7 @@ Measured on aws-c9g-16xlarge (arm64, 63 cores, glibc) with the
 - mimalloc costs about 5% more host memory per warm workload, which is 5%
   fewer workloads under the same max-process-memory. jemalloc costs about 1%.
   mimalloc's v2 (`libmimalloc-sys/v2`) is the same, at 77.1 KiB.
-- jemalloc does not build for MSVC. On Windows the `jemalloc` feature is
+- jemalloc does not build for MSVC. On MSVC targets the `jemalloc` feature is
   accepted and does nothing.
 - jemalloc builds with its own `configure` and `make`, so it needs a `sh`,
   a `make` and an `ar` for the target. Cross-building it from macOS with
