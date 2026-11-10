@@ -334,21 +334,7 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	if reconcilerCtx.ForceUpdate {
-		patch, err := client.MergeFrom(originalObject).Data(obj)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		// Scale counters are recomputed on every pass. Sending an empty
-		// status patch still consumes API capacity for each Ready workload.
-		reconcilerCtx.ForceUpdate = string(patch) != "{}"
-	}
-
-	if reconcilerCtx.ForceUpdate {
-		patch := client.MergeFrom(originalObject)
-		if reconcilerCtx.OptimisticLock {
-			patch = client.MergeFromWithOptions(originalObject, client.MergeFromWithOptimisticLock{})
-		}
-		if err := r.client.Status().Patch(ctx, obj, patch); err != nil {
+		if err := r.patchStatus(ctx, originalObject, obj, reconcilerCtx.OptimisticLock); err != nil {
 			if apierrors.IsConflict(err) {
 				log.FromContext(ctx).V(1).Info("status patch built from a stale read was rejected; requeueing")
 				return reconcile.Result{RequeueAfter: time.Second}, nil
@@ -379,4 +365,21 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	return reconcile.Result{RequeueAfter: reconcilerCtx.ReconcileInterval}, nil
+}
+
+func (r *ConditionedReconciler[T]) patchStatus(ctx context.Context, original, obj T, optimisticLock bool) error {
+	patch := client.MergeFrom(original)
+	data, err := patch.Data(obj)
+	if err != nil {
+		return err
+	}
+	// Scale counters are recomputed on every pass. Sending an empty
+	// status patch still consumes API capacity for each Ready workload.
+	if string(data) == "{}" {
+		return nil
+	}
+	if optimisticLock {
+		patch = client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})
+	}
+	return r.client.Status().Patch(ctx, obj, patch)
 }

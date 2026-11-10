@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
@@ -137,9 +136,8 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 		replicaSetTemplate.Template.Spec.Kubernetes = deployment.Spec.Kubernetes.DeepCopy()
 	}
 
-	revision := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s",
-		deployment.UID, deployment.Generation, replicaSetTemplate.Template.Hash())))
-	replicaSetName := fmt.Sprintf("%s-%x", deployment.Name, revision[:5])
+	replicaSetName := rolloutChildName(deployment.Name, fmt.Sprintf("%s:%d:%s",
+		deployment.UID, deployment.Generation, replicaSetTemplate.Template.Hash()))
 
 	// Copy the deployment's labels and stamp the managed selector label so the
 	// /scale subresource's selector actually matches this deployment's

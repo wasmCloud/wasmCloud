@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -229,4 +230,13 @@ func MaterializeConfigLayer(ctx context.Context,
 	ret = MergeMaps(ret, secrets)
 
 	return ret, nil
+}
+
+func rolloutChildName(parent, key string) string {
+	revision := sha256.Sum256([]byte(key))
+	const maxPrefix = 253 - 11
+	if len(parent) > maxPrefix {
+		parent = strings.TrimRight(parent[:maxPrefix], "-.")
+	}
+	return fmt.Sprintf("%s-%x", parent, revision[:5])
 }
