@@ -192,9 +192,14 @@ pub struct InvocationMeter {
 }
 
 impl InvocationMeter {
+    #[cfg(test)]
     pub(crate) fn new(enabled: bool) -> Self {
+        Self::with_meter(&opentelemetry::global::meter("wash-runtime"), enabled)
+    }
+
+    pub(crate) fn with_meter(meter: &opentelemetry::metrics::Meter, enabled: bool) -> Self {
         let duration = enabled.then(|| {
-            opentelemetry::global::meter("wash-runtime")
+            meter
                 .f64_histogram("guest.invocation.duration")
                 .with_description("Wall-clock duration of one guest invocation")
                 .with_unit("s")
@@ -251,10 +256,18 @@ impl Meters {
         }
     }
 
+    /// Meters for `kind` on the process-wide OTel meter provider, as it is at
+    /// this call.
     pub fn new(kind: MeterKind) -> Self {
+        Self::with_meter(kind, &opentelemetry::global::meter("wash-runtime"))
+    }
+
+    /// Meters for `kind` whose instruments come from `meter`, so a host can
+    /// record somewhere other than the process-wide provider.
+    pub fn with_meter(kind: MeterKind, meter: &opentelemetry::metrics::Meter) -> Self {
         Self {
-            invocation: InvocationMeter::new(kind.records()),
-            fuel_consumption: FuelConsumptionMeter::new(kind.consumes_fuel()),
+            invocation: InvocationMeter::with_meter(meter, kind.records()),
+            fuel_consumption: FuelConsumptionMeter::with_meter(meter, kind.consumes_fuel()),
             meters: Default::default(),
         }
     }
@@ -329,8 +342,12 @@ impl FuelConsumptionMeter {
     }
 
     pub(crate) fn new(enabled: bool) -> Self {
+        Self::with_meter(&opentelemetry::global::meter("wash-runtime"), enabled)
+    }
+
+    pub(crate) fn with_meter(meter: &opentelemetry::metrics::Meter, enabled: bool) -> Self {
         let hist = enabled.then(|| {
-            opentelemetry::global::meter("wash-runtime")
+            meter
                 .u64_histogram("fuel.consumption")
                 .with_description(
                     "Measure fuel consumption for components that export host plugin interfaces",

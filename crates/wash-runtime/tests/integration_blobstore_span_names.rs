@@ -1,7 +1,7 @@
 //! Integration test asserting that `wasi:blobstore` host calls emit OTEL spans
 //! named per the `<namespace>.<package>.<fn>` convention.
 //!
-//! Exercises the same http-blobstore component as `integration_http_blobstore`,
+//! Exercises the same http-blobstore component as `integration::http_blobstore`,
 //! but installs a custom `tracing::Layer` that records every span name created
 //! during the run. After the request round-trips, the recorded set is checked
 //! against the names the host plugin should have produced.

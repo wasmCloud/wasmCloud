@@ -28,7 +28,7 @@ import (
 //
 // The store-boundary mechanics (streams/futures/resources, per-caller
 // partitioning, restart-on-trap) are covered in-process by
-// crates/wash-runtime/tests/integration_component_host_plugin.rs; this spec
+// crates/wash-runtime/tests/integration/component_host_plugin.rs; this spec
 // proves the CLI/chart loading path and cross-store binding wire up in a real
 // cluster.
 //
