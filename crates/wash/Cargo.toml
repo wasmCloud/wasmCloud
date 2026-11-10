@@ -26,6 +26,16 @@ host-component-plugins = ["wash-runtime/host-component-plugins"]
 # On by default: the `wasi:webgpu` host from wasi-gfx and wgpu. Disable with
 # `--no-default-features` for a build without the GPU stack.
 wasi-webgpu = ["wash-runtime/wasi-webgpu"]
+# Replace the system allocator with mimalloc or jemalloc. Off by default.
+# Either allocator starts warm workloads about 45% faster than glibc on a 64-core
+# arm64 host, for about 1% (jemalloc) or 5% (mimalloc) more host memory per
+# workload. See "The allocator" in `crates/wash-runtime/benches/scale_density.md`.
+# jemalloc does not build for MSVC, so on MSVC targets `jemalloc` is accepted and
+# does nothing. With both enabled, mimalloc wins. `wash --version` names the
+# allocator a build got. arm64 Linux builds of jemalloc use 64 KiB pages; see
+# `.cargo/config.toml`.
+mimalloc = ["dep:mimalloc"]
+jemalloc = ["dep:tikv-jemallocator"]
 
 [lints]
 workspace = true
@@ -79,6 +89,7 @@ wasm-pkg-client = { workspace = true }
 wasm-pkg-core = { workspace = true }
 wash-runtime = { workspace = true, features = ["washlet", "oci", "wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "wasi-otel", "wasmcloud-nats"] }
 wit-component = { workspace = true }
+mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]
 bytes = { version = "1", default-features = false }
@@ -96,6 +107,10 @@ wash-runtime = { workspace = true, features = ["wasi-keyvalue", "wasi-blobstore"
 wasmtime = { workspace = true }
 testcontainers = { workspace = true }
 wat = { workspace = true, features = ["component-model"] }
+
+# jemalloc does not build for MSVC; see the `jemalloc` feature.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

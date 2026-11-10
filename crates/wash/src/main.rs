@@ -16,11 +16,45 @@ use wash::cli::{
     CONFIG_DIR_NAME, CONFIG_FILE_NAME, CliCommand, CliContext, CommandOutput, OutputKind,
 };
 
+// Opt-in global allocator; see the `mimalloc` and `jemalloc` features in
+// Cargo.toml. mimalloc wins when both are enabled, and jemalloc is skipped on
+// MSVC, which it does not support.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(all(
+    feature = "jemalloc",
+    not(feature = "mimalloc"),
+    not(target_env = "msvc")
+))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+// `wash --version` names an opt-in allocator, since a `jemalloc` build on MSVC
+// or one with both features silently gets another. Default builds are unchanged.
+#[cfg(feature = "mimalloc")]
+const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\nallocator: mimalloc");
+#[cfg(all(
+    feature = "jemalloc",
+    not(feature = "mimalloc"),
+    not(target_env = "msvc")
+))]
+const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\nallocator: jemalloc");
+#[cfg(all(feature = "jemalloc", not(feature = "mimalloc"), target_env = "msvc"))]
+const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "\nallocator: system (jemalloc is unsupported on MSVC)"
+);
+#[cfg(not(any(feature = "mimalloc", feature = "jemalloc")))]
+const LONG_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "wash",
     about,
     version,
+    long_version = LONG_VERSION,
     arg_required_else_help = true,
     color = clap::ColorChoice::Auto
 )]

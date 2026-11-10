@@ -209,3 +209,62 @@ Reading the preset runs:
   set no linear-memory keep-resident. Its macOS and Linux warm memory also
   differ by host page size, which is no evidence for changing production heap
   limits.
+
+## The allocator
+
+Starting a warm workload makes many small host allocations from every start
+worker at once. On the 64-core host measured below, the glibc run used about
+20% CPU while starting (`cpu max starts/s` was five times `starts/s`). The
+improvement with alternative allocators is consistent with allocator contention;
+these measurements alone do not establish the bottleneck. The bench's
+`bench-mimalloc` and `bench-jemalloc` features select the same allocator as
+`wash`'s `mimalloc` and `jemalloc`, so it measures the allocator a `wash` built
+with that feature runs on. They are internal to the bench, not API for crates
+that depend on `wash-runtime`:
+
+```text
+cargo bench -p wash-runtime --features bench-mimalloc --bench scale_density -- warm
+cargo bench -p wash-runtime --features bench-jemalloc --bench scale_density -- warm
+```
+
+The run prints `global allocator: <name>` before its first flavour, and a
+`wash` built with either feature names it in `wash --version`.
+Measured on aws-c9g-16xlarge (arm64, 63 cores, glibc) with the
+`million_warm` settings capped at 300,000 warm workloads, two runs each:
+
+| allocator | starts/s | per workload | p99 ms |
+| --- | --- | --- | --- |
+| system (glibc) | 33,628 / 33,848 | 73.5 KiB | 1.2 / 1.0 |
+| mimalloc | 48,299 / 48,637 | 77.4 KiB | 1.0 / 1.1 |
+| jemalloc | 48,668 / 49,952 | 74.2 KiB | 1.1 / 0.9 |
+
+- Either allocator starts workloads about 45% faster. Request latency does
+  not move.
+- mimalloc costs about 5% more host memory per warm workload, which is 5%
+  fewer workloads under the same max-process-memory. jemalloc costs about 1%.
+  mimalloc's v2 (`libmimalloc-sys/v2`) is the same, at 77.1 KiB.
+- jemalloc does not build for MSVC. On MSVC targets the `jemalloc` feature is
+  accepted and does nothing.
+- jemalloc builds with its own `configure` and `make`, so it needs a `sh`,
+  a `make` and an `ar` for the target. Cross-building it from macOS with
+  `cargo zigbuild` needs `ar` on `PATH` to be one that writes ELF archives
+  (for example a wrapper that runs `zig ar`), or it links with no
+  allocator symbols. mimalloc builds with `cc` alone. CI's `allocators` job in
+  `wash.yml` cross-builds both with zigbuild and checks the binary links the
+  allocator.
+- jemalloc fixes its page size at build time and aborts at startup on a kernel
+  with larger pages. `.cargo/config.toml` builds it for 64 KiB pages on
+  `aarch64-unknown-linux-{gnu,musl}` (`<TARGET>_JEMALLOC_SYS_WITH_LG_PAGE=16`),
+  so one arm64 binary runs on 4K, 16K and 64K kernels. The table above was
+  measured before that setting, at the host's 4 KiB pages.
+- The table measures warm starts, not memory returned after workloads stop.
+  Both allocators hold freed memory longer than glibc: mimalloc until its
+  purge delay passes, jemalloc until its decay does, and with jemalloc's
+  `background_threads_runtime_support` off (`default-features = false`) an
+  idle process may keep dirty pages. Since max-process-memory is held against
+  the process footprint, measure a start/stop churn run before recommending
+  either for production.
+- mimalloc's `secure` mode (libmimalloc-sys feature: guard pages, encoded
+  free lists, about 10% slower) hardens the host heap against corruption.
+  Guest linear memory is mapped by wasmtime and unaffected either way. It is
+  not enabled here.

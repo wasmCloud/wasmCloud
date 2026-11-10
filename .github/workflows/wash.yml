@@ -736,6 +736,74 @@ jobs:
           kubectl get workloaddeployments.runtime.wasmcloud.dev -A -o yaml || true
           kubectl get workloads.runtime.wasmcloud.dev -A -o yaml || true
 
+  # The opt-in `mimalloc` and `jemalloc` features, which no other job builds.
+  # Native legs check both on Linux and MSVC (where `jemalloc` is a no-op).
+  # Cross legs link a zigbuild binary for a release target and fail if the
+  # allocator's symbols are missing: a wrong `ar` links jemalloc silently empty.
+  allocators:
+    needs:
+      - changes
+    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.relevant == 'true')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            buildTarget: aarch64-unknown-linux-gnu.2.17
+            feature: jemalloc
+            symbol: _rjem_malloc
+          - os: ubuntu-latest
+            target: s390x-unknown-linux-gnu
+            buildTarget: s390x-unknown-linux-gnu.2.17
+            feature: mimalloc
+            # MiMalloc calls only the aligned API, and --gc-sections drops
+            # the unreferenced mi_malloc.
+            symbol: mi_malloc_aligned
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        uses: $/.github/actions/free-disk-space
+      - name: Setup Rust
+        uses: $/.github/actions/setup-rust
+        with:
+          rust-targets: ${{ matrix.target }}
+          install-zigbuild: ${{ matrix.target != '' }}
+          cache-key: allocators-${{ matrix.target || 'native' }}
+      - name: Check allocator features
+        if: ${{ !matrix.target }}
+        run: |
+          cargo check --locked -p wash --features mimalloc
+          cargo check --locked -p wash --features jemalloc
+          cargo check --locked -p wash --features mimalloc,jemalloc
+      - name: Cross-build and check the allocator is linked
+        if: ${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+          BUILD_TARGET: ${{ matrix.buildTarget }}
+          FEATURE: ${{ matrix.feature }}
+          SYMBOL: ${{ matrix.symbol }}
+        run: |
+          cargo zigbuild --locked --target "${BUILD_TARGET}" -p wash --features "${FEATURE}"
+          bin="target/${TARGET}/debug/wash"
+          # Via a file: under pipefail, `grep -q` exiting early SIGPIPEs readelf.
+          readelf --wide --syms "${bin}" > "${RUNNER_TEMP}/syms.txt"
+          if ! grep -qw "${SYMBOL}" "${RUNNER_TEMP}/syms.txt"; then
+            echo "::error::${bin} built with --features ${FEATURE} has no ${SYMBOL}: the allocator was not linked"
+            exit 1
+          fi
+          echo "${bin}: ${SYMBOL} linked"
+
   # The main branch ruleset requires this exact check name. Other workflows
   # must give their gate jobs unique names so they cannot mask a wash failure.
   gate:
@@ -743,6 +811,7 @@ jobs:
     needs:
       - check
       - lint
+      - allocators
       - wash-image
       - wash-image-all-features
       - wash-image-amd64
