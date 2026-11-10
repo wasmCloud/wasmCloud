@@ -15,7 +15,7 @@
 //   WASMCLOUD_BENCH_NO_CPUFREQ     "1" on a VM with no cpufreq driver, whose clock the
 //                                  hypervisor sets (EC2 Graviton): skip the governor check
 //   CARGO_TARGET_DIR               persistent target dir (default: /var/lib/bench/target)
-//   WASMCLOUD_BENCH_K6             "1" for a k6bench run: also check its tools (#11)
+//   WASMCLOUD_BENCH_K6             "1" for a k6bench run: also check its tools (#12)
 //
 // Each invariant prints one line on success ("pre-flight: …") or a
 // GitHub Actions error annotation on failure and exits non-zero.
@@ -25,6 +25,13 @@ import { existsSync, mkdirSync, readFileSync, statfsSync } from 'node:fs';
 import { hostname, loadavg, platform } from 'node:os';
 
 import { DEFAULT_HOST_LABEL, hostnameVar, parseHostLabel } from './bench-host.mjs';
+import {
+  ancestry,
+  formatLeftovers,
+  loginctlSession,
+  scanSessionProcesses,
+  settledLeftovers,
+} from './bench-sessions.mjs';
 
 const EXPECTED_GOVERNOR = 'performance';
 const MIN_FREE_BYTES = 5 * 1024 ** 3; // 5 GiB
@@ -235,7 +242,26 @@ if (!existsSync(cargoBin)) {
 }
 ok(`cargo: ${runStdout(cargoBin, ['--version'])}`);
 
-// 10. Docker idle. The daemon is socket-activated, and `docker ps` would start
+// 10. Nothing left running by a closed login session. provision.yml's logind
+//     drop-in kills a session's processes when it closes; this catches a host
+//     without it. Such work can sleep below the load check yet keep the
+//     socket-activated Docker daemon up by polling `docker ps`.
+let leftovers;
+try {
+  leftovers = settledLeftovers(
+    scanSessionProcesses,
+    { sessionInfo: loginctlSession, exclude: ancestry(process.pid), runnerUid: process.getuid() },
+    { sleep: sleepSync },
+  );
+} catch (err) {
+  fail(`can't check login sessions: ${err.message}`);
+}
+if (leftovers.length > 0) {
+  fail(formatLeftovers(leftovers));
+}
+ok('login sessions: no processes left by a closed one');
+
+// 11. Docker idle. The daemon is socket-activated, and `docker ps` would start
 //     it (and the always-restart local registry), so ask systemd instead,
 //     which doesn't. A criterion or gungraun bench refuses to share the host
 //     with a running daemon; k6bench.yml stops it after every run, so one
@@ -251,7 +277,12 @@ const dockerUp =
 const usesDocker =
   process.env.WASMCLOUD_BENCH_K6 === '1' || process.env.WASMCLOUD_BENCH_NAME === 'memory_pressure';
 if (dockerUp && !usesDocker) {
-  fail('docker daemon is running; stop it first (sudo systemctl stop docker.service)');
+  fail(
+    'docker daemon is running; stop it first (sudo systemctl stop docker.service). ' +
+      'It is socket-activated, so any client still polling it starts it again: ' +
+      'usually work left by a dropped SSH session (check 10, login sessions), ' +
+      'otherwise one started outside a login session (systemd-cgls)',
+  );
 }
 if (dockerUp) {
   const allowed = new Set(['kind-registry']);
@@ -268,7 +299,7 @@ if (dockerUp) {
 }
 ok(dockerUp ? 'docker: no leftover containers' : 'docker: daemon not running');
 
-// 11. k6bench runs only: the tools scripts/k6bench/run.sh drives, and room
+// 12. k6bench runs only: the tools scripts/k6bench/run.sh drives, and room
 //     for the node and wasmCloud images.
 if (process.env.WASMCLOUD_BENCH_K6 === '1') {
   if (!hasDocker || spawnSync('docker', ['info'], { stdio: 'ignore' }).status !== 0) {
@@ -286,7 +317,7 @@ if (process.env.WASMCLOUD_BENCH_K6 === '1') {
       fail(`${tool} not on PATH (scripts/bench/ansible/provision.yml installs it)`);
     }
   }
-  // With the daemon stopped, #10 couldn't see a cluster a failed teardown left
+  // With the daemon stopped, #11 couldn't see a cluster a failed teardown left
   // behind; run.sh would otherwise reuse it, stopped nodes and all.
   const clusters = runStdout('kind', ['get', 'clusters']);
   if (clusters.split('\n').includes('k6bench')) {
