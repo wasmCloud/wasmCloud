@@ -763,7 +763,9 @@ jobs:
             target: s390x-unknown-linux-gnu
             buildTarget: s390x-unknown-linux-gnu.2.17
             feature: mimalloc
-            symbol: mi_malloc
+            # MiMalloc calls only the aligned API, and --gc-sections drops
+            # the unreferenced mi_malloc.
+            symbol: mi_malloc_aligned
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -776,7 +778,6 @@ jobs:
         uses: $/.github/actions/setup-rust
         with:
           rust-targets: ${{ matrix.target }}
-          rust-components: ""
           install-zigbuild: ${{ matrix.target != '' }}
           cache-key: allocators-${{ matrix.target || 'native' }}
       - name: Check allocator features
@@ -795,7 +796,9 @@ jobs:
         run: |
           cargo zigbuild --locked --target "${BUILD_TARGET}" -p wash --features "${FEATURE}"
           bin="target/${TARGET}/debug/wash"
-          if ! readelf --wide --syms "${bin}" | grep -qw "${SYMBOL}"; then
+          # Via a file: under pipefail, `grep -q` exiting early SIGPIPEs readelf.
+          readelf --wide --syms "${bin}" > "${RUNNER_TEMP}/syms.txt"
+          if ! grep -qw "${SYMBOL}" "${RUNNER_TEMP}/syms.txt"; then
             echo "::error::${bin} built with --features ${FEATURE} has no ${SYMBOL}: the allocator was not linked"
             exit 1
           fi
