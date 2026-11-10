@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::process::Command;
 
 use anyhow::{Context as _, Result};
+use sha2::{Digest as _, Sha256};
 use wash_runtime::host::HostBuilder;
 
 #[test]
@@ -53,28 +54,22 @@ fn equally_seeded_processes_have_independent_ids() -> Result<()> {
         let stdout = String::from_utf8(output.stdout)?;
         let line = stdout
             .lines()
-            .find_map(|line| line.strip_prefix("IDS "))
-            .context("worker did not return IDs")?;
+            .find_map(|line| line.strip_prefix("ID_FINGERPRINTS "))
+            .context("worker did not return ID fingerprints")?;
         let (runtime, host) = line
             .split_once(' ')
-            .context("worker returned malformed IDs")?;
-        let runtime = uuid::Uuid::parse_str(runtime)?;
-        let host = uuid::Uuid::parse_str(host)?;
-        // Ignore the timestamp so wall-clock scheduling cannot conceal replay
-        // of a process's first counter and random tail.
-        assert!(runtime_ids.insert(runtime.as_u128() & ((1_u128 << 80) - 1)));
-        assert!(host_ids.insert(host.as_u128() & ((1_u128 << 80) - 1)));
-        assert_eq!(runtime.get_version_num(), 7);
-        assert_eq!(host.get_version_num(), 7);
+            .context("worker returned malformed ID fingerprints")?;
+        assert!(runtime_ids.insert(runtime.to_owned()));
+        assert!(host_ids.insert(host.to_owned()));
     }
     Ok(())
 }
 
 #[test]
 #[ignore = "subprocess worker for equally_seeded_processes_have_independent_ids"]
-fn seeded_process_worker() {
+fn seeded_process_worker() -> Result<()> {
     if std::env::var_os("WASH_ID_TEST_CHILD").is_none() {
-        return;
+        return Ok(());
     }
     fastrand::seed(5924);
     let seed = fastrand::get_seed();
@@ -85,5 +80,18 @@ fn seeded_process_worker() {
         seed,
         "ID initialization used application RNG state"
     );
-    println!("IDS {runtime} {}", host.id());
+    println!(
+        "ID_FINGERPRINTS {} {}",
+        id_fingerprint(runtime),
+        id_fingerprint(uuid::Uuid::parse_str(host.id())?)
+    );
+    Ok(())
+}
+
+fn id_fingerprint(id: uuid::Uuid) -> String {
+    assert_eq!(id.get_version_num(), 7);
+    // Ignore the timestamp so wall-clock scheduling cannot conceal replay
+    // of a process's first counter and random tail. Hash the remaining bytes
+    // so the subprocess protocol never writes raw IDs to test logs.
+    format!("{:x}", Sha256::digest(&id.as_bytes()[6..]))
 }
