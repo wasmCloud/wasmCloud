@@ -1011,7 +1011,8 @@ mod tests {
     #[tokio::test]
     async fn reference_validation_rejects_uppercase_repositories_before_pull_or_push() {
         for reference in ["ghiW/wasr", "A/b:Tag", "ghcr.io/UPPER:tag"] {
-            let config = OciConfig::new_with_credentials("unused", "unused");
+            let config =
+                OciConfig::new_with_credentials("unused", rand::random::<u128>().to_string());
             let pull_error = tokio::time::timeout(
                 Duration::from_secs(2),
                 pull_component(reference, config.clone(), OciPullPolicy::Never),

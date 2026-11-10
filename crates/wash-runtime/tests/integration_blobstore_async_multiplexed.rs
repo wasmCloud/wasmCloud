@@ -51,7 +51,7 @@ fn err(e: impl std::fmt::Debug) -> anyhow::Error {
 #[ignore = "requires Docker (NATS JetStream); run with `cargo test --include-ignored`"]
 async fn async_multiplexed_blobstore_routes_to_nats() -> Result<()> {
     // --- NATS container (JetStream enabled for the object store) ---
-    let nats = GenericImage::new("nats", "2.12.8-alpine")
+    let nats = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_cmd(["-js"])

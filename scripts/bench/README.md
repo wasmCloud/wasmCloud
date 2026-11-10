@@ -82,6 +82,37 @@ Host wasmcloud-bench
 - Host key fingerprints are pinned in `~/.ssh/known_hosts` after install.
   When re-staging, refresh them; `installimage` regenerates host keys.
 
+### 2.1 Work that outlives the SSH session
+
+When an SSH session closes, systemd-logind kills every process the session
+started, root's included. `provision.yml --tags logind` sets this with the
+drop-in `/etc/systemd/logind.conf.d/50-bench.conf` (`KillUserProcesses=yes`,
+and an empty `KillExcludeUsers=` because the default exempts root). The same
+tag sets `ClientAliveInterval 30` / `ClientAliveCountMax 4` in
+`/etc/ssh/sshd_config.d/50-bench-keepalive.conf`, so a connection that drops
+without closing (laptop sleep, network loss) ends its session within about two
+minutes instead of the ~2 h TCP keepalive takes.
+
+Without it, a dropped connection leaves its work running. A root `bash -s`
+polling `docker ps` once ran for 43 hours this way. It barely registered in
+the load average, but it kept the socket-activated Docker daemon up, so the
+pre-flight refused every criterion and gungraun bench (§10, pre-flight
+assertions).
+
+The trade-off: `nohup`, `&`, `disown`, `tmux` and `screen` no longer keep work
+alive after you disconnect. Run work meant to outlive the session as its own
+transient unit:
+
+```sh
+systemd-run --unit=<name> --working-directory=/opt/wasmcloud \
+  bash -c '. /root/.cargo/env && cargo bench -p wash-runtime --bench http_invoke'
+journalctl -u <name> -f        # its output
+systemctl stop <name>          # stop it early
+```
+
+Stop the unit when you're done with it; the pre-flight doesn't look at
+`systemd-run` units, only at login sessions.
+
 ## 3. OS install (Hetzner rescue → Ubuntu)
 
 Hetzner ships every dedicated server with a Rescue System (PXE-booted
@@ -293,6 +324,7 @@ cd scripts/bench/ansible
 ansible-playbook provision.yml                  # everything
 ansible-playbook provision.yml --tags toolchain # apt + rustup + gungraun only
 ansible-playbook provision.yml --tags kernel    # just GRUB drop-in
+ansible-playbook provision.yml --tags logind    # kill a closed SSH session's work (§2.1)
 ansible-playbook provision.yml --check          # dry-run; no changes
 ```
 
@@ -563,9 +595,14 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
   history unless the entry names a `publish_group`. A density variant with
   one publishes under that group instead of `density`
   (`bench-tools jsonl --group`, or `WASMCLOUD_BENCH_GROUP`), so its rows form
-  their own series; the publisher refuses a row in any other group.
-  - `million_warm`: an `env` preset, published as `density-max`, the record
-    run the density page on arewefastyet draws.
+  their own series, each flavour with a per-step `ramp` row; the publisher
+  refuses a row in any other group and keeps the run's files under
+  `<bench>/<group>/` in S3. An entry with a `publish_host` publishes only from
+  that host, and an entry never publishes from a ref whose `bench-tools`
+  predates `jsonl --group`; the matrix job warns and runs it unpublished.
+  - `million_warm`: an `env` preset, published as `density-max` from
+    `aws-c9g-16xlarge` only, the record run the density page on arewefastyet
+    draws.
   - `max_scale`: `scale_density -- max-scale`, which sets
     `WASH_SCALE_MEMORY_RESERVATION=256MiB`, `WASH_SCALE_MEMORY_GUARD=64KiB`,
     `WASH_SCALE_GUEST_MEMORY_MODE=growth` and `WASH_SCALE_MEMORY_LIMIT=2GiB`
@@ -765,6 +802,11 @@ ssh -i ~/.ssh/hetzner_bench root@<WASMCLOUD_BENCH_HOST_IP> \
    cargo xtask build-fixtures && \
    cargo bench -p wash-runtime --bench http_invoke'
 ```
+
+This runs inside the SSH session, so the host's logind drop-in kills it if
+the connection drops (§2.1). For a run longer than you'll stay connected,
+including `compare-bench.sh` on the host, start it with `systemd-run` as
+§2.1 shows.
 
 Manual runs do **not** touch S3 or arewefastyet — only the GitHub
 pipeline writes there. The `/opt/wasmcloud` checkout is cloned by the
@@ -1040,6 +1082,8 @@ Hard-checked invariants:
 | `$CARGO_TARGET_DIR`                  | exists, writable                                       |
 | Free space on the target dir's mount | ≥ 5 GiB                                                |
 | `cargo` binary                       | `$HOME/.cargo/bin/cargo` exists                        |
+| Closed login sessions                | no processes left in one *(names each PID; §2.1)*      |
+| Docker daemon                        | stopped, except for k6bench and `memory_pressure`      |
 
 If any check fails, the job aborts with a `::error::` annotation
 explaining which invariant is violated. Fix the host (or fix the
@@ -1146,11 +1190,13 @@ present only when measured:
 }
 ```
 
-After a flavour's metric rows comes one `ramp` row, when the run took steps:
-the steps thinned to at most 80, evenly spread and always keeping the last
-clean one, as one column per figure. `value` is how many steps the run took
-before thinning. It has no `better`, so it is not a trend; the trends and
-compare pages leave it out, and the density page draws it.
+Under a preset's group (`--group`, such as `density-max`), each flavour's
+metric rows are followed by one `ramp` row, when the run took steps: the steps
+thinned to at most 80, evenly spread and always keeping the last clean one, as
+one column per figure. A rate or latency that was not measured is `null`.
+`value` is how many steps the run took before thinning. It has no `better`, so
+it is not a trend; the trends and compare pages leave it out, and the density
+page draws it. The default `density` series has no ramp rows.
 
 ```json
 {
@@ -1253,6 +1299,34 @@ Resync runs after every fresh install (~30 min on these disks). Wait
 it out before benching — the I/O contention will skew numbers. The
 preflight script already refuses to run during a resync.
 
+### Pre-flight: processes left by a closed login session
+
+The message names each session, PID and command line, and the command that
+stops each session. Stop by session rather than by PID, since PIDs can be
+reused by the time you act, and `kill` can't clear a zombie:
+
+```sh
+sudo loginctl terminate-session <id>                 # session still "closing"
+sudo systemctl kill --signal=KILL session-<id>.scope # session logind no longer knows
+```
+
+Then re-dispatch. The check re-scans for about 15 s before failing, so a
+session logind is already stopping doesn't fail the job. If the host lets
+such work survive at all, its logind drop-in is missing: apply
+`ansible-playbook provision.yml --tags logind` (§2.1).
+
+If the check fails with `can't check login sessions`, `loginctl` itself
+failed (missing, or D-Bus/logind down). Fix logind
+(`systemctl status systemd-logind`) before re-dispatching.
+
+### Pre-flight: `docker daemon is running`
+
+Docker is socket-activated, so anything still polling the socket starts it
+again after `sudo systemctl stop docker.service`. The usual one is work from
+a dropped SSH session, which the closed-login-session check names. If that
+check passed, look for a client outside a login session (`systemd-cgls`,
+`systemctl list-units --type=service --state=running`).
+
 ### `bench-push-results.mjs` fails with `AccessDenied`
 
 The most common cause is the WRITE role policy missing one of the
@@ -1283,6 +1357,7 @@ cache). For longer staleness:
 | [`install-runner.sh`](./install-runner.sh)                                                                     | Phase 3 on the host: registers the GH Actions runner under the `bench` user and wires it to the shared bench tools in `/usr/local` (installed by `provision.yml`). Kept as bash because runner registration takes a one-shot token whose lifecycle is awkward to model declaratively.             |
 | [`../../.github/scripts/bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)                       | CI step: refuses to bench on a drifted host (env: `WASMCLOUD_BENCH_HOST_LABEL` + its hostname variable). GHA-only — runs via `node` from the workflow.                                                                                              |
 | [`run-bench.sh`](./run-bench.sh)                                                                               | CI step + local: invokes `cargo bench`, writes a run log. Stays bash because compare-bench.sh invokes it on the host for local operator runs.                                                                             |
+| [`../../.github/scripts/bench-sessions.mjs`](../../.github/scripts/bench-sessions.mjs)                         | Pre-flight helper: finds processes left in a closed login session (§2.1).                                                                                                                                                                        |
 | [`../../.github/scripts/bench-push-results.mjs`](../../.github/scripts/bench-push-results.mjs)                 | Prepares the data artifact on the bench host, then publishes it to S3 from a hosted job.                                                                                    |
 | [`compare-bench.sh`](./compare-bench.sh)                                                                       | Pair-bench script: runs one bench against two refs (interleaved for criterion, 1× for gungraun) and snapshots per-iteration data                                                                                               |
 | [`../../crates/bench-tools/`](../../crates/bench-tools/)                                                       | Rust binary that parses criterion + gungraun output and renders the JSONL trend rows, the step-summary markdown, and comparison deltas — see "Data processing" below                                                     |

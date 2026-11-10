@@ -213,8 +213,10 @@ adds a CodeQL alert of high or critical security severity, or of error severity.
 alert, or dismiss it in the Security tab with a stated reason, such as a false positive or code
 that only runs in tests.
 
-Code scanning alerts in released code follow the vulnerability timeline above, by the alert's
-security severity. Each alert is either fixed or dismissed with a stated reason.
+Code scanning alerts in released code must be fixed on the [vulnerability timeline](#vulnerabilities)
+above, by the alert's security severity: critical severity alerts within 7 days, high within 14
+days and medium within 90 days. Low severity alerts are fixed on a best-effort basis. Instead of a
+fix, an alert can be dismissed with a stated reason.
 
 ### Before a release
 

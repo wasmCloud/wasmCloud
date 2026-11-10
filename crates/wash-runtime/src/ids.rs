@@ -12,6 +12,17 @@
 //! - Each thread keeps its own last millisecond through clock rollback, so IDs
 //!   are monotonic per thread. A clock step on one thread does not hold back
 //!   the timestamps of other threads.
+//!
+//! The counter and each thread's private tail PRNG are seeded independently
+//! from the OS. Application seeding cannot steer either, and OS reads happen
+//! only during initialization, not on counter renewal or each random draw.
+//! Time/thread-based seeds can repeat across processes; matching application
+//! PRNG state can reproduce both counters and tails.
+//!
+//! The tails remain non-cryptographic: these IDs are not bearer secrets.
+//! Randomness only reduces cross-process collision probability; deterministic
+//! uniqueness is confined to one allocator's process lifetime. Forks or
+//! snapshots of initialized state can duplicate the allocator and PRNG.
 
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -37,7 +48,21 @@ pub fn now_v7() -> Uuid {
 /// processes don't walk the same counters.
 fn sequence() -> &'static Mutex<Sequence> {
     static SEQUENCE: OnceLock<Mutex<Sequence>> = OnceLock::new();
-    SEQUENCE.get_or_init(|| Mutex::new(Sequence::new(fastrand::u64(..))))
+    SEQUENCE.get_or_init(|| {
+        let mut seed = [0; 8];
+        random_bytes(&mut seed);
+        Mutex::new(Sequence::new(u64::from_ne_bytes(seed)))
+    })
+}
+
+/// Like `Uuid::new_v4`, fail closed if the OS cannot provide randomness.
+/// Never substitute time, a fixed seed, or partially filled bytes.
+fn random_bytes(bytes: &mut [u8]) {
+    let result = getrandom::fill(bytes);
+    assert!(
+        result.is_ok(),
+        "OS randomness unavailable for runtime IDs: {result:?}"
+    );
 }
 
 /// Allocates disjoint counter ranges. A reserved range keeps its timestamp,
@@ -93,6 +118,9 @@ struct Block {
     end: u64,
     /// The timestamp assigned to every counter in this reservation.
     millis: u64,
+    /// Seeded once per thread, independently of the counter and application
+    /// PRNG. Renewing a counter reservation does not reseed this generator.
+    rng: Option<fastrand::Rng>,
 }
 
 impl Block {
@@ -101,6 +129,7 @@ impl Block {
             next: 0,
             end: 0,
             millis: 0,
+            rng: None,
         }
     }
 
@@ -112,10 +141,24 @@ impl Block {
         }
         let counter = self.next;
         self.next += 1;
-        // Uniqueness within the process comes from the counter alone; the
-        // tail separates IDs minted by different processes.
-        build(self.millis, counter, fastrand::u32(..))
+        // The (timestamp, counter) pair ensures process-local uniqueness;
+        // independent OS seeds reduce collisions between processes.
+        build(self.millis, counter, self.random_tail())
     }
+
+    #[inline]
+    fn random_tail(&mut self) -> u32 {
+        self.rng.get_or_insert_with(private_rng).u32(..)
+    }
+}
+
+/// Do not use `Rng::new`: it draws its seed from the application's thread-local
+/// generator, which an embedder can seed for reproducible application behavior.
+#[cold]
+fn private_rng() -> fastrand::Rng {
+    let mut seed = [0; 8];
+    random_bytes(&mut seed);
+    fastrand::Rng::with_seed(u64::from_ne_bytes(seed))
 }
 
 /// Lay out the counter above the random tail, as uuid's `ContextV7` does.
@@ -183,6 +226,23 @@ mod tests {
     fn ids_are_monotonic_on_one_thread() {
         let ids: Vec<Uuid> = (0..10_000).map(|_| now_v7()).collect();
         assert!(ids.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn application_rng_cannot_steer_private_tails() {
+        let rng = private_rng();
+        let mut expected = rng.clone();
+        let mut block = Block::new();
+        block.rng = Some(rng);
+        for seed in 0..130 {
+            // Both reseeding and consuming the application's generator must
+            // leave the already-initialized private sequence untouched.
+            fastrand::seed(seed);
+            let _ = fastrand::u64(..);
+            let application_seed = fastrand::get_seed();
+            assert_eq!(block.random_tail(), expected.u32(..));
+            assert_eq!(fastrand::get_seed(), application_seed);
+        }
     }
 
     #[test]

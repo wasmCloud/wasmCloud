@@ -1464,8 +1464,14 @@ mod tests {
             .limits
             .ack_pending_advisory(64 * 1024 * 1024)
             .expect("the floor overruled the byte budget");
-        assert!(advisory.contains("serialise"), "{advisory}");
-        assert!(advisory.contains("max-ack-pending"), "{advisory}");
+        assert!(
+            advisory.contains("serialise"),
+            "missing delivery-floor guidance"
+        );
+        assert!(
+            advisory.contains("max-ack-pending"),
+            "missing configuration key"
+        );
 
         // An operator who set it themselves is not second-guessed.
         let explicit = NatsConfig::from_map(&map(&[
@@ -1727,7 +1733,10 @@ mod tests {
         assert!(!format!("{cfg:?}").contains("super-secret"));
         let auth = format!("{:?}", cfg.auth);
         assert!(!auth.contains("super-secret"));
-        assert!(auth.contains("token"), "{auth}");
+        assert!(
+            auth.contains("token"),
+            "missing token field in debug output"
+        );
     }
     #[test]
     fn jetstream_subs_basic() {

@@ -2896,7 +2896,7 @@ mod tests {
         let (_container, url) = match std::env::var("NATS_URL") {
             Ok(url) => (None, url),
             Err(_) => {
-                let container = GenericImage::new("nats", "2.12.8-alpine")
+                let container = GenericImage::new("nats", "2.12.15-alpine")
                     .with_exposed_port(4222.tcp())
                     .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
                     .start()
@@ -3199,7 +3199,7 @@ mod tests {
                 ..Default::default()
             },
         ));
-        let first = accept_connect(&listener, "first-nonce").await?;
+        let first = accept_connect(&listener).await?;
         let _client = client.await??;
         assert_eq!(first["name"], "host:test");
         assert_eq!(first["jwt"], "first.jwt");
@@ -3207,7 +3207,7 @@ mod tests {
         assert!(first["sig"].is_string(), "the nonce went unsigned: {first}");
 
         std::fs::write(&path, creds_file("rotated.jwt", &key.seed()?))?;
-        let second = accept_connect(&listener, "second-nonce").await?;
+        let second = accept_connect(&listener).await?;
         assert_eq!(second["name"], "host:test");
         assert_eq!(second["jwt"], "rotated.jwt");
         assert_eq!(second["auth_token"], "rotated.jwt");
@@ -3229,7 +3229,7 @@ mod tests {
             .into_connect_options()?
             .custom_inbox_prefix("agent.inbox");
 
-        let (first, client) = tokio::try_join!(accept_connect(&listener, "first-nonce"), async {
+        let (first, client) = tokio::try_join!(accept_connect(&listener), async {
             options
                 .connect(format!("nats://{}", listener.local_addr()?))
                 .await
@@ -3239,7 +3239,7 @@ mod tests {
         assert!(client.new_inbox().starts_with("agent.inbox."));
 
         std::fs::write(&token, "second")?;
-        let second = accept_connect(&listener, "second-nonce").await?;
+        let second = accept_connect(&listener).await?;
         assert_eq!(second["auth_token"], "second");
         Ok(())
     }
@@ -3253,7 +3253,7 @@ mod tests {
             .with_name("host:test")
             .with_inbox_prefix("runtime.inbox");
         let (connect, client) = tokio::try_join!(
-            accept_connect(&listener, "nonce"),
+            accept_connect(&listener),
             connect_nats(format!("nats://{}", listener.local_addr()?), options),
         )?;
         assert_eq!(connect["name"], "host:test");
@@ -3366,7 +3366,7 @@ mod tests {
         let addr = listener.local_addr()?;
         let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             loop {
-                let _ = accept_connect(&listener, "nonce").await;
+                let _ = accept_connect(&listener).await;
             }
         }));
 

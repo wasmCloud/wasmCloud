@@ -2062,7 +2062,7 @@ impl HostBuilder {
             };
             let declared = self.plugin_bindings.for_plugin(id);
             declared.validate_declaration()?;
-            crate::plugin::validate_plugin_secrets(
+            crate::plugin::validate_plugin_config_sources(
                 id,
                 &declared,
                 &plugin.binding_schema(),

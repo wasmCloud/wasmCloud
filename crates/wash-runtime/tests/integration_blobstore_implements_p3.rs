@@ -68,7 +68,7 @@ fn nats_blob_iface(name: &str, iface: &str) -> WitInterface {
 #[ignore = "requires Docker (NATS JetStream); run with `cargo test --include-ignored`"]
 async fn p3_guest_streams_blobstore_through_nats() -> Result<()> {
     // --- NATS container (JetStream enabled for the object store) ---
-    let nats = GenericImage::new("nats", "2.12.8-alpine")
+    let nats = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_cmd(["-js"])

@@ -55,7 +55,7 @@ struct Harness {
 }
 
 async fn start_nats() -> Result<Harness> {
-    start_nats_version("2.12.8-alpine", true).await
+    start_nats_version("2.12.15-alpine", true).await
 }
 
 async fn start_nats_version(version: &str, with_kv: bool) -> Result<Harness> {
@@ -1053,7 +1053,7 @@ async fn a_nakd_message_survives_a_consumer_rebuild() -> Result<()> {
 /// only need core pub/sub, and a second JetStream-enabled server would just be
 /// slower to start.
 async fn start_bare_nats() -> Result<(String, async_nats::Client, ContainerAsync<GenericImage>)> {
-    let container = GenericImage::new("nats", "2.12.8-alpine")
+    let container = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .start()
@@ -2521,7 +2521,7 @@ async fn put_until_reported(
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn a_kv_watch_waits_for_its_bucket_and_reports_every_operation() -> Result<()> {
-    let h = start_nats_version("2.12.8-alpine", false).await?;
+    let h = start_nats_version("2.12.15-alpine", false).await?;
     let host = start_host().await?;
     let mut sub = h.client.subscribe("test.results").await?;
 
@@ -2707,7 +2707,7 @@ async fn a_subscription_attaches_once_its_stream_is_provisioned() -> Result<()> 
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn a_recreated_kv_bucket_replays_early_writes_during_consumer_recovery() -> Result<()> {
-    let h = start_nats_version("2.12.8-alpine", false).await?;
+    let h = start_nats_version("2.12.15-alpine", false).await?;
     let config = async_nats::jetstream::kv::Config {
         bucket: "watched".into(),
         history: 5,

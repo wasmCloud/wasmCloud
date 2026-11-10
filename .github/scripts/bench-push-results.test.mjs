@@ -106,6 +106,18 @@ if (args[0] === 's3' && args[1] === 'cp') {
     symlinkSync(join(root, 'history.json'), join(bundle, 'results.jsonl'));
     const invalid = spawnSync(process.execPath, [script, 'validate', bundle], { env, encoding: 'utf8' });
     assert.notEqual(invalid.status, 0);
+
+    // A preset under its own group lands beside the base bench's files from
+    // the same run, not on top of them.
+    rmSync(join(bundle, 'results.jsonl'));
+    const grouped = { ...row, group: 'density-max' };
+    writeFileSync(join(bundle, 'results.jsonl'), JSON.stringify(grouped) + '\n');
+    const groupEnv = { ...env, WASMCLOUD_BENCH_GROUP: 'density-max' };
+    const groupPublish = spawnSync(process.execPath, [script, 'publish', bundle], { env: groupEnv, encoding: 'utf8' });
+    assert.equal(groupPublish.status, 0, groupPublish.stderr);
+    const runDir = join(root, 'bucket/runs/2026-10-06/aaaaaaaaaaaa/123/http_invoke');
+    assert.equal(readFileSync(join(runDir, 'results.jsonl'), 'utf8'), JSON.stringify(row) + '\n');
+    assert.equal(readFileSync(join(runDir, 'density-max/results.jsonl'), 'utf8'), JSON.stringify(grouped) + '\n');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

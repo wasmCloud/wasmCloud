@@ -201,7 +201,7 @@ pub use secret_source::{
     BindingName, CatalogName, HostSecretSource, PluginId, RequestingWorkload, SecretConsumer,
     SecretKey, SecretRequest, SecretSourceError, SecretValue, WorkloadGrant, WorkloadSelector,
 };
-pub(crate) use secret_source::{resolve_plugin_secrets, validate_plugin_secrets};
+pub(crate) use secret_source::{resolve_plugin_secrets, validate_plugin_config_sources};
 
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]

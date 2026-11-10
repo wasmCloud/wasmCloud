@@ -166,7 +166,7 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
         .try_init()
         .ok();
 
-    let container = GenericImage::new("nats", "2.12.8-alpine")
+    let container = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_exposed_port(8222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))

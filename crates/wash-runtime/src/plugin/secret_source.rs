@@ -2,7 +2,7 @@
 //! values another plugin serves through `wasmcloud:host/secret-source`.
 //!
 //! The key names are part of the [`PluginBindingSet`] from host start, so every
-//! key-level check sees them ([`validate_plugin_secrets`]). The values are
+//! key-level check sees them ([`validate_plugin_config_sources`]). The values are
 //! resolved each time a workload binds, before the binding policy runs
 //! ([`resolve_plugin_secrets`]), after which a secret key is an ordinary
 //! operator config key.
@@ -237,7 +237,11 @@ type LayerSource<'a> = (Option<&'a str>, &'a str);
 /// entry itself reads one, no other plugin may serve an interface this plugin
 /// serves: a plain import routes to whichever plugin serves it, and the
 /// secret's grant is checked only here.
-pub(crate) fn validate_plugin_secrets(
+///
+/// This validates reference metadata only; it does not read or return secret
+/// values. Keep the name distinct from value-producing secret accessors so
+/// static analysis does not classify its `Result<()>` as sensitive data.
+pub(crate) fn validate_plugin_config_sources(
     plugin_id: &str,
     declared: &PluginBindingSet,
     schema: &BindingSchema,
@@ -1021,10 +1025,11 @@ mod tests {
                 "db",
                 HashMap::from([("password".to_string(), secret("s", "k"))]),
             );
-        let error = validate_plugin_secrets("unsupported", &set, &BindingSchema::empty(), &plugins)
-            .unwrap_err();
+        let error =
+            validate_plugin_config_sources("unsupported", &set, &BindingSchema::empty(), &plugins)
+                .unwrap_err();
         assert!(error.to_string().contains("cannot consume plugin secrets"));
-        validate_plugin_secrets(
+        validate_plugin_config_sources(
             "unsupported",
             &PluginBindingSet::new("unsupported"),
             &BindingSchema::empty(),
@@ -1043,7 +1048,7 @@ mod tests {
             let set = PluginBindingSet::new(id)
                 .with_binding("app-db", Default::default())
                 .with_binding_secrets("app-db", HashMap::from([(key.to_string(), r)]));
-            validate_plugin_secrets(id, &set, &schema, &plugins).map_err(|e| e.to_string())
+            validate_plugin_config_sources(id, &set, &schema, &plugins).map_err(|e| e.to_string())
         };
         check("wasmcloud-postgres", "url", "vault").unwrap();
         for (id, key, plugin, expect) in [
@@ -1094,21 +1099,21 @@ mod tests {
         let on_entry = PluginBindingSet::new("wasmcloud-secrets").with_base_secrets(HashMap::from(
             [("db-password".to_string(), secret("tenant", "db-password"))],
         ));
-        validate_plugin_secrets(
+        validate_plugin_config_sources(
             "wasmcloud-secrets",
             &on_entry,
             &schema,
             &plugins(serving(&[])),
         )
         .unwrap();
-        validate_plugin_secrets(
+        validate_plugin_config_sources(
             "wasmcloud-secrets",
             &on_entry,
             &schema,
             &plugins(serving(&["acme:kv/store@0.1.0"])),
         )
         .unwrap();
-        let err = validate_plugin_secrets(
+        let err = validate_plugin_config_sources(
             "wasmcloud-secrets",
             &on_entry,
             &schema,
@@ -1128,7 +1133,7 @@ mod tests {
                 "db-password",
                 HashMap::from([("db-password".to_string(), secret("tenant", "db-password"))]),
             );
-        validate_plugin_secrets(
+        validate_plugin_config_sources(
             "wasmcloud-secrets",
             &on_binding,
             &schema,

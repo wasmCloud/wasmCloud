@@ -57,7 +57,7 @@ async fn multiplexed_routes_to_redis_and_nats() -> Result<()> {
     let redis_url = format!("redis://127.0.0.1:{redis_port}");
 
     // --- NATS container (JetStream enabled for KV) ---
-    let nats = GenericImage::new("nats", "2.12.8-alpine")
+    let nats = GenericImage::new("nats", "2.12.15-alpine")
         .with_exposed_port(4222.tcp())
         .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
         .with_cmd(["-js"])
