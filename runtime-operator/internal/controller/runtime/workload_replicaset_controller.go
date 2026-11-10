@@ -44,10 +44,11 @@ const (
 // WorkloadReplicaSetReconciler reconciles a WorkloadReplicaSet object
 type WorkloadReplicaSetReconciler struct {
 	client.Client
-	APIReader  client.Reader
-	Scheme     *runtime.Scheme
-	Recorder   events.EventRecorder
-	reconciler condition.AnyConditionedReconciler
+	ReadyRequeueInterval time.Duration
+	APIReader            client.Reader
+	Scheme               *runtime.Scheme
+	Recorder             events.EventRecorder
+	reconciler           condition.AnyConditionedReconciler
 }
 
 // recordRefusedCreate records a Workload create that the API server refused
@@ -406,6 +407,7 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		r.Scheme,
 		&runtimev1alpha1.WorkloadReplicaSet{},
 		workloadReplicaSetReconcileInterval)
+	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
 
 	// WorkloadDeployment reads these conditions and must tell a current one
 	// from one an earlier spec left behind.

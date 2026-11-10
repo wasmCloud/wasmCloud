@@ -745,3 +745,53 @@ func TestBatchStatusUpdatesPreserveOrderAndStops(t *testing.T) {
 		})
 	}
 }
+
+func TestReadyRequeueIntervalOnlyChangesStableHealthyObjects(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		ready       bool
+		observed    int64
+		deleting    bool
+		becomeReady bool
+		interval    time.Duration
+		want        time.Duration
+	}{
+		{name: "default", ready: true, want: time.Minute},
+		{name: "steady ready", ready: true, observed: 3, interval: 10 * time.Minute, want: 10 * time.Minute},
+		{name: "not ready", interval: 10 * time.Minute, want: time.Minute},
+		{name: "stale ready", ready: true, observed: 2, interval: 10 * time.Minute, want: time.Minute},
+		{name: "deleting", ready: true, deleting: true, interval: 10 * time.Minute, want: time.Minute},
+		{name: "transition still requeues immediately", becomeReady: true, interval: 10 * time.Minute, want: time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+			obj := &conditionedResource{
+				ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName, Generation: 3},
+			}
+			if tc.ready {
+				ready := ReadyCondition(TypeReady)
+				ready.ObservedGeneration = tc.observed
+				obj.Status.SetConditions(ready)
+			}
+			if tc.deleting {
+				now := metav1.Now()
+				obj.DeletionTimestamp = &now
+				obj.Finalizers = []string{"test"}
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).WithStatusSubresource(obj).Build()
+			r := NewConditionedReconciler(c, scheme, obj, time.Minute)
+			r.ReadyRequeueInterval(tc.interval)
+			if tc.becomeReady {
+				r.SetCondition(TypeReady, func(context.Context, *conditionedResource) error { return nil })
+			}
+			result, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.RequeueAfter != tc.want {
+				t.Fatalf("requeue = %s, want %s", result.RequeueAfter, tc.want)
+			}
+		})
+	}
+}
