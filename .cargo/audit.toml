@@ -1,8 +1,3 @@
 [advisories]
-ignore = [
-    # VEX: vex/wasmcloud.openvex.json
-    # Wasmtime's cache uses encode_all/decode_all without seekable or legacy.
-    "RUSTSEC-2026-0391", # `with_context` on a reused context
-    "RUSTSEC-2026-0398", # `seekable` only
-    "RUSTSEC-2026-0403", # legacy frames through `write::Decoder` only
-]
+# Every ignore needs a not_affected statement in vex/wasmcloud.openvex.json.
+ignore = []

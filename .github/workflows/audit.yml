@@ -72,7 +72,10 @@ jobs:
               - 'vex/**'
               - '.github/scripts/check-vex.mjs'
               - '.github/scripts/check-vex.test.mjs'
+              - '.github/scripts/release-vex.mjs'
+              - '.github/scripts/release-vex.test.mjs'
               - '.github/scripts/lib/vex.mjs'
+              - 'osv-scanner.toml'
             audit_config:
               - '.cargo/audit.toml'
             dependencies:
@@ -113,7 +116,7 @@ jobs:
           tool: cargo-audit
       - name: Check VEX assessments and suppression coverage
         run: |
-          node --test .github/scripts/check-vex.test.mjs
+          node --test .github/scripts/check-vex.test.mjs .github/scripts/release-vex.test.mjs
           node .github/scripts/check-vex.mjs
       - name: Run cargo audit
         run: cargo audit
@@ -151,6 +154,41 @@ jobs:
           cargo run --locked -p xtask -- fuzz verify-lock --source fuzz-source
           cargo deny --manifest-path fuzz-source/fuzz/Cargo.toml --workspace --config deny.toml --locked check licenses
 
+  # OSV, which also carries the OpenSSF malicious-packages feed, over every
+  # lockfile in the repository: Cargo, Go and npm. Runs on every change, so a
+  # newly published advisory or malicious package blocks merges until it is
+  # fixed or assessed (OSPS-VM-05.03).
+  # Findings that don't affect wasmCloud are ignored in osv-scanner.toml.
+  # osv-gate.mjs decides which findings block.
+  osv-scanner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: runtime-operator/go.mod
+          cache: false
+      # Fetched through the Go module proxy and verified against the Go
+      # checksum database, like any other module.
+      - name: Install osv-scanner
+        run: GOBIN="$RUNNER_TEMP" go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.7.0
+      - name: Scan every lockfile
+        run: |
+          # osv-scanner exits 1 when it has findings, which osv-gate.mjs
+          # classifies; any other non-zero status is a scan error.
+          status=0
+          "$RUNNER_TEMP/osv-scanner" scan source --recursive --config=osv-scanner.toml \
+            --format json --output-file "$RUNNER_TEMP/osv-report.json" ./ || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          node .github/scripts/osv-gate.mjs "$RUNNER_TEMP/osv-report.json"
+
   gate:
     name: gate-audit
     needs:
@@ -158,6 +196,7 @@ jobs:
       - dependency-review
       - cargo-audit
       - cargo-deny-licenses
+      - osv-scanner
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:

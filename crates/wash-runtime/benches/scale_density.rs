@@ -36,7 +36,24 @@
 //! cargo bench -p wash-runtime --bench scale_density                # both
 //! cargo bench -p wash-runtime --bench scale_density -- warm         # one
 //! cargo bench -p wash-runtime --bench scale_density -- scale-to-zero
+//! cargo bench -p wash-runtime --bench scale_density -- max-scale    # a preset
+//! cargo xtask scale-density density     # an xtask preset; see scale_density.md
 //! ```
+//!
+//! A preset names a set of the variables below, versioned with the bench:
+//!
+//! - `max-scale`: `WASH_SCALE_MEMORY_RESERVATION=256MiB`,
+//!   `WASH_SCALE_MEMORY_GUARD=64KiB`, `WASH_SCALE_GUEST_MEMORY_MODE=growth`
+//!   and `WASH_SCALE_MEMORY_LIMIT=2GiB`. At wasmtime's 4 GiB + 32 MiB layout
+//!   the address space holds about 16,000 warm instances; the preset shrinks
+//!   each guest memory's reservation and guard to run both flavours past
+//!   that. It moves an isolation boundary (`THREAT_MODEL.md`), so it runs
+//!   only when named.
+//!
+//! A preset combines with flavour filters and with the variables it does not
+//! set. Setting one of its own variables as well is an error, so a run under
+//! the preset's name always measures the same configuration. An argument that
+//! is neither a flavour nor a preset is an error too.
 //!
 //! | Variable | Meaning | Default |
 //! | --- | --- | --- |
@@ -51,7 +68,8 @@
 //! | `WASH_SCALE_STEP` | workloads started between measurements | `250` |
 //! | `WASH_SCALE_START_CONCURRENCY` | concurrent starts | available parallelism |
 //! | `WASH_SCALE_SAMPLE` | requests per step, spread across the set | `200` |
-//! | `WASH_SCALE_MAX_MEMORIES` | pool linear memories, the count that sizes the pool (`WASH_SCALE_CORE_INSTANCES` is an older name for it) | what the runtime derives from address space and `vm.max_map_count` |
+//! | `WASH_SCALE_MAX_MEMORIES` | pool linear memories, the count that sizes the pool (`WASH_SCALE_CORE_INSTANCES` is an older name for it) | what the runtime derives from address space, `vm.max_map_count` and the memory limit |
+//! | `WASH_SCALE_MAX_MEMORIES_CAP` | the most memories a derived count may reach, so hosts of different sizes size alike; small slots otherwise derive from the memory limit, over a million at 64 GiB | none |
 //! | `WASH_SCALE_FIXTURE` | `p3` or `p2` HTTP handler | `p3` |
 //! | `WASH_SCALE_CPUS` | cores the host may use; a list (`1,2,4`) runs each flavour at each | all |
 //! | `WASH_SCALE_REPORT_JSON` | also write every flavour's results as JSON here | unset |
@@ -67,7 +85,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -118,20 +136,9 @@ fn main() -> Result<()> {
     if args.iter().any(|a| a == "--list") || !args.iter().any(|a| a == "--bench") {
         return Ok(());
     }
-    let filters: Vec<&str> = args
-        .iter()
-        .map(String::as_str)
-        .filter(|a| !a.starts_with('-'))
-        .collect();
-    let flavours: Vec<Flavour> = Flavour::ALL
-        .into_iter()
-        .filter(|f| filters.is_empty() || filters.iter().any(|filter| f.name().contains(filter)))
-        .collect();
-    if flavours.is_empty() {
-        bail!("no flavour matches {filters:?}; choose from warm, scale-to-zero");
-    }
+    let (preset, flavours) = parse_args(&args)?;
     // Read here too, so a bad variable fails before any child starts.
-    let settings = Settings::from_env()?;
+    let settings = Settings::with_preset(preset, env_var)?;
     for &flavour in &flavours {
         settings.validate_flavour(flavour)?;
     }
@@ -143,7 +150,7 @@ fn main() -> Result<()> {
             run.layout,
         );
         eprintln!("\n== {name} ==");
-        reports.push(run_child(run.flavour, run.cpus, run.mode, run.layout)?);
+        reports.push(run_child(&run, preset)?);
     }
     print_comparison(&reports);
     if let Some(path) = &settings.report_json {
@@ -151,6 +158,41 @@ fn main() -> Result<()> {
             .with_context(|| format!("writing {path}"))?;
     }
     Ok(())
+}
+
+/// The preset and the flavours the positional arguments choose.
+///
+/// A preset name is taken out first; every other argument is a flavour
+/// filter, and one that matches no flavour is an error.
+fn parse_args(args: &[String]) -> Result<(Option<Preset>, Vec<Flavour>)> {
+    let mut preset = None;
+    let mut filters = Vec::new();
+    for arg in args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| !a.starts_with('-'))
+    {
+        match Preset::from_name(arg) {
+            Some(named) => {
+                if let Some(earlier) = preset.replace(named) {
+                    bail!("choose one preset, not {} and {arg}", earlier.name());
+                }
+            }
+            None => filters.push(arg),
+        }
+    }
+    let flavours: Vec<Flavour> = Flavour::ALL
+        .into_iter()
+        .filter(|f| filters.is_empty() || filters.iter().any(|filter| f.name().contains(filter)))
+        .collect();
+    if flavours.is_empty() {
+        let presets: Vec<_> = Preset::ALL.into_iter().map(Preset::name).collect();
+        bail!(
+            "no flavour matches {filters:?}; choose from warm, scale-to-zero, or a preset: {}",
+            presets.join(", ")
+        );
+    }
+    Ok((preset, flavours))
 }
 
 /// One requested combination, run in its own child process.
@@ -187,28 +229,39 @@ fn selected_runs(settings: &Settings, flavours: &[Flavour]) -> Vec<Run> {
     runs
 }
 
+/// The settings a child is given on top of the parent's environment: the
+/// preset's variables, then one mode and one layout in place of the lists
+/// the parent was given. The child reads its settings from the environment
+/// alone.
+fn child_env(run: &Run, preset: Option<Preset>) -> BTreeMap<&'static str, String> {
+    let mut env: BTreeMap<_, _> = preset
+        .map_or(&[][..], Preset::values)
+        .iter()
+        .map(|&(key, value)| (key, value.to_string()))
+        .collect();
+    env.insert(GUEST_MEMORY_MODE, run.mode.as_str().into());
+    env.insert(
+        MEMORY_RESERVATION,
+        run.layout
+            .map_or_else(|| "default".into(), |l| l.reservation.to_string()),
+    );
+    env
+}
+
 /// Run one flavour in one guest memory mode and layout in a fresh copy of this binary,
 /// and read back its report.
-fn run_child(
-    flavour: Flavour,
-    cpus: Option<usize>,
-    mode: GuestMemoryMode,
-    layout: Option<host_memory::MemoryLayout>,
-) -> Result<Report> {
-    let name = layout_label(report_label(flavour.name(), cpus, mode), layout);
+fn run_child(run: &Run, preset: Option<Preset>) -> Result<Report> {
+    let name = layout_label(
+        report_label(run.flavour.name(), run.cpus, run.mode),
+        run.layout,
+    );
     let report = tempfile::NamedTempFile::new()?;
     let mut child = std::process::Command::new(std::env::current_exe()?);
     child
-        .env(CHILD_FLAVOUR, flavour.name())
-        .env(CHILD_REPORT, report.path())
-        // One mode and one layout per child, in place of the lists the
-        // parent was given.
-        .env(GUEST_MEMORY_MODE, mode.as_str())
-        .env(
-            MEMORY_RESERVATION,
-            layout.map_or_else(|| "default".into(), |l| l.reservation.to_string()),
-        );
-    if let Some(cpus) = cpus {
+        .envs(child_env(run, preset))
+        .env(CHILD_FLAVOUR, run.flavour.name())
+        .env(CHILD_REPORT, report.path());
+    if let Some(cpus) = run.cpus {
         child.env(CHILD_CPUS, cpus.to_string());
     }
     let status = child
@@ -896,6 +949,33 @@ mod tests {
     }
 
     #[test]
+    fn a_cap_bounds_only_a_derived_pool_count_but_is_always_checked() -> Result<()> {
+        let settings = |max: Option<&str>, cap: Option<&str>| {
+            Settings::from_values(|key| match key {
+                "WASH_SCALE_MEMORY_LIMIT" | "WASH_SCALE_GUEST_MEMORY" => Some("1GiB".into()),
+                MEMORY_RESERVATION => Some("2MiB".into()),
+                "WASH_SCALE_MEMORY_GUARD" => Some("0".into()),
+                "WASH_SCALE_MAX_MEMORIES" => max.map(Into::into),
+                MAX_MEMORIES_CAP => cap.map(Into::into),
+                _ => None,
+            })
+        };
+        let derived = settings(None, None)?.max_memories;
+        let capped = settings(None, Some("1500"))?.max_memories;
+        assert_eq!(capped, derived.min(1500));
+        assert_eq!(
+            settings(None, Some("4294967296"))?.max_memories,
+            derived,
+            "a cap past u32 leaves the derived count"
+        );
+        assert_eq!(settings(Some("5000"), Some("1500"))?.max_memories, 5000);
+        assert!(settings(None, Some("0")).is_err());
+        assert!(settings(Some("5000"), Some("0")).is_err());
+        assert!(settings(Some("5000"), Some("many")).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn reduced_layout_runs_warm_and_scale_to_zero() -> Result<()> {
         let settings = Settings::from_values(|key| match key {
             "WASH_SCALE_MEMORY_LIMIT" | "WASH_SCALE_GUEST_MEMORY" => Some("2GiB".into()),
@@ -927,6 +1007,82 @@ mod tests {
             labels(&[Flavour::ScaleToZero]),
             ["scale-to-zero-growth-layout256MiB+64KiB"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn max_scale_preset_sets_the_reduced_growth_layout() -> Result<()> {
+        let (preset, flavours) = parse_args(&["--bench", "max-scale"].map(String::from))?;
+        assert_eq!(preset, Some(Preset::MaxScale));
+        assert_eq!(flavours, Flavour::ALL);
+        let (preset, flavours) = parse_args(&["max-scale", "warm"].map(String::from))?;
+        assert_eq!(preset, Some(Preset::MaxScale));
+        assert_eq!(flavours, [Flavour::Warm]);
+
+        let base = |key: &str| match key {
+            "WASH_SCALE_GUEST_MEMORY" => Some("1GiB".into()),
+            "WASH_SCALE_MAX_MEMORIES" => Some("1000".into()),
+            _ => None,
+        };
+        let settings = Settings::with_preset(preset, base)?;
+        assert_eq!(settings.memory_limit, 2 << 30);
+        assert_eq!(settings.guest_modes, [GuestMemoryMode::Growth]);
+        let layout = host_memory::MemoryLayout {
+            reservation: 256 << 20,
+            guard: 64 << 10,
+        };
+        assert_eq!(settings.memory_layouts, [Some(layout)]);
+        let runs = selected_runs(&settings, &Flavour::ALL);
+        assert_eq!(
+            runs.iter()
+                .map(|run| layout_label(
+                    report_label(run.flavour.name(), run.cpus, run.mode),
+                    run.layout
+                ))
+                .collect::<Vec<_>>(),
+            [
+                "warm-growth-layout256MiB+64KiB",
+                "scale-to-zero-growth-layout256MiB+64KiB",
+            ]
+        );
+
+        // Each child reads the same run back from its environment alone.
+        for run in &runs {
+            let env = child_env(run, preset);
+            let child = Settings::from_values(|key| env.get(key).cloned().or_else(|| base(key)))?;
+            assert_eq!(child.memory_limit, settings.memory_limit);
+            assert_eq!(child.guest_mode, GuestMemoryMode::Growth);
+            assert_eq!(child.memory_layouts, [Some(layout)]);
+        }
+
+        // Without the preset, nothing it sets applies.
+        let plain = Settings::with_preset(None, base)?;
+        assert_eq!(plain.guest_modes, [GuestMemoryMode::Enforce]);
+        assert_eq!(plain.memory_layouts, [None]);
+        Ok(())
+    }
+
+    #[test]
+    fn a_preset_refuses_its_own_variables_and_unknown_names() -> Result<()> {
+        let overridden = Settings::with_preset(Some(Preset::MaxScale), |key| match key {
+            "WASH_SCALE_GUEST_MEMORY" => Some("1GiB".into()),
+            MEMORY_LIMIT => Some("4GiB".into()),
+            _ => None,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(
+            overridden.contains("WASH_SCALE_MEMORY_LIMIT=4GiB"),
+            "{overridden}"
+        );
+
+        let unknown = parse_args(&["--bench", "max_scale"].map(String::from))
+            .unwrap_err()
+            .to_string();
+        assert!(unknown.contains("no flavour matches"), "{unknown}");
+        assert!(unknown.contains("max-scale"), "{unknown}");
+        assert!(parse_args(&["max-scale", "max-scale"].map(String::from)).is_err());
+        assert!(Preset::from_name("max-scale-2").is_none());
         Ok(())
     }
 

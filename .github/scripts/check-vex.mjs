@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Requires a current release assessment for every Cargo audit ignore.
+// Requires a current release assessment for every Cargo audit ignore, and keeps
+// the released-code ignores in osv-scanner.toml in step with .cargo/audit.toml
+// so both scanners suppress the same advisories.
 
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
@@ -52,16 +54,38 @@ export function checkVex(doc, ignored, version, artifacts) {
   }
 }
 
+// OSV-Scanner reads the same Cargo.lock as cargo-audit. An advisory VEX marks
+// not_affected there must be ignored by both, or osv-scanner fails gate-audit.
+// The reverse holds too: once an advisory leaves .cargo/audit.toml, an
+// osv-scanner.toml ignore that names it as released code must go with it, or
+// osv-scanner keeps hiding it. A released-code ignore is one whose reason
+// starts with "VEX", or one for an advisory the VEX document assesses. The
+// rest cover examples, templates and test fixtures only.
+export function checkOsvMirror(ignored, osvIgnores, doc) {
+  const audit = new Set(ignored);
+  const osv = new Set(osvIgnores.map(({ id }) => id));
+  for (const advisory of ignored) {
+    assert.ok(osv.has(advisory), `Cargo audit ignores ${advisory} but osv-scanner.toml does not`);
+  }
+  const assessed = new Set((doc.statements ?? []).map((statement) => statement.vulnerability?.name));
+  for (const { id, reason } of osvIgnores) {
+    if (audit.has(id)) continue;
+    const released = assessed.has(id) || /^VEX\b/.test(reason ?? '');
+    assert.ok(!released, `osv-scanner.toml ignores ${id} as released code but .cargo/audit.toml does not; remove the osv-scanner.toml ignore`);
+  }
+}
+
 // With `--release`, a dependency that moved since its assessment is an error.
 // Between releases it is a warning, since main still carries the last
 // release's version and products.
 function main(args) {
   const release = args.includes('--release');
-  const { ignored, version, lock } = readCargo('.');
+  const { ignored, osvIgnores, version, lock } = readCargo('.');
   const artifacts = readArtifacts('.');
   const doc = readVex('.');
   checkVex(doc, ignored, version, artifacts);
-  const drift = lockDrift(doc, version, artifacts, lock).map(describeDrift);
+  checkOsvMirror(ignored, osvIgnores, doc);
+  const drift = lockDrift(doc, version, artifacts, lock, ignored).map(describeDrift);
   if (release) {
     assert.ok(!drift.length, `reassess before releasing ${version}:\n${drift.join('\n')}`);
   }

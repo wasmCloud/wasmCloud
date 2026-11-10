@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1-labs
 
-FROM cgr.dev/chainguard/rust:latest-dev AS builder
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:185d4ab3d466528bcdb309632a0596df4df1ab68edbd29a387184156c0af4cf1 AS builder
 WORKDIR /src
 ENV RUST_BACKTRACE=1
 
@@ -31,7 +31,7 @@ ARG CARGO_FEATURES=""
 RUN cargo build --release --bin wash ${CARGO_FEATURES:+--features ${CARGO_FEATURES}}
 
 # Release image
-FROM cgr.dev/chainguard/wolfi-base
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:24f549a7fcace88e69b9557941168c74645688ecc4acf7fb6d734a6b74e9019d
 RUN attempt=1; delay=2; \
     until apk update && apk add --no-cache git; do \
         if [ "$attempt" -ge 5 ]; then \

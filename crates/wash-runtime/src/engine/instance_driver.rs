@@ -104,9 +104,12 @@ pub(crate) enum InstanceJob {
     /// plugin keeps its own payload and makes its own typed call. That is what
     /// lets a delivery carry, say, a NATS message's bytes rather than the one
     /// 48-byte [`Val`] per byte a store-independent lowering would cost.
-    /// Unboxed: it is a handful of pointers, and the call it carries is already
-    /// behind one.
-    Guest(GuestJob),
+    ///
+    /// Boxed like the others, though it is only a handful of pointers: the
+    /// job is what a driver's channel holds, and tokio allocates a channel's
+    /// first block of slots up front, so every warm instance pays for 32 jobs
+    /// of the largest variant's size whether it ever takes one or not.
+    Guest(Box<GuestJob>),
 }
 
 impl InstanceJob {
@@ -561,7 +564,7 @@ impl InstanceDriver {
                             }
                             InstanceJob::Guest(job) => accessor.spawn(GuestTask::new(
                                 instance,
-                                job,
+                                *job,
                                 Placement::Pooled(slot),
                                 &replies,
                                 FAULTED,

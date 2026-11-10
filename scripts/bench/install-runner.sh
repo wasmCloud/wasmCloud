@@ -5,13 +5,15 @@
 #   sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
 #     [--repo  wasmCloud/wasmCloud] \
 #     [--version 2.337.0] \
-#     [--label hetzner] [--nproc N] [--isolated-cpu N]
+#     [--label hetzner] [--nproc N] [--isolated-cpu N] [--no-cpufreq]
 #
 # --label is the host label workflows target with their `host` input
 # (.github/scripts/bench-host.mjs); hetzner is the dedicated host. --nproc and
 # --isolated-cpu tell the pre-flight what this host's online CPU count (with
 # nosmt) and isolated CPU are, when they differ from the dedicated host's 6
-# and 5.
+# and 5. --no-cpufreq is for a VM whose hypervisor sets the clock and exposes
+# no cpufreq driver (EC2 Graviton): the pre-flight then skips its governor
+# check instead of failing on the missing sysfs nodes.
 #
 # The registration token is one-shot. Get one from:
 #   GitHub Repo > Settings > Actions > Runners > New self-hosted runner
@@ -49,10 +51,13 @@ RUNNER_DIR="/opt/actions-runner"
 WORK_DIR="/var/lib/bench/work"
 TARGET_DIR="/var/lib/bench/target"
 
-# SHA256 of actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz, copied from
+# SHA256 of actions-runner-linux-<arch>-${RUNNER_VERSION}.tar.gz for each
+# architecture, copied from
 # https://github.com/actions/runner/releases/tag/v${RUNNER_VERSION}. Bump
-# both `RUNNER_VERSION` and this constant together.
-RUNNER_SHA256="70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
+# `RUNNER_VERSION` and both constants together.
+RUNNER_SHA256_X64="70920811a4f8ad4328818682bca5c6469c1c942fab52448868071d0063816613"
+RUNNER_SHA256_ARM64="9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393"
+NO_CPUFREQ=""
 
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
@@ -67,6 +72,7 @@ while [ $# -gt 0 ]; do
     --label)   HOST_LABEL="$2"; shift 2 ;;
     --nproc)   EXPECTED_NPROC="$2"; shift 2 ;;
     --isolated-cpu) ISOLATED_CPU="$2"; shift 2 ;;
+    --no-cpufreq) NO_CPUFREQ=1; shift ;;
     -h|--help) usage 0 ;;
     *)         echo "unknown arg: $1" >&2; usage 2 ;;
   esac
@@ -176,9 +182,14 @@ step "download + verify + extract actions-runner v${RUNNER_VERSION}"
 mkdir -p "$RUNNER_DIR"
 chown bench:bench "$RUNNER_DIR"
 tarball="$RUNNER_DIR/runner.tgz"
-url="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
+case "$(uname -m)" in
+  x86_64)  runner_arch=x64;   runner_sha256="$RUNNER_SHA256_X64" ;;
+  aarch64) runner_arch=arm64; runner_sha256="$RUNNER_SHA256_ARM64" ;;
+  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+url="https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${runner_arch}-${RUNNER_VERSION}.tar.gz"
 sudo -u bench bash -c "curl -fL -o '$tarball' '$url'"
-echo "${RUNNER_SHA256}  ${tarball}" | sha256sum -c -
+echo "${runner_sha256}  ${tarball}" | sha256sum -c -
 sudo -u bench bash -c "cd '$RUNNER_DIR' && tar xzf runner.tgz && rm runner.tgz"
 
 step "configure runner (registers with GitHub)"
@@ -210,6 +221,9 @@ if [ -n "$EXPECTED_NPROC" ]; then
 fi
 if [ -n "$ISOLATED_CPU" ]; then
   echo "WASMCLOUD_BENCH_ISOLATED_CPU=${ISOLATED_CPU}" >> "$RUNNER_DIR/.env"
+fi
+if [ -n "$NO_CPUFREQ" ]; then
+  echo "WASMCLOUD_BENCH_NO_CPUFREQ=1" >> "$RUNNER_DIR/.env"
 fi
 
 step "install + start systemd service"

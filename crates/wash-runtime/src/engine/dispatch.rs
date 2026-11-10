@@ -1311,7 +1311,7 @@ fn start_on_component(
     let (job, pool) = match pool {
         None => (job, None),
         Some(pool) => {
-            let (job, room) = match pool.try_dispatch(InstanceJob::Guest(job)) {
+            let (job, room) = match pool.try_dispatch(InstanceJob::Guest(Box::new(job))) {
                 Dispatch::Sent => return,
                 Dispatch::NeedsInstance(job) => (job, Some(Arc::clone(pool))),
                 Dispatch::Saturated(job) => {
@@ -1326,7 +1326,7 @@ fn start_on_component(
                 debug_assert!(false, "a dispatched job cannot come back as another kind");
                 return;
             };
-            (job, room)
+            (*job, room)
         }
     };
     tokio::spawn(hand_off(
@@ -1355,13 +1355,13 @@ async fn hand_off(
             Some(Err(e)) => return job.refuse(e),
             None => return,
         };
-        match pool.dispatch_on_new(built, InstanceJob::Guest(job)) {
+        match pool.dispatch_on_new(built, InstanceJob::Guest(Box::new(job))) {
             Ok(()) => return,
             Err(Declined {
                 job: InstanceJob::Guest(declined),
                 instance,
             }) => {
-                job = declined;
+                job = *declined;
                 reclaimed = instance;
             }
             Err(_) => {

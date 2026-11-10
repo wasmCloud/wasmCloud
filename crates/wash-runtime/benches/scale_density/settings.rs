@@ -29,6 +29,55 @@ pub(super) const GUEST_MEMORY_MODE: &str = "WASH_SCALE_GUEST_MEMORY_MODE";
 /// `default` is wasmtime's own layout.
 pub(super) const MEMORY_RESERVATION: &str = "WASH_SCALE_MEMORY_RESERVATION";
 
+/// The most linear memories a derived pool count may reach.
+pub(super) const MAX_MEMORIES_CAP: &str = "WASH_SCALE_MAX_MEMORIES_CAP";
+
+/// The guard after each guest memory.
+pub(super) const MEMORY_GUARD: &str = "WASH_SCALE_MEMORY_GUARD";
+
+/// The host's max-process-memory.
+pub(super) const MEMORY_LIMIT: &str = "WASH_SCALE_MEMORY_LIMIT";
+
+/// A named set of settings, chosen by a positional argument.
+///
+/// A preset owns its variables: setting one of them in the environment as
+/// well is an error, so every run under a preset's name measures the same
+/// configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Preset {
+    /// Warm and scale-to-zero in growth mode, with each guest memory's
+    /// reservation and guard shrunk below wasmtime's 4 GiB + 32 MiB so the
+    /// address space holds more than that layout's ~16,000 warm instances.
+    /// Moves an isolation boundary (`THREAT_MODEL.md`).
+    MaxScale,
+}
+
+impl Preset {
+    pub(super) const ALL: [Self; 1] = [Self::MaxScale];
+
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::MaxScale => "max-scale",
+        }
+    }
+
+    pub(super) fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    /// The variables the preset sets.
+    pub(super) fn values(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::MaxScale => &[
+                (MEMORY_RESERVATION, "256MiB"),
+                (MEMORY_GUARD, "64KiB"),
+                (GUEST_MEMORY_MODE, "growth"),
+                (MEMORY_LIMIT, "2GiB"),
+            ],
+        }
+    }
+}
+
 /// What a run was told, from the environment.
 #[derive(Debug, Clone)]
 pub(super) struct Settings {
@@ -73,7 +122,42 @@ impl Settings {
     }
 
     pub(super) fn from_env() -> Result<Self> {
-        Self::from_values(|key| std::env::var(key).ok().filter(|v| !v.trim().is_empty()))
+        Self::from_values(env_var)
+    }
+
+    /// `var` with the preset's variables on top; one that `var` sets too is
+    /// an error.
+    pub(super) fn with_preset(
+        preset: Option<Preset>,
+        var: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self> {
+        let Some(preset) = preset else {
+            return Self::from_values(var);
+        };
+        let values = preset.values();
+        let set: Vec<String> = values
+            .iter()
+            .filter_map(|(key, _)| var(key).map(|v| format!("{key}={v}")))
+            .collect();
+        if !set.is_empty() {
+            bail!(
+                "the {} preset sets {}; unset {} or run without the preset",
+                preset.name(),
+                values
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                set.join(", "),
+            );
+        }
+        Self::from_values(|key| {
+            values
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| (*v).to_string())
+                .or_else(|| var(key))
+        })
     }
 
     pub(super) fn from_values(var: impl Fn(&str) -> Option<String>) -> Result<Self> {
@@ -82,9 +166,10 @@ impl Settings {
                 .map(|v| v.trim().parse().with_context(|| format!("{key}={v}")))
                 .transpose()
         };
-        let memory_limit = match var("WASH_SCALE_MEMORY_LIMIT") {
-            Some(v) => parse_bytes(v.trim())
-                .map_err(|e| anyhow::anyhow!("WASH_SCALE_MEMORY_LIMIT={v}: {e}"))?,
+        let memory_limit = match var(MEMORY_LIMIT) {
+            Some(v) => {
+                parse_bytes(v.trim()).map_err(|e| anyhow::anyhow!("{MEMORY_LIMIT}={v}: {e}"))?
+            }
             None => (effective_memory()? / 2).min(2 << 30),
         };
         let guest_memory = match var("WASH_SCALE_GUEST_MEMORY") {
@@ -128,7 +213,7 @@ impl Settings {
         // - `default` is wasmtime's layout, guard and all;
         // - a size reserves that, with the guard named or wasmtime's;
         // - unset is one run, at wasmtime's layout unless a guard is named.
-        let guard = bytes("WASH_SCALE_MEMORY_GUARD")?;
+        let guard = bytes(MEMORY_GUARD)?;
         let layout = |reservation: Option<u64>| match (reservation, guard) {
             (None, None) => None,
             (reservation, guard) => {
@@ -160,18 +245,28 @@ impl Settings {
         });
         // `split` yields at least one entry, so the default is never reached.
         let memory_layout = memory_layouts.first().copied().flatten();
+        let cap = match number(MAX_MEMORIES_CAP)? {
+            Some(0) => bail!("{MAX_MEMORIES_CAP} must be at least 1"),
+            cap => cap.map(|cap| u32::try_from(cap).unwrap_or(u32::MAX)),
+        };
         // `WASH_SCALE_CORE_INSTANCES` named this count before the pool's
         // totals were derived from its memory count; still read.
         let max_memories = match number("WASH_SCALE_MAX_MEMORIES")? {
             Some(n) => u32::try_from(n).context("WASH_SCALE_MAX_MEMORIES")?,
             None => match number("WASH_SCALE_CORE_INSTANCES")? {
                 Some(n) => u32::try_from(n).context("WASH_SCALE_CORE_INSTANCES")?,
-                None => match memory_layout {
-                    Some(layout) => host_memory::derive_max_memories_with(
-                        host_memory::MaxMemoriesDerivation::default().with_memory_layout(layout),
-                    ),
-                    None => host_memory::derive_max_memories(),
-                },
+                None => {
+                    let derived = match memory_layout {
+                        Some(layout) => host_memory::derive_max_memories_with(
+                            host_memory::MaxMemoriesDerivation::default()
+                                .with_memory_layout(layout),
+                        ),
+                        None => host_memory::derive_max_memories(),
+                    };
+                    // Small slots derive from the memory limit, so a cap keeps
+                    // hosts of different sizes at one pool size.
+                    cap.map_or(derived, |cap| derived.min(cap))
+                }
             },
         };
         let fixture = match var("WASH_SCALE_FIXTURE").as_deref().map(str::trim) {
@@ -215,6 +310,11 @@ impl Settings {
             },
         })
     }
+}
+
+/// A variable from the environment; empty counts as unset.
+pub(super) fn env_var(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
 pub(super) fn effective_memory() -> Result<u64> {

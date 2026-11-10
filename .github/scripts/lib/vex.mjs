@@ -31,10 +31,14 @@ export function cargoPurl(id) {
 
 // Each cargo subcomponent of a `version` product that Cargo.lock does not
 // contain at that exact version: the dependency moved since the assessment.
-export function lockDrift(doc, version, artifacts, lock) {
+// Only statements for advisories in `ignored` count, since only those still
+// suppress a finding.
+export function lockDrift(doc, version, artifacts, lock, ignored) {
   const required = new Set(releaseProducts(version, artifacts));
+  const suppressing = new Set(ignored);
   const drift = new Map();
   for (const statement of doc.statements ?? []) {
+    if (!suppressing.has(statement.vulnerability?.name)) continue;
     for (const product of statement.products ?? []) {
       if (!required.has(product['@id'])) continue;
       for (const sub of product.subcomponents ?? []) {
@@ -57,16 +61,20 @@ export function describeDrift({ advisory, subcomponent, locked }) {
   return `${advisory} was assessed against ${subcomponent}, but ${now}`;
 }
 
-// The audit ignores, workspace version and locked packages under `root`,
+// The audit and OSV-Scanner ignores, workspace version and locked packages under `root`,
 // parsed with the runner's Python TOML reader for Cargo's quoting and arrays.
 export function readCargo(root) {
-  const { ignored, version, packages } = JSON.parse(execFileSync('python3', ['-c', `
+  const { ignored, osvIgnores, version, packages } = JSON.parse(execFileSync('python3', ['-c', `
 import json, pathlib, tomllib
 audit = tomllib.loads(pathlib.Path('.cargo/audit.toml').read_text())
 manifest = tomllib.loads(pathlib.Path('Cargo.toml').read_text())
+osv = pathlib.Path('osv-scanner.toml')
+osv_ignores = [{'id': v['id'], 'reason': v.get('reason', '')}
+               for v in tomllib.loads(osv.read_text()).get('IgnoredVulns', [])] if osv.exists() else []
 lock = pathlib.Path('Cargo.lock')
 packages = tomllib.loads(lock.read_text()).get('package', []) if lock.exists() else []
 print(json.dumps({'ignored': audit.get('advisories', {}).get('ignore', []),
+                  'osvIgnores': osv_ignores,
                   'version': manifest['workspace']['package']['version'],
                   'packages': [[p['name'], p['version']] for p in packages]}))
   `], { cwd: root, encoding: 'utf8' }));
@@ -75,7 +83,7 @@ print(json.dumps({'ignored': audit.get('advisories', {}).get('ignore', []),
     if (!lock.has(name)) lock.set(name, new Set());
     lock.get(name).add(v);
   }
-  return { ignored, version, lock };
+  return { ignored, osvIgnores, version, lock };
 }
 
 export function readArtifacts(root) {

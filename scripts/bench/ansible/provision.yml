@@ -51,7 +51,8 @@
     # Node 18 in `main`, which is past EOL; NodeSource gives us a current
     # LTS without competing with the OS package.
     node_lts_major: 24
-    # scripts/k6bench tools, linux-amd64, each pinned with the sha256 from its
+    # scripts/k6bench tools, linux-amd64 only (the tasks skip other
+    # architectures, which can't run k6bench yet), each pinned with the sha256 from its
     # release. Bump version and checksum together; kubectl tracks the kind
     # node image pinned in scripts/k6bench/kind-config.yaml.
     k6bench_tools:
@@ -342,6 +343,7 @@
         checksum: "sha256:{{ item.sha256 }}"
         mode: "0755"
       loop: "{{ k6bench_tools }}"
+      when: ansible_facts['architecture'] == 'x86_64'
       tags: [k6bench]
 
     - name: Download k6bench archives
@@ -350,6 +352,7 @@
         dest: "/tmp/{{ item.name }}.tar.gz"
         checksum: "sha256:{{ item.sha256 }}"
       loop: "{{ k6bench_archives }}"
+      when: ansible_facts['architecture'] == 'x86_64'
       tags: [k6bench]
 
     - name: Install k6bench binaries from archives
@@ -361,6 +364,7 @@
         executable: /bin/bash
         creates: "/usr/local/bin/{{ item.name }}.{{ item.sha256[:12] }}"
       loop: "{{ k6bench_archives }}"
+      when: ansible_facts['architecture'] == 'x86_64'
       tags: [k6bench]
 
     - name: Stamp installed archive versions
@@ -370,6 +374,7 @@
         modification_time: preserve
         access_time: preserve
       loop: "{{ k6bench_archives }}"
+      when: ansible_facts['architecture'] == 'x86_64'
       tags: [k6bench]
 
     # ── Repo clone for ad-hoc / manual benches ────────────────────────────
@@ -403,6 +408,21 @@
           GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} nosmt isolcpus={{ isolated_cpu }} nohz_full={{ isolated_cpu }} rcu_nocbs={{ isolated_cpu }}"
       notify: regenerate grub config
       tags: [kernel]
+
+    # ── Mapping limit for very large pools (opt-in, no reboot needed) ────
+    # Each warm component holds about six mappings, so a pool past ~170k
+    # memories needs more than Ubuntu's 1,048,576. Set per host, e.g.
+    # `-e vm_max_map_count=16777216` on aws-c9g-16xlarge; left alone
+    # otherwise, so the dedicated host's derived pool does not move.
+    - name: sysctl vm.max_map_count
+      ansible.posix.sysctl:
+        name: vm.max_map_count
+        value: "{{ vm_max_map_count }}"
+        sysctl_file: /etc/sysctl.d/90-wasmcloud-bench.conf
+        state: present
+        reload: true
+      when: vm_max_map_count is defined
+      tags: [kernel, sysctl]
 
     # ── cpu-performance governor (no reboot needed) ───────────────────────
     - name: Install cpu-performance systemd unit

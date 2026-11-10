@@ -223,6 +223,80 @@ impl Report {
     }
 }
 
+/// The most steps a published ramp keeps per flavour; longer runs are
+/// thinned to this many, so a million-workload run stays a few kilobytes of
+/// `history.json`.
+pub const RAMP_POINTS: usize = 80;
+
+/// A run's steps thinned for publishing, one column per figure, so each
+/// figure's name is written once rather than once per step. Every column
+/// has one entry per kept step; `None` is a reading not taken.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Ramp {
+    pub workloads: Vec<usize>,
+    pub footprint_bytes: Vec<Option<u64>>,
+    pub starts_per_sec: Vec<Option<f64>>,
+    pub requests_per_sec: Vec<Option<f64>>,
+    pub request_p50_ms: Vec<Option<f64>>,
+    pub request_p99_ms: Vec<Option<f64>>,
+    pub clean: Vec<bool>,
+}
+
+impl Report {
+    /// At most `points` steps, evenly spread from the first to the last,
+    /// always keeping the last clean one (the step `served` reports); with
+    /// one or two points there is no interior step to trade, so it takes the
+    /// first step's place. Rates are rounded to whole numbers and latencies
+    /// to microseconds; a reading that is not finite is `None`, never a
+    /// made-up zero. `None` for a run without steps.
+    pub fn ramp(&self, points: usize) -> Option<Ramp> {
+        if self.steps.is_empty() || points == 0 {
+            return None;
+        }
+        let mut keep = spread(self.steps.len(), points);
+        if let Some(i) = self.steps.iter().rposition(|s| s.clean)
+            && keep.binary_search(&i).is_err()
+        {
+            // `spread` keeps every step of a short run, so this is a long
+            // one and `keep` is full: trade the nearest interior step for
+            // it, keeping the first and the last. Without an interior, the
+            // first gives way, so the ramp never exceeds `points`.
+            let interior = keep.len().saturating_sub(1);
+            let slot = match keep.get_mut(1..interior) {
+                Some(kept) if !kept.is_empty() => kept.iter_mut().min_by_key(|k| k.abs_diff(i)),
+                _ => keep.first_mut(),
+            };
+            if let Some(k) = slot {
+                *k = i;
+            }
+            keep.sort_unstable();
+        }
+        let round = |v: f64, scale: f64| (v * scale).round() / scale;
+        let ms = |v: Option<f64>| v.filter(|v| v.is_finite()).map(|v| round(v, 1000.0));
+        let rate = |v: f64| v.is_finite().then(|| v.round());
+        let mut ramp = Ramp::default();
+        for step in keep.iter().filter_map(|&i| self.steps.get(i)) {
+            ramp.workloads.push(step.workloads);
+            ramp.footprint_bytes.push(step.footprint_bytes);
+            ramp.starts_per_sec.push(rate(step.starts_per_sec));
+            ramp.requests_per_sec.push(rate(step.requests_per_sec));
+            ramp.request_p50_ms.push(ms(step.request_p50_ms));
+            ramp.request_p99_ms.push(ms(step.request_p99_ms));
+            ramp.clean.push(step.clean);
+        }
+        Some(ramp)
+    }
+
+    /// The fastest step's start rate, which thinning the ramp can drop.
+    pub fn peak_starts_per_sec(&self) -> Option<f64> {
+        self.steps
+            .iter()
+            .map(|s| s.starts_per_sec)
+            .filter(|v| v.is_finite())
+            .max_by(f64::total_cmp)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Better {
     Higher,
@@ -599,6 +673,75 @@ mod tests {
                 .iter()
                 .all(|m| m.name == "served_workloads")
         );
+    }
+
+    #[test]
+    fn ramps_thin_long_runs_and_keep_the_served_step() {
+        let step = |workloads: usize, clean| Step {
+            workloads,
+            starts_per_sec: workloads as f64 + 0.4,
+            footprint_bytes: Some(workloads as u64 * 1000),
+            request_p99_ms: Some(1.23456),
+            clean,
+            ..Default::default()
+        };
+        assert_eq!(Report::default().ramp(RAMP_POINTS), None);
+
+        // A short run keeps every step, rounded.
+        let short = Report {
+            steps: vec![step(10, true), step(20, false)],
+            ..Default::default()
+        };
+        let ramp = short.ramp(RAMP_POINTS).unwrap();
+        assert_eq!(ramp.workloads, vec![10, 20]);
+        assert_eq!(ramp.starts_per_sec, vec![Some(10.0), Some(20.0)]);
+        assert_eq!(ramp.request_p99_ms, vec![Some(1.235), Some(1.235)]);
+        assert_eq!(ramp.request_p50_ms, vec![None, None]);
+        assert_eq!(ramp.clean, vec![true, false]);
+
+        // 1,000 steps whose last clean one is not on the even spread.
+        let mut steps: Vec<Step> = (1..=1000).map(|n| step(n * 10, n <= 997)).collect();
+        steps[400].starts_per_sec = 1e6;
+        let long = Report {
+            steps,
+            ..Default::default()
+        };
+        let ramp = long.ramp(RAMP_POINTS).unwrap();
+        assert_eq!(ramp.workloads.len(), RAMP_POINTS);
+        assert_eq!(ramp.workloads.first(), Some(&10));
+        assert_eq!(ramp.workloads.last(), Some(&10_000));
+        assert!(ramp.workloads.contains(&9970));
+        assert!(ramp.workloads.windows(2).all(|w| w[0] < w[1]));
+        for column in [
+            ramp.footprint_bytes.len(),
+            ramp.starts_per_sec.len(),
+            ramp.requests_per_sec.len(),
+            ramp.request_p50_ms.len(),
+            ramp.request_p99_ms.len(),
+            ramp.clean.len(),
+        ] {
+            assert_eq!(column, RAMP_POINTS);
+        }
+        // The peak survives thinning only in its own field.
+        assert!(!ramp.starts_per_sec.contains(&Some(1e6)));
+        assert_eq!(long.peak_starts_per_sec(), Some(1e6));
+        // Never more than asked for, and the served step always stays.
+        assert_eq!(long.ramp(1).unwrap().workloads, vec![9970]);
+        assert_eq!(long.ramp(2).unwrap().workloads, vec![9970, 10_000]);
+        assert_eq!(long.ramp(3).unwrap().workloads.len(), 3);
+        for points in 1..=RAMP_POINTS {
+            let ramp = long.ramp(points).unwrap();
+            assert_eq!(ramp.workloads.len(), points);
+            assert!(ramp.workloads.contains(&9970));
+        }
+
+        // A rate not measured is null, not a drop to zero.
+        let mut odd = short.clone();
+        odd.steps[0].starts_per_sec = f64::INFINITY;
+        odd.steps[1].requests_per_sec = f64::NAN;
+        let ramp = odd.ramp(RAMP_POINTS).unwrap();
+        assert_eq!(ramp.starts_per_sec, vec![None, Some(20.0)]);
+        assert_eq!(ramp.requests_per_sec, vec![Some(0.0), None]);
     }
 
     #[test]

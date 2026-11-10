@@ -27,7 +27,7 @@
 //! `memory_reservation`, plus a guard region (see [`pool_slot_bytes`]). A
 //! `default_heap_memory` past the reservation does not make the slot larger;
 //! wasmtime refuses to build that pool at all. A pool of 1000 such memories claims 3.9 TiB of
-//! address space; the 128 TiB a 64-bit process can map holds about 30,000 of
+//! address space; the 128 TiB an x86_64 process can map holds about 30,000 of
 //! them, so `max_memories` has a ceiling, and the derived default stops
 //! well short of it. Naming the budget lets the host say, at startup, whether
 //! the pool it is about to build is one the machine could actually back.
@@ -141,11 +141,31 @@ fn mappings_per_warm_component(memory_init_cow: bool) -> u64 {
 /// the map-count advisory counts the pool, not the code.
 const POOL_MAP_COUNT_PERCENT: u64 = 90;
 
-/// Share of the usable address space the derived linear-memory count reserves. The
-/// reservation advisory fires at [`POOL_ADDRESS_SPACE_PERCENT`], so a derived
-/// count never trips it, and an operator can still raise the count by hand,
-/// by up to four fifths, before it does.
+/// Share of the usable address space the derived linear-memory count reserves:
+/// each memory's slot, and the stack and tables that come with it (see
+/// [`PoolCommitShape`]). The reservation advisory fires at
+/// [`POOL_ADDRESS_SPACE_PERCENT`] of the same, so a derived count never
+/// trips it.
 const DERIVED_POOL_ADDRESS_SPACE_PERCENT: u64 = 50;
+
+/// Resident bytes the pooling allocator spends on each memory when the engine
+/// is built, before any guest runs: bookkeeping for the memory's slot and for
+/// the stack, tables and instances derived with it. Measured at about 480
+/// bytes on macOS aarch64, at a 2 MiB layout from 300,000 to 3,000,000
+/// memories, and rounded up.
+const POOL_BOOKKEEPING_BYTES_PER_MEMORY: u64 = 512;
+
+/// Share of the memory limit the derived count's bookkeeping
+/// ([`POOL_BOOKKEEPING_BYTES_PER_MEMORY`]) may take. Small slots reach it:
+/// 2 MiB slots would otherwise derive some 14 million memories, a 6 GiB
+/// footprint and a 12 s engine build. At wasmtime's layout it binds only
+/// under about 500 MiB on Linux and 800 MiB on macOS.
+const DERIVED_POOL_BOOKKEEPING_PERCENT: u64 = 1;
+
+/// Share of the memory limit past which the pool's bookkeeping advisory
+/// fires: a tenth of the process's memory gone before any guest runs. Well
+/// above [`DERIVED_POOL_BOOKKEEPING_PERCENT`], so only a named count trips it.
+const POOL_BOOKKEEPING_PERCENT: u64 = 10;
 
 /// wasmtime's default fiber stack size, restated: the builder never sets
 /// one, so each pooled stack maps this much unless a caller-supplied base
@@ -199,16 +219,21 @@ enum CommitBound {
 /// a count. Not the engine's own default: an engine is often one of several
 /// in a process, and each one's pool reserves this much address space.
 ///
-/// Half the address space this process can map, at one memory's reservation each (see
-/// [`pool_slot_bytes`]), and no more than nine tenths of the kernel's
-/// `vm.max_map_count` holds at six mappings a warm component (its live
-/// memory's four and its stack's two; four with copy-on-write images off),
-/// since a warm pool makes every memory live. Never below
-/// [`WASMTIME_DEFAULT_MAX_MEMORIES`], so no host gets fewer memories than it
-/// had. On a default Linux (47-bit address space, 65,530 mappings) that is
-/// 9,829 linear memories, or 14,744 with copy-on-write images turned off by
-/// `WASMTIME_MEMORY_INIT_COW=false`, the one lever a `wash host` has for
-/// them; macOS, with no mapping limit, derives 16,256.
+/// The smallest of:
+/// - half the address space this process can map, at one memory's
+///   reservation (see [`pool_slot_bytes`]) plus its stack and tables each;
+/// - nine tenths of the kernel's `vm.max_map_count` at six mappings a warm
+///   component (its live memory's four and its stack's two; four with
+///   copy-on-write images off), since a warm pool makes every memory live;
+/// - one percent of the memory limit at the pool's bookkeeping, about 512
+///   bytes a memory, which binds only where slots are small.
+///
+/// Never below [`WASMTIME_DEFAULT_MAX_MEMORIES`]. On a default Linux (47-bit
+/// address space, 65,530 mappings) that is 9,829 linear memories, or 14,744
+/// with copy-on-write images turned off by `WASMTIME_MEMORY_INIT_COW=false`,
+/// the one lever a `wash host` has for them; macOS, with no mapping limit,
+/// derives 16,246. Under about 500 MiB of memory (800 MiB on macOS) the
+/// bookkeeping share binds first even at wasmtime's layout.
 ///
 /// Windows and Linux with strict overcommit accounting keep the floor:
 /// their stack and table pools (on Windows, the table pool) are committed
@@ -234,13 +259,13 @@ pub struct MaxMemoriesDerivation {
     /// Size against the commit limit where the stack and table pools are
     /// precommitted (`--set-max-memories-from-memory-precommit-limit`).
     ///
-    /// Where [`derive_max_memories`] would keep the floor, this adds a third
-    /// bound beside address space and mappings: the number of memories whose
+    /// Where [`derive_max_memories`] would keep the floor, this adds a bound
+    /// beside address space, mappings and bookkeeping: the number of memories whose
     /// stacks and tables (on Windows, tables) fit in a quarter of what this
     /// process may commit (the kernel's `CommitLimit` or `RLIMIT_DATA`,
     /// or Windows's RAM plus page file, never past the container's limit or
-    /// physical memory where there is none), and takes the smallest of the
-    /// three, never below the floor. The stack and table commit advisories
+    /// physical memory where there is none), and takes the smallest, never
+    /// below the floor. The stack and table commit advisories
     /// warn past the same share, so a count derived here never trips them.
     /// Where the pools are not accounted, it changes nothing.
     pub from_memory_precommit_limit: bool,
@@ -290,10 +315,11 @@ pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
         .or_else(memory_init_cow_from_env)
         .unwrap_or(true);
     let limits = process_limits();
+    let memory_limit = detected_memory_limit();
     let commit = PoolCommit::read_within(
         limits.as_deref(),
         options.from_memory_precommit_limit,
-        detected_memory_limit(),
+        memory_limit,
     );
     let bound = match (commit.charge, commit.ceiling) {
         (PoolMappingCharge::Free, _) => CommitBound::Unaccounted,
@@ -310,7 +336,8 @@ pub fn derive_max_memories_with(options: MaxMemoriesDerivation) -> u32 {
         bound,
         PoolCommitShape::from_env(),
         mappings_per_warm_component(memory_init_cow),
-        derived_slot_bytes(options.memory_layout.unwrap_or_default()),
+        options.memory_layout.unwrap_or_default(),
+        memory_limit.map(|limit| share_of(limit, DERIVED_POOL_BOOKKEEPING_PERCENT)),
     )
 }
 
@@ -334,14 +361,16 @@ fn share_of(x: u64, percent: u64) -> u64 {
 
 /// [`derive_max_memories`] from inputs the caller already read;
 /// `mappings_per_warm_component` is [`mappings_per_warm_component`]'s for the
-/// engine's copy-on-write setting.
+/// engine's copy-on-write setting, and `bookkeeping` the bytes the pool's
+/// bookkeeping may take, `None` when no memory limit is known.
 fn derive_max_memories_within(
     address_space: u64,
     max_map_count: Option<u64>,
     commit: CommitBound,
     shape: PoolCommitShape,
     mappings_per_warm_component: u64,
-    slot_bytes: u64,
+    layout: MemoryLayout,
+    bookkeeping: Option<u64>,
 ) -> u32 {
     if cfg!(not(target_pointer_width = "64")) {
         return WASMTIME_DEFAULT_MAX_MEMORIES;
@@ -351,20 +380,31 @@ fn derive_max_memories_within(
         CommitBound::Floor => return WASMTIME_DEFAULT_MAX_MEMORIES,
         CommitBound::Within(bytes) => shape.memories_within(bytes),
     };
-    let by_address_space =
-        share_of(address_space, DERIVED_POOL_ADDRESS_SPACE_PERCENT) / slot_bytes.max(1);
+    let by_address_space = share_of(address_space, DERIVED_POOL_ADDRESS_SPACE_PERCENT)
+        .saturating_sub(shape.fixed)
+        .saturating_sub(round_to_pool_page(layout.guard))
+        / derived_slot_bytes(layout)
+            .saturating_add(shape.per_memory)
+            .max(1);
     let by_map_count = max_map_count.map_or(u64::MAX, |limit| {
         share_of(limit, POOL_MAP_COUNT_PERCENT) / mappings_per_warm_component
     });
-    u32::try_from(by_address_space.min(by_map_count).min(by_commit))
-        .unwrap_or(u32::MAX)
-        .max(WASMTIME_DEFAULT_MAX_MEMORIES)
+    let by_bookkeeping =
+        bookkeeping.map_or(u64::MAX, |bytes| bytes / POOL_BOOKKEEPING_BYTES_PER_MEMORY);
+    u32::try_from(
+        by_address_space
+            .min(by_map_count)
+            .min(by_commit)
+            .min(by_bookkeeping),
+    )
+    .unwrap_or(u32::MAX)
+    .max(WASMTIME_DEFAULT_MAX_MEMORIES)
 }
 
-/// What the stack and table pools commit where their mappings are committed
-/// (see [`CommitBound`]), split into what grows with the memory count and
-/// what does not. The address space a memory's own reservation takes is
-/// [`pool_slot_bytes`].
+/// What the stack and table pools map, split into what grows with the memory
+/// count and what does not: address space everywhere, and commit where their
+/// mappings are committed (see [`CommitBound`]). The address space a memory's
+/// own reservation takes is [`pool_slot_bytes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PoolCommitShape {
     /// Bytes each memory adds: its pooled stack where the stack pool is
@@ -1089,10 +1129,12 @@ pub(crate) fn pool_advisories(
         pool_reservation_advisory(
             totals.memories,
             max_memory_size,
+            pool_stack_and_table_bytes(totals, table_elements, async_stack_size),
             usable_address_space_within(limits.as_deref()),
             layout,
         ),
         pool_map_count_advisory_for(totals, memory_init_cow.unwrap_or(false)),
+        memory_limit.and_then(|limit| pool_bookkeeping_advisory(totals.memories, limit)),
         pool_table_commit_advisory(totals.tables, table_elements, &commit),
         async_stack_size.and_then(|size| pool_stack_commit_advisory(totals.stacks, size, &commit)),
     ]
@@ -1379,6 +1421,24 @@ fn accessible_pool_commit_advisory(
     )
 }
 
+/// What to say when the pool's bookkeeping, resident from the moment the
+/// engine is built, takes more than [`POOL_BOOKKEEPING_PERCENT`] of
+/// `memory_limit`.
+fn pool_bookkeeping_advisory(memories: u32, memory_limit: u64) -> Option<String> {
+    let bookkeeping = u64::from(memories).saturating_mul(POOL_BOOKKEEPING_BYTES_PER_MEMORY);
+    (bookkeeping > share_of(memory_limit, POOL_BOOKKEEPING_PERCENT)).then(|| {
+        format!(
+            "{memories} pool memories (max-memories, or WASMTIME_POOLING_TOTAL_MEMORIES) keep \
+             about {} resident for the pooling allocator's bookkeeping from the moment the \
+             engine is built, past {POOL_BOOKKEEPING_PERCENT}% of the {} memory limit, and \
+             building the engine takes over half a second per million. Lower max-memories, or \
+             leave it unset to derive a count.",
+            render_bytes(bookkeeping),
+            render_bytes(memory_limit),
+        )
+    })
+}
+
 /// Explain why a pool's heap ceiling cannot exceed its configured reservation.
 fn pool_heap_ceiling_advisory(max_memory_size: u64, layout: MemoryLayout) -> Option<String> {
     (max_memory_size > layout.reservation).then(|| {
@@ -1433,12 +1493,34 @@ fn pool_map_count_advisory(
     })
 }
 
-/// What to say when the pool's reservation crowds or overflows
-/// `address_space`, the most this process can map. Taken as an argument so
-/// the threshold can be tested apart from the machine running it.
+/// Address space the stack and table pools map when the engine is built:
+/// the tables everywhere, and the stacks where
+/// [`STACK_POOL_MAPPED_AT_STARTUP`]. `async_stack_size` is `None` when a base
+/// config may have changed wasmtime's default.
+fn pool_stack_and_table_bytes(
+    totals: &PoolTotals,
+    table_elements: usize,
+    async_stack_size: Option<usize>,
+) -> u64 {
+    let stacks = if STACK_POOL_MAPPED_AT_STARTUP {
+        pool_stack_bytes(
+            totals.stacks,
+            async_stack_size.unwrap_or(WASMTIME_DEFAULT_ASYNC_STACK_SIZE),
+        )
+    } else {
+        0
+    };
+    stacks.saturating_add(pool_table_bytes(totals.tables, table_elements))
+}
+
+/// What to say when the pool's reservation, its slab plus the `beside`
+/// bytes its stacks and tables map, crowds or overflows `address_space`,
+/// the most this process can map. Taken as arguments so the threshold can
+/// be tested apart from the machine running it.
 fn pool_reservation_advisory(
     memories: u32,
     max_memory_size: u64,
+    beside: u64,
     address_space: u64,
     layout: MemoryLayout,
 ) -> Option<String> {
@@ -1453,7 +1535,7 @@ fn pool_reservation_advisory(
     if max_memory_size > layout.reservation {
         return None;
     }
-    let reservation = pool_slab_bytes(max_memory_size, memories, layout);
+    let reservation = pool_slab_bytes(max_memory_size, memories, layout).saturating_add(beside);
     if reservation <= share_of(address_space, POOL_ADDRESS_SPACE_PERCENT) {
         return None;
     }
@@ -1475,12 +1557,13 @@ fn pool_reservation_advisory(
     };
     Some(format!(
         "default-heap-memory {} across {memories} pool memories (max-memories, or \
-         WASMTIME_POOLING_TOTAL_MEMORIES) would reserve {} of address space ({} per slot), \
-         past {POOL_ADDRESS_SPACE_PERCENT}% of the {} this process can map. {consequence} \
-         {remedy}",
+         WASMTIME_POOLING_TOTAL_MEMORIES) would reserve {} of address space ({} per slot, \
+         plus {} for stacks and tables), past {POOL_ADDRESS_SPACE_PERCENT}% of the {} this \
+         process can map. {consequence} {remedy}",
         render_bytes(max_memory_size),
         render_bytes(reservation),
         render_bytes(pool_slot_bytes(max_memory_size, layout)),
+        render_bytes(beside),
         render_bytes(address_space),
     ))
 }
@@ -1493,9 +1576,11 @@ fn pool_reservation_advisory(
 /// `limits.memory` produces.
 const MAX_ENFORCED_SHARE_PERCENT: u64 = 90;
 
-/// Address space a process can map with no `RLIMIT_AS`: the lower half of a
-/// 48-bit virtual address space, which is what Linux on x86_64 and aarch64
-/// (4-level page tables) and macOS give user space.
+/// Address space a process can map with no `RLIMIT_AS`, where it cannot be
+/// read from the kernel ([`user_address_space`]): the lower half of a 48-bit
+/// virtual address space, which is what Linux on x86_64 and macOS give user
+/// space. Linux on aarch64 with 4-level page tables gives user space all 48
+/// bits, twice this; [`user_address_space`] reads that.
 ///
 /// Not the 4 TiB that `is_pooling_allocator_supported` probes. That probe asks
 /// whether the pool is worth using at all; a host passes it and can then map
@@ -1510,7 +1595,7 @@ const USER_ADDRESS_SPACE: u64 = 2 * 1024 * MIB;
 /// stacks, compiled code, libraries — small beside the pool, but not nothing.
 const POOL_ADDRESS_SPACE_PERCENT: u64 = 90;
 
-/// The most address space this process can map: [`USER_ADDRESS_SPACE`],
+/// The most address space this process can map: [`user_address_space`],
 /// lowered by `RLIMIT_AS` where one is set.
 ///
 /// The limit is read on Linux only, from `/proc/self/limits`, which needs no
@@ -1522,9 +1607,39 @@ pub fn usable_address_space() -> u64 {
 
 /// [`usable_address_space`] from a `/proc/self/limits` already read.
 fn usable_address_space_within(limits: Option<&str>) -> u64 {
+    let space = user_address_space();
     limits
         .and_then(|limits| soft_limit(limits, "Max address space"))
-        .map_or(USER_ADDRESS_SPACE, |limit| limit.min(USER_ADDRESS_SPACE))
+        .map_or(space, |limit| limit.min(space))
+}
+
+/// The user address space the kernel gives this process. On Linux, the top
+/// of the main thread's `[stack]` mapping, which the kernel places just below
+/// the end of user space, rounded up to a power of two: 2^47 on x86_64 with
+/// 4-level page tables, 2^48 on aarch64 with 4-level tables, 2^39 on aarch64
+/// kernels built with 3. Elsewhere, or when the stack cannot be read or lands
+/// outside 2^32..=2^57, [`USER_ADDRESS_SPACE`].
+fn user_address_space() -> u64 {
+    static SPACE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SPACE.get_or_init(|| {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        match super::address_space::read() {
+            Ok(space) => {
+                tracing::debug!(
+                    user_address_space = %render_bytes(space),
+                    source = "/proc/self/maps initial stack",
+                    "detected user address space"
+                );
+                return space;
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                user_address_space = %render_bytes(USER_ADDRESS_SPACE),
+                "cannot detect user address space; using the platform assumption"
+            ),
+        }
+        USER_ADDRESS_SPACE
+    })
 }
 
 /// Linux applies `RLIMIT_DATA` to anonymous writable mappings, including
@@ -1729,6 +1844,39 @@ pub(crate) fn derive_max_process_memory_bytes_within(memory_limit: Option<u64>) 
     memory_limit.map_or(u64::MAX, |limit| limit / 100 * PROCESS_MEMORY_PERCENT)
 }
 
+/// Resolve admission policy without silently disabling an automatic limit.
+/// Strict mode additionally requires a detected capacity and headroom below it.
+pub(crate) fn resolve_process_memory_limit(
+    requested: Option<u64>,
+    detected: Option<u64>,
+    strict: bool,
+) -> Result<u64, String> {
+    let bytes = match requested {
+        Some(bytes) => bytes,
+        None => derive_max_process_memory_bytes_within(Some(detected.ok_or(
+            "cannot detect memory capacity; set max-process-memory explicitly or explicitly disable it",
+        )?)),
+    };
+    if bytes == 0 {
+        return Err(
+            "max-process-memory must be greater than zero; explicitly disable it for no limit"
+                .into(),
+        );
+    }
+    if strict {
+        let capacity =
+            detected.ok_or("strict process memory requires detectable memory capacity")?;
+        if bytes >= capacity {
+            return Err(format!(
+                "strict max-process-memory {} must be below detected capacity {}; reserve headroom for in-flight allocations and uncounted memory",
+                render_bytes(bytes),
+                render_bytes(capacity),
+            ));
+        }
+    }
+    Ok(bytes)
+}
+
 /// What to say about `max_process_memory` at startup, if anything: a limit
 /// past the memory this process can actually have is one the kernel enforces
 /// first, and on macOS that means the whole machine stalling.
@@ -1742,10 +1890,10 @@ pub(crate) fn process_memory_advisory_within(
     memory_limit: Option<u64>,
 ) -> Option<String> {
     let limit = memory_limit?;
-    (max_process_memory_bytes > limit).then(|| {
+    (max_process_memory_bytes >= limit).then(|| {
         format!(
-            "max-process-memory {} is more than the {} this process can actually have, so it \
-             will never refuse anything; the kernel will get there first. Set it below {}",
+            "max-process-memory {} leaves no headroom below detected capacity {}; the kernel \
+             may run out of memory before admission stops. Set it below {}",
             render_bytes(max_process_memory_bytes),
             render_bytes(limit),
             render_bytes(limit),
@@ -1874,12 +2022,14 @@ mod tests {
             commit,
             PoolCommitShape::defaults(),
             mappings_per_warm_component(true),
-            derived_slot_bytes(MemoryLayout::default()),
+            MemoryLayout::default(),
+            None,
         )
     }
 
-    /// The address space holds 16,256 slots at wasmtime's layout, and about
-    /// four times as many at a quarter of the reservation.
+    /// Half the address space holds 16,246 memories at wasmtime's layout, each
+    /// slot with its stack and tables, and about four times as many at a
+    /// quarter of the reservation.
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn a_smaller_memory_layout_fits_more_memories_in_the_address_space() {
@@ -1890,7 +2040,8 @@ mod tests {
                 CommitBound::Unaccounted,
                 PoolCommitShape::defaults(),
                 mappings_per_warm_component(true),
-                derived_slot_bytes(layout),
+                layout,
+                None,
             )
         };
         let reduced = MemoryLayout {
@@ -1900,8 +2051,170 @@ mod tests {
         assert!(!MemoryLayout::default().is_reduced());
         assert!(reduced.is_reduced());
         assert_eq!(derived_slot_bytes(reduced), 1056 * MIB);
-        assert_eq!(at(MemoryLayout::default()), 16_256);
-        assert_eq!(at(reduced), 63_550);
+        let fits = |layout| {
+            (USER_ADDRESS_SPACE / 2)
+                / (derived_slot_bytes(layout) + PoolCommitShape::defaults().per_memory)
+        };
+        // Windows maps no stacks at startup, so fits a few more.
+        let expected = if STACK_POOL_MAPPED_AT_STARTUP {
+            16_246
+        } else {
+            16_254
+        };
+        assert_eq!(at(MemoryLayout::default()), expected);
+        assert_eq!(
+            u64::from(at(MemoryLayout::default())),
+            fits(MemoryLayout::default())
+        );
+        assert_eq!(u64::from(at(reduced)), fits(reduced));
+        assert!((63_000..64_000).contains(&at(reduced)));
+    }
+
+    /// The slab, stacks and tables a derived count maps all fit in the
+    /// address-space share, including platforms that map only tables at startup.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn a_small_slot_count_maps_its_stacks_and_tables_too() {
+        let small = MemoryLayout {
+            reservation: 2 * MIB,
+            guard: 0,
+        };
+        let shape = PoolCommitShape::defaults();
+        let count = derive_max_memories_within(
+            USER_ADDRESS_SPACE,
+            None,
+            CommitBound::Unaccounted,
+            shape,
+            mappings_per_warm_component(true),
+            small,
+            None,
+        );
+        let share = share_of(USER_ADDRESS_SPACE, DERIVED_POOL_ADDRESS_SPACE_PERCENT);
+        let mapped = |n: u64| n * (derived_slot_bytes(small) + shape.per_memory) + shape.fixed;
+        assert!(mapped(u64::from(count)) <= share);
+        assert!(mapped(u64::from(count) + 1) > share);
+        let slots_only = share / derived_slot_bytes(small);
+        assert!(u64::from(count) < slots_only);
+        // Only Unix maps the stacks at startup. There they outweigh the
+        // 2 MiB slots, so slots alone would admit over twice as many.
+        if STACK_POOL_MAPPED_AT_STARTUP {
+            assert!(2 * u64::from(count) < slots_only);
+        }
+    }
+
+    /// The leading slab guard consumes address space in addition to each
+    /// slot's guard, even when the stack and table totals are pinned.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_address_space_bound_includes_the_leading_guard() {
+        let layout = MemoryLayout {
+            reservation: 2 * MIB,
+            guard: MIB,
+        };
+        for shape in [
+            PoolCommitShape::defaults(),
+            PoolCommitShape::new(WASMTIME_DEFAULT_TABLE_ELEMENTS, Some(500), Some(2000)),
+        ] {
+            let mapped = |count: u32| {
+                pool_slab_bytes(layout.reservation, count, layout)
+                    + u64::from(count) * shape.per_memory
+                    + shape.fixed
+            };
+            let share = mapped(2000) - 1;
+            let count = derive_max_memories_within(
+                share * 2,
+                None,
+                CommitBound::Unaccounted,
+                shape,
+                mappings_per_warm_component(true),
+                layout,
+                None,
+            );
+            assert_eq!(count, 1999);
+            assert!(mapped(count) <= share);
+            assert!(mapped(count + 1) > share);
+        }
+    }
+
+    /// A named count whose slots fit but whose stacks and tables push the
+    /// pool past the address space is told it cannot be mapped.
+    #[test]
+    #[cfg(all(unix, target_pointer_width = "64"))]
+    fn the_reservation_advisory_counts_stacks_and_tables() {
+        let small = MemoryLayout {
+            reservation: 2 * MIB,
+            guard: 0,
+        };
+        let memories = 30_000_000;
+        assert!(
+            pool_slab_bytes(2 * MIB, memories, small)
+                < share_of(USER_ADDRESS_SPACE, POOL_ADDRESS_SPACE_PERCENT)
+        );
+        let beside = pool_stack_and_table_bytes(
+            &super::super::derived_pool_totals(memories),
+            WASMTIME_DEFAULT_TABLE_ELEMENTS,
+            None,
+        );
+        let advisory =
+            pool_reservation_advisory(memories, 2 * MIB, beside, USER_ADDRESS_SPACE, small)
+                .expect("30 million stacks and slots overflow 128 TiB");
+        assert!(advisory.contains("cannot be mapped"), "{advisory}");
+        assert!(advisory.contains("for stacks and tables"), "{advisory}");
+    }
+
+    /// A named count whose bookkeeping takes a tenth of the memory limit
+    /// warns; the count derived from the same limit never does.
+    #[test]
+    fn the_bookkeeping_advisory_fires_past_a_tenth_of_the_memory_limit() {
+        let gib = 1024 * MIB;
+        // 2 GiB: a tenth is 214 MB, about 419,000 memories.
+        assert_eq!(pool_bookkeeping_advisory(400_000, 2 * gib), None);
+        let advisory =
+            pool_bookkeeping_advisory(500_000, 2 * gib).expect("244 MiB is past a tenth of 2 GiB");
+        assert!(advisory.contains("500000 pool memories"), "{advisory}");
+        assert!(advisory.contains("10%"), "{advisory}");
+        let derived = share_of(64 * gib, DERIVED_POOL_BOOKKEEPING_PERCENT)
+            / POOL_BOOKKEEPING_BYTES_PER_MEMORY;
+        assert_eq!(
+            pool_bookkeeping_advisory(u32::try_from(derived).unwrap(), 64 * gib),
+            None
+        );
+    }
+
+    /// The bookkeeping bound takes 1% of the memory limit at 512 bytes a
+    /// memory, binds only where slots are small, and never goes below the
+    /// floor.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_bookkeeping_share_bounds_a_small_slot_count() {
+        let small = MemoryLayout {
+            reservation: 2 * MIB,
+            guard: 0,
+        };
+        let at = |layout, memory_limit: Option<u64>| {
+            derive_max_memories_within(
+                USER_ADDRESS_SPACE,
+                None,
+                CommitBound::Unaccounted,
+                PoolCommitShape::defaults(),
+                mappings_per_warm_component(true),
+                layout,
+                memory_limit.map(|limit| share_of(limit, DERIVED_POOL_BOOKKEEPING_PERCENT)),
+            )
+        };
+        let gib = 1024 * MIB;
+        // 64 GiB: 687 MB of bookkeeping, 1,342,177 memories.
+        assert_eq!(at(small, Some(64 * gib)), 1_342_177);
+        assert!(at(small, Some(64 * gib)) < at(small, None));
+        // wasmtime's layout: the address space binds well before 64 GiB does.
+        assert_eq!(
+            at(MemoryLayout::default(), Some(64 * gib)),
+            at(MemoryLayout::default(), None)
+        );
+        // 256 MiB holds about 5,200 at wasmtime's layout.
+        assert_eq!(at(MemoryLayout::default(), Some(256 * MIB)), 5_242);
+        // 32 MiB would hold 655: the floor holds.
+        assert_eq!(at(small, Some(32 * MIB)), WASMTIME_DEFAULT_MAX_MEMORIES);
     }
 
     /// The pool a host with these knobs and no environment overrides installs:
@@ -1910,6 +2223,11 @@ mod tests {
         pool_reservation_advisory(
             budgets.max_memories,
             budgets.default_heap_memory,
+            pool_stack_and_table_bytes(
+                &super::super::derived_pool_totals(budgets.max_memories),
+                WASMTIME_DEFAULT_TABLE_ELEMENTS,
+                None,
+            ),
             address_space,
             MemoryLayout::default(),
         )
@@ -2638,7 +2956,8 @@ mod tests {
                 CommitBound::Within(bytes),
                 shape,
                 mappings_per_warm_component(true),
-                derived_slot_bytes(MemoryLayout::default()),
+                MemoryLayout::default(),
+                None,
             )
         };
         // 16 GiB holds about 6,000 memories at the default tables and about
@@ -2682,10 +3001,10 @@ mod tests {
             9_829
         );
         // No mapping limit (macOS, or a kernel that reports none): half the
-        // address space at 4 GiB + 32 MiB a memory.
+        // address space at 4 GiB + 32 MiB a memory, plus its stack and tables.
         assert_eq!(
             derive_at_defaults(USER_ADDRESS_SPACE, None, CommitBound::Unaccounted),
-            16_256
+            16_246
         );
         // A raised mapping limit hands the decision back to the address space.
         assert_eq!(
@@ -2694,7 +3013,7 @@ mod tests {
                 Some(1_048_576),
                 CommitBound::Unaccounted
             ),
-            16_256
+            16_246
         );
         // A tight RLIMIT_AS or mapping limit never goes below the old default.
         assert_eq!(
@@ -2715,7 +3034,8 @@ mod tests {
                 CommitBound::Unaccounted,
                 PoolCommitShape::defaults(),
                 mappings_per_warm_component(false),
-                derived_slot_bytes(MemoryLayout::default()),
+                MemoryLayout::default(),
+                None,
             ),
             14_744
         );
@@ -2830,17 +3150,23 @@ mod tests {
             soft_limit(limited, "Max address space"),
             Some(8 * 1024 * MIB)
         );
-        assert!(usable_address_space() <= USER_ADDRESS_SPACE);
+        assert!(usable_address_space() <= user_address_space());
     }
 
     #[test]
     fn an_unreservable_combination_is_reported_with_both_numbers() {
         let resolved = HostMemoryBudgets::resolve(None, None, Some(35_000), None).unwrap();
         let advisory = reservation_advisory(&resolved, USER_ADDRESS_SPACE)
-            .expect("137.8 TiB is past the 128 TiB a process can map");
+            .expect("137.8 TiB of slots is past the 128 TiB a process can map");
         assert!(advisory.contains("cannot be mapped"), "{advisory}");
+        // The slots' 137.8 TiB, and on Unix 70 GiB of stacks besides.
+        let expected = if STACK_POOL_MAPPED_AT_STARTUP {
+            "137.9TiB"
+        } else {
+            "137.8TiB"
+        };
         assert!(
-            advisory.contains("137.8TiB"),
+            advisory.contains(expected),
             "names the reservation, to one decimal because it is not a round unit: {advisory}"
         );
         assert!(
@@ -2919,6 +3245,38 @@ mod tests {
         assert_eq!(resolved.advisory(), None);
         assert!(reservation_advisory(&resolved, USER_ADDRESS_SPACE).is_some());
         assert!(map_count_advisory(&resolved, 65_530).is_some());
+    }
+
+    #[test]
+    fn process_limit_resolution_requires_a_deliberate_fallback() {
+        assert!(resolve_process_memory_limit(None, None, false).is_err());
+        assert_eq!(
+            resolve_process_memory_limit(Some(100), None, false),
+            Ok(100)
+        );
+        assert!(resolve_process_memory_limit(Some(0), Some(1000), false).is_err());
+        assert_eq!(
+            resolve_process_memory_limit(None, Some(1000), false),
+            Ok(900)
+        );
+        assert!(resolve_process_memory_limit(None, Some(0), false).is_err());
+    }
+
+    #[test]
+    fn strict_process_limits_require_headroom() {
+        for bytes in [1000, 1001, u64::MAX] {
+            assert!(resolve_process_memory_limit(Some(bytes), Some(1000), true).is_err());
+        }
+        assert!(resolve_process_memory_limit(Some(100), None, true).is_err());
+        assert_eq!(
+            resolve_process_memory_limit(Some(999), Some(1000), true),
+            Ok(999)
+        );
+        assert_eq!(
+            resolve_process_memory_limit(Some(1001), Some(1000), false),
+            Ok(1001)
+        );
+        assert!(process_memory_advisory_within(1000, Some(1000)).is_some());
     }
 
     #[test]

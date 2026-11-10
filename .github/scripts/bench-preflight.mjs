@@ -12,6 +12,8 @@
 //                                  hostname. An env var of that name wins (local runs).
 //   WASMCLOUD_BENCH_ISOLATED_CPU   override for the isolated-CPU index (default: "5")
 //   WASMCLOUD_BENCH_EXPECTED_NPROC online CPUs with nosmt (default: 6, the dedicated host)
+//   WASMCLOUD_BENCH_NO_CPUFREQ     "1" on a VM with no cpufreq driver, whose clock the
+//                                  hypervisor sets (EC2 Graviton): skip the governor check
 //   CARGO_TARGET_DIR               persistent target dir (default: /var/lib/bench/target)
 //   WASMCLOUD_BENCH_K6             "1" for a k6bench run: also check its tools (#12)
 //
@@ -144,17 +146,28 @@ if (onlineCount !== EXPECTED_NPROC) {
 }
 ok(`online CPUs: ${onlineCount}  (mask '${onlineMask}'; nosmt active)`);
 
-// 3. cpufreq governor == "performance" on every CPU.
-const governors = runStdout('sh', [
-  '-c',
-  'cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor',
-]).split('\n');
-for (const g of governors) {
-  if (g !== EXPECTED_GOVERNOR) {
-    fail(`scaling_governor = ${g} (expected ${EXPECTED_GOVERNOR})`);
+// 3. cpufreq governor == "performance" on every CPU. A host registered with
+//    install-runner.sh --no-cpufreq has no governor to pin; the check still
+//    fails if a cpufreq driver shows up there, since its clock is no longer
+//    fixed.
+const hasCpufreq = existsSync('/sys/devices/system/cpu/cpu0/cpufreq');
+if (process.env.WASMCLOUD_BENCH_NO_CPUFREQ === '1') {
+  if (hasCpufreq) {
+    fail('WASMCLOUD_BENCH_NO_CPUFREQ=1 but cpu0 has a cpufreq driver; pin its governor instead');
   }
+  ok('governor: none (no cpufreq driver; the hypervisor sets the clock)');
+} else {
+  const governors = runStdout('sh', [
+    '-c',
+    'cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor',
+  ]).split('\n');
+  for (const g of governors) {
+    if (g !== EXPECTED_GOVERNOR) {
+      fail(`scaling_governor = ${g} (expected ${EXPECTED_GOVERNOR})`);
+    }
+  }
+  ok(`governor: ${EXPECTED_GOVERNOR} on every CPU`);
 }
-ok(`governor: ${EXPECTED_GOVERNOR} on every CPU`);
 
 // 4. /sys/devices/system/cpu/isolated matches the expected isolated CPU.
 //    Override via WASMCLOUD_BENCH_ISOLATED_CPU for hosts staged differently.

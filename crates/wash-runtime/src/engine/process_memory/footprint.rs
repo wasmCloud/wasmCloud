@@ -41,7 +41,9 @@ pub fn pid_footprint(pid: u32) -> Option<u64> {
 /// limit, and no allocation per sample.
 ///
 /// Elsewhere `sysinfo` keeps one `System` for the life of the reader rather
-/// than building one per sample.
+/// than building one per sample. Its resident size (the working set on
+/// Windows) does not include page tables, so there the reading is low by
+/// what Linux now counts in `VmPTE`, about a tenth of a dense warm pool.
 pub(super) struct FootprintReader {
     #[cfg(target_os = "linux")]
     status: Option<std::fs::File>,
@@ -118,8 +120,27 @@ fn read_footprint(pid: u32) -> Option<u64> {
     Some(unsafe { info.assume_init() }.ri_phys_footprint)
 }
 
-/// `RssAnon + VmSwap` out of `/proc/self/status`, in bytes, or
-/// `VmRSS + VmSwap` on a kernel too old (before 4.5) to report `RssAnon`.
+/// `RssAnon + VmSwap + VmPTE + VmPMD` out of `/proc/self/status`, in bytes,
+/// with `VmRSS` in place of `RssAnon` on a kernel too old (before 4.5) to
+/// report it.
+///
+/// `VmPTE` and `VmPMD` are the page tables mapping this process, memory the
+/// kernel allocates for it and charges to it (the OOM killer counts it). From
+/// Linux 4.15 `VmPTE` covers every level and `VmPMD` is gone; on 4.0 to 4.14
+/// `VmPTE` is the last level only and `VmPMD` the level above it, so both are
+/// read. A dense pool makes them large: every slot is its own sparse region,
+/// so each warm instance needs page-table pages of its own for its memory,
+/// its image and its stack, about 9 KiB an instance at a 64 MiB layout,
+/// 13.7 GiB at 1.5M warm instances. Left out, a host that sized
+/// `max-process-memory` to its machine is OOM-killed with its guard still
+/// reading under the limit.
+///
+/// Page tables outlive the instance that needed them. Wasmtime decommits a
+/// pooled slot with `madvise(MADV_DONTNEED)`, which returns its pages but, on
+/// most kernels, keeps the page tables that mapped them, so they stay counted
+/// until the pool is unmapped. That is memory the host still holds, like its
+/// allocator's free lists, and the guard treats it the same way (see "When
+/// refusals stop" in the module docs).
 ///
 /// `VmRSS` counts a shared page once for every mapping that has it faulted
 /// in, and wasmtime maps each instance's copy-on-write initial-memory image
@@ -131,15 +152,25 @@ fn read_footprint(pid: u32) -> Option<u64> {
 /// same per-mapping overcount back.
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn linux_footprint(status: &str) -> Option<u64> {
-    let kib = |name: &str| {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .and_then(|rest| rest.trim().strip_suffix("kB"))
-            .and_then(|n| n.trim().parse::<u64>().ok())
+    // Absence is distinct from corruption: optional fields may be absent,
+    // but a present field must parse or the entire sample is unavailable.
+    let kib = |name: &str| -> Option<Option<u64>> {
+        let Some(rest) = status.lines().find_map(|line| line.strip_prefix(name)) else {
+            return Some(None);
+        };
+        Some(Some(rest.trim().strip_suffix("kB")?.trim().parse().ok()?))
     };
-    let resident = kib("RssAnon:").or_else(|| kib("VmRSS:"))?;
-    // Swap is absent on kernels built without it, which means none.
-    let kib_total = resident.saturating_add(kib("VmSwap:").unwrap_or(0));
+    let resident = match kib("RssAnon:")? {
+        Some(anon) => anon,
+        None => kib("VmRSS:")??,
+    };
+    // VmPTE is mandatory on supported Linux kernels. Missing or malformed
+    // accounting must not silently restore the page-table undercount.
+    let page_tables = kib("VmPTE:")??;
+    // Swap may be absent without CONFIG_SWAP; modern kernels omit VmPMD.
+    let kib_total = resident
+        .saturating_add(kib("VmSwap:")?.unwrap_or(0))
+        .saturating_add(page_tables)
+        .saturating_add(kib("VmPMD:")?.unwrap_or(0));
     Some(kib_total.saturating_mul(1024))
 }

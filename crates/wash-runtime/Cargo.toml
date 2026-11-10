@@ -70,7 +70,9 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
+rand = { workspace = true, features = ["std", "thread_rng"] }
 futures = { workspace = true }
+getrandom = { workspace = true }
 hmac = { workspace = true, optional = true }
 hostname = { workspace = true }
 http = { workspace = true }
@@ -173,9 +175,10 @@ libc = { workspace = true }
 # fails to build on Windows and s390x, so the deps are gated to match the
 # `#[cfg]` on `plugin::wasi_webgpu`.
 [target.'cfg(all(not(target_os = "windows"), not(target_arch = "s390x")))'.dependencies]
-wasi-webgpu-wasmtime = { version = "0.3.1", optional = true }
+wasi-webgpu-wasmtime = { version = "0.5.1", optional = true }
 
 [dev-dependencies]
+sha2 = { workspace = true }
 bench-tools = { path = "../bench-tools" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 # `testing` brings in `InMemoryMetricExporter`, which is how the guest memory

@@ -23,7 +23,7 @@
 //! assemble the store (pre-instantiating the linked components). See
 //! [`EphemeralLinkedCall`] for how the ephemeral path is captured at link time.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
 
 use tokio::sync::RwLock;
@@ -49,7 +49,6 @@ use crate::engine::store::stream_pump::Done;
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
 use crate::engine::workload::{WorkloadComponent, WorkloadMetadata};
-use crate::plugin::HostPlugin;
 use crate::sockets::{self, loopback};
 
 /// A cheap, cloneable recipe for building a component's [`Ctx`].
@@ -76,7 +75,7 @@ pub(crate) struct ComponentCtxTemplate {
     workload_id: Arc<str>,
     local_resources: crate::types::LocalResources,
     volume_mounts: Vec<ResolvedVolumeMount>,
-    plugins: Option<HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>>,
+    plugins: Option<Arc<crate::engine::ctx::StorePlugins>>,
     loopback: Arc<std::sync::Mutex<loopback::Network>>,
     /// The host-level half of this component's socket policy: enforcement mode,
     /// address ranges, whether host-loopback access is enabled at all, and the
@@ -101,7 +100,7 @@ impl ComponentCtxTemplate {
             workload_id: metadata.workload_id.clone(),
             local_resources: metadata.local_resources.clone(),
             volume_mounts: metadata.resolved_volume_mounts.clone(),
-            plugins: metadata.plugins.clone(),
+            plugins: metadata.store_plugins.clone(),
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
             guest_memory: metadata.guest_memory.clone(),
@@ -131,7 +130,7 @@ pub(crate) fn component_ctx_template_from_metadata_with_tls(
 }
 
 /// A workload's components, keyed by id.
-type ComponentMap = RwLock<BTreeMap<Arc<str>, WorkloadComponent>>;
+type ComponentMap = RwLock<BTreeMap<Arc<str>, Box<WorkloadComponent>>>;
 
 /// Everything needed to spin up a throwaway store for a single cross-component
 /// linked call.
@@ -312,16 +311,47 @@ pub(crate) fn apply_environment(
     builder.envs(&pairs);
 }
 
+/// `wasi:random/random` drawn from the calling thread's generator.
+///
+/// A WASI context left to its default boxes a ChaCha generator of its own, a
+/// few hundred bytes held for as long as the store lives, which a warm
+/// instance does indefinitely. `rand`'s thread generator is the same kind of
+/// cryptographically secure generator, seeded from the OS and reseeded as it
+/// goes, so sharing it gives the guest the same guarantee for no per-store
+/// state.
+struct ThreadRandom;
+
+impl rand::TryRng for ThreadRandom {
+    type Error = std::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        rand::rng().try_next_u32()
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        rand::rng().try_next_u64()
+    }
+
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        rand::rng().try_fill_bytes(dst)
+    }
+}
+
+impl rand::TryCryptoRng for ThreadRandom {}
+
 async fn build_ctx_from_template(
     template: &ComponentCtxTemplate,
     http_handler: &crate::host::HostRef,
     all_volume_mounts: &[ResolvedVolumeMount],
-    store_id: &str,
+    store_id: &Arc<str>,
     is_service: bool,
 ) -> anyhow::Result<Ctx> {
     let mut wasi_ctx_builder = WasiCtxBuilder::new();
     apply_environment(&mut wasi_ctx_builder, &template.local_resources.environment);
-    wasi_ctx_builder.inherit_stdout().inherit_stderr();
+    wasi_ctx_builder
+        .inherit_stdout()
+        .inherit_stderr()
+        .secure_random(ThreadRandom);
 
     let kind = if is_service {
         sockets::policy::GuestKind::Service
@@ -344,12 +374,13 @@ async fn build_ctx_from_template(
 
     let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
         .with_host(http_handler)
+        .with_store_id(Arc::clone(store_id))
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(template.local_resources.allowed_hosts.clone());
 
     if let Some(plugins) = &template.plugins {
-        ctx_builder = ctx_builder.with_plugins(plugins.clone());
+        ctx_builder = ctx_builder.with_store_plugins(Arc::clone(plugins));
     }
 
     #[cfg(feature = "wasi-tls")]
@@ -359,7 +390,6 @@ async fn build_ctx_from_template(
 
     let mut ctx = ctx_builder.build();
     ctx.volume_mounts = all_volume_mounts.to_vec();
-    ctx.store_id = store_id.to_string().into();
     ctx.trap_hints = Arc::clone(&template.trap_hints);
     Ok(ctx)
 }
@@ -373,7 +403,7 @@ pub(crate) async fn new_store_from_templates(
     linked_instances: &[(Arc<str>, InstancePre<SharedCtx>)],
     is_service: bool,
 ) -> anyhow::Result<wasmtime::Store<SharedCtx>> {
-    let store_id = crate::ids::now_v7().to_string();
+    let store_id: Arc<str> = crate::ids::now_v7().to_string().into();
     let all_volume_mounts = std::iter::once(active)
         .chain(linked.iter())
         .flat_map(|template| template.volume_mounts.clone())

@@ -31,9 +31,13 @@ runs `enforce,growth`, so CI publishes both series.
   `warm-layout<reservation>+<guard>` and
   `scale-to-zero-layout<reservation>+<guard>`. An explicit flavour filter
   still selects only that flavour.
-- The `max_scale` workflow variant selects only `256MiB` with a `64KiB`
-  guard and `growth` mode, producing `warm-growth-layout256MiB+64KiB`
-  and `scale-to-zero-growth-layout256MiB+64KiB`.
+- The `max-scale` preset (`-- max-scale`, the `max_scale` workflow
+  variant) selects only `256MiB` with a `64KiB` guard and `growth` mode at a
+  2 GiB limit, producing `warm-growth-layout256MiB+64KiB` and
+  `scale-to-zero-growth-layout256MiB+64KiB`. Setting any of those four
+  variables alongside it is an error. `run-bench.sh` skips its sweep when a
+  preset is named, and applies it otherwise, flavour filters included.
+  CI publishes its rows as group `density-max-scale`, apart from `density`.
 - A reduced reservation moves an isolation boundary; see `THREAT_MODEL.md`.
 
 - Count mode measures guest bytes,
@@ -54,7 +58,7 @@ with the component, so these are a guide, not constants.
 
 | | scale-to-zero (`pool_size: 0`) | warm (`pool_size: 1`) |
 | --- | --- | --- |
-| host footprint, marginal | ~11 KiB | ~65-75 KiB |
+| host footprint, marginal | ~11 KiB | ~75-85 KiB, ~9 KiB of it page tables |
 | guest memory charged | 0 | 1.06 MiB (17 pages, the declared initial memory) |
 | pool core instances | 0 | 4 (core modules in the component) |
 | pool linear memories | 0 | 1 |
@@ -73,10 +77,14 @@ with the component, so these are a guide, not constants.
     to instantiate it reports.
   - The bench's fixture imports nothing a plugin writes to, so it holds no
     copy, and this does not show in its figures.
-- **Warm** adds a parked instance: its stores, its core instances, and the
-  pages of linear memory the guest has touched. The guest budget charges the
-  declared size whether or not it is resident, which is why the guest charge
-  is many times the footprint growth.
+- **Warm** adds a parked instance: its stores, its core instances, the
+  pages of linear memory the guest has touched, and the page tables that map
+  its slot. The page-table share was measured at a 64 MiB + 64 KiB layout on
+  arm64 (73.4 KiB a warm instance before the footprint counted page tables,
+  82.2 KiB after); it grows with how much of the slot is touched. Page tables
+  stay counted after the instance is dropped, until the slot's pool goes.
+  The guest budget charges the declared size whether or not it is resident,
+  which is why the guest charge is many times the footprint growth.
 
 ## The limits
 
@@ -107,10 +115,12 @@ footprint there.
   CPU is left out.
 - **Pool linear memories** default to what the runtime derives
   (`derive_max_memories`): half the usable address space at one 4 GiB +
-  32 MiB reservation each, and no more than nine tenths of `vm.max_map_count`
-  holds at six mappings per warm component (two for its pooled stack, four for
-  its memory, or two with `WASMTIME_MEMORY_INIT_COW=false`). That is 9,829 on
-  a default Linux, 14,744 with images off. A warm workload holds one
+  32 MiB reservation each plus its stack and tables, no more than nine tenths
+  of `vm.max_map_count` holds at six mappings per warm component (two for its
+  pooled stack, four for its memory, or two with
+  `WASMTIME_MEMORY_INIT_COW=false`), and no more than 1% of the memory limit
+  at 512 bytes a memory. That is 9,829 on a default Linux, 14,744 with images
+  off, and 16,246 on macOS. A warm workload holds one
   linear memory, one fiber stack and one component instance, from totals of
   the same size; its four core instances and two tables draw on totals sized
   as multiples of that count, so they do not bind first. Windows, 32-bit
@@ -138,3 +148,64 @@ pulling or compiling. Reserve headroom; use OS/container limits for a hard bound
 
 If the footprint passes 125% of the limit without the guard tripping, the
 run stops and reports that the guard did not hold.
+
+## Presets
+
+`cargo xtask scale-density <preset>` runs this bench with one of three presets,
+building `http-handler-p3` first if it is missing, then the bench, whose cold
+build can take ten minutes or more. Each run writes its JSON
+report and a log to `<target>/scale-density/`, or to `--out` (relative to the
+current directory), so it refuses a `WASH_SCALE_REPORT_JSON` you set. A log records the commit, whether the tree had uncommitted
+or untracked changes, the fixture's SHA-256, and the host's OS version, CPU
+and core count. Before each run, its previous JSON report is removed so a
+failure cannot leave old results beside the new log. A failed flavour does
+not skip the next one, but the task still fails. Every preset runs the P3
+fixture and refuses another `WASH_SCALE_FIXTURE`.
+
+| Preset | Configuration |
+| --- | --- |
+| `stock` | The bench's defaults; adds nothing |
+| `density` | Warm and scale-to-zero ramps, 2 GiB process limit, 30 minutes per flavour |
+| `cores` | Both flavours at 1, 2 and 4 cores (pinned on Linux; host runtime workers elsewhere), 2 GiB process limit; at most 50k warm or 100k scale-to-zero workloads |
+
+The density and core presets use 64 concurrent starts, 10k starts per step and
+20k sampled requests, keep up to 64 KiB of freed table memory per slot
+resident, and cap a derived pool count at 300k memories
+(`WASH_SCALE_MAX_MEMORIES_CAP`). Warm runs use growth mode, a 2 MiB
+reservation and no guard region; scale-to-zero runs keep the bench's layout and
+mode. A variable you set wins over the preset's value:
+
+```sh
+WASH_SCALE_MEMORY_LIMIT=32GiB WASH_SCALE_CPUS=1,2,4,6,12,18 cargo xtask scale-density cores
+
+# Compare table retention; its own --out keeps the baseline.
+WASMTIME_POOLING_TABLE_KEEP_RESIDENT=0 cargo xtask scale-density cores --out target/scale-density/no-table-keep
+
+# Give larger guests more heap and keep a guard region.
+WASH_SCALE_MEMORY_RESERVATION=64MiB WASH_SCALE_MEMORY_GUARD=2MiB \
+  cargo xtask scale-density density --out target/scale-density/64mib-guarded
+```
+
+Reading the preset runs:
+
+- A 2 MiB pooled reservation is also a 2 MiB heap cap. It suits this fixture;
+  larger components can fail to instantiate or grow.
+- Removing the guard region makes isolation depend on generated bounds checks
+  (`THREAT_MODEL.md`). The runtime's default layout is unchanged.
+- Growth mode leaves some initial memory uncharged; see the initial-memory
+  limit above, and use `WASH_SCALE_INITIAL_GUEST_MEMORY` to compare revisions
+  with a fixed cap.
+- The runtime bounds a derived count by its bookkeeping, about 512 bytes a
+  memory within 1% of the memory limit (a cgroup's, else physical memory):
+  1.3 million at 2 MiB slots at 64 GiB. The cap limits it to at most 300k;
+  machines with tighter memory, address-space or mapping limits still derive
+  fewer. Retained table pages still consume real memory.
+- Off Linux, the core sweep changes host runtime workers, not CPU affinity. The
+  load generator shares the machine and its CPU is in the process total, so
+  throughput is not host-only capacity.
+- The presets come from an [M5 Max experiment](https://github.com/wasmCloud/wasmCloud/blob/30168eb1c3389d63a8b6dd8f6a158a127354f114/scripts/bench/macos/README.md)
+  that also used an experimental Wasmtime linear-memory reset. Its tuned
+  cold-request results depend on that patch; these presets apply no patch and
+  set no linear-memory keep-resident. Its macOS and Linux warm memory also
+  differ by host page size, which is no evidence for changing production heap
+  limits.

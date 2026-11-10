@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 async fn plugin() -> anyhow::Result<NatsBlobstore> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let (_, client) = tokio::try_join!(
-        crate::nats_credentials::tests::accept_connect(&listener, "nonce"),
+        crate::nats_credentials::tests::accept_connect(&listener),
         async {
             anyhow::Ok(async_nats::connect(format!("nats://{}", listener.local_addr()?)).await?)
         },

@@ -1,6 +1,6 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-11-04'
+  last-updated: '2026-11-08'
   last-reviewed: '2026-10-27'
   url: https://raw.githubusercontent.com/wasmCloud/wasmCloud/main/security-insights.yml
 
@@ -62,7 +62,7 @@ project:
     release-process: https://github.com/wasmCloud/wasmCloud/blob/main/RELEASE_RUNBOOK.md
     support-policy: https://github.com/wasmCloud/wasmCloud/blob/main/SUPPORT.md
     design: https://github.com/wasmCloud/wasmCloud/blob/main/ARCHITECTURE.md
-    signature-verification: https://github.com/wasmCloud/wasmCloud/blob/main/RELEASE_RUNBOOK.md#image-attestations
+    signature-verification: https://wasmcloud.com/docs/verify-releases/
 
 repository:
   url: https://github.com/wasmCloud/wasmCloud
@@ -156,16 +156,18 @@ repository:
       - name: CodeQL
         type: SAST
         comment: >-
-          Weekly Rust and Go analysis, uploaded to code scanning. Also runs on
-          pull requests that change the CodeQL workflow.
+          Rust and Go analysis with the security-extended suite on every pull
+          request, merge queue run and push to main, plus weekly. The main
+          ruleset blocks merges that add high or critical alerts. Threshold
+          policy: SECURITY.md#code-scanning.
         rulesets:
-          - default
+          - security-extended
         integration:
           adhoc: true
-          ci: false
+          ci: true
           release: false
         results:
-          adhoc:
+          ci:
             name: CodeQL
             predicate-uri: https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html
             location: https://github.com/wasmCloud/wasmCloud/actions/workflows/codeql.yml
@@ -184,6 +186,27 @@ repository:
           ci:
             name: cargo-audit
             predicate-uri: https://rustsec.org
+            location: https://github.com/wasmCloud/wasmCloud/actions/workflows/audit.yml
+      - name: OSV-Scanner
+        type: SCA
+        comment: >-
+          Scans every Cargo, Go and npm lockfile against OSV, including the
+          OpenSSF malicious-packages feed, on every pull request, merge queue
+          run, push to main and daily. Fails gate-audit on any finding not
+          ignored in osv-scanner.toml, except RustSec informational advisories,
+          which warn as they do in cargo-audit; malicious packages always fail.
+          Released-code ignores require a VEX statement. Policy:
+          SECURITY.md#malicious-dependencies.
+        rulesets:
+          - default
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+        results:
+          ci:
+            name: osv-scanner
+            predicate-uri: https://osv.dev
             location: https://github.com/wasmCloud/wasmCloud/actions/workflows/audit.yml
       - name: Dependency Review
         type: SCA
@@ -295,7 +318,7 @@ repository:
       - name: OSPS Baseline Scanner (grc.store)
         type: other
         comment: >-
-          OSPS Baseline Maturity Level 2 assessment weekly and on demand,
+          OSPS Baseline Maturity Level 3 assessment weekly and on demand,
           published to grc.store as a signed log by the publish-results
           workflow.
         rulesets:

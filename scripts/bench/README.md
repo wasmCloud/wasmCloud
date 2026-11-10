@@ -419,7 +419,7 @@ with a fresh token). It:
 - Installs **rustup as the `bench` user** so `cargo` is available in
   the workflow's PATH. The actual toolchain is auto-installed on
   first build via `rust-toolchain.toml`.
-- Downloads `actions-runner-linux-x64-2.337.0.tar.gz`, **verifies the
+- Downloads `actions-runner-linux-<x64|arm64>-2.337.0.tar.gz`, **verifies the
   SHA256** (constant in the script — bump version + sha together
   when upgrading), extracts to `/opt/actions-runner`.
 - Registers the runner with labels `self-hosted, bench, hetzner` and
@@ -438,7 +438,7 @@ with a fresh token). It:
 
 **Runner upgrade procedure:**
 
-1. Bump `RUNNER_VERSION` and `RUNNER_SHA256` in
+1. Bump `RUNNER_VERSION`, `RUNNER_SHA256_X64` and `RUNNER_SHA256_ARM64` in
    [`install-runner.sh`](./install-runner.sh) (SHA256 from the runner
    release page).
 2. On the host, stop the service, run `./config.sh remove --token …`
@@ -506,6 +506,53 @@ host at a time (`?host=<label>`), with `hetzner` as the default.
 To tear one down, deregister its runner (`./config.sh remove`) before
 deleting the host. The repo variable can stay for the next time.
 
+**EC2 and arm64 hosts.** A cloud VM differs from the dedicated host in a few
+ways the scripts handle with flags rather than edits:
+
+- **No cpufreq driver.** EC2 VMs (Graviton included) expose no
+  `cpufreq/` in sysfs; the hypervisor sets the clock. Register the runner with
+  `--no-cpufreq` so the pre-flight skips the governor check. It still fails if
+  a driver appears later.
+- **No SMT on Graviton.** `nosmt` is a no-op, so `--nproc` is the vCPU count.
+  Isolate the last CPU (`-e isolated_cpu=<n-1>` for `provision.yml`,
+  `--isolated-cpu <n-1>` for `install-runner.sh`).
+- **arm64.** `install-runner.sh` picks the runner tarball for `uname -m`.
+  `provision.yml` skips the k6bench binaries off x86_64 (they're pinned to
+  amd64); run it with `--skip-tags k6bench`.
+- **Login.** EC2 images log in as `ubuntu` with sudo, not `root`. Point
+  Ansible at the host with a local inventory that sets `ansible_user: ubuntu`
+  and `ansible_become: true`, plus a `ProxyJump` in `~/.ssh/config` when the
+  host is reachable only through a jump box.
+
+For a 64-vCPU c9g.16xlarge, for example:
+
+```sh
+WASMCLOUD_BENCH_HOSTNAME=<hostname> ansible-playbook -i <inventory> provision.yml \
+  --skip-tags k6bench -e isolated_cpu=63 -e vm_max_map_count=16777216
+sudo WASMCLOUD_BENCH_RUNNER_TOKEN=<TOKEN> bash scripts/bench/install-runner.sh \
+  --label aws-c9g-16xlarge --nproc 64 --isolated-cpu 63 --no-cpufreq
+```
+
+The c9g also carries `-e vm_max_map_count=16777216` for the `million_warm`
+preset (`bench.yml`), whose 1.6M-memory pool needs about 10M mappings;
+`provision.yml` leaves `vm.max_map_count` alone unless it is given.
+
+### 6.3 Sharing a box with other runners
+
+A box can run another repository's bench runner beside this one. The
+aws-c9g-16xlarge box also runs Cosmonic Control's agent density bench, as
+the `cbench` user. Every measuring step takes `/var/lock/bench-box.lock`
+through
+[`.github/scripts/bench-box-lock.sh`](../../.github/scripts/bench-box-lock.sh),
+and Control's run script takes the same lock, so two benches never share the
+machine. The pre-flight host checks run inside the same lock, since another
+bench's load would fail their load check. A job waits for the lock rather
+than failing, but the wait counts toward the job's `timeout-minutes`. Since
+`/var/lock` is a tmpfs, the script makes the file again after a reboot.
+The workflows run the script from their own commit's tools checkout, like
+the pre-flight, so a benched ref from before the lock existed still takes
+it.
+
 ## 7. Pipeline architecture
 
 ```text
@@ -529,22 +576,53 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
 - Trigger: `workflow_dispatch` and published releases. Inputs:
   - `bench`: a bench or named variant from the workflow's choices.
   - `ref`: any branch/tag/sha or `#PR`; defaults to the workflow's ref.
-  - `args`: extra `bench-tools memory-pressure` flags, for `memory_pressure` only.
+  - `args`: extra `bench-tools memory-pressure` flags for `memory_pressure`,
+    or a preset that `BENCH_VARIANTS` names for `scale_density` (`max-scale`).
     Other benches refuse a non-empty value.
 - Published releases run `http_invoke`, `service_http`, `gungraun`, and
   `max_scale`. These run after publication, not as a pre-release gate.
 - Variants: a `bench` choice may name an entry in `BENCH_VARIANTS` (in
-  `bench.yml`) instead of a bench. It runs that entry's `bench` with its `env`
-  preset. Variants can run manually or in the release subset; their results
-  remain in the workflow summary and artifact and are never published to the
-  public benchmark history.
-  - `max_scale`: `scale_density` with `WASH_SCALE_MEMORY_RESERVATION=256MiB`,
-    `WASH_SCALE_MEMORY_GUARD=64KiB`, `WASH_SCALE_GUEST_MEMORY_MODE=growth`,
-    and `WASH_SCALE_MEMORY_LIMIT=2GiB`.
+  `bench.yml`) instead of a bench. It runs that entry's `bench` with either
+  its `args`, the name of a preset the bench defines and versions with its
+  code, or its `env`, variables the bench reads from its environment.
+  Dispatching the bench with a variant's preset as `args` runs that variant.
+  Variants can run manually or in the release subset. Their results remain
+  in the workflow summary and artifact, and stay out of the public benchmark
+  history unless the entry names a `publish_group`. A density variant with
+  one publishes under that group instead of `density`
+  (`bench-tools jsonl --group`, or `WASMCLOUD_BENCH_GROUP`), so its rows form
+  their own series, each flavour with a per-step `ramp` row; the publisher
+  refuses a row in any other group and keeps the run's files under
+  `<bench>/<group>/` in S3. An entry with a `publish_host` publishes only from
+  that host, and an entry never publishes from a ref whose `bench-tools`
+  predates `jsonl --group`; the matrix job warns and runs it unpublished.
+  - `million_warm`: an `env` preset, published as `density-max` from
+    `aws-c9g-16xlarge` only, the record run the density page on arewefastyet
+    draws.
+  - `max_scale`: `scale_density -- max-scale`, which sets
+    `WASH_SCALE_MEMORY_RESERVATION=256MiB`, `WASH_SCALE_MEMORY_GUARD=64KiB`,
+    `WASH_SCALE_GUEST_MEMORY_MODE=growth` and `WASH_SCALE_MEMORY_LIMIT=2GiB`
+    (`crates/wash-runtime/benches/scale_density.rs`). Run it locally with
+    `cargo bench -p wash-runtime --bench scale_density -- max-scale`, or
+    `scripts/bench/run-bench.sh scale_density max-scale`.
     It produces only `warm-growth-layout256MiB+64KiB` and
     `scale-to-zero-growth-layout256MiB+64KiB`, with no default-layout runs.
     The terminal readout and workflow summary show `max-process-memory`
     for each run; the summary heading also includes that limit in GiB.
+    The reduced layout moves an isolation boundary (`THREAT_MODEL.md`), so
+    it runs only when named and is never part of the default sweep.
+  - `max_scale` results are published as group `density-max-scale`:
+    - Its rows form their own series, apart from the default sweep's
+      `density` rows and `million_warm`'s `density-max`.
+    - It cannot run under a different configuration. The preset refuses
+      its own variables when they are also set in the environment, so every
+      row under its labels measured the same layout, mode and 2 GiB limit.
+      Its variant sets no `env`.
+    - An older ref fails instead of running something else. A bench that
+      predates a preset rejects its name as a flavour filter it cannot
+      match, and `bench-run.yml` refuses to run a ref whose `run-bench.sh`
+      would drop the argument: it asks `run-bench.sh --takes-args <bench>`,
+      which an older script fails.
 - The single `[self-hosted, bench, hetzner]` runner serializes measurements
   (a dispatch's `host` input picks another; §6.2).
   Each entry measures the commit resolved before queuing and publishes as soon
@@ -561,7 +639,7 @@ each matrix entry through [`bench-run.yml`](../../.github/workflows/bench-run.ym
 
 1. **Pre-flight** ([`bench-preflight.mjs`](../../.github/scripts/bench-preflight.mjs)) — see §10.
 2. **Run bench** ([`run-bench.sh`](./run-bench.sh)) — sources cargo,
-   runs `cargo bench -p wash-runtime --bench <name>`,
+   runs `cargo bench -p wash-runtime --bench <name> -- <args>`,
    tees output to a per-run log under `$CARGO_TARGET_DIR`.
 3. **Summary** (`cargo run -p bench-tools -- summary --bench <name>`) —
    emits a markdown table to `$GITHUB_STEP_SUMMARY` with one row per
@@ -1108,6 +1186,42 @@ present only when measured:
 }
 ```
 
+Under a preset's group (`--group`, such as `density-max`), each flavour's
+metric rows are followed by one `ramp` row, when the run took steps: the steps
+thinned to at most 80, evenly spread and always keeping the last clean one, as
+one column per figure. A rate or latency that was not measured is `null`.
+`value` is how many steps the run took before thinning. It has no `better`, so
+it is not a trend; the trends and compare pages leave it out, and the density
+page draws it. The default `density` series has no ramp rows.
+
+```json
+{
+  "bench": "scale_density",
+  "group": "density-max",
+  "param": "warm-growth-layout64MiB+64KiB",
+  "sha": "...", "ref": "main", "...": "...",
+  "metric": "ramp",
+  "value": 142,
+  "unit": "steps",
+  "flavour": "warm",
+  "stop": "max-process-memory (7705 growths refused)",
+  "guest_memory_mode": "growth",
+  "memory_limit_bytes": 107374182400,
+  "baseline_footprint_bytes": 810094592,
+  "marginal_bytes_per_workload": 84440,
+  "peak_starts_per_sec": 45529.0,
+  "steps": {
+    "workloads": [10000, 30000, "..."],
+    "footprint_bytes": [1760358400, 3458715648, "..."],
+    "starts_per_sec": [27759.0, 32442.0, "..."],
+    "requests_per_sec": [152520.0, 158741.0, "..."],
+    "request_p50_ms": [0.612, 0.513, "..."],
+    "request_p99_ms": [1.132, 1.037, "..."],
+    "clean": [true, true, "..."]
+  }
+}
+```
+
 The `throughput` field on criterion rows is captured from criterion's
 `benchmark.json` and tells the renderer whether to display this row as
 time (latency-style) or as ops/sec (throughput-style). gungraun rows have no
@@ -1298,7 +1412,7 @@ into layers, each with its own cadence.
 | Rust toolchain                         | rolls with `rust-toolchain.toml` (monthly stable) | repo file                                                                                          | No bench-host-specific pin.                                                                                                                                                                                            |
 | `gungraun` crate + runner              | when the bench fails to start, or yearly          | `crates/wash-runtime/Cargo.toml`, resolved in `Cargo.lock`                                          | Bump the dep in `Cargo.toml` and `cargo update -p gungraun`; `provision.yml` installs the matching `gungraun-runner` (derived from the **resolved** `Cargo.lock` version — a caret req resolves up to the latest patch) to the shared `/usr/local`; until it is re-run, `run-bench.sh` installs a per-version copy itself. gungraun enforces crate-vs-runner equality at run time.                       |
 | Node.js                                | quarterly (with the kernel bump)                  | `provision.yml` (`node_lts_major`)                                                                 | Bump to the current active LTS line. Built-ins-only scripts; Node version changes are usually low-risk.                                                                                                                |
-| GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
+| GitHub Actions runner agent            | monthly check, bump on changelog review           | `install-runner.sh` (`RUNNER_VERSION` + `RUNNER_SHA256_*`)                                           | Auto-tracked via [`bench-host-checks.yml`](../../.github/workflows/bench-host-checks.yml); see below.                                                                                                                  |
 | Action SHA pins (`actions/checkout@…`) | weekly via Dependabot                             | `.github/workflows/*.yml`                                                                          | Low risk — these execute on hosted runners, not the bench host.                                                                                                                                                        |
 | AWS CLI v2                             | yearly                                            | `install-runner.sh` (curl from official zip)                                                       | Unpinned; we just pull whatever's current at install time.                                                                                                                                                             |
 | Docker, kind, kubectl, helm, k6 (k6bench) | quarterly (with the kernel bump) | `provision.yml` (`k6bench_tools` / `k6bench_archives`, URL + sha256) | kubectl tracks the kind node image pinned in `scripts/k6bench/kind-config.yaml`; bump both together. Docker is Ubuntu's `docker.io` plus `docker-buildx`, socket-activated. |
@@ -1317,8 +1431,8 @@ issue auto-closes once `RUNNER_VERSION` catches up to upstream.
 
 To accept a bump:
 
-1. Note the SHA-256 from the release page's assets — `actions-runner-linux-x64-<version>.tar.gz`.
-2. Bump `RUNNER_VERSION` and `RUNNER_SHA256` in `install-runner.sh` together.
+1. Note the SHA-256s from the release page's assets — `actions-runner-linux-x64-<version>.tar.gz` and `actions-runner-linux-arm64-<version>.tar.gz`.
+2. Bump `RUNNER_VERSION`, `RUNNER_SHA256_X64` and `RUNNER_SHA256_ARM64` in `install-runner.sh` together.
 3. On the bench host: stop the service, deregister with a fresh removal token, `rm -rf /opt/actions-runner`, re-run `install-runner.sh`. See §6 for the full re-registration flow.
 
 ### Quarterly: bench-host maintenance window

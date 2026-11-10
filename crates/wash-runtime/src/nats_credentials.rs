@@ -504,12 +504,13 @@ pub(crate) mod tests {
         )
     }
 
-    /// Answer one connection's handshake with `nonce` and hand back the
+    /// Answer one connection's handshake with a fresh challenge and hand back the
     /// `CONNECT` it sent, then close it so the client has to reconnect.
     pub(crate) async fn accept_connect(
         listener: &tokio::net::TcpListener,
-        nonce: &str,
     ) -> anyhow::Result<serde_json::Value> {
+        // Generate the challenge here so every simulated reconnect gets a new one.
+        let nonce = rand::random::<u128>().to_string();
         tokio::time::timeout(Duration::from_secs(5), async {
             use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
             let (socket, _) = listener.accept().await?;
@@ -586,6 +587,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn the_seed_signs_the_nonce_and_the_hook_runs_last() -> anyhow::Result<()> {
+        let nonce = rand::random::<[u8; 32]>();
         let dir = tempfile::tempdir()?;
         let key = nkeys::KeyPair::new_user();
         let path = dir.path().join("user.creds");
@@ -600,15 +602,16 @@ pub(crate) mod tests {
             ..Default::default()
         };
 
-        let presented = Presenter::new(credentials)?.present(b"nonce").await?;
+        let presented = Presenter::new(credentials)?.present(&nonce).await?;
         assert_eq!(presented.jwt.as_deref(), Some("the.user.jwt"));
         assert_eq!(presented.token.as_deref(), Some("the.user.jwt"));
-        key.verify(b"nonce", presented.signature.as_deref().unwrap_or_default())?;
+        key.verify(&nonce, presented.signature.as_deref().unwrap_or_default())?;
         Ok(())
     }
 
     #[tokio::test]
     async fn an_nkey_file_may_be_bare_or_decorated() -> anyhow::Result<()> {
+        let nonce = rand::random::<[u8; 32]>();
         let dir = tempfile::tempdir()?;
         let key = nkeys::KeyPair::new_user();
         let seed = key.seed()?;
@@ -625,9 +628,9 @@ pub(crate) mod tests {
                 nkey: file(&path),
                 ..Default::default()
             };
-            let presented = Presenter::new(credentials)?.present(b"nonce").await?;
+            let presented = Presenter::new(credentials)?.present(&nonce).await?;
             assert_eq!(presented.nkey, Some(key.public_key()), "{name}");
-            key.verify(b"nonce", presented.signature.as_deref().unwrap_or_default())?;
+            key.verify(&nonce, presented.signature.as_deref().unwrap_or_default())?;
         }
         Ok(())
     }
@@ -636,16 +639,17 @@ pub(crate) mod tests {
     /// for, with no nkey of its own.
     #[tokio::test]
     async fn a_jwt_is_signed_for_by_the_nkey_seed() -> anyhow::Result<()> {
+        let nonce = rand::random::<[u8; 32]>();
         let key = nkeys::KeyPair::new_user();
         let credentials = Credentials {
             jwt: Some("the.user.jwt".into()),
             nkey: value(&key.seed()?),
             ..Default::default()
         };
-        let presented = Presenter::new(credentials)?.present(b"nonce").await?;
+        let presented = Presenter::new(credentials)?.present(&nonce).await?;
         assert_eq!(presented.jwt.as_deref(), Some("the.user.jwt"));
         assert_eq!(presented.nkey, None);
-        key.verify(b"nonce", presented.signature.as_deref().unwrap_or_default())?;
+        key.verify(&nonce, presented.signature.as_deref().unwrap_or_default())?;
 
         let unsigned = Credentials {
             jwt: Some("the.user.jwt".into()),
@@ -712,6 +716,7 @@ pub(crate) mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn priming_waits_out_a_slow_first_read() -> anyhow::Result<()> {
+        let nonce = rand::random::<[u8; 32]>();
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("token");
         anyhow::ensure!(
@@ -735,7 +740,7 @@ pub(crate) mod tests {
         presenter.prime().await?;
         writer.await??;
 
-        let presented = presenter.present(b"nonce").await?;
+        let presented = presenter.present(&nonce).await?;
         assert_eq!(presented.token.as_deref(), Some("primed"));
         Ok(())
     }
@@ -825,6 +830,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn token_and_password_files_lose_one_line_ending() -> anyhow::Result<()> {
+        let nonce = rand::random::<[u8; 32]>();
         let dir = tempfile::tempdir()?;
         let token = dir.path().join("token");
         let password = dir.path().join("password");
@@ -836,25 +842,26 @@ pub(crate) mod tests {
             password: file(&password),
             ..Default::default()
         })?;
-        let presented = presenter.present(b"nonce").await?;
+        let presented = presenter.present(&nonce).await?;
         assert_eq!(presented.token.as_deref(), Some(" the token "));
         assert_eq!(presented.password.as_deref(), Some("the password\n"));
 
         std::fs::write(&token, "\n")?;
-        let presented = presenter.present(b"nonce").await?;
+        let presented = presenter.present(&nonce).await?;
         assert_eq!(presented.token.as_deref(), Some(" the token "));
 
         let empty = Presenter::new(Credentials {
             token: file(&token),
             ..Default::default()
         })?;
-        let error = empty.present(b"nonce").await.err().context("empty token")?;
+        let error = empty.present(&nonce).await.err().context("empty token")?;
         assert!(format!("{error:#}").contains("is empty"), "{error:#}");
         Ok(())
     }
 
     #[tokio::test]
     async fn a_file_that_does_not_parse_presents_the_last_one_that_did() -> anyhow::Result<()> {
+        let nonce = rand::random::<[u8; 32]>();
         let dir = tempfile::tempdir()?;
         let key = nkeys::KeyPair::new_user();
         let path = dir.path().join("user.creds");
@@ -864,19 +871,20 @@ pub(crate) mod tests {
             credentials: Some(path.clone()),
             ..Default::default()
         })?;
-        assert!(presenter.present(b"nonce").await.is_ok());
+        assert!(presenter.present(&nonce).await.is_ok());
 
         // A rewrite caught halfway through.
         std::fs::write(&path, &contents[..contents.len() / 2])?;
-        let presented = presenter.present(b"nonce").await?;
+        let presented = presenter.present(&nonce).await?;
         assert_eq!(presented.jwt.as_deref(), Some("the.user.jwt"));
-        key.verify(b"nonce", presented.signature.as_deref().unwrap_or_default())?;
+        key.verify(&nonce, presented.signature.as_deref().unwrap_or_default())?;
         Ok(())
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn stalled_files_cost_one_read_wait() -> anyhow::Result<()> {
+        let nonce = rand::random::<[u8; 32]>();
         let dir = tempfile::tempdir()?;
         let paths = ["user.creds", "token", "password"].map(|name| dir.path().join(name));
         for path in &paths {
@@ -896,7 +904,7 @@ pub(crate) mod tests {
             ..Default::default()
         })?;
         let started = std::time::Instant::now();
-        assert!(presenter.present(b"nonce").await.is_err());
+        assert!(presenter.present(&nonce).await.is_err());
         assert!(started.elapsed() < READ_WAIT * 2, "{:?}", started.elapsed());
 
         // Release the stalled readers.

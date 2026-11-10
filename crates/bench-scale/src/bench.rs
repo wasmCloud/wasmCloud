@@ -383,6 +383,12 @@ fn checked_footprint(
 }
 
 /// Wait for the footprint to settle back near `before`; how long that took.
+///
+/// The footprint does not return to `before` exactly: a sample that lands in
+/// pooled slots no earlier instance used leaves their page tables behind,
+/// which the footprint counts on Linux. That is a few KiB an instance, so the
+/// default sample stays well inside the tolerance, and `before` is read again
+/// ahead of every sample, so it does not add up across a run.
 async fn spin_down(pid: Option<u32>, before: u64, wait: Duration) -> Option<f64> {
     let tolerance = (before / 100).max(1 << 20);
     let began = Instant::now();

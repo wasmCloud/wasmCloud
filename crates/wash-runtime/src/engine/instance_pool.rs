@@ -74,7 +74,7 @@ use crate::types::Component;
 /// would quietly acquire state that outlives a call, just because something
 /// else in the workload imports it.
 pub(crate) fn poolable(
-    components: &BTreeMap<Arc<str>, WorkloadComponent>,
+    components: &BTreeMap<Arc<str>, Box<WorkloadComponent>>,
     component_id: &str,
     linked: &HashSet<Arc<str>>,
 ) -> Option<Arc<InstancePool>> {
@@ -1058,12 +1058,12 @@ mod tests {
                 unreachable!("the pool never runs this job")
             }
         }
-        InstanceJob::Guest(crate::engine::dispatch::GuestJob::new(
+        InstanceJob::Guest(Box::new(crate::engine::dispatch::GuestJob::new(
             Box::new(NeverRun),
             tokio::sync::oneshot::channel().0,
             crate::engine::abandon::DispatchedCall::new("test", std::time::Duration::MAX).flag(),
             Arc::from([]),
-        ))
+        )))
     }
 
     /// Instances still admitting calls.

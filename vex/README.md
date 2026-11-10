@@ -8,7 +8,11 @@ It uses [OpenVEX 0.2.0](https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.m
 Each statement identifies an advisory, the release's wash binaries (`pkg:github` package URLs)
 and wash images (`pkg:oci` package URLs), `not_affected` status, justification, and supporting
 source/build evidence. The Go gateway and operator images do not contain these Rust dependencies.
-The `osv-scanner.toml` ignores cover examples, templates, and test fixtures, outside released code.
+Every advisory ignored in `.cargo/audit.toml` also needs an ignore in
+[`osv-scanner.toml`](../osv-scanner.toml), with a reason that starts with `VEX not_affected:` and
+links this file. When an advisory leaves `.cargo/audit.toml`, remove its `osv-scanner.toml`
+ignore in the same pull request. The other `osv-scanner.toml` ignores cover examples, templates,
+and test fixtures, outside released code, and need no statement.
 
 The [security policy](../SECURITY.md#vulnerability-exploitability-exchange-vex) defines review
 requirements. Before adding an ignore, assess its evidence and add a statement covering the
@@ -20,14 +24,21 @@ node .github/scripts/check-vex.mjs
 ```
 
 The check uses the runner's Python 3.11+ standard library to parse Cargo TOML. It requires a
-statement for every Cargo audit ignore and checks coverage of the current release products. It
-warns when `Cargo.lock` no longer has a dependency version a statement names; reassess that
-statement in the same pull request. It does not prove non-exploitability; maintainers must
-review the evidence.
+statement for every Cargo audit ignore and checks coverage of the current release products.
+It fails if `osv-scanner.toml` lacks an audit ignore, or keeps a released-code ignore that
+`.cargo/audit.toml` dropped; an ignore counts as released code if its reason starts with `VEX`
+or this file has a statement for it. The release train runs the same check with `--release`. It
+warns when `Cargo.lock` no longer has a dependency version an ignored advisory's statement
+names; reassess that statement in the same pull request. If the update fixes the advisory,
+remove its ignore instead. It does not prove non-exploitability; maintainers must review the
+evidence.
 
 The release train runs `release-vex.mjs` to move each statement to the new version, and fails if
-an assessed dependency moved. The release pull request lists the carried statements, and
-approving it confirms each still holds. A new binary target needs its products added by hand.
+an assessed dependency of an ignored advisory moved. A `not_affected` statement whose ignore was
+removed becomes `fixed` for the new release, naming the dependency versions it ships; the train
+fails instead if `Cargo.lock` still has an assessed version. The release pull request lists the
+carried statements, and approving it confirms each still holds. A new binary target needs its
+products added by hand.
 
 Every GitHub Release includes `wasmcloud.openvex.json` and `wasmcloud.openvex.sigstore.json`
 next to its SBOMs. Release tags and assets preserve past assessments. After downloading the

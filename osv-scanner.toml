@@ -1,10 +1,18 @@
 # OSV-Scanner configuration.
 #
-# The advisories ignored below are "unmaintained crate" notices (RustSec
-# informational advisories) with no patched version available. They are pulled
-# in transitively and only appear in example, template, and test-fixture
-# lockfiles -- not in any shipped wasmCloud artifact. Each is blocked on an
-# upstream change we cannot make from this repository; see the reasons below.
+# There are two kinds of ignore here:
+#
+# - Released-code ignores, when needed. Each mirrors an ignore in
+#   .cargo/audit.toml, has a not_affected statement in
+#   vex/wasmcloud.openvex.json, and gives a reason starting with
+#   "VEX not_affected:". .github/scripts/check-vex.mjs fails if one is
+#   missing, or if one stays after its audit ignore is removed.
+# - Examples, templates and test fixtures only. These are not in any
+#   shipped wasmCloud artifact and need no VEX statement. Each is blocked on
+#   an upstream change we cannot make from this repository; see the reasons.
+#
+# RustSec informational advisories (unmaintained, unsound) only warn in
+# gate-audit, so the first two ignores below silence warnings, not failures.
 #
 # Note: the OpenSSF Scorecard "Vulnerabilities" check may query OSV directly and
 # might not honor these repo-local ignores. They are documented here regardless
@@ -13,11 +21,11 @@
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0384"
 # `instant` is unmaintained, with no fixed version. It is pulled in only on the
-# wasm target via wstd 0.6.6 -> futures-lite 1.x -> fastrand 1.x -> instant.
-# wstd 0.6.6 is the latest published release and pins `futures-lite = "1.12.0"`,
+# wasm target via wstd 0.6.x -> futures-lite 1.x -> fastrand 1.x -> instant.
+# wstd 0.6.8 is the latest published release and pins `futures-lite = "1.12.0"`,
 # so the dependency cannot be removed until wstd migrates to futures-lite 2.x
 # upstream (futures-lite 2.0 / fastrand 2.0 dropped `instant`).
-reason = "Unmaintained-crate advisory, no fix; transitive (examples/templates only) via wstd 0.6.6 pinning futures-lite 1.x. Blocked on upstream wstd migration to futures-lite 2.x."
+reason = "Unmaintained-crate advisory, no fix; transitive (examples/templates only) via wstd 0.6.x requiring futures-lite 1.x. Blocked on upstream wstd migration to futures-lite 2.x."
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0436"

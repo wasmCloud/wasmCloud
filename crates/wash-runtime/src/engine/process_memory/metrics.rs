@@ -27,6 +27,20 @@ impl ProcessMemoryGuard {
                     .build();
             }};
         }
+        let _ = meter
+            .u64_observable_gauge("process_memory.readable")
+            .with_description(
+                "1 when all active guards have readable memory accounting, otherwise 0",
+            )
+            .with_unit("1")
+            .with_callback(|observer| {
+                if let Some(value) =
+                    live_guards(|guards| guards.map(|g| u64::from(g.is_readable())).min())
+                {
+                    observer.observe(value, &[]);
+                }
+            })
+            .build();
         observe!(
             "process_memory.footprint",
             "This process's memory footprint, counting swapped and compressed pages",

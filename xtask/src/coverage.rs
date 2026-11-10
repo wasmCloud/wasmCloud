@@ -331,7 +331,7 @@ fn shortfalls(summary: &Path) -> Result<Option<String>> {
     Ok((!failures.is_empty()).then(|| failures.join("; ")))
 }
 
-fn execute(mut command: Command, mut log: Option<File>, mut echo: bool) -> Result<()> {
+pub(crate) fn execute(mut command: Command, mut log: Option<File>, mut echo: bool) -> Result<()> {
     let program = command.get_program().to_owned();
     let status = if log.is_some() {
         let mut child = command

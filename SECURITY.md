@@ -153,7 +153,16 @@ Findings come from:
   [`audit.yml`](.github/workflows/audit.yml) daily, on pushes to `main`, and on pull requests that
   change dependencies.
 - Dependabot alerts for Cargo, Go modules and GitHub Actions.
-- CodeQL and zizmor code scanning, reported in the repository's Security tab.
+- [OSV-Scanner](https://google.github.io/osv-scanner/) over every Cargo, Go and npm lockfile in
+  the repository, in `audit.yml` on every pull request, merge queue run, push to `main` and daily.
+  OSV includes the [OpenSSF malicious packages](https://github.com/ossf/malicious-packages) feed.
+  RustSec informational advisories (unmaintained or unsound crates) are warnings, as they are for
+  `cargo audit`; every other finding fails `gate-audit`.
+- CodeQL on every pull request, merge queue run and push to `main`, plus weekly. It reports to the
+  repository's Security tab.
+- zizmor in [`lint-workflows.yml`](.github/workflows/lint-workflows.yml), on pull requests,
+  merge queue runs and pushes to `main` that change workflows, composite actions or CI scripts.
+  It reports to the repository's Security tab.
 - Parser fuzzing in the private `wasmCloud/security-fuzz` repository. Release
   trains dispatch every target on the exact merged release commit; longer
   campaigns run weekly. Campaign results do not gate promotion.
@@ -176,8 +185,18 @@ A vulnerability that affects released code is fixed on this timeline, by its adv
 | Low      | Best effort |
 
 An advisory that doesn't affect wasmCloud requires a public [VEX assessment](#vulnerability-exploitability-exchange-vex)
-before it can be suppressed in [`.cargo/audit.toml`](.cargo/audit.toml) or another scanner.
+before it can be suppressed in [`.cargo/audit.toml`](.cargo/audit.toml), [`osv-scanner.toml`](osv-scanner.toml) or another scanner.
 The suppression must link to that assessment.
+
+### Malicious dependencies
+
+A dependency that is known to be malicious, or that a maintainer believes acts maliciously, is
+removed. It is never suppressed or assessed as non-exploitable. A malicious package that reached a
+release is handled as a critical vulnerability under the response process above.
+
+`osv-scanner` fails `gate-audit` on any OSV `MAL-` entry, so a pull request can't add a known
+malicious package, and a package newly reported as malicious blocks merges until it is removed.
+New dependencies are also reviewed under the [dependency policy](CONTRIBUTING.md#dependencies).
 
 ### Licenses
 
@@ -189,14 +208,21 @@ dependency is replaced.
 
 ### Code scanning
 
-Code scanning alerts in released code follow the vulnerability timeline above, by the alert's
-security severity. Each alert is either fixed or dismissed in the Security tab with a stated
-reason, such as code that only runs in tests.
+CodeQL analyses every pull request and merge queue run. The `main` ruleset blocks a merge that
+adds a CodeQL alert of high or critical security severity, or of error severity. To merge, fix the
+alert, or dismiss it in the Security tab with a stated reason, such as a false positive or code
+that only runs in tests.
+
+Code scanning alerts in released code must be fixed on the [vulnerability timeline](#vulnerabilities)
+above, by the alert's security severity: critical severity alerts within 7 days, high within 14
+days and medium within 90 days. Low severity alerts are fixed on a best-effort basis. Instead of a
+fix, an alert can be dismissed with a stated reason.
 
 ### Before a release
 
-A release PR can't merge while `cargo audit` or `cargo deny check licenses` fails, or while a
-known critical or high advisory that affects released code is open.
+A release PR can't merge while `cargo audit`, `cargo deny check licenses` or `osv-scanner` fails,
+or while a known critical or high advisory or code scanning alert that affects released code is
+open.
 Maintainers must review VEX coverage for the release as described in the [VEX guide](vex/README.md).
 
 ## Vulnerability Exploitability Exchange (VEX)
@@ -209,9 +235,13 @@ a scanner suppression or dismissal alone is not an assessment.
 The security team and the relevant component maintainers review assessments through a pull
 request. Each statement identifies the advisory, release binaries and images using package URLs,
 `not_affected` status, an OpenVEX justification, and an impact statement explaining why it is
-not exploitable. All advisories ignored in `.cargo/audit.toml` require a matching statement;
-the audit workflow enforces coverage. The `osv-scanner.toml` ignores cover only examples,
-templates, and test fixtures, which are outside released code and do not need statements.
+not exploitable. All advisories ignored in `.cargo/audit.toml` require a matching statement
+and the same ignore in `osv-scanner.toml`, with a reason that starts with `VEX not_affected:`
+and links the statement. When an ignore leaves `.cargo/audit.toml`, its `osv-scanner.toml`
+ignore goes too. The audit workflow and the release train require the statement and keep both
+files in step. The other
+`osv-scanner.toml` ignores cover only examples, templates, and test fixtures, which are outside
+released code and do not need statements.
 
 Reassess statements when dependencies, build features, code paths, mitigations, or upstream
 advisories change, and before every release. An unconfirmed finding stays under investigation

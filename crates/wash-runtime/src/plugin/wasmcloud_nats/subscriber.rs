@@ -350,7 +350,7 @@ async fn run_delivery(
     let mut reclaimed = None;
 
     if let Some(pool) = workload.instance_pool_for_component(component_id).await {
-        let outcome = match pool.try_dispatch(InstanceJob::Guest(job)) {
+        let outcome = match pool.try_dispatch(InstanceJob::Guest(Box::new(job))) {
             Dispatch::Sent => Ok(()),
             // Built out here, where awaiting is allowed and where a component
             // that fails to instantiate reports it to this delivery rather
@@ -382,7 +382,7 @@ async fn run_delivery(
                     return Err(anyhow::anyhow!("pool returned the wrong job kind"));
                 };
                 debug!(job = %what, "warm instances saturated; own store");
-                job = returned;
+                job = *returned;
                 reclaimed = declined.instance;
             }
         }

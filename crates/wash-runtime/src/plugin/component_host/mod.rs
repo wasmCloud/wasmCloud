@@ -47,6 +47,9 @@
 //! submodule; this module drives it from `ComponentHostPlugin`'s `HostPlugin`
 //! impl.
 //!
+//! Nonempty imports containing only structural types need no provider and do
+//! not become workload callbacks. Empty marker interfaces remain capabilities.
+//!
 //! Calls also run the other way. A plugin that imports
 //! `wasmcloud:host/workload-call` may *import* an interface no host built-in
 //! provides, in which case a workload that exports it satisfies it — the
@@ -2279,9 +2282,38 @@ fn introspect_exports(component: &Component) -> anyhow::Result<Vec<ExportedInter
 /// Introspect a plugin component's *imported* interfaces and their functions.
 /// Used to wire self-imports (an interface the plugin both imports and exports)
 /// back to the plugin's own capability channel.
+///
+/// Imports that define only types are left out (see [`is_type_only`]),
+/// so no caller mistakes one for a capability or a workload callback.
 fn introspect_imports(component: &Component) -> anyhow::Result<Vec<ExportedInterface>> {
+    let engine = component.engine();
     let ty = component.component_type();
-    introspect_interfaces(component, ty.imports(component.engine()))
+    introspect_interfaces(
+        component,
+        ty.imports(engine)
+            .filter(|(_, item)| !is_type_only(engine, item)),
+    )
+}
+
+/// Whether an imported instance defines types and nothing else.
+///
+/// Wasmtime needs no definition for such an import,
+/// so it needs no provider either.
+/// Linking an empty instance for it anyway could shadow
+/// a native's semver-compatible version of the same interface
+/// that another import needs functions from.
+///
+/// An empty instance is not type-only:
+/// a marker interface still names a capability.
+fn is_type_only(
+    engine: &wasmtime::Engine,
+    item: &wasmtime::component::types::ComponentExtern<'_>,
+) -> bool {
+    let ComponentItem::ComponentInstance(instance) = &item.ty else {
+        return false;
+    };
+    let mut exports = instance.exports(engine).peekable();
+    exports.peek().is_some() && exports.all(|(_, item)| matches!(item.ty, ComponentItem::Type(_)))
 }
 
 /// Collect the capability interfaces (and their functions and resource types)
@@ -2342,6 +2374,10 @@ fn introspect_interfaces<'a>(
 
     Ok(interfaces)
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod type_import_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
