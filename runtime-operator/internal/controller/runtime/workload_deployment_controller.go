@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -135,7 +137,9 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 		replicaSetTemplate.Template.Spec.Kubernetes = deployment.Spec.Kubernetes.DeepCopy()
 	}
 
-	replicaSetName := fmt.Sprintf("%s-%s", deployment.Name, randHash())
+	revision := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%s",
+		deployment.UID, deployment.Generation, replicaSetTemplate.Template.Hash())))
+	replicaSetName := fmt.Sprintf("%s-%x", deployment.Name, revision[:5])
 
 	// Copy the deployment's labels and stamp the managed selector label so the
 	// /scale subresource's selector actually matches this deployment's
@@ -159,10 +163,26 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 		return err
 	}
 	if err := r.Create(ctx, newReplicaSet); err != nil {
-		if isRefused(err) {
-			recordRefused(r.Recorder, deployment, nil, "Create", "WorkloadReplicaSet create refused", err)
+		if !apierrors.IsAlreadyExists(err) {
+			if isRefused(err) {
+				recordRefused(r.Recorder, deployment, nil, "Create", "WorkloadReplicaSet create refused", err)
+			}
+			return fmt.Errorf("creating WorkloadReplicaSet: %w", err)
 		}
-		return fmt.Errorf("creating WorkloadReplicaSet: %w", err)
+		// A successful Create can precede a failed status write or a stale
+		// Deployment cache read. Reuse only this rollout's owned child.
+		reader := r.APIReader
+		if reader == nil {
+			reader = r.Client
+		}
+		existing := &runtimev1alpha1.WorkloadReplicaSet{}
+		if err := reader.Get(ctx, client.ObjectKeyFromObject(newReplicaSet), existing); err != nil {
+			return err
+		}
+		if !existing.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(existing, deployment) ||
+			!apiequality.Semantic.DeepDerivative(newReplicaSet.Spec, existing.Spec) {
+			return fmt.Errorf("WorkloadReplicaSet %s exists with different ownership or spec, or is terminating", replicaSetName)
+		}
 	}
 
 	if deployment.Spec.DeployPolicy != runtimev1alpha1.WorkloadDeployPolicyRecreate {

@@ -548,3 +548,35 @@ func TestSyncConfirmsCacheMissWithAPIReader(t *testing.T) {
 		})
 	}
 }
+
+func TestDeploymentCreateIsIdempotentAcrossStatusWriteRetry(t *testing.T) {
+	original := readyDeployment("")
+	original.Status.CurrentReplicaSet = nil
+	original.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact),
+		condition.UnknownCondition(runtimev1alpha1.WorkloadDeploymentConditionSync, "Pending", "not deployed"),
+	)
+	r := newScaleReconciler(t)
+	for range 3 {
+		stale := original.DeepCopy()
+		if err := r.reconcileDeploy(t.Context(), stale); !errors.Is(err, condition.ErrSkipReconciliation()) {
+			t.Fatalf("retry rollout = %v", err)
+		}
+	}
+	sets := &runtimev1alpha1.WorkloadReplicaSetList{}
+	if err := r.List(t.Context(), sets); err != nil {
+		t.Fatal(err)
+	}
+	if len(sets.Items) != 1 {
+		t.Fatalf("created %d ReplicaSets for one rollout, want one", len(sets.Items))
+	}
+	set := &sets.Items[0]
+	set.OwnerReferences = nil
+	if err := r.Update(t.Context(), set); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileDeploy(t.Context(), original.DeepCopy()); err == nil ||
+		!strings.Contains(err.Error(), "different ownership or spec") {
+		t.Fatalf("unowned ReplicaSet adopted, got %v", err)
+	}
+}
