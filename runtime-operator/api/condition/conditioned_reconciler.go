@@ -144,8 +144,9 @@ type ConditionedReconciler[T ConditionedType] struct {
 	finalizerName string
 	// trackGeneration stamps each condition with the generation it was
 	// computed for. See TrackGeneration.
-	trackGeneration    bool
-	batchStatusUpdates bool
+	trackGeneration      bool
+	batchStatusUpdates   bool
+	readyRequeueInterval time.Duration
 }
 
 // restampOnly reports whether next differs from current in its generation
@@ -176,6 +177,13 @@ func (r *ConditionedReconciler[T]) TrackGeneration() {
 // still stop a pass at the existing boundary.
 func (r *ConditionedReconciler[T]) BatchStatusUpdates() {
 	r.batchStatusUpdates = true
+}
+
+// ReadyRequeueInterval overrides periodic reconciliation for healthy objects.
+// Events and condition transitions still queue the object immediately.
+// A nonpositive interval retains the existing periodic schedule.
+func (r *ConditionedReconciler[T]) ReadyRequeueInterval(interval time.Duration) {
+	r.readyRequeueInterval = interval
 }
 
 // AddPreHook adds a function to be called before the conditions are evaluated.
@@ -375,7 +383,18 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 		return reconcile.Result{RequeueAfter: time.Second}, nil
 	}
 
-	return reconcile.Result{RequeueAfter: reconcilerCtx.ReconcileInterval}, nil
+	return reconcile.Result{RequeueAfter: r.periodicInterval(obj, reconcilerCtx.ReconcileInterval)}, nil
+}
+
+func (r *ConditionedReconciler[T]) periodicInterval(obj T, fallback time.Duration) time.Duration {
+	if r.readyRequeueInterval > 0 && obj.GetDeletionTimestamp().IsZero() {
+		ready := obj.ConditionedStatus().GetCondition(TypeReady)
+		if ready.Status == ConditionTrue &&
+			(ready.ObservedGeneration == 0 || ready.ObservedGeneration == obj.GetGeneration()) {
+			return r.readyRequeueInterval
+		}
+	}
+	return fallback
 }
 
 func (r *ConditionedReconciler[T]) patchStatus(ctx context.Context, original, obj T, optimisticLock bool) error {

@@ -34,10 +34,11 @@ const (
 // WorkloadDeploymentReconciler reconciles a WorkloadReplicaSet object
 type WorkloadDeploymentReconciler struct {
 	client.Client
-	APIReader  client.Reader
-	Scheme     *runtime.Scheme
-	Recorder   events.EventRecorder
-	reconciler condition.AnyConditionedReconciler
+	ReadyRequeueInterval time.Duration
+	APIReader            client.Reader
+	Scheme               *runtime.Scheme
+	Recorder             events.EventRecorder
+	reconciler           condition.AnyConditionedReconciler
 }
 
 func (r *WorkloadDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -387,6 +388,7 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		r.Scheme,
 		&runtimev1alpha1.WorkloadDeployment{},
 		workloadDeploymentReconcileInterval)
+	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
 	reconciler.BatchStatusUpdates()
 
 	reconciler.SetCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact, r.reconcileArtifacts)

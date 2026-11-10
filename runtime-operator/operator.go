@@ -33,6 +33,9 @@ type EmbeddedOperatorConfig struct {
 	// host unreachable. Unset means DefaultHeartbeatTTL; anything under
 	// MinHeartbeatTTL is raised to it.
 	HeartbeatTTL time.Duration
+	// ReadyRequeueInterval overrides periodic polling for healthy workload
+	// Deployments, ReplicaSets, and Workloads. Zero uses their defaults.
+	ReadyRequeueInterval time.Duration
 	// Host CPU threshold (percentage).
 	// Used to calculate workload scheduling, avoiding hosts that are over this threshold.
 	HostCPUThreshold float64
@@ -135,28 +138,31 @@ func NewEmbeddedOperator(
 	}
 
 	if err = (&runtime_controllers.WorkloadReconciler{
-		Client:            mgr.GetClient(),
-		Bus:               bus,
-		Recorder:          mgr.GetEventRecorder("workload-controller"),
-		OperatorNamespace: cfg.Namespace,
-		AllowSharedHosts:  cfg.AllowSharedHosts,
-		EvictionLimiter:   runtime_controllers.NewEvictionLimiter(),
+		ReadyRequeueInterval: cfg.ReadyRequeueInterval,
+		Client:               mgr.GetClient(),
+		Bus:                  bus,
+		Recorder:             mgr.GetEventRecorder("workload-controller"),
+		OperatorNamespace:    cfg.Namespace,
+		AllowSharedHosts:     cfg.AllowSharedHosts,
+		EvictionLimiter:      runtime_controllers.NewEvictionLimiter(),
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 
 	if err = (&runtime_controllers.WorkloadReplicaSetReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("workload-replicaset-controller"),
+		ReadyRequeueInterval: cfg.ReadyRequeueInterval,
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		Recorder:             mgr.GetEventRecorder("workload-replicaset-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}
 
 	if err = (&runtime_controllers.WorkloadDeploymentReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("workload-deployment-controller"),
+		ReadyRequeueInterval: cfg.ReadyRequeueInterval,
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		Recorder:             mgr.GetEventRecorder("workload-deployment-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		return nil, err
 	}

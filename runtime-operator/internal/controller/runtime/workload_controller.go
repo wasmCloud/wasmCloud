@@ -50,8 +50,9 @@ const (
 // WorkloadReconciler reconciles a Workload object
 type WorkloadReconciler struct {
 	client.Client
-	Bus      wasmbus.Bus
-	Recorder events.EventRecorder
+	ReadyRequeueInterval time.Duration
+	Bus                  wasmbus.Bus
+	Recorder             events.EventRecorder
 	// OperatorNamespace is the namespace every Host CRD lives in. The
 	// scheduler always lists Hosts in this namespace; tenant boundaries
 	// are enforced via the Host.Environment field, not via Host.Namespace.
@@ -930,6 +931,7 @@ func (r *WorkloadReconciler) stopOnHost(ctx context.Context, workload *runtimev1
 // the behavior.
 func (r *WorkloadReconciler) newReconciler() *condition.ConditionedReconciler[*runtimev1alpha1.Workload] {
 	reconciler := condition.NewConditionedReconciler(r.Client, r.Scheme(), &runtimev1alpha1.Workload{}, workloadReconcileInterval)
+	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
 	reconciler.SetFinalizer(workloadFinalizerName, r.finalize)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionConfig, r.reconcileConfig)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionHostSelection, r.reconcileHostSelection)
