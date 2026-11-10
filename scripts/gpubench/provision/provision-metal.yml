@@ -1,0 +1,211 @@
+---
+# Provision the gpubench metal box: macOS on Apple Silicon. Runs before
+# install-runner.sh. Idempotent; re-run to apply drift.
+#
+#   cd scripts/gpubench/provision
+#   ansible-playbook provision-metal.yml -K     # -K: the admin account's sudo password
+#
+# By hand first, because macOS only does these from its own UI:
+#   - the Xcode Command Line Tools (xcode-select --install)
+#   - Homebrew, installed as the admin account Ansible connects as
+#   - a Standard (not admin) user named gpubench, set to log in automatically
+#     (System Settings > Users & Groups). The runner is a LaunchAgent in that
+#     user's desktop session, where the GPU is reachable the way it is for an
+#     app; it doesn't start until the user is logged in.
+#
+# Untested: the box doesn't exist yet.
+
+- name: Provision the gpubench metal box
+  hosts: gpubench_metal
+  # Fact gathering needs python3, which on macOS comes with the Command Line
+  # Tools; check for them first, with raw.
+  gather_facts: false
+
+  vars:
+    runner_user: gpubench
+    runner_home: "/Users/{{ runner_user }}"
+    brew: /opt/homebrew/bin/brew
+    # bash: macOS ships 3.2 and scripts/gpubench needs 4+; install-runner.sh
+    # puts Homebrew ahead of /bin on the runner's PATH.
+    brew_formulae: [bash, cmake, ninja, jq, zstd, node]
+    rust_channel: >-
+      {{ (lookup('file', playbook_dir + '/../../../rust-toolchain.toml')
+          | regex_findall('channel = "([^"]+)"'))[0] }}
+
+  pre_tasks:
+    - name: Refuse to run if GPUBENCH_METAL_HOSTNAME isn't exported
+      ansible.builtin.assert:
+        that: expected_hostname | length > 0
+        fail_msg: GPUBENCH_METAL_HOSTNAME not set (see inventory.yml).
+      tags: always
+
+    - name: Xcode Command Line Tools — look
+      ansible.builtin.raw: xcode-select -p
+      register: clt
+      changed_when: false
+      failed_when: false
+      tags: always
+
+    - name: Xcode Command Line Tools — installed
+      ansible.builtin.assert:
+        that: clt.rc == 0
+        fail_msg: >-
+          No Command Line Tools. Run `xcode-select --install` on the box (it
+          opens a dialog), then re-run.
+      tags: always
+
+    - name: Gather facts
+      ansible.builtin.setup:
+      tags: always
+
+    - name: Refuse to run on the wrong host
+      ansible.builtin.assert:
+        that: ansible_facts['hostname'] == expected_hostname
+        fail_msg: >-
+          Host hostname is {{ ansible_facts['hostname'] }}, expected
+          {{ expected_hostname }}.
+      tags: always
+
+    - name: Refuse to run on anything but macOS on Apple Silicon
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['system'] == 'Darwin'
+          - ansible_facts['architecture'] == 'arm64'
+        fail_msg: >-
+          This is {{ ansible_facts['system'] }} on
+          {{ ansible_facts['architecture'] }}; the metal box is macOS on arm64.
+      tags: always
+
+    - name: Homebrew — look
+      ansible.builtin.stat:
+        path: "{{ brew }}"
+      register: brew_stat
+      tags: always
+
+    - name: Homebrew — installed
+      ansible.builtin.assert:
+        that: brew_stat.stat.exists
+        fail_msg: >-
+          No {{ brew }}. Install Homebrew as {{ ansible_user }}
+          (https://brew.sh), then re-run.
+      tags: always
+
+  tasks:
+    - name: Homebrew — list installed formulae
+      ansible.builtin.command: "{{ brew }} list --formula -1"
+      register: brew_installed
+      changed_when: false
+      tags: [toolchain, brew]
+
+    - name: Homebrew — install {{ brew_formulae | join(', ') }}
+      ansible.builtin.command: "{{ brew }} install {{ missing | join(' ') }}"
+      vars:
+        missing: "{{ brew_formulae | difference(brew_installed.stdout_lines) }}"
+      when: missing | length > 0
+      tags: [toolchain, brew]
+
+    - name: Runner user — look
+      ansible.builtin.command: id -u {{ runner_user }}
+      register: runner_id
+      changed_when: false
+      failed_when: false
+      tags: [runner]
+
+    - name: Runner user — admin group membership
+      ansible.builtin.command: dseditgroup -o checkmember -m {{ runner_user }} admin
+      register: runner_admin
+      changed_when: false
+      failed_when: false
+      when: runner_id.rc == 0
+      tags: [runner]
+
+    - name: Runner user — automatic login
+      ansible.builtin.command: defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser
+      register: auto_login
+      changed_when: false
+      failed_when: false
+      tags: [runner]
+
+    - name: Runner user — exists, isn't an admin, logs in automatically
+      ansible.builtin.assert:
+        that:
+          - runner_id.rc == 0
+          - runner_admin.rc | default(1) != 0
+          - auto_login.stdout | default('') | trim == runner_user
+        fail_msg: >-
+          Create a Standard user named {{ runner_user }} in System Settings >
+          Users & Groups and set it to log in automatically (Users & Groups >
+          Automatically log in as). The runner is a LaunchAgent in that user's
+          session. Now: exists={{ runner_id.rc == 0 }},
+          admin={{ runner_admin.rc | default(1) == 0 }},
+          auto-login='{{ auto_login.stdout | default('') | trim }}'.
+      tags: [runner]
+
+    # A sleeping Mac drops the runner's connection and stalls a run. Applied
+    # every time; pmset has no per-setting query worth parsing.
+    - name: Never sleep; restart after a power failure
+      become: true
+      ansible.builtin.command: pmset -a sleep 0 disksleep 0 powernap 0 autorestart 1
+      changed_when: false
+      tags: [power]
+
+    - name: Install rustup (runner user)
+      become: true
+      become_user: "{{ runner_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --default-toolchain stable --no-modify-path
+      args:
+        creates: "{{ runner_home }}/.cargo/bin/rustup"
+        executable: /bin/bash
+      tags: [toolchain, rustup]
+
+    - name: List the runner user's Rust toolchains
+      become: true
+      become_user: "{{ runner_user }}"
+      ansible.builtin.command: "{{ runner_home }}/.cargo/bin/rustup toolchain list"
+      register: rust_toolchains
+      changed_when: false
+      tags: [toolchain, rustup]
+
+    - name: Install Rust {{ rust_channel }} (rust-toolchain.toml)
+      become: true
+      become_user: "{{ runner_user }}"
+      ansible.builtin.command: "{{ runner_home }}/.cargo/bin/rustup toolchain install {{ rust_channel }} --profile minimal"
+      when: not (rust_toolchains.stdout_lines | select('match', '^' ~ (rust_channel | regex_escape) ~ '-') | list)
+      tags: [toolchain, rustup]
+
+    - name: GPUBENCH_CACHE
+      become: true
+      ansible.builtin.file:
+        path: "{{ runner_home }}/.cache/wasmcloud-gpubench"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: staff
+        mode: "0755"
+      tags: [runner]
+
+    - name: Stamp /etc/wasmcloud-gpubench-stage
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/wasmcloud-gpubench-stage
+        owner: root
+        group: wheel
+        mode: "0644"
+        content: |
+          wasmcloud-gpubench metal box provisioned (ansible)
+          stamp: {{ ansible_facts['date_time']['iso8601'] }}
+          macos: {{ ansible_facts['distribution_version'] }}
+          rust: {{ rust_channel }}
+          brew: {{ brew_formulae | join(' ') }}
+      tags: [marker]
+
+  post_tasks:
+    - name: Next step
+      ansible.builtin.debug:
+        msg: |
+          Register the runner (once, with a fresh token) from a Terminal in
+          {{ runner_user }}'s logged-in desktop session, not over SSH:
+            GPUBENCH_RUNNER_TOKEN=<TOKEN> bash scripts/gpubench/provision/install-runner.sh
+      tags: always

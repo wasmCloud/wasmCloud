@@ -1,0 +1,270 @@
+---
+# Provision the gpubench cuda box: Ubuntu 24.04 on x86_64 with an NVIDIA GPU.
+# Runs before install-runner.sh. Idempotent; re-run to apply drift.
+#
+#   cd scripts/gpubench/provision
+#   ansible-playbook provision-cuda.yml
+#   ansible-playbook provision-cuda.yml --tags nvidia   # just the driver checks
+#
+# The NVIDIA driver and the CUDA toolkit are checked, not installed: which
+# driver branch and packages fit depends on the GPU and the image the box
+# comes with. Install the driver with its Vulkan ICD (the desktop or -server
+# packages, not -headless) and the toolkit from NVIDIA's apt repository, then
+# re-run.
+#
+# Untested: the box doesn't exist yet.
+
+- name: Provision the gpubench cuda box
+  hosts: gpubench_cuda
+  gather_facts: true
+
+  vars:
+    runner_user: gpubench
+    runner_home: /var/lib/gpubench
+    # The toolchain rust-toolchain.toml pins, installed ahead of the first
+    # build. `stable` is the default for out-of-workspace builds.
+    rust_channel: >-
+      {{ (lookup('file', playbook_dir + '/../../../rust-toolchain.toml')
+          | regex_findall('channel = "([^"]+)"'))[0] }}
+    node_lts_major: 24
+    # The CUDA version the driver supports, once nvidia-smi has run.
+    driver_cuda: "{{ (nvidia_smi.stdout | default('') | regex_findall('CUDA Version: *([0-9]+[.][0-9]+)') + [''])[0] }}"
+
+  pre_tasks:
+    - name: Refuse to run if GPUBENCH_CUDA_HOSTNAME isn't exported
+      ansible.builtin.assert:
+        that: expected_hostname | length > 0
+        fail_msg: GPUBENCH_CUDA_HOSTNAME not set (see inventory.yml).
+      tags: always
+
+    - name: Refuse to run on the wrong host
+      ansible.builtin.assert:
+        that: ansible_facts['hostname'] == expected_hostname
+        fail_msg: >-
+          Host hostname is {{ ansible_facts['hostname'] }}, expected
+          {{ expected_hostname }}.
+      tags: always
+
+    - name: Refuse to run on anything but Ubuntu on x86_64
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Ubuntu'
+          - ansible_facts['architecture'] == 'x86_64'
+        fail_msg: >-
+          This is {{ ansible_facts['distribution'] }} on
+          {{ ansible_facts['architecture'] }}; the cuda box is Ubuntu on
+          x86_64 (wasi-sdk is pinned for linux-x86_64).
+      tags: always
+
+  tasks:
+    - name: NVIDIA driver — run nvidia-smi
+      ansible.builtin.command: nvidia-smi
+      register: nvidia_smi
+      changed_when: false
+      failed_when: false
+      tags: [nvidia]
+
+    - name: NVIDIA driver — present
+      ansible.builtin.assert:
+        that:
+          - nvidia_smi.rc == 0
+          - driver_cuda | length > 0
+        fail_msg: >-
+          nvidia-smi exited {{ nvidia_smi.rc }}, driver CUDA version
+          '{{ driver_cuda }}'. Install the driver and reboot.
+      tags: [nvidia]
+
+    - name: CUDA toolkit — run nvcc
+      ansible.builtin.command: /usr/local/cuda/bin/nvcc --version
+      register: nvcc
+      changed_when: false
+      failed_when: false
+      tags: [nvidia]
+
+    # llama.cpp's CUDA build must run on this driver.
+    - name: CUDA toolkit — at /usr/local/cuda, no newer than the driver supports
+      ansible.builtin.assert:
+        that:
+          - nvcc.rc == 0
+          - nvcc_version | length > 0
+          - driver_cuda is version(nvcc_version, '>=')
+        fail_msg: >-
+          /usr/local/cuda/bin/nvcc exited {{ nvcc.rc }}, version
+          '{{ nvcc_version }}', driver CUDA '{{ driver_cuda }}'. Install a
+          cuda-toolkit the driver supports from NVIDIA's apt repository.
+      vars:
+        nvcc_version: "{{ (nvcc.stdout | default('') | regex_findall('release ([0-9]+[.][0-9]+)') + [''])[0] }}"
+      tags: [nvidia]
+
+    # The driver otherwise tears down between processes, and every cold start
+    # would pay for bringing it back. gpubench-preflight.mjs checks it's on.
+    - name: NVIDIA persistence daemon
+      ansible.builtin.systemd:
+        name: nvidia-persistenced
+        enabled: true
+        state: started
+      tags: [nvidia]
+
+    - name: Apt — build and run deps
+      ansible.builtin.apt:
+        name:
+          # C/C++ and Rust builds: llama.cpp, wgpu-native, bench-gpu.
+          - build-essential
+          - pkg-config
+          - libssl-dev
+          - clang
+          - cmake
+          - ninja-build
+          # Used by scripts/gpubench and the workflow.
+          - git
+          - curl
+          - jq
+          - perl
+          - zstd
+          - ca-certificates
+          # wgpu's Vulkan loader, and vulkaninfo for the checks. No Mesa
+          # drivers: without the NVIDIA ICD, wgpu should fail, not quietly
+          # bench a CPU implementation.
+          - libvulkan1
+          - vulkan-tools
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [toolchain, apt]
+
+    - name: Vulkan — find the NVIDIA ICD
+      ansible.builtin.find:
+        paths: [/usr/share/vulkan/icd.d, /etc/vulkan/icd.d]
+        patterns: "nvidia_icd*.json"
+      register: nvidia_icd
+      tags: [nvidia, vulkan]
+
+    - name: Vulkan — list devices
+      ansible.builtin.command: vulkaninfo --summary
+      register: vulkaninfo
+      changed_when: false
+      failed_when: false
+      tags: [nvidia, vulkan]
+
+    - name: Vulkan — the NVIDIA GPU is visible to wgpu's loader
+      ansible.builtin.assert:
+        that:
+          - nvidia_icd.matched > 0
+          - "'0x10de' in (vulkaninfo.stdout | default('') | lower)"
+        fail_msg: >-
+          No NVIDIA Vulkan ICD ({{ nvidia_icd.matched }} found) or no NVIDIA
+          device in vulkaninfo. The driver's headless packages leave the ICD
+          out; install libnvidia-gl-<branch> for the installed driver branch.
+      tags: [nvidia, vulkan]
+
+    # Self-hosted runners don't put their bundled Node on PATH for `run:`
+    # steps, and the workflow runs .github/scripts/*.mjs.
+    - name: NodeSource — apt keyring dir
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+      tags: [toolchain, nodejs]
+
+    - name: NodeSource — install signing key
+      ansible.builtin.get_url:
+        url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+        dest: /etc/apt/keyrings/nodesource.asc
+        mode: "0644"
+      tags: [toolchain, nodejs]
+
+    - name: NodeSource — apt source for Node {{ node_lts_major }}.x
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_{{ node_lts_major }}.x nodistro main"
+        state: present
+        filename: nodesource
+        update_cache: true
+      tags: [toolchain, nodejs]
+
+    - name: Apt — install nodejs (from NodeSource)
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+      tags: [toolchain, nodejs]
+
+    # The runner user. NVIDIA's device nodes are world-accessible; `video`
+    # covers the DRM nodes some driver setups restrict.
+    - name: Runner user
+      ansible.builtin.user:
+        name: "{{ runner_user }}"
+        system: true
+        create_home: true
+        home: "{{ runner_home }}"
+        shell: /usr/sbin/nologin
+        groups: video
+        append: true
+      notify: restart actions runner
+      tags: [runner]
+
+    - name: Install rustup (runner user)
+      become: true
+      become_user: "{{ runner_user }}"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --default-toolchain stable --no-modify-path
+      args:
+        creates: "{{ runner_home }}/.cargo/bin/rustup"
+        executable: /bin/bash
+      tags: [toolchain, rustup]
+
+    - name: List the runner user's Rust toolchains
+      become: true
+      become_user: "{{ runner_user }}"
+      ansible.builtin.command: "{{ runner_home }}/.cargo/bin/rustup toolchain list"
+      register: rust_toolchains
+      changed_when: false
+      tags: [toolchain, rustup]
+
+    - name: Install Rust {{ rust_channel }} (rust-toolchain.toml)
+      become: true
+      become_user: "{{ runner_user }}"
+      ansible.builtin.command: "{{ runner_home }}/.cargo/bin/rustup toolchain install {{ rust_channel }} --profile minimal"
+      when: not (rust_toolchains.stdout_lines | select('match', '^' ~ (rust_channel | regex_escape) ~ '-') | list)
+      tags: [toolchain, rustup]
+
+    # Outside the checkout, so a CI clean step never throws away an hour of
+    # builds or the model files (scripts/gpubench/lib/common.sh).
+    - name: GPUBENCH_CACHE
+      ansible.builtin.file:
+        path: "{{ runner_home }}/.cache/wasmcloud-gpubench"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: "0755"
+      tags: [runner]
+
+    - name: Stamp /etc/wasmcloud-gpubench-stage
+      ansible.builtin.copy:
+        dest: /etc/wasmcloud-gpubench-stage
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          wasmcloud-gpubench cuda box provisioned (ansible)
+          stamp: {{ ansible_facts['date_time']['iso8601'] }}
+          rust: {{ rust_channel }}
+          node-lts-major: {{ node_lts_major }}
+      tags: [marker]
+
+  handlers:
+    # The running runner keeps the groups it started with. svc.sh records its
+    # unit name in .service. Restarting kills an in-flight job.
+    - name: restart actions runner
+      ansible.builtin.shell: systemctl restart "$(cat /opt/actions-runner/.service)"
+      args:
+        removes: /opt/actions-runner/.service
+      listen: restart actions runner
+
+  post_tasks:
+    - name: Next step
+      ansible.builtin.debug:
+        msg: |
+          Register the runner (once, with a fresh token):
+            sudo GPUBENCH_RUNNER_TOKEN=<TOKEN> bash scripts/gpubench/provision/install-runner.sh
+      tags: always

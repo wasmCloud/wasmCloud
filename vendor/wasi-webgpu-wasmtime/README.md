@@ -1,0 +1,45 @@
+# wasi-webgpu-wasmtime 0.3.1, patched
+
+The crates.io release of [wasi-webgpu-wasmtime](https://crates.io/crates/wasi-webgpu-wasmtime)
+0.3.1 (Apache-2.0 WITH LLVM-exception, from
+[wasi-gfx/wasi-gfx-runtime](https://github.com/wasi-gfx/wasi-gfx-runtime)), with
+`scripts/gpubench/repro/queue-wait/wasi-webgpu-wasmtime-0.3.1.patch` applied.
+The workspace `Cargo.toml` swaps it in with `[patch.crates-io]`. Its own
+`Cargo.toml` adds an empty `[workspace]` and this directory has a `Cargo.lock`,
+only so the license check can resolve it alone; builds use the root lock.
+
+The patch fixes `on_submitted_work_done`, which never returns to the guest.
+It is the code of upstream
+[wasi-gfx/wasi-gfx-runtime#156](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/156)
+at 895488a, plus
+[#157](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/157) at d4bb0a2, which
+reports the adapter strings wgpu-native does, so the guest and the
+`webgpu-native` step take the same vendor-gated paths in llama.cpp. A new `DeviceHandle` owns the device and queue ids, and runs at
+most one thread per device that polls only that device and runs the wgpu
+callbacks. `on_submitted_work_done` and `map_async` both wait on it, and
+neither traps the guest if the device is lost. `callback-future` is replaced
+by `oneshot`.
+
+`scripts/gpubench/repro/queue-wait/` has the repro. Drop this directory and the
+patch entry once a release with the fix is in `Cargo.lock`.
+
+The resource table also owns its wgpu-core objects (`src/owned.rs`). Dropping a
+table entry releases the object, so a store torn down while the guest still
+holds handles frees them, and its device with them. Without it, every GPU
+workload that exits without dropping everything leaves its device and that
+device's memory in the host's shared wgpu instance, about 270 MiB per run on an
+NVIDIA L4. Upstream, this is
+[wasi-gfx/wasi-gfx-runtime#159](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/159),
+against `main` without #156.
+
+Guest-supplied input can't panic the host:
+- **Spec errors:** out-of-range offsets and lengths in `write-buffer-with-copy`,
+  `set-bind-group` and the mapped-range calls return the WIT error the spec
+  calls for. So does a mapped-range call on a buffer that isn't mapped.
+- **Validation errors:** wgpu-core's errors from `submit`, `write-buffer` and
+  `write-texture` go to the device's error scopes.
+- **Ended encoders:** a call on a pass or bundle encoder after `end` or
+  `finish` traps the guest.
+
+Upstream, this is
+[wasi-gfx/wasi-gfx-runtime#160](https://github.com/wasi-gfx/wasi-gfx-runtime/pull/160).

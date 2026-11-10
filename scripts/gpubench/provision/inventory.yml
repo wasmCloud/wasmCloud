@@ -1,0 +1,28 @@
+# Inventory for the two gpubench boxes. Values come from the operator's
+# environment, not the repo, so the boxes' identities stay out of git:
+#
+#   export GPUBENCH_CUDA_HOST_IP=<ip>  GPUBENCH_CUDA_HOSTNAME=<hostname>
+#   export GPUBENCH_METAL_HOST_IP=<ip> GPUBENCH_METAL_HOSTNAME=<hostname>
+#   export GPUBENCH_METAL_SSH_USER=<the Mac's admin account>
+#   # SSH_KEY defaults to ~/.ssh/gpubench.
+#
+# The hostnames are also the values of the boxes' WASMCLOUD_BENCH_<LABEL>_HOSTNAME
+# repo variables gpubench-preflight.mjs checks (install-runner.sh prints the name).
+
+all:
+  vars:
+    ansible_ssh_private_key_file: "{{ lookup('env', 'SSH_KEY') | default(lookup('env', 'HOME') + '/.ssh/gpubench', true) }}"
+  children:
+    gpubench_cuda:
+      hosts:
+        gpubench-cuda:
+          ansible_host: "{{ lookup('env', 'GPUBENCH_CUDA_HOST_IP') }}"
+          ansible_user: root
+          expected_hostname: "{{ lookup('env', 'GPUBENCH_CUDA_HOSTNAME') }}"
+    gpubench_metal:
+      hosts:
+        gpubench-metal:
+          ansible_host: "{{ lookup('env', 'GPUBENCH_METAL_HOST_IP') }}"
+          # macOS has no root login; tasks that need root use become (pass -K).
+          ansible_user: "{{ lookup('env', 'GPUBENCH_METAL_SSH_USER') }}"
+          expected_hostname: "{{ lookup('env', 'GPUBENCH_METAL_HOSTNAME') }}"
