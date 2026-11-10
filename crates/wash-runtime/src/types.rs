@@ -54,6 +54,8 @@ pub enum WorkloadState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Service {
     pub bytes: Bytes,
+    /// What the compile of `bytes` is cached and shared under. Unset, the
+    /// engine hashes `bytes` for it.
     pub digest: Option<String>,
     pub local_resources: LocalResources,
     pub max_restarts: u64,
@@ -65,6 +67,8 @@ pub struct Service {
 pub struct Component {
     pub name: String,
     pub bytes: Bytes,
+    /// What the compile of `bytes` is cached and shared under. Unset, the
+    /// engine hashes `bytes` for it.
     pub digest: Option<String>,
     pub local_resources: LocalResources,
     /// The instance limits, exactly as the wire carried them. Signed because

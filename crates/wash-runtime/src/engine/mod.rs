@@ -464,6 +464,12 @@ impl std::fmt::Debug for Engine {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CacheKey(String);
 
+/// The cache identity of a component's bytes: `sha256:` and their hex hash.
+pub(crate) fn content_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
 /// One compile, and whether a store of it may need a GC heap: read off the
 /// source the first time a workload asks, and kept with the compile so it is
 /// never read again. Services never ask.
@@ -1033,7 +1039,7 @@ impl Engine {
         service.metadata.socket_policy = Arc::clone(&self.socket_policy);
         service.metadata.guest_memory = Arc::clone(&self.guest_memory);
         service.metadata.store_settings = self.store_settings;
-        service.metadata.compiled = compiled;
+        service.metadata.compiled = Some(compiled);
 
         let world = service.world();
 
@@ -1096,23 +1102,28 @@ impl Engine {
     ///
     /// Under [`Blocking::Forbidden`] only a live compile is served; nothing is
     /// compiled.
+    ///
+    /// Bytes without a digest are cached under [`content_digest`], so many
+    /// workloads of one component share a compile however they were loaded.
     fn load_live_component(
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
         blocking: Blocking,
-    ) -> anyhow::Result<(CacheValue, Option<Arc<LiveCompile>>)> {
-        let Some(digest) = digest else {
-            blocking.ensure_allowed("compile a component")?;
-            return Ok((self.load_component_bytes(bytes, None::<&str>)?, None));
+    ) -> anyhow::Result<(CacheValue, Arc<LiveCompile>)> {
+        let digest = match digest {
+            Some(digest) => digest.as_ref().to_string(),
+            None => {
+                blocking.ensure_allowed("hash a component")?;
+                content_digest(bytes.as_ref())
+            }
         };
-        let digest = digest.as_ref();
-        if let Some(live) = self.live_compile(digest) {
-            return Ok((live.compiled.clone(), Some(live)));
+        if let Some(live) = self.live_compile(&digest) {
+            return Ok((live.compiled.clone(), live));
         }
         blocking.ensure_allowed("compile a component")?;
-        let live = self.record_live(digest, self.load_component_bytes(&bytes, Some(digest))?);
-        Ok((live.compiled.clone(), Some(live)))
+        let live = self.record_live(&digest, self.load_component_bytes(&bytes, Some(&digest))?);
+        Ok((live.compiled.clone(), live))
     }
 
     /// `digest`'s live compile, recording a cached one as live; never compiles.
@@ -1244,7 +1255,7 @@ impl Engine {
         workload_component.metadata.socket_policy = Arc::clone(&self.socket_policy);
         workload_component.metadata.guest_memory = Arc::clone(&self.guest_memory);
         workload_component.metadata.store_settings = self.store_settings;
-        workload_component.metadata.compiled = compiled;
+        workload_component.metadata.compiled = Some(compiled);
         // From the source alone. A component wasmtime cannot cost
         // (`resources_required` is `None`) imports a core module, which no
         // linker here provides, so it never instantiates to need a heap.
@@ -3423,25 +3434,47 @@ mod tests {
             .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
             .expect("second load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
-        assert!(Arc::ptr_eq(
-            first.as_ref().expect("a digest is tracked"),
-            second.as_ref().expect("a digest is tracked"),
-        ));
+        assert!(Arc::ptr_eq(&first, &second));
 
         drop((first, second));
         assert!(engine.live_compiles.lock().unwrap().is_empty());
         engine.cache.invalidate_all();
         engine.cache.run_pending_tasks();
-        let (_, third) = engine
+        engine
             .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
             .expect("third load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
-        assert!(third.is_some());
+    }
 
-        let (_, untracked) = engine
+    /// Bytes loaded without a digest compile once and share that compile,
+    /// with each other and with a file source's content digest.
+    #[test]
+    fn bytes_without_a_digest_share_one_compile() {
+        use std::sync::atomic::Ordering;
+
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        let engine = Engine::builder().build().expect("engine should build");
+
+        let (_, first) = engine
             .load_live_component(&bytes, None::<&str>, Blocking::Allowed)
-            .expect("load without a digest");
-        assert!(untracked.is_none(), "nothing to share without a digest");
+            .expect("first load");
+        let (_, second) = engine
+            .load_live_component(&bytes, None::<&str>, Blocking::Allowed)
+            .expect("second load");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let (_, by_digest) = engine
+            .load_live_component(&bytes, Some(content_digest(&bytes)), Blocking::Allowed)
+            .expect("load by content digest");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&first, &by_digest));
+
+        let other = wat::parse_str("(component (core module))").expect("component should assemble");
+        engine
+            .load_live_component(&other, None::<&str>, Blocking::Allowed)
+            .expect("other load");
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
     }
 
     fn component_workload(digest: Option<&str>, volumes: Vec<crate::types::Volume>) -> Workload {
@@ -3563,7 +3596,7 @@ mod tests {
 
         let engine = Engine::builder().build().expect("engine should build");
         for (workload, step) in [
-            (component_workload(None, vec![]), "compile a component"),
+            (component_workload(None, vec![]), "hash a component"),
             (
                 component_workload(Some("sha256:not-compiled"), vec![]),
                 "compile a component",
