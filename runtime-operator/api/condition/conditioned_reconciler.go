@@ -144,7 +144,8 @@ type ConditionedReconciler[T ConditionedType] struct {
 	finalizerName string
 	// trackGeneration stamps each condition with the generation it was
 	// computed for. See TrackGeneration.
-	trackGeneration bool
+	trackGeneration    bool
+	batchStatusUpdates bool
 }
 
 // restampOnly reports whether next differs from current in its generation
@@ -167,6 +168,14 @@ func restampOnly(current, next Condition) bool {
 // return ErrNoop.
 func (r *ConditionedReconciler[T]) TrackGeneration() {
 	r.trackGeneration = true
+}
+
+// BatchStatusUpdates lets later conditions read earlier changes in the same
+// pass. Use it only when condition functions do not require those earlier
+// changes to have been persisted first. Hard errors and explicit skips
+// still stop a pass at the existing boundary.
+func (r *ConditionedReconciler[T]) BatchStatusUpdates() {
+	r.batchStatusUpdates = true
 }
 
 // AddPreHook adds a function to be called before the conditions are evaluated.
@@ -296,6 +305,7 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 			return c
 		}
 
+		batch := r.batchStatusUpdates
 		condErr := condEntry.fn(condCtx, obj)
 		if condErr != nil {
 			if errors.Is(condErr, errStatusUnknown) {
@@ -310,6 +320,7 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 				break
 			} else {
 				conditions.SetConditions(stamp(ErrorCondition(condEntry.condition, "Reconcile", condErr)))
+				batch = false
 			}
 		} else {
 			conditions.SetConditions(stamp(ReadyCondition(condEntry.condition)))
@@ -325,11 +336,11 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 
 		// NOTE(lxf): we only update the status if the condition has changed.
 		if !currentCondition.Equal(conditions.GetCondition(condEntry.condition)) {
-			// NOTE(lxf): we always bail out of the loop to avoid partial updates.
-			// This also ensures conditions are updated in the correct order.
 			reconcilerCtx.ForceRequeue = true
 			reconcilerCtx.ForceUpdate = true
-			break
+			if !batch {
+				break
+			}
 		}
 	}
 

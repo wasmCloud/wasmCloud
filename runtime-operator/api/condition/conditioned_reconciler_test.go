@@ -693,3 +693,55 @@ func TestForcedStatusUpdateSkipsEmptyPatch(t *testing.T) {
 		}
 	}
 }
+
+func TestBatchStatusUpdatesPreserveOrderAndStops(t *testing.T) {
+	const second ConditionType = "Second"
+	const third ConditionType = "Third"
+	for _, tc := range []struct {
+		name  string
+		batch bool
+		stop  error
+		want  int
+	}{
+		{name: "default persists first", want: 1},
+		{name: "all in one write", batch: true, want: 3},
+		{name: "explicit skip", batch: true, stop: ErrSkipReconciliation(), want: 2},
+		{name: "hard error", batch: true, stop: errors.New("api read failed"), want: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+			obj := &conditionedResource{
+				ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName},
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).WithStatusSubresource(obj).Build()
+			r := NewConditionedReconciler(c, scheme, obj, time.Minute)
+			if tc.batch {
+				r.BatchStatusUpdates()
+			}
+			r.SetCondition(testCondition, func(context.Context, *conditionedResource) error { return nil })
+			r.SetCondition(second, func(_ context.Context, current *conditionedResource) error {
+				if !current.Status.AllTrue(testCondition) {
+					t.Error("second condition did not see first change")
+				}
+				return tc.stop
+			})
+			r.SetCondition(third, func(_ context.Context, current *conditionedResource) error {
+				if !current.Status.AllTrue(testCondition, second) {
+					t.Error("third condition did not see earlier changes")
+				}
+				return nil
+			})
+			key := client.ObjectKeyFromObject(obj)
+			if _, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: key}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Get(t.Context(), key, obj); err != nil {
+				t.Fatal(err)
+			}
+			if got := len(obj.Status.Conditions); got != tc.want {
+				t.Fatalf("persisted %d conditions, want %d", got, tc.want)
+			}
+		})
+	}
+}
