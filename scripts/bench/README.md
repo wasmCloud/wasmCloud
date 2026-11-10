@@ -92,7 +92,8 @@ and an empty `KillExcludeUsers=` because the default exempts root).
 Without it, a dropped connection leaves its work running. A root `bash -s`
 polling `docker ps` once ran for 43 hours this way. It barely registered in
 the load average, but it kept the socket-activated Docker daemon up, so the
-pre-flight refused every criterion and gungraun bench (§10).
+pre-flight refused every criterion and gungraun bench (§10, pre-flight
+assertions).
 
 The trade-off: `nohup`, `&`, `disown`, `tmux` and `screen` no longer keep work
 alive after you disconnect. Run work meant to outlive the session as its own
@@ -720,6 +721,11 @@ ssh -i ~/.ssh/hetzner_bench root@<WASMCLOUD_BENCH_HOST_IP> \
    cargo bench -p wash-runtime --bench http_invoke'
 ```
 
+This runs inside the SSH session, so the host's logind drop-in kills it if
+the connection drops (§2.1). For a run longer than you'll stay connected,
+including `compare-bench.sh` on the host, start it with `systemd-run` as
+§2.1 shows.
+
 Manual runs do **not** touch S3 or arewefastyet — only the GitHub
 pipeline writes there. The `/opt/wasmcloud` checkout is cloned by the
 Ansible playbook and used for these one-offs (it's separate from the
@@ -1177,10 +1183,23 @@ preflight script already refuses to run during a resync.
 
 ### Pre-flight: processes left by a closed login session
 
-The message names each session, PID and command line. Kill them
-(`sudo kill <pids>`; `-9` if they ignore it), then re-dispatch. If the host
-lets them survive at all, its logind drop-in is missing: apply
+The message names each session, PID and command line, and the command that
+stops each session. Stop by session rather than by PID, since PIDs can be
+reused by the time you act, and `kill` can't clear a zombie:
+
+```sh
+sudo loginctl terminate-session <id>                 # session still "closing"
+sudo systemctl kill --signal=KILL session-<id>.scope # session logind no longer knows
+```
+
+Then re-dispatch. The check re-scans for about 15 s before failing, so a
+session logind is already stopping doesn't fail the job. If the host lets
+such work survive at all, its logind drop-in is missing: apply
 `ansible-playbook provision.yml --tags logind` (§2.1).
+
+If the check fails with `can't check login sessions`, `loginctl` itself
+failed (missing, or D-Bus/logind down). Fix logind
+(`systemctl status systemd-logind`) before re-dispatching.
 
 ### Pre-flight: `docker daemon is running`
 

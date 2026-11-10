@@ -25,10 +25,10 @@ import { hostname, loadavg, platform } from 'node:os';
 import { DEFAULT_HOST_LABEL, hostnameVar, parseHostLabel } from './bench-host.mjs';
 import {
   ancestry,
-  findLeftovers,
   formatLeftovers,
   loginctlSession,
   scanSessionProcesses,
+  settledLeftovers,
 } from './bench-sessions.mjs';
 
 const EXPECTED_GOVERNOR = 'performance';
@@ -233,11 +233,16 @@ ok(`cargo: ${runStdout(cargoBin, ['--version'])}`);
 //     drop-in kills a session's processes when it closes; this catches a host
 //     without it. Such work can sleep below the load check yet keep the
 //     socket-activated Docker daemon up by polling `docker ps`.
-const leftovers = findLeftovers(scanSessionProcesses(), {
-  sessionInfo: loginctlSession,
-  exclude: ancestry(process.pid),
-  runnerUid: process.getuid(),
-});
+let leftovers;
+try {
+  leftovers = settledLeftovers(
+    scanSessionProcesses,
+    { sessionInfo: loginctlSession, exclude: ancestry(process.pid), runnerUid: process.getuid() },
+    { sleep: sleepSync },
+  );
+} catch (err) {
+  fail(`can't check login sessions: ${err.message}`);
+}
 if (leftovers.length > 0) {
   fail(formatLeftovers(leftovers));
 }

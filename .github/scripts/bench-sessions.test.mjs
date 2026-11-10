@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,10 +8,12 @@ import {
   ancestry,
   findLeftovers,
   formatLeftovers,
+  loginctlSession,
   parentPid,
   parseSessionProps,
   scanSessionProcesses,
   sessionOfCgroup,
+  settledLeftovers,
 } from './bench-sessions.mjs';
 
 const SCOPE = (uid, id) => `0::/user.slice/user-${uid}.slice/session-${id}.scope\n`;
@@ -19,13 +21,15 @@ const SCOPE = (uid, id) => `0::/user.slice/user-${uid}.slice/session-${id}.scope
 function fakeProc(t, procs) {
   const root = mkdtempSync(join(tmpdir(), 'bench-sessions-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const { pid, ppid = 1, uid = 0, cgroup, argv = [], comm = 'cmd' } of procs) {
+  for (const { pid, ppid = 1, uid = 0, cgroup, argv = [], comm = 'cmd', exe, cwd } of procs) {
     const dir = join(root, String(pid));
     mkdirSync(dir);
     writeFileSync(join(dir, 'cgroup'), cgroup);
     writeFileSync(join(dir, 'status'), `Name:\t${comm}\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
     writeFileSync(join(dir, 'cmdline'), argv.map((a) => `${a}\0`).join(''));
     writeFileSync(join(dir, 'stat'), `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1\n`);
+    if (exe) symlinkSync(exe, join(dir, 'exe'));
+    if (cwd) symlinkSync(cwd, join(dir, 'cwd'));
   }
   mkdirSync(join(root, 'self'));
   return root;
@@ -51,14 +55,14 @@ test('parses loginctl show-session properties', () => {
 
 test('scans only processes in a session scope, with their command lines', (t) => {
   const root = fakeProc(t, [
-    { pid: 1582235, cgroup: SCOPE(0, 12), argv: ['bash', '-s'] },
+    { pid: 1582235, cgroup: SCOPE(0, 12), argv: ['bash', '-s'], exe: '/usr/bin/bash', cwd: '/root' },
     { pid: 900, uid: 999, cgroup: '0::/system.slice/actions.runner.x.service\n', argv: ['/opt/actions-runner/bin/Runner.Listener'] },
     { pid: 2, cgroup: '0::/\n' },
     { pid: 77, cgroup: SCOPE(0, 12), argv: [] },
   ]);
   assert.deepEqual(scanSessionProcesses(root), [
-    { pid: 77, session: '12', uid: 0, cmdline: '' },
-    { pid: 1582235, session: '12', uid: 0, cmdline: 'bash -s' },
+    { pid: 77, session: '12', uid: 0, cmdline: '', exe: null, cwd: null },
+    { pid: 1582235, session: '12', uid: 0, cmdline: 'bash -s', exe: '/usr/bin/bash', cwd: '/root' },
   ]);
 });
 
@@ -95,9 +99,11 @@ test('reports processes of closing and forgotten sessions only', () => {
 
 test('skips the runner and the pre-flight ancestry', () => {
   const procs = [
-    { pid: 900, session: '12', uid: 999, cmdline: '/opt/actions-runner/bin/Runner.Listener run' },
-    { pid: 901, session: '12', uid: 999, cmdline: '/opt/actions-runner/externals/node20/bin/node' },
-    { pid: 910, session: '12', uid: 999, cmdline: 'node bench-preflight.mjs' },
+    { pid: 900, session: '12', uid: 999, exe: '/opt/actions-runner/bin/Runner.Listener', cwd: '/home/bench' },
+    { pid: 901, session: '12', uid: 999, exe: '/opt/actions-runner/externals/node20/bin/node', cwd: '/tmp' },
+    // A runner started by hand as `./run.sh`: bash, from the runner directory.
+    { pid: 902, session: '12', uid: 999, exe: '/usr/bin/bash', cwd: '/opt/actions-runner' },
+    { pid: 910, session: '12', uid: 999, exe: '/usr/bin/node', cwd: '/tmp' },
   ];
   const opts = { sessionInfo, runnerUid: 999, exclude: new Set([910]) };
   assert.deepEqual(findLeftovers(procs, opts), []);
@@ -105,8 +111,54 @@ test('skips the runner and the pre-flight ancestry', () => {
   const rootCopy = [{ ...procs[0], uid: 0 }];
   assert.equal(findLeftovers(rootCopy, opts).length, 1);
   // Nor is a lookalike directory.
-  const lookalike = [{ ...procs[0], cmdline: '/opt/actions-runner-old/run.sh' }];
+  const lookalike = [{ ...procs[0], exe: '/opt/actions-runner-old/run.sh' }];
   assert.equal(findLeftovers(lookalike, opts).length, 1);
+  // Nor is a process that only names the runner in its argv.
+  const spoofed = [{ ...procs[0], exe: '/usr/bin/sleep', cmdline: '/opt/actions-runner/bin/Runner.Listener' }];
+  assert.equal(findLeftovers(spoofed, opts).length, 1);
+  // Nor a zombie, whose exe and cwd can't be read.
+  const zombie = [{ ...procs[0], exe: null, cwd: null }];
+  assert.equal(findLeftovers(zombie, opts).length, 1);
+});
+
+test('tells a session logind forgot from loginctl itself failing', () => {
+  const run = (result) => () => ({ stdout: '', stderr: '', ...result });
+  assert.deepEqual(loginctlSession('12', run({ status: 0, stdout: 'State=closing\nName=root\n' })), {
+    state: 'closing',
+    user: 'root',
+  });
+  assert.equal(
+    loginctlSession('12', run({ status: 1, stderr: "Failed to get session path: No session '12' known\n" })),
+    null,
+  );
+  assert.throws(
+    () => loginctlSession('12', run({ status: null, error: new Error('spawnSync loginctl ENOENT') })),
+    /loginctl show-session 12 failed: spawnSync loginctl ENOENT/,
+  );
+  assert.throws(
+    () => loginctlSession('12', run({ status: 1, stderr: 'Failed to connect to bus: No such file or directory\n' })),
+    /failed: Failed to connect to bus/,
+  );
+});
+
+test('re-scans before reporting, so a session logind is still stopping passes', () => {
+  const closing = [{ pid: 600, session: '12', uid: 0, cmdline: 'cargo bench' }];
+  const opts = { sessionInfo, runnerUid: 999 };
+  const sleeps = [];
+  const sleep = (ms) => sleeps.push(ms);
+
+  const scans = [closing, closing, []];
+  assert.deepEqual(settledLeftovers(() => scans.shift(), opts, { delayMs: 10, sleep }), []);
+  assert.deepEqual(sleeps, [10, 10]);
+
+  sleeps.length = 0;
+  const stuck = settledLeftovers(() => closing, opts, { attempts: 3, delayMs: 10, sleep });
+  assert.equal(stuck.length, 1);
+  assert.deepEqual(sleeps, [10, 10]);
+
+  sleeps.length = 0;
+  assert.deepEqual(settledLeftovers(() => [], opts, { sleep }), []);
+  assert.deepEqual(sleeps, []);
 });
 
 test('names each leftover pid and command line', () => {
@@ -124,7 +176,11 @@ test('names each leftover pid and command line', () => {
   ]);
   assert.match(message, /session 12 \(root, closing\): PID 1582235: bash -s; PID 1582240: \[no command line\]/);
   assert.match(message, / \| session 20 \(unknown to logind\): PID 600: x{200}…\./);
-  assert.match(message, /sudo kill 1582235 1582240 600\)/);
+  assert.match(
+    message,
+    /Stop them \(sudo loginctl terminate-session 12; sudo systemctl kill --signal=KILL session-20\.scope\)/,
+  );
+  assert.doesNotMatch(message, /sudo kill /);
   assert.match(message, /systemd-run --unit=<name>/);
   assert.doesNotMatch(message, /\n/);
 });

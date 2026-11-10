@@ -10,7 +10,7 @@
 // hand from an SSH session.
 
 import { spawnSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const RUNNER_DIR = '/opt/actions-runner';
@@ -47,8 +47,18 @@ function readOrNull(path) {
   }
 }
 
-// Every process in a login session scope, as { pid, session, uid, cmdline }.
-// A process that exits mid-scan is skipped.
+function linkOrNull(path) {
+  try {
+    return readlinkSync(path);
+  } catch {
+    return null;
+  }
+}
+
+// Every process in a login session scope, as
+// { pid, session, uid, cmdline, exe, cwd }. exe and cwd are null when
+// unreadable (another user's process, or a zombie). A process that exits
+// mid-scan is skipped.
 export function scanSessionProcesses(procRoot = '/proc') {
   const procs = [];
   for (const entry of readdirSync(procRoot)) {
@@ -66,6 +76,8 @@ export function scanSessionProcesses(procRoot = '/proc') {
       session,
       uid,
       cmdline: cmdline.replace(/\0+$/, '').replaceAll('\0', ' '),
+      exe: linkOrNull(join(dir, 'exe')),
+      cwd: linkOrNull(join(dir, 'cwd')),
     });
   }
   return procs.sort((a, b) => a.pid - b.pid);
@@ -84,14 +96,28 @@ export function ancestry(pid, procRoot = '/proc') {
 }
 
 // logind's view of a session as { state, user }, or null when logind no
-// longer knows it.
-export function loginctlSession(id) {
-  const out = spawnSync('loginctl', ['show-session', id, '-p', 'State', '-p', 'Name'], {
+// longer knows it. Throws when loginctl itself fails (missing, D-Bus down,
+// timed out), so that isn't mistaken for every session having closed.
+export function loginctlSession(id, run = spawnSync) {
+  const out = run('loginctl', ['show-session', id, '-p', 'State', '-p', 'Name'], {
     encoding: 'utf8',
+    timeout: 10_000,
   });
-  if (out.status !== 0) return null;
-  const props = parseSessionProps(out.stdout);
-  return { state: props.State, user: props.Name };
+  if (out.status === 0) {
+    const props = parseSessionProps(out.stdout);
+    return { state: props.State, user: props.Name };
+  }
+  if (!out.error && /No session/.test(out.stderr ?? '')) return null;
+  const why = out.error?.message ?? (out.stderr?.trim() || `exit status ${out.status}`);
+  throw new Error(`loginctl show-session ${id} failed: ${why}`);
+}
+
+// A process the actions runner itself runs: its binary or working directory
+// is under runnerDir. Unlike argv, a process can't fake its exe, and the cwd
+// covers a runner started by hand as `./run.sh`.
+function isRunnerProcess(proc, runnerDir) {
+  const under = (path) => path === runnerDir || path?.startsWith(`${runnerDir}/`);
+  return under(proc.exe) || under(proc.cwd);
 }
 
 // The processes in `procs` whose session has closed, grouped by session.
@@ -102,11 +128,10 @@ export function findLeftovers(
   procs,
   { sessionInfo, exclude = new Set(), runnerUid, runnerDir = RUNNER_DIR },
 ) {
-  const runnerPrefix = `${runnerDir}/`;
   const bySession = new Map();
   for (const proc of procs) {
     if (exclude.has(proc.pid)) continue;
-    if (proc.uid === runnerUid && proc.cmdline.startsWith(runnerPrefix)) continue;
+    if (proc.uid === runnerUid && isRunnerProcess(proc, runnerDir)) continue;
     if (!bySession.has(proc.session)) bySession.set(proc.session, []);
     bySession.get(proc.session).push(proc);
   }
@@ -124,6 +149,28 @@ export function findLeftovers(
   return leftovers;
 }
 
+// findLeftovers, re-scanned up to `attempts` times `delayMs` apart while
+// any are found. logind leaves a session "closing" while it stops the
+// scope (up to its 90 s stop timeout), so a job dispatched just after an
+// operator logs out shouldn't fail on work that is already being killed.
+export function settledLeftovers(scan, opts, { attempts = 4, delayMs = 5_000, sleep }) {
+  let leftovers = findLeftovers(scan(), opts);
+  for (let i = 1; i < attempts && leftovers.length > 0; i++) {
+    sleep(delayMs);
+    leftovers = findLeftovers(scan(), opts);
+  }
+  return leftovers;
+}
+
+// The command that stops a leftover session's processes. It targets the
+// session's scope rather than PIDs, which may be reused before an operator
+// acts on the message, and also clears zombies.
+export function stopCommand(leftover) {
+  return leftover.state === 'closing'
+    ? `sudo loginctl terminate-session ${leftover.session}`
+    : `sudo systemctl kill --signal=KILL session-${leftover.session}.scope`;
+}
+
 function shortCmdline(cmdline) {
   if (!cmdline) return '[no command line]';
   return cmdline.length > MAX_CMDLINE ? `${cmdline.slice(0, MAX_CMDLINE)}…` : cmdline;
@@ -136,10 +183,10 @@ export function formatLeftovers(leftovers) {
     const procs = l.procs.map((p) => `PID ${p.pid}: ${shortCmdline(p.cmdline)}`).join('; ');
     return `session ${l.session} (${who}): ${procs}`;
   });
-  const pids = leftovers.flatMap((l) => l.procs.map((p) => p.pid)).join(' ');
+  const stops = leftovers.map(stopCommand).join('; ');
   return (
     `processes left by a closed login session: ${sessions.join(' | ')}. ` +
-    `Kill them (sudo kill ${pids}); work meant to outlive SSH goes in ` +
+    `Stop them (${stops}); work meant to outlive SSH goes in ` +
     'systemd-run --unit=<name> (scripts/bench/README.md §2.1)'
   );
 }
