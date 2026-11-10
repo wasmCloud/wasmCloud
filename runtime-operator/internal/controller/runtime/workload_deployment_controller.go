@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,6 +33,7 @@ const (
 // WorkloadDeploymentReconciler reconciles a WorkloadReplicaSet object
 type WorkloadDeploymentReconciler struct {
 	client.Client
+	APIReader  client.Reader
 	Scheme     *runtime.Scheme
 	Recorder   events.EventRecorder
 	reconciler condition.AnyConditionedReconciler
@@ -75,8 +77,15 @@ func (r *WorkloadDeploymentReconciler) reconcileSync(ctx context.Context, deploy
 
 	currentReplica := &runtimev1alpha1.WorkloadReplicaSet{}
 
-	if err := r.Get(ctx, client.ObjectKey{Name: deployment.Status.CurrentReplicaSet.Name, Namespace: deployment.Namespace}, currentReplica); err != nil {
-		if client.IgnoreNotFound(err) == nil {
+	key := client.ObjectKey{Name: deployment.Status.CurrentReplicaSet.Name, Namespace: deployment.Namespace}
+	err := r.Get(ctx, key, currentReplica)
+	// A newly created ReplicaSet may not have reached the cache. Treating
+	// that lag as deletion causes Deploy to create a replacement every pass.
+	if apierrors.IsNotFound(err) && r.APIReader != nil {
+		err = r.APIReader.Get(ctx, key, currentReplica)
+	}
+	if err != nil {
+		if apierrors.IsNotFound(err) {
 			return condition.ErrStatusUnknown(fmt.Errorf("current ReplicaSet not found"))
 		}
 		return err
@@ -354,6 +363,7 @@ func (r *WorkloadDeploymentReconciler) reconcileReady(_ context.Context, deploym
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments/finalizers,verbs=update
 
 func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -522,5 +523,28 @@ func TestScaleUpdatesReplicaSetOnlyOnChange(t *testing.T) {
 		if got := updates > 0; got != tc.wantUpdate {
 			t.Errorf("%s: updated = %v, want %v", tc.name, got, tc.wantUpdate)
 		}
+	}
+}
+
+func TestSyncConfirmsCacheMissWithAPIReader(t *testing.T) {
+	scheme := newScaleTestScheme(t)
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprintf("exists=%v", present), func(t *testing.T) {
+			wd := readyDeployment("")
+			wd.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact))
+			cached := fake.NewClientBuilder().WithScheme(scheme).Build()
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if present {
+				builder = builder.WithObjects(baseReplicaSet(testReplicaSetName))
+			}
+			r := &WorkloadDeploymentReconciler{Client: cached, APIReader: builder.Build(), Scheme: scheme}
+			err := r.reconcileSync(t.Context(), wd)
+			if present && err != nil {
+				t.Fatalf("existing ReplicaSet lost to cache lag: %v", err)
+			}
+			if !present && (err == nil || !condition.IsStatusUnknown(err)) {
+				t.Fatalf("missing ReplicaSet should still trigger recovery, got %v", err)
+			}
+		})
 	}
 }
