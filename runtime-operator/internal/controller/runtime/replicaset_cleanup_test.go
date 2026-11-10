@@ -57,7 +57,7 @@ func newCleanupReconciler(t *testing.T, funcs interceptor.Funcs, objects ...clie
 	gvk := runtimev1alpha1.GroupVersion.WithKind("WorkloadReplicaSet")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objects...).
 		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, replicaSetOwnerIndexValue(gvk)).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, replicaSetHashIndexValue(gvk)).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(gvk)).
 		WithInterceptorFuncs(funcs).Build()
 	return &WorkloadReplicaSetReconciler{Client: c, Scheme: s}
 }

@@ -58,9 +58,7 @@ func testReplicaSetScaleStatus(t *testing.T, replicaSetName string) {
 			}
 			return nil
 		}).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, func(obj client.Object) []string {
-			return []string{obj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]}
-		}).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(replicaSetGvk)).
 		Build()
 	r := &WorkloadReplicaSetReconciler{Client: c, Scheme: s}
 	ctx := context.Background()
@@ -143,9 +141,7 @@ func TestReplicaSet_PredecessorWorkloadsDoNotCount(t *testing.T) {
 			}
 			return nil
 		}).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, func(obj client.Object) []string {
-			return []string{obj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]}
-		}).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(replicaSetGvk)).
 		Build()
 	r := &WorkloadReplicaSetReconciler{Client: c, Scheme: s}
 	ctx := context.Background()
@@ -237,9 +233,7 @@ func TestReplicaSet_DeleteChangesNothing(t *testing.T) {
 			}
 			return nil
 		}).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, func(obj client.Object) []string {
-			return []string{obj.GetAnnotations()[workloadReplicaSetGenerationAnnotation]}
-		}).
+		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(replicaSetGvk)).
 		Build()
 	r := &WorkloadReplicaSetReconciler{Client: c, Scheme: s}
 	ctx := context.Background()
@@ -290,7 +284,7 @@ func TestScaleUpRecordsRefusedWorkloadCreate(t *testing.T) {
 			WithScheme(s).
 			WithObjects(rs).
 			WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, replicaSetOwnerIndexValue(replicaSetGvk)).
-			WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetHashIndex, replicaSetHashIndexValue(replicaSetGvk)).
+			WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(replicaSetGvk)).
 			WithInterceptorFuncs(refuseCreates).
 			Build(),
 		Scheme:   s,
