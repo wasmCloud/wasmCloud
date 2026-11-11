@@ -196,9 +196,22 @@ func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Hos
 	// in the cluster when a host is finalized. The list is cluster-wide
 	// because Workloads live in tenant namespaces while Hosts live in the
 	// operator's namespace.
+	//
+	// UnsafeDisableDeepCopy makes the items share the informer cache's memory
+	// instead of being deep copied,
+	// which a host with many Workloads would pay for on every pass.
+	// That is safe here because the items are only read:
+	//   - finalize and deleteAssignedWorkload read their identity, assignment
+	//     and deletion timestamp, and never assign to them.
+	//   - Delete builds its request from the object's name and namespace and
+	//     does not decode the response back into it.
+	//   - The informer replaces a cached object on update rather than changing
+	//     it in place, so these reads do not race with the cache.
+	// Anything added below that writes to a listed Workload must DeepCopy it first.
 	workloadList := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, workloadList,
 		client.MatchingFields{workloadByHostIDIndex: host.HostID},
+		client.UnsafeDisableDeepCopy,
 	); err != nil {
 		return err
 	}
