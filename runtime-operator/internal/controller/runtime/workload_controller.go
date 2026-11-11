@@ -15,9 +15,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
@@ -42,6 +49,9 @@ const (
 	// heartbeat (typically a namespace); the Host object itself always
 	// lives in the operator's namespace.
 	hostEnvironmentIndex = "spec.environment"
+	// workloadUnplacedIndex indexes the Workloads waiting for a host, so a Host
+	// becoming schedulable looks at those alone rather than at every Workload.
+	workloadUnplacedIndex = "status.unplaced"
 	// workloadReplicaSetLegacyAnnotation is an older spelling of
 	// workloadReplicaSetNameAnnotation that the host still reads.
 	workloadReplicaSetLegacyAnnotation = "runtime.wasmcloud.dev/workload-replicaset"
@@ -49,8 +59,17 @@ const (
 
 // WorkloadReconciler reconciles a Workload object
 type WorkloadReconciler struct {
+	APIReader     client.Reader
+	objectSlots   hostSlots
+	statusBatches *statusBatches
 	client.Client
 	ReadyRequeueInterval time.Duration
+	Concurrency          int
+	CleanupConcurrency   int
+	HostConcurrency      int
+	liveSlots            hostSlots
+	cleanupSlots         hostSlots
+	cleanupStalls        stalledHosts
 	Bus                  wasmbus.Bus
 	Recorder             events.EventRecorder
 	// OperatorNamespace is the namespace every Host CRD lives in. The
@@ -426,6 +445,48 @@ func schedulableHostIndexValue(rawObj client.Object) []string {
 	return []string{}
 }
 
+func unplacedWorkloadIndexValue(rawObj client.Object) []string {
+	if workload, ok := rawObj.(*runtimev1alpha1.Workload); ok && workload.Status.HostID == "" && workload.DeletionTimestamp.IsZero() {
+		return []string{string(condition.ConditionTrue)}
+	}
+	return nil
+}
+
+// workloadsForHost enqueues the unplaced Workloads that host can take. Once its
+// condition stops changing, a Workload that found no host otherwise looks again
+// only on its reconcile interval, however soon a host arrives.
+func (r *WorkloadReconciler) workloadsForHost(ctx context.Context, obj client.Object) []reconcile.Request {
+	host, ok := obj.(*runtimev1alpha1.Host)
+	if !ok || !isSchedulable(host) {
+		return nil
+	}
+	workloads := &runtimev1alpha1.WorkloadList{}
+	if err := r.List(ctx, workloads, client.MatchingFields{workloadUnplacedIndex: string(condition.ConditionTrue)}); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "listing unplaced Workloads for Host event")
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range workloads.Items {
+		workload := &workloads.Items[i]
+		// A pinned Workload waits for its one host, whatever its selector says.
+		if workload.Spec.HostID != "" {
+			if workload.Spec.HostID != host.HostID {
+				continue
+			}
+		} else if !labels.SelectorFromSet(workload.Spec.HostSelector).Matches(labels.Set(host.Labels)) {
+			continue
+		}
+		filter, err := hostEnvironmentFilter(r.AllowSharedHosts, workload.Namespace, &workload.Spec)
+		if err != nil || (filter != "" && filter != host.Environment) {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: workload.Namespace, Name: workload.Name},
+		})
+	}
+	return requests
+}
+
 // lookupHostByID finds a Host CRD by HostID. Hosts always live in the
 // operator's namespace, so the lookup is namespace-scoped and indexed.
 // Returns (nil, nil) when no host matches; an error only on List failure.
@@ -544,6 +605,20 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		return condition.ErrNoop()
 	}
 
+	// Cleanup may have completed while a stale live object was still cached.
+	// Check durable intent immediately before dispatching a new start. The
+	// shared object budget keeps finalization from overlapping this operation.
+	if r.APIReader != nil {
+		current := &runtimev1alpha1.Workload{}
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(workload), current); err != nil {
+			return err
+		}
+		if current.UID != workload.UID || !current.DeletionTimestamp.IsZero() ||
+			current.Generation != workload.Generation || current.Status.HostID != workload.Status.HostID ||
+			current.Status.WorkloadID != workload.Status.WorkloadID {
+			return condition.ErrStatusUnknown(fmt.Errorf("workload changed before start; retrying"))
+		}
+	}
 	spec, err := r.materializeWorkload(ctx, workload)
 	if err != nil {
 		return err
@@ -831,19 +906,21 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 		return fmt.Errorf("host %s is being deleted", workload.Status.HostID)
 	}
 
-	client := NewWashHostClient(r.Bus, workload.Status.HostID)
-	req := &runtimev2.WorkloadStatusRequest{
-		WorkloadId: workload.Status.WorkloadID,
+	var status *runtimev2.WorkloadStatus
+	if r.statusBatches != nil {
+		status = r.statusBatches.status(ctx, r, workload)
+	}
+	if status == nil {
+		queryCtx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
+		defer cancel()
+		resp, err := NewWashHostClient(r.Bus, workload.Status.HostID).Status(queryCtx,
+			&runtimev2.WorkloadStatusRequest{WorkloadId: workload.Status.WorkloadID})
+		if err != nil {
+			return err
+		}
+		status = resp.GetWorkloadStatus()
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
-	defer cancel()
-
-	resp, err := client.Status(ctx, req)
-	if err != nil {
-		return err
-	}
-	status := resp.GetWorkloadStatus()
 	if state := status.GetWorkloadState(); state == runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING ||
 		state == runtimev2.WorkloadState_WORKLOAD_STATE_COMPLETED {
 		return nil
@@ -879,9 +956,26 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		// nothing to do, no start was ever sent
 		return nil
 	}
+	// A failed stop has already established that this host is unreachable.
+	// Preserve the existing failed-host cleanup policy without paying that
+	// timeout once for every remaining replica. Unknown hosts still retry.
+	if r.cleanupStalls.stalled(workload.Status.HostID) {
+		host, err := r.lookupHostByID(ctx, workload.Status.HostID)
+		if err != nil {
+			return err
+		}
+		if hostFailed(host) {
+			return nil
+		}
+	}
 	// Deletion gives up sooner than eviction, on any host not heartbeating:
 	// waiting for its Host to be reaped could block the deletion for good.
-	_, err := r.stopOnHost(ctx, workload, workloadStopTimeout, hostUnavailable)
+	answered, err := r.stopOnHost(ctx, workload, workloadStopTimeout, hostUnavailable)
+	if answered {
+		r.cleanupStalls.answered(workload.Status.HostID)
+	} else {
+		r.cleanupStalls.failed(workload.Status.HostID)
+	}
 	return err
 }
 
@@ -933,6 +1027,7 @@ func (r *WorkloadReconciler) newReconciler() *condition.ConditionedReconciler[*r
 	reconciler := condition.NewConditionedReconciler(r.Client, r.Scheme(), &runtimev1alpha1.Workload{}, workloadReconcileInterval)
 	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
 	reconciler.OptimisticStatusWrites()
+	reconciler.BatchStatusUpdates()
 	reconciler.SetFinalizer(workloadFinalizerName, r.finalize)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionConfig, r.reconcileConfig)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionHostSelection, r.reconcileHostSelection)
@@ -951,7 +1046,23 @@ func (r *WorkloadReconciler) newReconciler() *condition.ConditionedReconciler[*r
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;get;list;patch;update;watch
 
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.reconciler = r.newReconciler()
+	r.APIReader = mgr.GetAPIReader()
+	if r.Concurrency <= 0 {
+		r.Concurrency = DefaultWorkloadConcurrency
+	}
+	if r.CleanupConcurrency <= 0 {
+		r.CleanupConcurrency = DefaultCleanupConcurrency
+	}
+	if r.HostConcurrency <= 0 {
+		r.HostConcurrency = DefaultHostConcurrency
+	}
+	r.statusBatches = &statusBatches{}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, statusBucketIndex, statusBucketValue); err != nil {
+		return err
+	}
+	reconciler := r.newReconciler()
+	cleanup := reconciler.SeparateFinalizer()
+	r.reconciler = r.withHostBudget(reconciler, false)
 
 	// Index Hosts by HostID for lookupHostByID. WorkloadRouteReconciler reads
 	// it too.
@@ -993,8 +1104,30 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&runtimev1alpha1.Workload{},
+		workloadUnplacedIndex,
+		unplacedWorkloadIndexValue,
+	); err != nil {
+		return err
+	}
+
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Workload{}).
+		Watches(&runtimev1alpha1.Host{},
+			handler.EnqueueRequestsFromMapFunc(r.workloadsForHost),
+			builder.WithPredicates(hostPlacementChanged)).
 		Named("workload-replica").
-		Complete(r)
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
+		Complete(r); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&runtimev1alpha1.Workload{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+			return !obj.GetDeletionTimestamp().IsZero()
+		}))).
+		Named("workload-cleanup").
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.CleanupConcurrency}).
+		Complete(r.withHostBudget(cleanup, true))
 }

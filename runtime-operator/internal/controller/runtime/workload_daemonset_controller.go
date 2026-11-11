@@ -445,6 +445,7 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 
 	workload := &runtimev1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
+			Finalizers:  []string{workloadFinalizerName},
 			Name:        name,
 			Namespace:   daemonSet.Namespace,
 			Labels:      workloadLabels,
@@ -639,8 +640,8 @@ func (r *WorkloadDaemonSetReconciler) daemonSetsForHost(ctx context.Context, obj
 	return requests
 }
 
-// hostPlacementChanged passes Host updates that can change which DaemonSets
-// place on it, skipping the heartbeat status writes that change nothing.
+// hostPlacementChanged passes Host updates that can change what is placed on
+// it, skipping the heartbeat status writes that change nothing.
 var hostPlacementChanged = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		oldHost, okOld := e.ObjectOld.(*runtimev1alpha1.Host)
@@ -691,7 +692,7 @@ func (r *WorkloadDaemonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.WorkloadDaemonSet{}).
-		Owns(&runtimev1alpha1.Workload{}).
+		Watches(&runtimev1alpha1.Workload{}, coalesce(handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &runtimev1alpha1.WorkloadDaemonSet{}, handler.OnlyControllerOwner())), builder.WithPredicates(childChanges())).
 		Watches(&runtimev1alpha1.Host{},
 			handler.EnqueueRequestsFromMapFunc(r.daemonSetsForHost),
 			builder.WithPredicates(hostPlacementChanged)).

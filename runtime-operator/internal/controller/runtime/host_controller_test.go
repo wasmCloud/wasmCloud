@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/encoding/protojson"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -82,9 +84,14 @@ func TestHostStatusPatch_OnlyLastSeen(t *testing.T) {
 	}
 }
 
-// TestHostStatusPatch_SatisfiesCRDRequired exercises the patch against a real
-// API server with the Host CRD installed.
+// startHostEnvtest runs a real API server with the runtime CRDs installed.
 func startHostEnvtest(t *testing.T) (client.Client, context.Context) {
+	t.Helper()
+	c, _ := startHostEnvtestClient(t)
+	return c, context.Background()
+}
+
+func startHostEnvtestClient(t *testing.T) (client.Client, *rest.Config) {
 	t.Helper()
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("KUBEBUILDER_ASSETS not set; run via `make test` for envtest")
@@ -115,7 +122,7 @@ func startHostEnvtest(t *testing.T) (client.Client, context.Context) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-	return c, context.Background()
+	return c, cfg
 }
 
 func createTestNamespace(t *testing.T, ctx context.Context, c client.Client, name string) string {
@@ -678,7 +685,7 @@ func TestFinalize(t *testing.T) {
 	otherHost := workloadForHost("other-host", "host-id-2")
 
 	c := newHostFinalizeClient(t, assigned, deleting, otherHost)
-	r := &HostReconciler{Client: c}
+	r := &HostReconciler{Client: c, deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency)}
 	host := &runtimev1alpha1.Host{HostID: testHeartbeatHostID}
 
 	if err := r.finalize(context.Background(), host); err != nil {

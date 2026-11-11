@@ -11,14 +11,18 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/encoding/protojson"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
@@ -29,9 +33,11 @@ import (
 )
 
 const (
-	hostHeartbeatTimeout  = 5 * time.Second
-	hostReconcileInterval = 1 * time.Minute
-	hostFinalizerName     = "runtime.wasmcloud.dev/host-finalizer"
+	hostHeartbeatTimeout          = 5 * time.Second
+	hostReconcileInterval         = 1 * time.Minute
+	hostFinalizerName             = "runtime.wasmcloud.dev/host-finalizer"
+	hostCleanupConcurrency        = 2
+	hostFinalizeDeleteConcurrency = 24
 	// workloadByHostIDIndex indexes Workloads by their Status.HostID so
 	// the host finalizer can fan out to assigned workloads without
 	// scanning every Workload in the cluster.
@@ -41,6 +47,8 @@ const (
 // HostReconciler reconciles a Host object
 type HostReconciler struct {
 	client.Client
+	apiReader          client.Reader
+	deleteSlots        *semaphore.Weighted
 	Scheme             *runtime.Scheme
 	Bus                wasmbus.Bus
 	UnreachableTimeout time.Duration
@@ -191,24 +199,72 @@ func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Hos
 	// in the cluster when a host is finalized. The list is cluster-wide
 	// because Workloads live in tenant namespaces while Hosts live in the
 	// operator's namespace.
+	//
+	// UnsafeDisableDeepCopy makes the items share the informer cache's memory
+	// instead of being deep copied,
+	// which a host with many Workloads would pay for on every pass.
+	// That is safe here because the items are only read:
+	//   - finalize and deleteAssignedWorkload read their identity, assignment
+	//     and deletion timestamp, and never assign to them.
+	//   - Delete builds its request from the object's name and namespace and
+	//     does not decode the response back into it.
+	//   - The informer replaces a cached object on update rather than changing
+	//     it in place, so these reads do not race with the cache.
+	// Anything added below that writes to a listed Workload must DeepCopy it first.
 	workloadList := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, workloadList,
 		client.MatchingFields{workloadByHostIDIndex: host.HostID},
+		client.UnsafeDisableDeepCopy,
 	); err != nil {
 		return err
 	}
 
+	deletes, deleteCtx := errgroup.WithContext(ctx)
 	for i := range workloadList.Items {
 		workload := &workloadList.Items[i]
 		if workload.DeletionTimestamp != nil {
 			continue
 		}
-		if err := r.Delete(ctx, workload); client.IgnoreNotFound(err) != nil {
-			return err
+		if err := r.deleteSlots.Acquire(deleteCtx, 1); err != nil {
+			break
 		}
+		deletes.Go(func() error {
+			defer r.deleteSlots.Release(1)
+			if err := deleteCtx.Err(); err != nil {
+				return err
+			}
+			return r.deleteAssignedWorkload(deleteCtx, workload, host.HostID)
+		})
 	}
 
-	return nil
+	if err := deletes.Wait(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// Check both object identity and the observed assignment when deleting. A
+// conflict is retried against an uncached read, since assignment or unrelated
+// status may have changed since the index was read.
+func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *runtimev1alpha1.Workload, hostID string) error {
+	snapshot := workload
+	key := client.ObjectKeyFromObject(workload)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if snapshot == nil {
+			snapshot = &runtimev1alpha1.Workload{}
+			if err := r.apiReader.Get(ctx, key, snapshot); err != nil {
+				return client.IgnoreNotFound(err)
+			}
+		}
+		if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
+			return nil
+		}
+		err := deleteObservedObject(ctx, r.Client, snapshot)
+		if apierrors.IsConflict(err) {
+			snapshot = nil
+		}
+		return err
+	})
 }
 
 // deleteUnresponsiveHost is the reconcile post-hook: a Host whose Ready
@@ -224,7 +280,7 @@ func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runti
 		return nil
 	}
 	// Delete unresponsive host; the finalizer will clean up assigned workloads.
-	return r.Delete(ctx, host)
+	return deleteObservedObject(ctx, r.Client, host)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -233,13 +289,20 @@ func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runti
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=hosts/finalizers,verbs=update
 
 func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.apiReader = mgr.GetAPIReader()
+	// Share the delete budget across all Host cleanup workers.
+	r.deleteSlots = semaphore.NewWeighted(hostFinalizeDeleteConcurrency)
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,
 		&runtimev1alpha1.Host{},
 		hostReconcileInterval)
+	// Cleanup can finish while a heartbeat probe is in flight. Its status must
+	// not overwrite a same-name replacement or a newer heartbeat's LastSeen.
+	reconciler.OptimisticStatusWrites()
 
 	reconciler.SetFinalizer(hostFinalizerName, r.finalize)
+	cleanup := reconciler.SeparateFinalizer()
 	reconciler.SetCondition(runtimev1alpha1.HostConditionReporting, r.reconcileReporting)
 	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
 
@@ -276,10 +339,32 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	// Respect explicit manager tuning for live Host reconciliation. Cleanup
+	// retains its separate workers and shared API deletion budget.
+	managerOptions := mgr.GetControllerOptions()
+	hostOptions := controller.Options{}
+	hostGroupKind := runtimev1alpha1.GroupVersion.WithKind("Host").GroupKind().String()
+	if managerOptions.MaxConcurrentReconciles == 0 && managerOptions.GroupKindConcurrency[hostGroupKind] == 0 {
+		hostOptions.MaxConcurrentReconciles = 2
+	}
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
-		Complete(r)
+		WithOptions(hostOptions).
+		Complete(r); err != nil {
+		return err
+	}
+
+	// Cleanup has its own queue: even when every cleanup worker is blocked on
+	// deletes, live Hosts can still become Ready. Include deleting objects in
+	// the initial list so interrupted cleanup resumes after an operator restart.
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+			return !obj.GetDeletionTimestamp().IsZero()
+		}))).
+		Named("workload-host-cleanup").
+		WithOptions(controller.Options{MaxConcurrentReconciles: hostCleanupConcurrency}).
+		Complete(cleanup)
 }
 
 type hostStatusUpdater struct {

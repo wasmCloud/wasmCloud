@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
@@ -100,7 +102,7 @@ var controllerSetups = []controllerSetup{
 	}},
 	{
 		name:    "workload-replica",
-		indexes: []string{hostIDIndex, workloadSchedulableHostsIndex, hostEnvironmentIndex},
+		indexes: []string{statusBucketIndex, hostIDIndex, workloadSchedulableHostsIndex, hostEnvironmentIndex, workloadUnplacedIndex},
 		setup: func(m *recordingManager, _ *runtime.Scheme) error {
 			return (&WorkloadReconciler{Client: m.GetClient()}).SetupWithManager(m)
 		},
@@ -224,6 +226,11 @@ func TestRegisteredIndexesExtract(t *testing.T) {
 		{"host in an environment", hostEnvironmentIndex, &runtimev1alpha1.Host{Environment: testTenant}, []string{testTenant}},
 		{"host in no environment", hostEnvironmentIndex, &runtimev1alpha1.Host{}, nil},
 		{"workload by environment", hostEnvironmentIndex, &runtimev1alpha1.Workload{Spec: runtimev1alpha1.WorkloadSpec{Environment: testTenant}}, nil},
+
+		{"unplaced workload", workloadUnplacedIndex, &runtimev1alpha1.Workload{}, []string{string(condition.ConditionTrue)}},
+		{"placed workload", workloadUnplacedIndex, &runtimev1alpha1.Workload{Status: runtimev1alpha1.WorkloadStatus{HostID: indexedHostID}}, nil},
+		{"workload being deleted", workloadUnplacedIndex, &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: time.Now()}}}, nil},
+		{"host by unplaced", workloadUnplacedIndex, &runtimev1alpha1.Host{}, nil},
 
 		{"workload behind a service", workloadKubernetesServiceIndex, withService(&runtimev1alpha1.KubernetesSpec{
 			Service: &runtimev1alpha1.KubernetesServiceRef{Name: "frontend"}}), []string{"frontend"}},

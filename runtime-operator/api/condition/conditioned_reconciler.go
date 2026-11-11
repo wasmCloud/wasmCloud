@@ -142,6 +142,8 @@ type ConditionedReconciler[T ConditionedType] struct {
 	conditions    []conditionPair[T]
 	finalizerFunc func(context.Context, T) error
 	finalizerName string
+	// separateFinalizer leaves deletion to a controller with its own workers.
+	separateFinalizer bool
 	// trackGeneration stamps each condition with the generation it was
 	// computed for. See TrackGeneration.
 	trackGeneration        bool
@@ -221,6 +223,28 @@ func (r *ConditionedReconciler[T]) SetFinalizer(finalizer string, fn func(contex
 	r.finalizerFunc = fn
 }
 
+// SeparateFinalizer keeps cleanup from occupying the workers that reconcile live
+// objects. Reconcile still installs the finalizer, but leaves deleting objects to
+// the returned reconciler. Register it with a separate controller that watches
+// both deletion transitions and objects already deleting at startup. Like the
+// other configuration methods, call this before starting either controller.
+func (r *ConditionedReconciler[T]) SeparateFinalizer() reconcile.Reconciler {
+	r.separateFinalizer = true
+	return reconcile.Func(r.reconcileFinalizer)
+}
+
+func (r *ConditionedReconciler[T]) reconcileFinalizer(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	obj := r.obj.DeepCopyObject().(T)
+	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+	if obj.GetDeletionTimestamp().IsZero() || r.finalizerName == "" {
+		return reconcile.Result{}, nil
+	}
+	_, err := HandleFinalizer(ctx, r.client, obj, r.finalizerName, r.finalizerFunc)
+	return reconcile.Result{}, err
+}
+
 type ctxKey string
 
 type ReconcilerContext struct {
@@ -265,6 +289,9 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
+	if r.separateFinalizer && !obj.GetDeletionTimestamp().IsZero() {
+		return reconcile.Result{}, nil
+	}
 
 	// NOTE(lxf): this means we only auto-initialize conditions if finalizer name is set.
 	if r.finalizerName != "" {
@@ -285,6 +312,10 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 		}
 	}
 
+	return r.reconcileConditions(ctx, obj)
+}
+
+func (r *ConditionedReconciler[T]) reconcileConditions(ctx context.Context, obj T) (reconcile.Result, error) {
 	originalObject := obj.DeepCopyObject().(T)
 
 	reconcilerCtx := &ReconcilerContext{
@@ -377,7 +408,7 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	for _, hook := range r.afterHooks {
-		if err := hook(ctx, obj); err != nil {
+		if err := hook(condCtx, obj); err != nil {
 			if errors.Is(err, errStatusSkip) {
 				// If the post-hook returns ErrSkipReconciliation, we skip the remaining hooks.
 				break

@@ -93,7 +93,7 @@ func newDaemonSetReconciler(t *testing.T, objs ...client.Object) *WorkloadDaemon
 		Build()
 
 	return &WorkloadDaemonSetReconciler{
-		Client:            c,
+		Client:            finalizingTestClient{c},
 		APIReader:         c,
 		Scheme:            s,
 		OperatorNamespace: testNamespace,

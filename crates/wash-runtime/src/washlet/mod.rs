@@ -1703,6 +1703,40 @@ async fn handle_command(
                 }),
             )
         }
+        "workload.status.batch" => {
+            let req: types::v2::WorkloadStatusBatchRequest = from_api(payload)?;
+            anyhow::ensure!(
+                !req.workload_ids.is_empty()
+                    && req.workload_ids.len() <= 128
+                    && req
+                        .workload_ids
+                        .iter()
+                        .all(|id| !id.is_empty() && id.len() <= 128),
+                "status batch requires 1..128 workload IDs of at most 128 bytes"
+            );
+            let mut workloads = Vec::with_capacity(req.workload_ids.len());
+            for workload_id in req.workload_ids {
+                let request = types::v2::WorkloadStatusRequest { workload_id };
+                // Preserve custom status authorization; do not bypass the handler.
+                let response = match handler {
+                    Some(handler) => handler.status(defaults, request).await?,
+                    None => defaults.status(request).await?,
+                };
+                let mut status = response
+                    .workload_status
+                    .context("missing workload status")?;
+                // Bound the reply even when a plugin supplies a large diagnostic.
+                if status.message.len() > 1024 {
+                    let mut end = 1024;
+                    while !status.message.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    status.message.truncate(end);
+                }
+                workloads.push(status);
+            }
+            to_api(&types::v2::WorkloadStatusBatchResponse { workloads })
+        }
         "workload.status" => {
             let req: types::v2::WorkloadStatusRequest = match from_api(payload) {
                 Ok(request) => request,
@@ -2292,6 +2326,40 @@ mod tests {
         let control = AttachedHostControl::new(shutdown_tx, task);
         control.shutdown_within(budget).await?;
         control.stopped().await
+    }
+
+    #[tokio::test]
+    async fn batched_status_is_bounded_and_preserves_status_authorization() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let defaults = control_defaults(host.clone());
+        let msg = command_message(
+            "workload.status.batch",
+            br#"{"workloadIds":["absent-a","absent-b"]}"#.to_vec(),
+        );
+        let reply = handle_command(&defaults, &msg, None, None).await?;
+        let reply: types::v2::WorkloadStatusBatchResponse = from_api(&reply)?;
+        assert_eq!(reply.workloads.len(), 2);
+        assert_eq!(reply.workloads[0].workload_id, "absent-a");
+        assert_eq!(reply.workloads[1].workload_id, "absent-b");
+        assert!(
+            reply
+                .workloads
+                .iter()
+                .all(|s| s.workload_state == types::v2::WorkloadState::NotFound as i32)
+        );
+        assert!(
+            handle_command(&defaults, &msg, Some(&RefusingCommands), None)
+                .await
+                .is_err()
+        );
+        for ids in [vec![], vec!["id"; 129]] {
+            let msg = command_message(
+                "workload.status.batch",
+                serde_json::to_vec(&serde_json::json!({"workloadIds":ids}))?,
+            );
+            assert!(handle_command(&defaults, &msg, None, None).await.is_err());
+        }
+        host.stop().await
     }
 
     struct NotifyOnDrop(Option<oneshot::Sender<()>>);
