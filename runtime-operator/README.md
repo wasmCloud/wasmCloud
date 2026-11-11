@@ -170,6 +170,20 @@ library HTTP server diagnostics are logged at error without application stack
 traces. Application stack traces start at the log call. In text output a stack
 trace is a single escaped `stacktrace="…\n\t…"` value.
 
+## Host cleanup
+
+The `workload-host` controller reconciles live Hosts. Deleting Hosts are handled
+by `workload-host-cleanup`, whose two workers share a limit of 24 concurrent
+Workload deletes. Cleanup has its own queue so overlapping Host removals cannot
+occupy the workers that make replacement Hosts Ready.
+
+A cleanup error retains the Host finalizer and retries through the cleanup
+queue. Cleanup also resumes for deleting Hosts after an operator restart.
+Deletes check object identity and resource version; a stale Host deletion
+decision must be reconciled again against the current Host.
+Heartbeat status writes also check resource version so an old probe cannot
+overwrite a replacement Host's status.
+
 ## Development
 
 You will need a local Kind cluster, NATS, and a Wash host.
