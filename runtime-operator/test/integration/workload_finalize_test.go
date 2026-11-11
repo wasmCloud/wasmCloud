@@ -32,6 +32,7 @@ const (
 	// stop, reaches no other spec.
 	evictHostID      = "host-evict"
 	unansweredHostID = "host-unanswered"
+	arrivingHostID   = "host-arriving"
 )
 
 // fakeHost stands in for a wash host and tracks which workloads it runs, so a
@@ -87,7 +88,7 @@ func (h *fakeHost) isRunning(id string) bool {
 
 func (h *fakeHost) Request(ctx context.Context, msg *wasmbus.Message) (*wasmbus.Message, error) {
 	var prefix, host string
-	for _, hostID := range []string{testHostID, evictHostID, unansweredHostID} {
+	for _, hostID := range []string{testHostID, evictHostID, unansweredHostID, arrivingHostID} {
 		if p := "runtime.host." + hostID + "."; strings.HasPrefix(msg.Subject, p) {
 			prefix, host = p, hostID
 		}
@@ -300,6 +301,60 @@ func (h *cacheHold) transform(obj any) (any, error) {
 	}
 	return obj, nil
 }
+
+var _ = Describe("Workload waiting for a host", func() {
+	// A Workload that found no host has a stable condition, so nothing but the
+	// Host's own arrival can place it sooner than its 30s reconcile interval.
+	It("is placed as soon as a matching Host is schedulable", func() {
+		ctx := context.Background()
+		selector := map[string]string{"hostgroup": "arriving"}
+		w := &runtimev1alpha1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: "waits-for-host", Namespace: testNamespace},
+			Spec: runtimev1alpha1.WorkloadSpec{
+				HostSelector: selector,
+				Components:   []runtimev1alpha1.WorkloadComponent{{Name: "http", Image: "example.com/http:1"}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, w)).To(Succeed()) })
+		key := types.NamespacedName{Namespace: w.Namespace, Name: w.Name}
+
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			g.Expect(got.Status.GetCondition(runtimev1alpha1.WorkloadConditionHostSelection).Message).
+				To(Equal("no suitable host found"))
+		}).Should(Succeed())
+		// Outlast the short requeues of a condition still changing.
+		Consistently(func(g Gomega) {
+			var got runtimev1alpha1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			g.Expect(got.Status.HostID).To(BeEmpty())
+		}, "3s").Should(Succeed())
+
+		host := &runtimev1alpha1.Host{
+			ObjectMeta:  metav1.ObjectMeta{Name: arrivingHostID, Namespace: testNamespace, Labels: selector},
+			HostID:      arrivingHostID,
+			Environment: testNamespace,
+		}
+		Expect(k8sClient.Create(ctx, host)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, host)).To(Succeed()) })
+		Consistently(func(g Gomega) {
+			var got runtimev1alpha1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			g.Expect(got.Status.HostID).To(BeEmpty())
+		}, "500ms").Should(Succeed(), "placed on a Host that is not Ready yet")
+
+		host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+		Expect(k8sClient.Status().Update(ctx, host)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			g.Expect(got.Status.HostID).To(Equal(arrivingHostID))
+		}, "5s").Should(Succeed())
+	})
+})
 
 var _ = Describe("Workload eviction", func() {
 	// A placed Workload whose host leaves its Environment is stopped there and
