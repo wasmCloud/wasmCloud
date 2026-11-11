@@ -344,6 +344,25 @@
             </ul>
           </li>
         
+          
+          <li>
+            <a href="#wasmcloud%2fruntime%2fv2%2fworkload_status_batch.proto">wasmcloud/runtime/v2/workload_status_batch.proto</a>
+            <ul>
+              
+                <li>
+                  <a href="#wasmcloud.runtime.v2.WorkloadStatusBatchRequest"><span class="badge">M</span>WorkloadStatusBatchRequest</a>
+                </li>
+              
+                <li>
+                  <a href="#wasmcloud.runtime.v2.WorkloadStatusBatchResponse"><span class="badge">M</span>WorkloadStatusBatchResponse</a>
+                </li>
+              
+              
+              
+              
+            </ul>
+          </li>
+        
         <li><a href="#scalar-value-types">Scalar Value Types</a></li>
       </ul>
     </div>
@@ -1634,6 +1653,69 @@ Then the host removes the workload from its internal state.</p></td>
         </table>
 
         
+    
+      
+      <div class="file-heading">
+        <h2 id="wasmcloud/runtime/v2/workload_status_batch.proto">wasmcloud/runtime/v2/workload_status_batch.proto</h2><a href="#title">Top</a>
+      </div>
+      <p></p>
+
+      
+        <h3 id="wasmcloud.runtime.v2.WorkloadStatusBatchRequest">WorkloadStatusBatchRequest</h3>
+        <p>NATS subject: runtime.host.<host-id>.workload.status.batch.</p><p>A complete response covers exactly the requested IDs. Each lookup uses the</p><p>same authorization hook as workload.status. This is a bounded collection of</p><p>observations, not an atomic snapshot of all workloads on a host.</p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>workload_ids</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Between 1 and 128 IDs, each at most 128 bytes. </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
+        <h3 id="wasmcloud.runtime.v2.WorkloadStatusBatchResponse">WorkloadStatusBatchResponse</h3>
+        <p></p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>workloads</td>
+                  <td><a href="#wasmcloud.runtime.v2.WorkloadStatus">WorkloadStatus</a></td>
+                  <td>repeated</td>
+                  <td><p>In request order. A missing workload has NOT_FOUND state; an absent entry
+makes the response incomplete and must not be interpreted as healthy. </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
+
+      
+
+      
+
+      
     
 
     <h2 id="scalar-value-types">Scalar Value Types</h2>

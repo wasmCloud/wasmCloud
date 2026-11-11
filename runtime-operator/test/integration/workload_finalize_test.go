@@ -149,6 +149,20 @@ func (h *fakeHost) Request(ctx context.Context, msg *wasmbus.Message) (*wasmbus.
 			h.mu.Unlock()
 			return nil, context.DeadlineExceeded
 		}
+		gateKey := "stop:" + req.GetWorkloadId()
+		recv, gate := h.received[gateKey], h.gates[gateKey]
+		delete(h.received, gateKey)
+		delete(h.gates, gateKey)
+		h.mu.Unlock()
+		if gate != nil {
+			close(recv)
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		h.mu.Lock()
 		state := runtimev2.WorkloadState_WORKLOAD_STATE_NOT_FOUND
 		if h.running[req.GetWorkloadId()] {
 			state = runtimev2.WorkloadState_WORKLOAD_STATE_STOPPING
@@ -193,6 +207,36 @@ func newPinnedWorkloadOn(ctx context.Context, name, hostID string) *runtimev1alp
 }
 
 var _ = Describe("Workload finalizer", func() {
+	It("places another workload on the same host while a stop is blocked", func() {
+		ctx := context.Background()
+		w := newPinnedWorkload(ctx, "blocked-stop")
+		key := client.ObjectKeyFromObject(w)
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			g.Expect(got.Status.WorkloadID).NotTo(BeEmpty())
+		}, 10*time.Second).Should(Succeed())
+		received, release := testHost.holdStart("stop:" + string(w.UID))
+		DeferCleanup(release)
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+		Eventually(received, 10*time.Second).Should(BeClosed())
+
+		replacement := newPinnedWorkload(ctx, "starts-during-cleanup")
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, replacement))).To(Succeed()) })
+		Eventually(func(g Gomega) {
+			var got runtimev1alpha1.Workload
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(replacement), &got)).To(Succeed())
+			g.Expect(got.Status.IsAvailable()).To(BeTrue())
+		}, 10*time.Second).Should(Succeed())
+		Expect(k8sClient.Get(ctx, key, &runtimev1alpha1.Workload{})).To(Succeed())
+		Expect(testHost.isRunning(string(w.UID))).To(BeTrue())
+		release()
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, key, &runtimev1alpha1.Workload{}))
+		}, 10*time.Second).Should(BeTrue())
+		Expect(testHost.isRunning(string(w.UID))).To(BeFalse())
+	})
+
 	It("stops a workload on its host once the Workload is gone", func() {
 		ctx := context.Background()
 		w := newPinnedWorkload(ctx, "stopped-after-placement")

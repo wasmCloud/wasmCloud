@@ -95,16 +95,21 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		httpPort int32
 	}
 	endpoints := make(map[string]endpointInfo) // key = podIP
+	seenHosts := make(map[string]bool)
 
 	for i := range workloadList.Items {
 		workload := &workloadList.Items[i]
-		if !workload.Status.IsAvailable() {
+		if !workload.DeletionTimestamp.IsZero() || !workload.Status.IsAvailable() {
 			continue
 		}
 		if workload.Status.HostID == "" {
 			continue
 		}
 
+		if seenHosts[workload.Status.HostID] {
+			continue
+		}
+		seenHosts[workload.Status.HostID] = true
 		// Look up the Host CRD by HostID.
 		host, err := r.findHostByID(ctx, workload.Status.HostID)
 		if err != nil {
@@ -144,21 +149,6 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	sliceName := endpointSliceName(serviceName)
-
-	if len(endpoints) == 0 {
-		// No ready workloads for this service; delete our EndpointSlice if it exists.
-		es := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      sliceName,
-				Namespace: namespace,
-			},
-		}
-		if err := r.Delete(ctx, es); err != nil && !errors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("deleting empty EndpointSlice: %w", err)
-		}
-		log.Info("deleted EndpointSlice (no ready endpoints)", "endpointSlice", sliceName)
-		return ctrl.Result{}, nil
-	}
 
 	// Set the port to the first HTTPPort, since all Hosts within the same HostGroup have the same HTTPPort.
 	// Doing a range, since endpoints is a map object and can't use index.
@@ -217,39 +207,133 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	sortEndpoints(desiredSlice.Endpoints)
 
-	existing := &discoveryv1.EndpointSlice{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: sliceName}, existing)
-	if errors.IsNotFound(err) {
-		if err := r.Create(ctx, desiredSlice); err != nil {
-			return ctrl.Result{}, fmt.Errorf("creating EndpointSlice: %w", err)
+	return ctrl.Result{}, r.syncSlices(ctx, desiredSlice)
+}
+
+// Preserve existing membership so deleting one endpoint changes only its slice.
+// Fill available capacity before allocating another bounded slice.
+func (r *WorkloadRouteReconciler) syncSlices(ctx context.Context, desired *discoveryv1.EndpointSlice) error {
+	list := &discoveryv1.EndpointSliceList{}
+	if err := r.List(ctx, list, client.InNamespace(desired.Namespace), client.MatchingLabels(desired.Labels)); err != nil {
+		return err
+	}
+	// Read the legacy deterministic name too, so damaged labels can be repaired.
+	legacy := &discoveryv1.EndpointSlice{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), legacy); err == nil {
+		found := false
+		for i := range list.Items {
+			if list.Items[i].Name == legacy.Name {
+				found = true
+				break
+			}
 		}
-		log.Info("created EndpointSlice", "endpointSlice", sliceName, "endpoints", len(endpoints))
-		return ctrl.Result{}, nil
+		if !found {
+			list.Items = append(list.Items, *legacy)
+		}
+	} else if !errors.IsNotFound(err) {
+		return err
 	}
-	if err != nil {
-		return ctrl.Result{}, err
+	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
+	remaining := make(map[string]discoveryv1.Endpoint, len(desired.Endpoints))
+	for _, ep := range desired.Endpoints {
+		remaining[ep.Addresses[0]] = ep
 	}
-
-	sortEndpoints(existing.Endpoints)
-
-	if reflect.DeepEqual(existing.Labels, desiredSlice.Labels) &&
-		existing.AddressType == desiredSlice.AddressType &&
-		reflect.DeepEqual(existing.Ports, desiredSlice.Ports) &&
-		reflect.DeepEqual(existing.Endpoints, desiredSlice.Endpoints) {
-		return ctrl.Result{}, nil
+	slices := make([]*discoveryv1.EndpointSlice, 0, len(list.Items))
+	occupied := make(map[string]bool)
+	for i := range list.Items {
+		current := &list.Items[i]
+		occupied[current.Name] = true
+		if len(current.OwnerReferences) > 0 && !reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) {
+			if err := deleteObservedObject(ctx, r.Client, current); err != nil {
+				return err
+			}
+			continue
+		}
+		next := desired.DeepCopy()
+		next.Name = current.Name
+		next.ResourceVersion = current.ResourceVersion
+		next.Endpoints = nil
+		for _, ep := range current.Endpoints {
+			if len(ep.Addresses) != 1 || len(next.Endpoints) >= 100 {
+				continue
+			}
+			if wanted, ok := remaining[ep.Addresses[0]]; ok {
+				next.Endpoints = append(next.Endpoints, wanted)
+				delete(remaining, ep.Addresses[0])
+			}
+		}
+		slices = append(slices, next)
 	}
-
-	// Update if the existing slice differs.
-	existing.Labels = desiredSlice.Labels
-	existing.AddressType = desiredSlice.AddressType
-	existing.Ports = desiredSlice.Ports
-	existing.Endpoints = desiredSlice.Endpoints
-	if err := r.Update(ctx, existing); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating EndpointSlice: %w", err)
+	addresses := make([]string, 0, len(remaining))
+	for address := range remaining {
+		addresses = append(addresses, address)
 	}
-	log.Info("updated EndpointSlice", "endpointSlice", sliceName, "endpoints", len(endpoints))
+	sort.Strings(addresses)
+	slot := 0
+	for _, address := range addresses {
+		for slot < len(slices) && len(slices[slot].Endpoints) >= 100 {
+			slot++
+		}
+		if slot == len(slices) {
+			next := desired.DeepCopy()
+			next.Endpoints = nil
+			for suffix := 0; ; suffix++ {
+				next.Name = desired.Name
+				if suffix > 0 {
+					next.Name = endpointSliceName(fmt.Sprintf("%s-%d", desired.Name, suffix))
+				}
+				if !occupied[next.Name] {
+					break
+				}
+			}
+			occupied[next.Name] = true
+			slices = append(slices, next)
+		}
+		slices[slot].Endpoints = append(slices[slot].Endpoints, remaining[address])
+	}
+	return r.applySlices(ctx, list, slices)
+}
 
-	return ctrl.Result{}, nil
+func (r *WorkloadRouteReconciler) applySlices(
+	ctx context.Context, list *discoveryv1.EndpointSliceList, slices []*discoveryv1.EndpointSlice,
+) error {
+	existing := make(map[string]*discoveryv1.EndpointSlice, len(list.Items))
+	for i := range list.Items {
+		existing[list.Items[i].Name] = &list.Items[i]
+	}
+	for _, next := range slices {
+		current := existing[next.Name]
+		if len(next.Endpoints) == 0 {
+			if current != nil {
+				if err := deleteObservedObject(ctx, r.Client, current); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		sort.Slice(next.Endpoints, func(i, j int) bool { return next.Endpoints[i].Addresses[0] < next.Endpoints[j].Addresses[0] })
+		if current == nil {
+			if err := r.Create(ctx, next); err != nil {
+				return err
+			}
+			continue
+		}
+		sort.Slice(current.Endpoints, func(i, j int) bool {
+			if len(current.Endpoints[i].Addresses) == 0 || len(current.Endpoints[j].Addresses) == 0 {
+				return len(current.Endpoints[i].Addresses) < len(current.Endpoints[j].Addresses)
+			}
+			return current.Endpoints[i].Addresses[0] < current.Endpoints[j].Addresses[0]
+		})
+		if reflect.DeepEqual(current.Labels, next.Labels) && reflect.DeepEqual(current.OwnerReferences, next.OwnerReferences) && reflect.DeepEqual(current.Endpoints, next.Endpoints) && reflect.DeepEqual(current.Ports, next.Ports) && current.AddressType == next.AddressType {
+			continue
+		}
+		current.Labels, current.OwnerReferences = next.Labels, next.OwnerReferences
+		current.Endpoints, current.Ports, current.AddressType = next.Endpoints, next.Ports, next.AddressType
+		if err := r.Update(ctx, current); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // findPodByHostname locates the HostPodLabel-bearing Pod whose OS hostname
@@ -357,7 +441,8 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		Watches(&runtimev1alpha1.Workload{}, handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest)).
+		Watches(&runtimev1alpha1.Workload{}, coalesce(handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest))).
+		Watches(&corev1.Service{}, coalesce(&handler.EnqueueRequestForObject{})).
 		Named("workload-route").
 		Complete(r)
 }

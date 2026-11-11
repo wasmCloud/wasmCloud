@@ -408,7 +408,7 @@ func (r *ConditionedReconciler[T]) reconcileConditions(ctx context.Context, obj 
 	}
 
 	for _, hook := range r.afterHooks {
-		if err := hook(ctx, obj); err != nil {
+		if err := hook(condCtx, obj); err != nil {
 			if errors.Is(err, errStatusSkip) {
 				// If the post-hook returns ErrSkipReconciliation, we skip the remaining hooks.
 				break

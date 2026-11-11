@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -469,7 +472,7 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.WorkloadDeployment{}).
-		Owns(&runtimev1alpha1.WorkloadReplicaSet{}).
+		Watches(&runtimev1alpha1.WorkloadReplicaSet{}, coalesce(handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &runtimev1alpha1.WorkloadDeployment{}, handler.OnlyControllerOwner())), builder.WithPredicates(childChanges())).
 		Named("workload-deployment").
 		Complete(r)
 }

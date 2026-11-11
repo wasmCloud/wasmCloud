@@ -17,7 +17,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
@@ -49,8 +52,17 @@ const (
 
 // WorkloadReconciler reconciles a Workload object
 type WorkloadReconciler struct {
+	APIReader     client.Reader
+	objectSlots   hostSlots
+	statusBatches *statusBatches
 	client.Client
 	ReadyRequeueInterval time.Duration
+	Concurrency          int
+	CleanupConcurrency   int
+	HostConcurrency      int
+	liveSlots            hostSlots
+	cleanupSlots         hostSlots
+	cleanupStalls        stalledHosts
 	Bus                  wasmbus.Bus
 	Recorder             events.EventRecorder
 	// OperatorNamespace is the namespace every Host CRD lives in. The
@@ -544,6 +556,20 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		return condition.ErrNoop()
 	}
 
+	// Cleanup may have completed while a stale live object was still cached.
+	// Check durable intent immediately before dispatching a new start. The
+	// shared object budget keeps finalization from overlapping this operation.
+	if r.APIReader != nil {
+		current := &runtimev1alpha1.Workload{}
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(workload), current); err != nil {
+			return err
+		}
+		if current.UID != workload.UID || !current.DeletionTimestamp.IsZero() ||
+			current.Generation != workload.Generation || current.Status.HostID != workload.Status.HostID ||
+			current.Status.WorkloadID != workload.Status.WorkloadID {
+			return condition.ErrStatusUnknown(fmt.Errorf("workload changed before start; retrying"))
+		}
+	}
 	spec, err := r.materializeWorkload(ctx, workload)
 	if err != nil {
 		return err
@@ -831,19 +857,21 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 		return fmt.Errorf("host %s is being deleted", workload.Status.HostID)
 	}
 
-	client := NewWashHostClient(r.Bus, workload.Status.HostID)
-	req := &runtimev2.WorkloadStatusRequest{
-		WorkloadId: workload.Status.WorkloadID,
+	var status *runtimev2.WorkloadStatus
+	if r.statusBatches != nil {
+		status = r.statusBatches.status(ctx, r, workload)
+	}
+	if status == nil {
+		queryCtx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
+		defer cancel()
+		resp, err := NewWashHostClient(r.Bus, workload.Status.HostID).Status(queryCtx,
+			&runtimev2.WorkloadStatusRequest{WorkloadId: workload.Status.WorkloadID})
+		if err != nil {
+			return err
+		}
+		status = resp.GetWorkloadStatus()
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
-	defer cancel()
-
-	resp, err := client.Status(ctx, req)
-	if err != nil {
-		return err
-	}
-	status := resp.GetWorkloadStatus()
 	if state := status.GetWorkloadState(); state == runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING ||
 		state == runtimev2.WorkloadState_WORKLOAD_STATE_COMPLETED {
 		return nil
@@ -879,9 +907,26 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		// nothing to do, no start was ever sent
 		return nil
 	}
+	// A failed stop has already established that this host is unreachable.
+	// Preserve the existing failed-host cleanup policy without paying that
+	// timeout once for every remaining replica. Unknown hosts still retry.
+	if r.cleanupStalls.stalled(workload.Status.HostID) {
+		host, err := r.lookupHostByID(ctx, workload.Status.HostID)
+		if err != nil {
+			return err
+		}
+		if hostFailed(host) {
+			return nil
+		}
+	}
 	// Deletion gives up sooner than eviction, on any host not heartbeating:
 	// waiting for its Host to be reaped could block the deletion for good.
-	_, err := r.stopOnHost(ctx, workload, workloadStopTimeout, hostUnavailable)
+	answered, err := r.stopOnHost(ctx, workload, workloadStopTimeout, hostUnavailable)
+	if answered {
+		r.cleanupStalls.answered(workload.Status.HostID)
+	} else {
+		r.cleanupStalls.failed(workload.Status.HostID)
+	}
 	return err
 }
 
@@ -933,6 +978,7 @@ func (r *WorkloadReconciler) newReconciler() *condition.ConditionedReconciler[*r
 	reconciler := condition.NewConditionedReconciler(r.Client, r.Scheme(), &runtimev1alpha1.Workload{}, workloadReconcileInterval)
 	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
 	reconciler.OptimisticStatusWrites()
+	reconciler.BatchStatusUpdates()
 	reconciler.SetFinalizer(workloadFinalizerName, r.finalize)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionConfig, r.reconcileConfig)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionHostSelection, r.reconcileHostSelection)
@@ -951,7 +997,23 @@ func (r *WorkloadReconciler) newReconciler() *condition.ConditionedReconciler[*r
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;get;list;patch;update;watch
 
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.reconciler = r.newReconciler()
+	r.APIReader = mgr.GetAPIReader()
+	if r.Concurrency <= 0 {
+		r.Concurrency = DefaultWorkloadConcurrency
+	}
+	if r.CleanupConcurrency <= 0 {
+		r.CleanupConcurrency = DefaultCleanupConcurrency
+	}
+	if r.HostConcurrency <= 0 {
+		r.HostConcurrency = DefaultHostConcurrency
+	}
+	r.statusBatches = &statusBatches{}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, statusBucketIndex, statusBucketValue); err != nil {
+		return err
+	}
+	reconciler := r.newReconciler()
+	cleanup := reconciler.SeparateFinalizer()
+	r.reconciler = r.withHostBudget(reconciler, false)
 
 	// Index Hosts by HostID for lookupHostByID. WorkloadRouteReconciler reads
 	// it too.
@@ -993,8 +1055,18 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Workload{}).
 		Named("workload-replica").
-		Complete(r)
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
+		Complete(r); err != nil {
+		return err
+	}
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&runtimev1alpha1.Workload{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+			return !obj.GetDeletionTimestamp().IsZero()
+		}))).
+		Named("workload-cleanup").
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.CleanupConcurrency}).
+		Complete(r.withHostBudget(cleanup, true))
 }
