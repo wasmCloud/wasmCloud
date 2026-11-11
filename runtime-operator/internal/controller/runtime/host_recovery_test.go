@@ -29,7 +29,7 @@ func TestRecoveryHostFinalizeBoundsParallelDeletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var objs []client.Object
+	objs := make([]client.Object, 0, 2*hostFinalizeDeleteConcurrency)
 	for i := range 2 * hostFinalizeDeleteConcurrency {
 		objs = append(objs, workloadForHost(fmt.Sprintf("assigned-%d", i), testHeartbeatHostID))
 	}
@@ -72,17 +72,18 @@ func TestRecoveryHostFinalizeBoundsParallelDeletes(t *testing.T) {
 }
 
 func TestRecoveryHostFinalizeRefreshesConflict(t *testing.T) {
+	const originalUID = "same-object"
 	for _, tc := range []struct {
 		name, hostID, uid string
 		wantDeletes       int
 	}{
-		{"same assignment", testHeartbeatHostID, "same-object", 2},
-		{"reassigned", "replacement-host", "same-object", 1},
+		{"same assignment", testHeartbeatHostID, originalUID, 2},
+		{"reassigned", "replacement-host", originalUID, 1},
 		{"recreated", testHeartbeatHostID, "replacement-object", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			original := workloadForHost("assigned", testHeartbeatHostID)
-			original.UID, original.ResourceVersion = "same-object", "100"
+			original.UID, original.ResourceVersion = originalUID, "100"
 			fresh := original.DeepCopy()
 			fresh.Status.HostID, fresh.ResourceVersion, fresh.UID = tc.hostID, "101", types.UID(tc.uid)
 			base := newHostFinalizeClient(t, fresh)
@@ -90,7 +91,7 @@ func TestRecoveryHostFinalizeRefreshesConflict(t *testing.T) {
 			r := &HostReconciler{apiReader: base, Client: &deleteTestClient{Client: base, delete: func(_ context.Context, obj client.Object, opts ...client.DeleteOption) error {
 				deletes++
 				if deletes == 1 {
-					return apierrors.NewConflict(schema.GroupResource{Group: "runtime.wasmcloud.dev", Resource: "workloads"}, obj.GetName(), errors.New("version changed"))
+					return apierrors.NewConflict(schema.GroupResource{Group: runtimev1alpha1.GroupVersion.Group, Resource: "workloads"}, obj.GetName(), errors.New("version changed"))
 				}
 				if version := (&client.DeleteOptions{}).ApplyOptions(opts).Preconditions.ResourceVersion; *version != fresh.ResourceVersion {
 					t.Errorf("delete used resourceVersion %s, want %s", *version, fresh.ResourceVersion)

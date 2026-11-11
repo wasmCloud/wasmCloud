@@ -84,7 +84,7 @@ func TestReplacementHostBecomesReadyDuringCleanup(t *testing.T) {
 	defer cancel()
 	ns := createTestNamespace(t, ctx, apiClient, "host-recovery")
 	old := &runtimev1alpha1.Host{
-		ObjectMeta: metav1.ObjectMeta{Name: "predecessor", Namespace: ns, Finalizers: []string{hostFinalizerName}},
+		ObjectMeta: metav1.ObjectMeta{Name: "departing-host", Namespace: ns, Finalizers: []string{hostFinalizerName}},
 		HostID:     "old-host",
 	}
 	if err := apiClient.Create(ctx, old); err != nil {
@@ -141,19 +141,7 @@ func TestReplacementHostBecomesReadyDuringCleanup(t *testing.T) {
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		t.Fatal(err)
 	}
-	managerDone := make(chan struct{})
-	var managerErr error
-	go func() {
-		defer close(managerDone)
-		managerErr = mgr.Start(ctx)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-managerDone
-		if managerErr != nil {
-			t.Errorf("run manager: %v", managerErr)
-		}
-	})
+	managerDone := startHostRecoveryManager(t, ctx, cancel, mgr)
 
 	select {
 	case <-deleteStarted:
@@ -199,4 +187,23 @@ func TestReplacementHostBecomesReadyDuringCleanup(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("predecessor did not finish cleanup: %v", err)
 	}
+}
+
+func startHostRecoveryManager(t *testing.T, ctx context.Context, cancel context.CancelFunc, mgr ctrl.Manager) <-chan struct{} {
+	t.Helper()
+	managerDone := make(chan struct{})
+	var managerErr error
+	go func() {
+		defer close(managerDone)
+		managerErr = mgr.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-managerDone
+		if managerErr != nil {
+			t.Errorf("run manager: %v", managerErr)
+		}
+	})
+
+	return managerDone
 }
