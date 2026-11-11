@@ -129,7 +129,7 @@ func (r *HostPodReconciler) deleteHostForPod(ctx context.Context, pod *corev1.Po
 				"hostCreated", host.CreationTimestamp.Time, "podCondemnedAt", condemnedAt)
 			continue
 		}
-		if err := r.Delete(ctx, host); client.IgnoreNotFound(err) != nil {
+		if err := deleteObservedObject(ctx, r.Client, host); err != nil {
 			return err
 		}
 		r.RetiredHosts.retire(host.HostID)
