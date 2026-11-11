@@ -321,10 +321,18 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	// Keep a worker available to register a replacement while the previous
+	// Host is deleting its assigned Workloads. Respect explicit manager tuning.
+	managerOptions := mgr.GetControllerOptions()
+	hostOptions := controller.Options{}
+	hostGroupKind := runtimev1alpha1.GroupVersion.WithKind("Host").GroupKind().String()
+	if managerOptions.MaxConcurrentReconciles == 0 && managerOptions.GroupKindConcurrency[hostGroupKind] == 0 {
+		hostOptions.MaxConcurrentReconciles = 2
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
+		WithOptions(hostOptions).
 		Complete(r)
 }
 
