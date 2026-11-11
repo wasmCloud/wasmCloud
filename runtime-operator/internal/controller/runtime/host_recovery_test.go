@@ -7,8 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -34,7 +38,7 @@ func TestRecoveryHostFinalizeBoundsParallelDeletes(t *testing.T) {
 	release := make(chan struct{})
 	deleteFailure := errors.New("delete failed")
 	base := newHostFinalizeClient(t, objs...)
-	r := &HostReconciler{Client: &deleteTestClient{Client: base, delete: func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	r := &HostReconciler{deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency), Client: &deleteTestClient{Client: base, delete: func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 		preconditions := (&client.DeleteOptions{}).ApplyOptions(opts).Preconditions
 		if preconditions == nil || preconditions.UID == nil || preconditions.ResourceVersion == nil {
 			return errors.New("delete lacked identity and version preconditions")
@@ -69,18 +73,26 @@ func TestRecoveryHostFinalizeBoundsParallelDeletes(t *testing.T) {
 }
 
 func TestRecoveryHostFinalizeRefreshesConflict(t *testing.T) {
-	for _, hostID := range []string{testHeartbeatHostID, "replacement-host"} {
-		t.Run(hostID, func(t *testing.T) {
+	const originalUID = "same-object"
+	for _, tc := range []struct {
+		name, hostID, uid string
+		wantDeletes       int
+	}{
+		{"same assignment", testHeartbeatHostID, originalUID, 2},
+		{"reassigned", "replacement-host", originalUID, 1},
+		{"recreated", testHeartbeatHostID, "replacement-object", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			original := workloadForHost("assigned", testHeartbeatHostID)
-			original.UID, original.ResourceVersion = "same-object", "100"
+			original.UID, original.ResourceVersion = originalUID, "100"
 			fresh := original.DeepCopy()
-			fresh.Status.HostID, fresh.ResourceVersion = hostID, "101"
+			fresh.Status.HostID, fresh.ResourceVersion, fresh.UID = tc.hostID, "101", types.UID(tc.uid)
 			base := newHostFinalizeClient(t, fresh)
 			deletes := 0
 			r := &HostReconciler{apiReader: base, Client: &deleteTestClient{Client: base, delete: func(_ context.Context, obj client.Object, opts ...client.DeleteOption) error {
 				deletes++
 				if deletes == 1 {
-					return apierrors.NewConflict(runtimev1alpha1.GroupVersion.WithResource("workloads").GroupResource(), obj.GetName(), errors.New("version changed"))
+					return apierrors.NewConflict(schema.GroupResource{}, obj.GetName(), errors.New("version changed"))
 				}
 				if version := (&client.DeleteOptions{}).ApplyOptions(opts).Preconditions.ResourceVersion; *version != fresh.ResourceVersion {
 					t.Errorf("delete used resourceVersion %s, want %s", *version, fresh.ResourceVersion)
@@ -90,12 +102,8 @@ func TestRecoveryHostFinalizeRefreshesConflict(t *testing.T) {
 			if err := r.deleteAssignedWorkload(context.Background(), original, testHeartbeatHostID); err != nil {
 				t.Fatal(err)
 			}
-			wantDeletes := 1
-			if hostID == testHeartbeatHostID {
-				wantDeletes = 2
-			}
-			if deletes != wantDeletes {
-				t.Fatalf("delete called %d times, want %d", deletes, wantDeletes)
+			if deletes != tc.wantDeletes {
+				t.Fatalf("delete called %d times, want %d", deletes, tc.wantDeletes)
 			}
 		})
 	}

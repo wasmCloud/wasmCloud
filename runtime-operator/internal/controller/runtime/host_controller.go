@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/encoding/protojson"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,6 +47,7 @@ const (
 type HostReconciler struct {
 	client.Client
 	apiReader          client.Reader
+	deleteSlots        *semaphore.Weighted
 	Scheme             *runtime.Scheme
 	Bus                wasmbus.Bus
 	UnreachableTimeout time.Duration
@@ -217,16 +219,16 @@ func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Hos
 	}
 
 	deletes, deleteCtx := errgroup.WithContext(ctx)
-	deletes.SetLimit(hostFinalizeDeleteConcurrency)
 	for i := range workloadList.Items {
 		workload := &workloadList.Items[i]
 		if workload.DeletionTimestamp != nil {
 			continue
 		}
-		if deleteCtx.Err() != nil {
+		if err := r.deleteSlots.Acquire(deleteCtx, 1); err != nil {
 			break
 		}
 		deletes.Go(func() error {
+			defer r.deleteSlots.Release(1)
 			if err := deleteCtx.Err(); err != nil {
 				return err
 			}
@@ -256,12 +258,11 @@ func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *r
 		if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
 			return nil
 		}
-		uid, resourceVersion := snapshot.UID, snapshot.ResourceVersion
-		err := r.Delete(ctx, snapshot, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+		err := deleteObservedChild(ctx, r.Client, snapshot)
 		if apierrors.IsConflict(err) {
 			snapshot = nil
 		}
-		return client.IgnoreNotFound(err)
+		return err
 	})
 }
 
@@ -288,6 +289,8 @@ func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runti
 
 func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.apiReader = mgr.GetAPIReader()
+	// Share the delete budget across all Host reconcile workers.
+	r.deleteSlots = semaphore.NewWeighted(hostFinalizeDeleteConcurrency)
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,
@@ -340,9 +343,9 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		hostOptions.MaxConcurrentReconciles = 2
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		WithOptions(hostOptions).
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
+		WithOptions(hostOptions).
 		Complete(r)
 }
 
