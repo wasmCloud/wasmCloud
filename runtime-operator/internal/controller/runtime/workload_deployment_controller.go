@@ -389,6 +389,7 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		&runtimev1alpha1.WorkloadDeployment{},
 		workloadDeploymentReconcileInterval)
 	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
+	reconciler.OptimisticStatusWrites()
 	reconciler.BatchStatusUpdates()
 
 	reconciler.SetCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact, r.reconcileArtifacts)

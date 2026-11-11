@@ -144,9 +144,10 @@ type ConditionedReconciler[T ConditionedType] struct {
 	finalizerName string
 	// trackGeneration stamps each condition with the generation it was
 	// computed for. See TrackGeneration.
-	trackGeneration      bool
-	batchStatusUpdates   bool
-	readyRequeueInterval time.Duration
+	trackGeneration        bool
+	batchStatusUpdates     bool
+	readyRequeueInterval   time.Duration
+	optimisticStatusWrites bool
 }
 
 // restampOnly reports whether next differs from current in its generation
@@ -184,6 +185,12 @@ func (r *ConditionedReconciler[T]) BatchStatusUpdates() {
 // A nonpositive interval retains the existing periodic schedule.
 func (r *ConditionedReconciler[T]) ReadyRequeueInterval(interval time.Duration) {
 	r.readyRequeueInterval = interval
+}
+
+// OptimisticStatusWrites prevents a stale cached object from publishing
+// status after another write advanced its resource version.
+func (r *ConditionedReconciler[T]) OptimisticStatusWrites() {
+	r.optimisticStatusWrites = true
 }
 
 // AddPreHook adds a function to be called before the conditions are evaluated.
@@ -282,6 +289,7 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 
 	reconcilerCtx := &ReconcilerContext{
 		ReconcileInterval: r.interval,
+		OptimisticLock:    r.optimisticStatusWrites,
 	}
 	condCtx := context.WithValue(ctx, ctxKeyReconcilerContext, reconcilerCtx)
 

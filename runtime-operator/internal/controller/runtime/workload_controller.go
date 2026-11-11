@@ -932,6 +932,7 @@ func (r *WorkloadReconciler) stopOnHost(ctx context.Context, workload *runtimev1
 func (r *WorkloadReconciler) newReconciler() *condition.ConditionedReconciler[*runtimev1alpha1.Workload] {
 	reconciler := condition.NewConditionedReconciler(r.Client, r.Scheme(), &runtimev1alpha1.Workload{}, workloadReconcileInterval)
 	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
+	reconciler.OptimisticStatusWrites()
 	reconciler.SetFinalizer(workloadFinalizerName, r.finalize)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionConfig, r.reconcileConfig)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadConditionHostSelection, r.reconcileHostSelection)
