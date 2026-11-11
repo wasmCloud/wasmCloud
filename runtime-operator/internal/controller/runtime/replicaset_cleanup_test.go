@@ -21,6 +21,31 @@ import (
 
 const cleanupPreviousHash = "previous-hash"
 
+func TestReplicaSetScaleDownPreservesReplacementInSameSlot(t *testing.T) {
+	rs := cleanupReplicaSet()
+	zero := int32(0)
+	rs.Spec.Replicas = &zero
+	stale := cleanupWorkload(rs, "deterministic-slot")
+	stale.UID = "old-workload"
+	stale.ResourceVersion = "10"
+	replacement := stale.DeepCopy()
+	replacement.UID = "replacement"
+	replacement.ResourceVersion = "11"
+	r := newCleanupReconciler(t, interceptor.Funcs{
+		List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {
+			list.(*runtimev1alpha1.WorkloadList).Items = []runtimev1alpha1.Workload{*stale}
+			return nil
+		},
+	}, replacement)
+	if err := r.reconcileScaleDown(t.Context(), rs); !apierrors.IsConflict(err) {
+		t.Fatalf("scale down with stale cache = %v, want conflict", err)
+	}
+	var got runtimev1alpha1.Workload
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(replacement), &got); err != nil || got.UID != replacement.UID {
+		t.Fatalf("replacement lost: %v, UID %q", err, got.UID)
+	}
+}
+
 func cleanupReplicaSet() *runtimev1alpha1.WorkloadReplicaSet {
 	rs := baseReplicaSet(testReplicaSetName)
 	rs.UID = testReplicaSetUID

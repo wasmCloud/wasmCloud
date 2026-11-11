@@ -156,8 +156,9 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 					return err
 				}
 				if !existing.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(existing, replicaSet) ||
+					existing.Annotations[workloadReplicaSetGenerationAnnotation] != templateHash ||
 					!apiequality.Semantic.DeepDerivative(workload.Spec, existing.Spec) {
-					return fmt.Errorf("workload %s exists with different ownership or spec, or is terminating", name)
+					return fmt.Errorf("workload %s exists with different ownership, revision, or spec, or is terminating", name)
 				}
 				continue
 			}
@@ -202,7 +203,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 	}
 
 	for i := len(workloads.Items); i > expectedReplicas; i-- {
-		if err := r.Delete(ctx, &workloads.Items[i-1]); err != nil {
+		if err := deleteObservedChild(ctx, r.Client, &workloads.Items[i-1]); err != nil {
 			return err
 		}
 	}
@@ -326,7 +327,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx con
 
 		// At this point, the workload is not of the current generation
 		// and should be cleaned up
-		if err := r.Delete(ctx, &workload); err != nil {
+		if err := deleteObservedChild(ctx, r.Client, &workload); err != nil {
 			return err
 		}
 	}
@@ -351,7 +352,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 			continue
 		}
 		// Delete the workload, which will be replaced by the scale-up logic
-		if err := r.Delete(ctx, &workload); err != nil {
+		if err := deleteObservedChild(ctx, r.Client, &workload); err != nil {
 			return err
 		}
 	}
