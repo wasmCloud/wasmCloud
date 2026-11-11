@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/protobuf/encoding/protojson"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -678,7 +679,7 @@ func TestFinalize(t *testing.T) {
 	otherHost := workloadForHost("other-host", "host-id-2")
 
 	c := newHostFinalizeClient(t, assigned, deleting, otherHost)
-	r := &HostReconciler{Client: c}
+	r := &HostReconciler{Client: c, deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency)}
 	host := &runtimev1alpha1.Host{HostID: testHeartbeatHostID}
 
 	if err := r.finalize(context.Background(), host); err != nil {
