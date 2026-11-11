@@ -326,10 +326,18 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	// Respect explicit manager tuning for live Host reconciliation. Cleanup
+	// retains its separate workers and shared API deletion budget.
+	managerOptions := mgr.GetControllerOptions()
+	hostOptions := controller.Options{}
+	hostGroupKind := runtimev1alpha1.GroupVersion.WithKind("Host").GroupKind().String()
+	if managerOptions.MaxConcurrentReconciles == 0 && managerOptions.GroupKindConcurrency[hostGroupKind] == 0 {
+		hostOptions.MaxConcurrentReconciles = 2
+	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
+		WithOptions(hostOptions).
 		Complete(r); err != nil {
 		return err
 	}
