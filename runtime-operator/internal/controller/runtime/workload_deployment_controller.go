@@ -313,22 +313,8 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 
 	if prevSetName != "" {
 		if prevSetName != curSetName {
-			reader := r.APIReader
-			if reader == nil {
-				reader = r.Client
-			}
-			previous := &runtimev1alpha1.WorkloadReplicaSet{}
-			err := reader.Get(ctx, client.ObjectKey{Namespace: deployment.Namespace, Name: prevSetName}, previous)
-			if client.IgnoreNotFound(err) != nil {
+			if err := r.deletePreviousReplicaSet(ctx, deployment, prevSetName); err != nil {
 				return err
-			}
-			if err == nil && metav1.IsControlledBy(previous, deployment) {
-				if err := r.confirmDeploymentForScale(ctx, deployment); err != nil {
-					return err
-				}
-				if err := deleteObservedChild(ctx, r.Client, previous); err != nil {
-					return err
-				}
 			}
 		}
 
@@ -336,6 +322,29 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 		return condition.ErrSkipReconciliation()
 	}
 
+	return nil
+}
+
+func (r *WorkloadDeploymentReconciler) deletePreviousReplicaSet(
+	ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment, name string,
+) error {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	previous := &runtimev1alpha1.WorkloadReplicaSet{}
+	err := reader.Get(ctx, client.ObjectKey{Namespace: deployment.Namespace, Name: name}, previous)
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if err == nil && metav1.IsControlledBy(previous, deployment) {
+		if err := r.confirmDeploymentForScale(ctx, deployment); err != nil {
+			return err
+		}
+		if err := deleteObservedChild(ctx, r.Client, previous); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

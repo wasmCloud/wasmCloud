@@ -29,7 +29,7 @@ func TestReplicaSetScaleDownPreservesReplacementInSameSlot(t *testing.T) {
 	stale.UID = "old-workload"
 	stale.ResourceVersion = "10"
 	replacement := stale.DeepCopy()
-	replacement.UID = "replacement"
+	replacement.UID = testReplacement
 	replacement.ResourceVersion = "11"
 	r := newCleanupReconciler(t, interceptor.Funcs{
 		List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {

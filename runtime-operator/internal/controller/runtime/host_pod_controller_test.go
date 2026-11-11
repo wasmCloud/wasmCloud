@@ -85,7 +85,7 @@ func TestHostPodDraining(t *testing.T) {
 	}{
 		"no pod holds the IP":            {want: false},
 		"its only pod is terminating":    {pods: []client.Object{terminatingPod(podIP, time.Now(), 30)}, want: true},
-		"a live pod has the recycled IP": {pods: []client.Object{terminatingPod(podIP, time.Now(), 30), livePod("replacement", podIP)}, want: false},
+		"a live pod has the recycled IP": {pods: []client.Object{terminatingPod(podIP, time.Now(), 30), livePod(testReplacement, podIP)}, want: false},
 		"its pod is live":                {pods: []client.Object{livePod("live", podIP)}, want: false},
 	} {
 		got, err := hostPodDraining(context.Background(), newHostPodClient(t, tc.pods...), podIP)
@@ -169,7 +169,7 @@ func TestHeartbeatHandler_SkipsRetiredHostAfterPodIsGone(t *testing.T) {
 	}
 
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		"runtime.operator.heartbeat."+"replacement-id", heartbeatBytesAt(t, "replacement", "replacement-id", podIP, condemnedAt.Add(time.Second)))
+		"runtime.operator.heartbeat."+"replacement-id", heartbeatBytesAt(t, testReplacement, "replacement-id", podIP, condemnedAt.Add(time.Second)))
 	if writes == 0 {
 		t.Error("a new Host ID on the recycled IP was not registered")
 	}
@@ -202,7 +202,7 @@ func TestHeartbeatHandler_SkipsRetiredPodWhenHostWasAlreadyGone(t *testing.T) {
 		t.Errorf("old host was recreated after its Pod disappeared: %d writes", writes)
 	}
 	updater.handleHeartbeat(context.Background(), logr.Discard(),
-		"runtime.operator.heartbeat."+"replacement-id", heartbeatBytesAt(t, "replacement", "replacement-id", podIP, condemnedAt.Add(time.Second)))
+		"runtime.operator.heartbeat."+"replacement-id", heartbeatBytesAt(t, testReplacement, "replacement-id", podIP, condemnedAt.Add(time.Second)))
 	if writes == 0 {
 		t.Error("replacement host on recycled IP was not registered")
 	}

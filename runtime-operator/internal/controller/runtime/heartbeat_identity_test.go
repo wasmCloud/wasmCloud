@@ -18,6 +18,7 @@ import (
 const (
 	heartbeatVictimName   = "victim"
 	heartbeatHostResource = "hosts"
+	testReplacement       = "replacement"
 )
 
 func TestHeartbeatHandler_RejectsSubjectMismatch(t *testing.T) {
@@ -96,7 +97,7 @@ func TestHeartbeatHandler_RejectsConcurrentReplacement(t *testing.T) {
 		}
 		raced := &heartbeatReadClient{Client: c, afterGet: func(obj client.Object) error {
 			replacement := obj.(*runtimev1alpha1.Host).DeepCopy()
-			replacement.HostID = "replacement"
+			replacement.HostID = testReplacement
 			return c.Update(ctx, replacement)
 		}}
 		updater.client = raced
@@ -105,7 +106,7 @@ func TestHeartbeatHandler_RejectsConcurrentReplacement(t *testing.T) {
 		if err := c.Get(ctx, client.ObjectKeyFromObject(original), got); err != nil {
 			t.Fatal(err)
 		}
-		if got.HostID != "replacement" || got.Hostname != original.Hostname || !got.Status.LastSeen.Equal(&original.Status.LastSeen) {
+		if got.HostID != testReplacement || got.Hostname != original.Hostname || !got.Status.LastSeen.Equal(&original.Status.LastSeen) {
 			t.Fatalf("concurrent replacement overwritten: %+v", got)
 		}
 	}
