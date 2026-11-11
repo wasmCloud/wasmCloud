@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -103,6 +104,50 @@ func TestRecoveryHostFinalizeRefreshesConflict(t *testing.T) {
 			}
 			if deletes != tc.wantDeletes {
 				t.Fatalf("delete called %d times, want %d", deletes, tc.wantDeletes)
+			}
+		})
+	}
+}
+
+// A conflict means the listed Workload is out of date, not that it may be
+// deleted: whatever now lives under its name is left alone unless it is the
+// same object, still assigned to the retiring host.
+func TestRecoveryHostFinalizeLeavesUnconfirmedWorkloads(t *testing.T) {
+	original := workloadForHost("assigned", testHeartbeatHostID)
+	original.UID, original.ResourceVersion = "same-object", "100"
+	recreated := original.DeepCopy()
+	recreated.UID, recreated.ResourceVersion = "new-object", "101"
+	touched := original.DeepCopy()
+	touched.ResourceVersion = "101"
+
+	for _, tt := range []struct {
+		name string
+		// live is what the API server holds when the conflict is refreshed.
+		live        []client.Object
+		wantDeletes int
+		wantErr     bool
+	}{
+		{name: "recreated under the same name", live: []client.Object{recreated}, wantDeletes: 1},
+		{name: "already gone", wantDeletes: 1},
+		{
+			// The error is what keeps the Host finalizer for another pass.
+			name: "never settles", live: []client.Object{touched},
+			wantDeletes: retry.DefaultRetry.Steps, wantErr: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			base := newHostFinalizeClient(t, tt.live...)
+			deletes := 0
+			r := &HostReconciler{apiReader: base, Client: &deleteTestClient{Client: base, delete: func(_ context.Context, obj client.Object, _ ...client.DeleteOption) error {
+				deletes++
+				return apierrors.NewConflict(runtimev1alpha1.GroupVersion.WithResource("workloads").GroupResource(), obj.GetName(), errors.New("version changed"))
+			}}}
+			err := r.deleteAssignedWorkload(context.Background(), original, testHeartbeatHostID)
+			if tt.wantErr != apierrors.IsConflict(err) || (!tt.wantErr && err != nil) {
+				t.Fatalf("deleteAssignedWorkload returned %v, want conflict: %t", err, tt.wantErr)
+			}
+			if deletes != tt.wantDeletes {
+				t.Fatalf("delete called %d times, want %d", deletes, tt.wantDeletes)
 			}
 		})
 	}
