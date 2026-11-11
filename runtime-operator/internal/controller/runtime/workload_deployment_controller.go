@@ -262,7 +262,7 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 		if err := r.confirmDeploymentForScale(ctx, deployment); err != nil {
 			return err
 		}
-		if err := deleteObservedChild(ctx, r.Client, rs); err != nil {
+		if err := deleteObservedObject(ctx, r.Client, rs); err != nil {
 			return err
 		}
 	}
@@ -341,7 +341,7 @@ func (r *WorkloadDeploymentReconciler) deletePreviousReplicaSet(
 		if err := r.confirmDeploymentForScale(ctx, deployment); err != nil {
 			return err
 		}
-		if err := deleteObservedChild(ctx, r.Client, previous); err != nil {
+		if err := deleteObservedObject(ctx, r.Client, previous); err != nil {
 			return err
 		}
 	}

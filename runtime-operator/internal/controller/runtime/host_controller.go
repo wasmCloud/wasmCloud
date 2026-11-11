@@ -36,6 +36,7 @@ const (
 	hostHeartbeatTimeout          = 5 * time.Second
 	hostReconcileInterval         = 1 * time.Minute
 	hostFinalizerName             = "runtime.wasmcloud.dev/host-finalizer"
+	hostCleanupConcurrency        = 2
 	hostFinalizeDeleteConcurrency = 24
 	// workloadByHostIDIndex indexes Workloads by their Status.HostID so
 	// the host finalizer can fan out to assigned workloads without
@@ -245,7 +246,7 @@ func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *r
 		if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
 			return nil
 		}
-		err := deleteObservedChild(ctx, r.Client, snapshot)
+		err := deleteObservedObject(ctx, r.Client, snapshot)
 		if apierrors.IsConflict(err) {
 			snapshot = nil
 		}
@@ -266,7 +267,7 @@ func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runti
 		return nil
 	}
 	// Delete unresponsive host; the finalizer will clean up assigned workloads.
-	return r.Delete(ctx, host)
+	return deleteObservedObject(ctx, r.Client, host)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -276,15 +277,19 @@ func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runti
 
 func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.apiReader = mgr.GetAPIReader()
-	// Share the delete budget across all Host reconcile workers.
+	// Share the delete budget across all Host cleanup workers.
 	r.deleteSlots = semaphore.NewWeighted(hostFinalizeDeleteConcurrency)
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,
 		&runtimev1alpha1.Host{},
 		hostReconcileInterval)
+	// Cleanup can finish while a heartbeat probe is in flight. Its status must
+	// not overwrite a same-name replacement or a newer heartbeat's LastSeen.
+	reconciler.OptimisticStatusWrites()
 
 	reconciler.SetFinalizer(hostFinalizerName, r.finalize)
+	cleanup := reconciler.SeparateFinalizer()
 	reconciler.SetCondition(runtimev1alpha1.HostConditionReporting, r.reconcileReporting)
 	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
 
@@ -321,11 +326,24 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
-		Complete(r)
+		Complete(r); err != nil {
+		return err
+	}
+
+	// Cleanup has its own queue: even when every cleanup worker is blocked on
+	// deletes, live Hosts can still become Ready. Include deleting objects in
+	// the initial list so interrupted cleanup resumes after an operator restart.
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+			return !obj.GetDeletionTimestamp().IsZero()
+		}))).
+		Named("workload-host-cleanup").
+		WithOptions(controller.Options{MaxConcurrentReconciles: hostCleanupConcurrency}).
+		Complete(cleanup)
 }
 
 type hostStatusUpdater struct {
