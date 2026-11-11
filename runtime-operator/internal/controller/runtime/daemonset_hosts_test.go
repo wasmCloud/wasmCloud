@@ -23,7 +23,7 @@ func isolatedDaemonSetReconciler(t *testing.T, funcs interceptor.Funcs, objs ...
 		WithIndex(&runtimev1alpha1.Host{}, hostEnvironmentIndex, workloadHostIndexes(t)[hostEnvironmentIndex]).
 		WithInterceptorFuncs(funcs).
 		Build()
-	return &WorkloadDaemonSetReconciler{Client: c, APIReader: c, Scheme: s, OperatorNamespace: testNamespace}
+	return &WorkloadDaemonSetReconciler{Client: finalizingTestClient{c}, APIReader: c, Scheme: s, OperatorNamespace: testNamespace}
 }
 
 func hostInEnvironment(hostID, environment string) *runtimev1alpha1.Host {

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -102,6 +103,12 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 		watchNamespaces             string
 		hostNamespaces              string
 		allowSharedHosts            bool
+		workloadConcurrency         int
+		cleanupConcurrency          int
+		hostConcurrency             int
+		replicaBatchSize            int
+		replicaConcurrency          int
+		readyRequeueInterval        time.Duration
 	)
 
 	fs.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to. "+
@@ -161,10 +168,22 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 			"environment is rejected.",
 	)
 
+	fs.IntVar(&workloadConcurrency, "workload-concurrency", 8, "Maximum concurrent live Workload reconciliations.")
+	fs.IntVar(&cleanupConcurrency, "workload-cleanup-concurrency", 16, "Maximum concurrent Workload finalizations.")
+	fs.IntVar(&hostConcurrency, "workload-host-concurrency", 2,
+		"Maximum concurrent reconciliations per host in each Workload queue.")
+	fs.IntVar(&replicaBatchSize, "replica-batch-size", 64, "Maximum ReplicaSet creates or deletes per scaling pass.")
+	fs.IntVar(&replicaConcurrency, "replica-concurrency", 8, "Maximum concurrent API mutations within a ReplicaSet batch.")
+	fs.DurationVar(&readyRequeueInterval, "ready-requeue-interval", 0,
+		"Polling interval for healthy workloads; zero uses controller defaults.")
 	logOptions := logging.Options{Development: true}
 	logOptions.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if workloadConcurrency < 1 || cleanupConcurrency < 1 || hostConcurrency < 1 ||
+		replicaBatchSize < 1 || replicaConcurrency < 1 || readyRequeueInterval < 0 {
+		return errors.New("scaling concurrency and batch sizes must be positive; ready requeue interval must be nonnegative")
 	}
 	logger, err := logOptions.Logger(os.Stderr)
 	if err != nil {
@@ -181,6 +200,12 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 
 	operatorCfg := runtime_operator.EmbeddedOperatorConfig{
 		DisableArtifactController: disableArtifactController,
+		WorkloadConcurrency:       workloadConcurrency,
+		CleanupConcurrency:        cleanupConcurrency,
+		HostConcurrency:           hostConcurrency,
+		ReplicaBatchSize:          replicaBatchSize,
+		ReplicaConcurrency:        replicaConcurrency,
+		ReadyRequeueInterval:      readyRequeueInterval,
 		NatsURL:                   natsUrl,
 		HeartbeatTTL:              runtime_operator.DefaultHeartbeatTTL,
 		HostCPUThreshold:          cpuBackpressureThreshold,

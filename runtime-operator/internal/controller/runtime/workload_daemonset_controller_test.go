@@ -76,7 +76,7 @@ func newDaemonSetReconciler(t *testing.T, objs ...client.Object) *WorkloadDaemon
 	s := newScaleTestScheme(t)
 	c := daemonSetClientBuilder(t, s, objs...).Build()
 	return &WorkloadDaemonSetReconciler{
-		Client:            c,
+		Client:            finalizingTestClient{c},
 		APIReader:         c,
 		Scheme:            s,
 		OperatorNamespace: testNamespace,

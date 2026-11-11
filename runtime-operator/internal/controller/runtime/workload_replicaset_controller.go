@@ -1,11 +1,17 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -45,6 +51,8 @@ const (
 type WorkloadReplicaSetReconciler struct {
 	client.Client
 	ReadyRequeueInterval time.Duration
+	BatchSize            int
+	Concurrency          int
 	APIReader            client.Reader
 	Scheme               *runtime.Scheme
 	Recorder             events.EventRecorder
@@ -102,7 +110,21 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		names[workload.Name] = true
 	}
 	missing := expectedReplicas - len(workloads.Items)
-	for slot, added := 0, 0; added < missing; slot++ {
+	if missing <= 0 {
+		return nil
+	}
+	if err := r.confirmScale(ctx, replicaSet); err != nil {
+		return err
+	}
+	count := min(missing, r.batchSize())
+	if missing > count {
+		condition.ForceRequeue(ctx)
+	}
+	createCtx, cancelCreates := context.WithCancel(ctx)
+	defer cancelCreates()
+	creates, createCtx := errgroup.WithContext(createCtx)
+	creates.SetLimit(max(1, r.Concurrency))
+	for slot, added := 0, 0; added < count; slot++ {
 		name := rolloutChildName(replicaSet.Name, fmt.Sprintf("%s:%s:%d",
 			replicaSet.UID, templateHash, slot))
 		if names[name] {
@@ -133,6 +155,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 
 		workload := &runtimev1alpha1.Workload{
 			ObjectMeta: metav1.ObjectMeta{
+				Finalizers:  []string{workloadFinalizerName},
 				Name:        name,
 				Namespace:   replicaSet.Namespace,
 				Labels:      workloadLabels,
@@ -142,41 +165,49 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		}
 
 		if err := controllerutil.SetControllerReference(replicaSet, workload, r.Scheme); err != nil {
-			return err
+			cancelCreates()
+			return errors.Join(err, creates.Wait())
 		}
 
-		if err := r.Create(ctx, workload); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				reader := r.APIReader
-				if reader == nil {
-					reader = r.Client
-				}
-				existing := &runtimev1alpha1.Workload{}
-				if err := reader.Get(ctx, client.ObjectKeyFromObject(workload), existing); err != nil {
-					return err
-				}
-				if !existing.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(existing, replicaSet) ||
-					existing.Annotations[workloadReplicaSetGenerationAnnotation] != templateHash ||
-					!apiequality.Semantic.DeepDerivative(workload.Spec, existing.Spec) {
-					return fmt.Errorf("workload %s exists with different ownership, revision, or spec, or is terminating", name)
-				}
-				continue
-			}
-			// A refusal may mention the Workload
-			// name: the API server quotes it, a webhook may use it anywhere.
-			// Left in, the ScaleUp message would change every pass, and a
-			// changed condition is requeued a second later: the create, and its
-			// events, would repeat each second.
-			refused := isRefused(err)
-			msg := strings.ReplaceAll(err.Error(), fmt.Sprintf(" %q", workload.Name), "")
-			err = errors.New(strings.ReplaceAll(msg, workload.Name, "<new Workload>"))
-			if refused {
-				r.recordRefusedCreate(replicaSet, err)
-			}
-			return fmt.Errorf("creating Workload: %w", err)
-		}
+		creates.Go(func() error { return r.createReplica(createCtx, replicaSet, workload, templateHash) })
 	}
+	return creates.Wait()
+}
 
+func (r *WorkloadReplicaSetReconciler) createReplica(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet, workload *runtimev1alpha1.Workload, templateHash string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, workload); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			reader := r.APIReader
+			if reader == nil {
+				reader = r.Client
+			}
+			existing := &runtimev1alpha1.Workload{}
+			if err := reader.Get(ctx, client.ObjectKeyFromObject(workload), existing); err != nil {
+				return err
+			}
+			if !existing.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(existing, replicaSet) ||
+				existing.Annotations[workloadReplicaSetGenerationAnnotation] != templateHash ||
+				!apiequality.Semantic.DeepDerivative(workload.Spec, existing.Spec) {
+				return fmt.Errorf("workload %s exists with different ownership, revision, or spec, or is terminating", workload.Name)
+			}
+			return nil
+		}
+		// A refusal may mention the Workload
+		// name: the API server quotes it, a webhook may use it anywhere.
+		// Left in, the ScaleUp message would change every pass, and a
+		// changed condition is requeued a second later: the create, and its
+		// events, would repeat each second.
+		refused := isRefused(err)
+		msg := strings.ReplaceAll(err.Error(), fmt.Sprintf(" %q", workload.Name), "")
+		err = errors.New(strings.ReplaceAll(msg, workload.Name, "<new Workload>"))
+		if refused {
+			r.recordRefusedCreate(replicaSet, err)
+		}
+		return fmt.Errorf("creating Workload: %w", err)
+	}
 	return nil
 }
 
@@ -202,13 +233,38 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 		return err
 	}
 
-	for i := len(workloads.Items); i > expectedReplicas; i-- {
-		if err := deleteObservedObject(ctx, r.Client, &workloads.Items[i-1]); err != nil {
-			return err
+	// Terminating replicas already satisfy earlier deletion decisions. Retain
+	// the same lexicographic prefix on every pass, independent of list order.
+	live := make([]runtimev1alpha1.Workload, 0, len(workloads.Items))
+	for _, w := range workloads.Items {
+		if w.DeletionTimestamp.IsZero() {
+			live = append(live, w)
 		}
 	}
-
-	return nil
+	slices.SortFunc(live, func(a, b runtimev1alpha1.Workload) int { return cmp.Compare(a.Name, b.Name) })
+	excess := len(live) - expectedReplicas
+	if excess <= 0 {
+		return nil
+	}
+	if err := r.confirmScale(ctx, replicaSet); err != nil {
+		return err
+	}
+	count := min(excess, r.batchSize())
+	if excess > count {
+		condition.ForceRequeue(ctx)
+	}
+	deletes, deleteCtx := errgroup.WithContext(ctx)
+	deletes.SetLimit(max(1, r.Concurrency))
+	for i := len(live) - 1; i >= len(live)-count; i-- {
+		workload := &live[i]
+		deletes.Go(func() error {
+			if err := deleteCtx.Err(); err != nil {
+				return err
+			}
+			return deleteObservedObject(deleteCtx, r.Client, workload)
+		})
+	}
+	return deletes.Wait()
 }
 
 func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
@@ -244,7 +300,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 	unavailableCount := int32(0)
 	readyCount := int32(0)
 	for _, workload := range workloads.Items {
-		if workload.Status.IsAvailable() {
+		if workload.DeletionTimestamp.IsZero() && workload.Status.IsAvailable() {
 			readyCount++
 		} else {
 			unavailableCount++
@@ -313,25 +369,16 @@ func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx con
 	}
 
 	currentGeneration := replicaSet.Spec.Template.Hash()
-
+	victims := make([]runtimev1alpha1.Workload, 0)
 	for _, workload := range workloads.Items {
-		// catches workloads already being deleted
 		if workload.DeletionTimestamp != nil {
 			continue
 		}
-
-		// catches workloads that are of the current generation
-		if generation, ok := workload.Annotations[workloadReplicaSetGenerationAnnotation]; !ok || generation == currentGeneration {
-			continue
-		}
-
-		// At this point, the workload is not of the current generation
-		// and should be cleaned up
-		if err := deleteObservedObject(ctx, r.Client, &workload); err != nil {
-			return err
+		if generation, ok := workload.Annotations[workloadReplicaSetGenerationAnnotation]; ok && generation != currentGeneration {
+			victims = append(victims, workload)
 		}
 	}
-	return nil
+	return r.deleteReplicaBatch(ctx, replicaSet, victims)
 }
 
 func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
@@ -347,16 +394,39 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 		return err
 	}
 
+	victims := make([]runtimev1alpha1.Workload, 0)
 	for _, workload := range workloads.Items {
-		if !isFailedPastGracePeriod(&workload, time.Time{}) {
-			continue
-		}
-		// Delete the workload, which will be replaced by the scale-up logic
-		if err := deleteObservedObject(ctx, r.Client, &workload); err != nil {
-			return err
+		if isFailedPastGracePeriod(&workload, time.Time{}) {
+			victims = append(victims, workload)
 		}
 	}
-	return nil
+	return r.deleteReplicaBatch(ctx, replicaSet, victims)
+}
+
+func (r *WorkloadReplicaSetReconciler) deleteReplicaBatch(ctx context.Context, rs *runtimev1alpha1.WorkloadReplicaSet, victims []runtimev1alpha1.Workload) error {
+	if len(victims) == 0 {
+		return nil
+	}
+	if err := r.confirmScale(ctx, rs); err != nil {
+		return err
+	}
+	slices.SortFunc(victims, func(a, b runtimev1alpha1.Workload) int { return cmp.Compare(a.Name, b.Name) })
+	count := min(len(victims), r.batchSize())
+	if len(victims) > count {
+		condition.ForceRequeue(ctx)
+	}
+	deletes, deleteCtx := errgroup.WithContext(ctx)
+	deletes.SetLimit(max(1, r.Concurrency))
+	for i := range count {
+		workload := &victims[i]
+		deletes.Go(func() error {
+			if err := deleteCtx.Err(); err != nil {
+				return err
+			}
+			return deleteObservedObject(deleteCtx, r.Client, workload)
+		})
+	}
+	return deletes.Wait()
 }
 
 // isFailedPastGracePeriod reports whether workload is not ready, has failed,
@@ -400,6 +470,12 @@ func isFailedPastGracePeriod(workload *runtimev1alpha1.Workload, notBefore time.
 
 func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.APIReader = mgr.GetAPIReader()
+	if r.BatchSize <= 0 {
+		r.BatchSize = DefaultReplicaBatchSize
+	}
+	if r.Concurrency <= 0 {
+		r.Concurrency = DefaultReplicaConcurrency
+	}
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,
@@ -407,6 +483,7 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		workloadReplicaSetReconcileInterval)
 	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
 	reconciler.OptimisticStatusWrites()
+	reconciler.BatchStatusUpdates()
 
 	// WorkloadDeployment reads these conditions and must tell a current one
 	// from one an earlier spec left behind.
@@ -436,7 +513,7 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.WorkloadReplicaSet{}).
-		Owns(&runtimev1alpha1.Workload{}).
+		Watches(&runtimev1alpha1.Workload{}, coalesce(handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &runtimev1alpha1.WorkloadReplicaSet{}, handler.OnlyControllerOwner())), builder.WithPredicates(childChanges())).
 		Named("workload-replicaset").
 		Complete(r)
 }
@@ -467,4 +544,29 @@ func replicaSetRevisionIndexValue(replicaSetGvk schema.GroupVersionKind) client.
 		}
 		return nil
 	}
+}
+
+func (r *WorkloadReplicaSetReconciler) batchSize() int {
+	if r.BatchSize > 0 {
+		return r.BatchSize
+	}
+	return DefaultReplicaBatchSize
+}
+
+// A fresh parent read bounds the damage from a scale decision made against
+// stale cached intent. Child deletes still carry UID and resourceVersion guards.
+func (r *WorkloadReplicaSetReconciler) confirmScale(ctx context.Context, observed *runtimev1alpha1.WorkloadReplicaSet) error {
+	if r.APIReader == nil {
+		return nil
+	}
+	current := &runtimev1alpha1.WorkloadReplicaSet{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(observed), current); err != nil {
+		return err
+	}
+	if current.UID != observed.UID || current.Generation != observed.Generation ||
+		!current.DeletionTimestamp.IsZero() || !apiequality.Semantic.DeepEqual(current.Spec, observed.Spec) {
+		condition.ForceRequeue(ctx)
+		return condition.ErrStatusUnknown(fmt.Errorf("replicaset changed while planning scale; retrying"))
+	}
+	return nil
 }
