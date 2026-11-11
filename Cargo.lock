@@ -716,15 +716,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "callback-future"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b76a63a41df0ba9490dd817a3d98511c6d3d9e530eff9bcf5f3de2a6723d1c3f"
-dependencies = [
- "futures",
-]
-
-[[package]]
 name = "cap-primitives"
 version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6485,9 +6476,9 @@ dependencies = [
 
 [[package]]
 name = "wasi-gfx-runtime-shared"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41f6c1f70cabdce19a66dc676ffa17b74d93d14bda1ccd44ab4cf84048700aa8"
+checksum = "8563d29ff988efd973388515a602d1fed0f7c6b78317aca48008c80a4d562f43"
 dependencies = [
  "async-broadcast",
  "futures",
@@ -6502,12 +6493,12 @@ checksum = "ab0702b5f6a92430482eeae78e34c51fb36d97483842220d641b91b38e4ac8c0"
 
 [[package]]
 name = "wasi-webgpu-wasmtime"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff8dc94485970b28a5cc3f0e4d3bb051b3842f6a518df6793b167dec3e469989"
+checksum = "f7f4140f03b17b0a29f6dbf792cdbde4cef20d269c21cbb534d76fd0c4913d72"
 dependencies = [
  "async-broadcast",
- "callback-future",
+ "futures",
  "log",
  "wasi-gfx-runtime-shared",
  "wasmtime",
