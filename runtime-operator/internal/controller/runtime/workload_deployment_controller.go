@@ -92,6 +92,9 @@ func (r *WorkloadDeploymentReconciler) reconcileSync(ctx context.Context, deploy
 		}
 		return err
 	}
+	if !metav1.IsControlledBy(currentReplica, deployment) {
+		return condition.ErrStatusUnknown(fmt.Errorf("current ReplicaSet %s belongs to another owner", currentReplica.Name))
+	}
 
 	templateCopy := deployment.Spec.Template.DeepCopy()
 	if err := resolveArtifacts(ctx, r.Client, deployment.Namespace, templateCopy, deployment.Spec.Artifacts); err != nil {
@@ -184,7 +187,8 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 		}
 	}
 
-	if deployment.Spec.DeployPolicy != runtimev1alpha1.WorkloadDeployPolicyRecreate {
+	if deployment.Spec.DeployPolicy != runtimev1alpha1.WorkloadDeployPolicyRecreate &&
+		(deployment.Status.CurrentReplicaSet == nil || deployment.Status.CurrentReplicaSet.Name != replicaSetName) {
 		// the default policy is rolling
 		deployment.Status.PreviousReplicaSet = deployment.Status.CurrentReplicaSet
 	}
@@ -226,10 +230,16 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 	}, currentReplica); err != nil {
 		return err
 	}
+	if !metav1.IsControlledBy(currentReplica, deployment) {
+		return condition.ErrStatusUnknown(fmt.Errorf("current ReplicaSet %s belongs to another owner", currentReplica.Name))
+	}
 
 	// If all we touched was the replica-count, update-it
 	if deployment.Spec.Replicas != nil &&
 		(currentReplica.Spec.Replicas == nil || *currentReplica.Spec.Replicas != *deployment.Spec.Replicas) {
+		if err := r.confirmDeploymentForScale(ctx, deployment); err != nil {
+			return err
+		}
 		currentReplica.Spec.Replicas = deployment.Spec.Replicas
 		if err := r.Update(ctx, currentReplica); err != nil {
 			if isRefused(err) {
@@ -249,7 +259,10 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 		if rs.Name == curSetName || rs.Name == prevSetName {
 			continue
 		}
-		if err := r.Delete(ctx, rs); err != nil {
+		if err := r.confirmDeploymentForScale(ctx, deployment); err != nil {
+			return err
+		}
+		if err := deleteObservedChild(ctx, r.Client, rs); err != nil {
 			return err
 		}
 	}
@@ -299,14 +312,23 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 	}
 
 	if prevSetName != "" {
-		if err := r.Delete(ctx, &runtimev1alpha1.WorkloadReplicaSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      prevSetName,
-				Namespace: deployment.Namespace,
-			},
-		}); err != nil {
+		if prevSetName != curSetName {
+			reader := r.APIReader
+			if reader == nil {
+				reader = r.Client
+			}
+			previous := &runtimev1alpha1.WorkloadReplicaSet{}
+			err := reader.Get(ctx, client.ObjectKey{Namespace: deployment.Namespace, Name: prevSetName}, previous)
 			if client.IgnoreNotFound(err) != nil {
 				return err
+			}
+			if err == nil && metav1.IsControlledBy(previous, deployment) {
+				if err := r.confirmDeploymentForScale(ctx, deployment); err != nil {
+					return err
+				}
+				if err := deleteObservedChild(ctx, r.Client, previous); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -314,6 +336,25 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 		return condition.ErrSkipReconciliation()
 	}
 
+	return nil
+}
+
+// A deployment's status patch is optimistic, but scaling and retiring children
+// already have side effects by the time that patch runs. Check the parent
+// before those writes, since a stale current/previous pair can retire the new set.
+func (r *WorkloadDeploymentReconciler) confirmDeploymentForScale(ctx context.Context, deployment *runtimev1alpha1.WorkloadDeployment) error {
+	if r.APIReader == nil {
+		return nil
+	}
+	current := &runtimev1alpha1.WorkloadDeployment{}
+	err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(deployment), current)
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if err != nil || current.UID != deployment.UID || current.ResourceVersion != deployment.ResourceVersion {
+		condition.ForceRequeue(ctx)
+		return condition.ErrNoop()
+	}
 	return nil
 }
 

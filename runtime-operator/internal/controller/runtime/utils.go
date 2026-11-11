@@ -23,6 +23,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// deleteObservedChild refuses to delete a replacement with the same name or
+// a child whose state changed after the controller decided to remove it.
+func deleteObservedChild(ctx context.Context, c client.Client, child client.Object) error {
+	uid, version := child.GetUID(), child.GetResourceVersion()
+	return client.IgnoreNotFound(c.Delete(ctx, child, client.Preconditions{UID: &uid, ResourceVersion: &version}))
+}
+
 func translatePullPolicy(policy corev1.PullPolicy) runtimev2.ImagePullPolicy {
 	switch policy {
 	case corev1.PullAlways:

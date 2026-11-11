@@ -580,3 +580,72 @@ func TestDeploymentCreateIsIdempotentAcrossStatusWriteRetry(t *testing.T) {
 		t.Fatalf("unowned ReplicaSet adopted, got %v", err)
 	}
 }
+
+func TestDeploymentRecreatesCurrentReplicaSetWithoutRetiringIt(t *testing.T) {
+	wd := readyDeployment("")
+	wd.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact),
+		condition.UnknownCondition(runtimev1alpha1.WorkloadDeploymentConditionSync, "Pending", "not deployed"),
+	)
+	r := newScaleReconciler(t)
+	if err := r.reconcileDeploy(t.Context(), wd); !errors.Is(err, condition.ErrSkipReconciliation()) {
+		t.Fatalf("initial rollout = %v", err)
+	}
+	wd.Status.PreviousReplicaSet = nil
+	name := wd.Status.CurrentReplicaSet.Name
+	key := client.ObjectKey{Namespace: wd.Namespace, Name: name}
+	set := &runtimev1alpha1.WorkloadReplicaSet{}
+	if err := r.Get(t.Context(), key, set); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(t.Context(), set); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileDeploy(t.Context(), wd); !errors.Is(err, condition.ErrSkipReconciliation()) {
+		t.Fatalf("recreate current set = %v", err)
+	}
+	if wd.Status.CurrentReplicaSet.Name != name || wd.Status.PreviousReplicaSet != nil {
+		t.Fatalf("recreated set should only be current: %+v", wd.Status)
+	}
+}
+
+func TestDeploymentRetirementPreservesCurrentAndUnownedSets(t *testing.T) {
+	for _, previousName := range []string{testReplicaSetName, testPrevSetName} {
+		t.Run(previousName, func(t *testing.T) {
+			wd := readyDeployment(previousName)
+			current := availableReplicaSet(testReplicaSetName)
+			unowned := availableReplicaSet(testPrevSetName)
+			unowned.OwnerReferences = nil
+			r := newScaleReconciler(t, wd, current, unowned)
+			if err := r.reconcileScale(t.Context(), wd); !errors.Is(err, condition.ErrSkipReconciliation()) {
+				t.Fatalf("scale = %v", err)
+			}
+			if wd.Status.PreviousReplicaSet != nil {
+				t.Fatal("obsolete status reference was kept")
+			}
+			for _, set := range []*runtimev1alpha1.WorkloadReplicaSet{current, unowned} {
+				if err := r.Get(t.Context(), client.ObjectKeyFromObject(set), &runtimev1alpha1.WorkloadReplicaSet{}); err != nil {
+					t.Fatalf("protected set %s: %v", set.Name, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStaleDeploymentCannotRetireNewCurrentReplicaSet(t *testing.T) {
+	old := readyDeployment("")
+	old.ResourceVersion = "10"
+	fresh := old.DeepCopy()
+	fresh.ResourceVersion = "11"
+	fresh.Status.CurrentReplicaSet.Name = testPrevSetName
+	current := availableReplicaSet(testReplicaSetName)
+	newSet := availableReplicaSet(testPrevSetName)
+	r := newScaleReconciler(t, fresh, current, newSet)
+	r.APIReader = r.Client
+	if err := r.reconcileScale(t.Context(), old); !errors.Is(err, condition.ErrNoop()) {
+		t.Fatalf("stale scale = %v, want a retry", err)
+	}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(newSet), &runtimev1alpha1.WorkloadReplicaSet{}); err != nil {
+		t.Fatalf("current set was retired: %v", err)
+	}
+}
