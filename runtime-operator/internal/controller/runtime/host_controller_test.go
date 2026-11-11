@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -83,9 +84,14 @@ func TestHostStatusPatch_OnlyLastSeen(t *testing.T) {
 	}
 }
 
-// TestHostStatusPatch_SatisfiesCRDRequired exercises the patch against a real
-// API server with the Host CRD installed.
+// startHostEnvtest runs a real API server with the runtime CRDs installed.
 func startHostEnvtest(t *testing.T) (client.Client, context.Context) {
+	t.Helper()
+	c, _ := startHostEnvtestClient(t)
+	return c, context.Background()
+}
+
+func startHostEnvtestClient(t *testing.T) (client.Client, *rest.Config) {
 	t.Helper()
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
 		t.Skip("KUBEBUILDER_ASSETS not set; run via `make test` for envtest")
@@ -116,7 +122,7 @@ func startHostEnvtest(t *testing.T) (client.Client, context.Context) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-	return c, context.Background()
+	return c, cfg
 }
 
 func createTestNamespace(t *testing.T, ctx context.Context, c client.Client, name string) string {
