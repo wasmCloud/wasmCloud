@@ -11,14 +11,17 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/encoding/protojson"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
@@ -29,9 +32,10 @@ import (
 )
 
 const (
-	hostHeartbeatTimeout  = 5 * time.Second
-	hostReconcileInterval = 1 * time.Minute
-	hostFinalizerName     = "runtime.wasmcloud.dev/host-finalizer"
+	hostHeartbeatTimeout          = 5 * time.Second
+	hostReconcileInterval         = 1 * time.Minute
+	hostFinalizerName             = "runtime.wasmcloud.dev/host-finalizer"
+	hostFinalizeDeleteConcurrency = 24
 	// workloadByHostIDIndex indexes Workloads by their Status.HostID so
 	// the host finalizer can fan out to assigned workloads without
 	// scanning every Workload in the cluster.
@@ -41,6 +45,7 @@ const (
 // HostReconciler reconciles a Host object
 type HostReconciler struct {
 	client.Client
+	apiReader          client.Reader
 	Scheme             *runtime.Scheme
 	Bus                wasmbus.Bus
 	UnreachableTimeout time.Duration
@@ -198,17 +203,53 @@ func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Hos
 		return err
 	}
 
+	deletes, deleteCtx := errgroup.WithContext(ctx)
+	deletes.SetLimit(hostFinalizeDeleteConcurrency)
 	for i := range workloadList.Items {
 		workload := &workloadList.Items[i]
 		if workload.DeletionTimestamp != nil {
 			continue
 		}
-		if err := r.Delete(ctx, workload); client.IgnoreNotFound(err) != nil {
-			return err
+		if deleteCtx.Err() != nil {
+			break
 		}
+		deletes.Go(func() error {
+			if err := deleteCtx.Err(); err != nil {
+				return err
+			}
+			return r.deleteAssignedWorkload(deleteCtx, workload, host.HostID)
+		})
 	}
 
-	return nil
+	if err := deletes.Wait(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+// Check both object identity and the observed assignment when deleting. A
+// conflict is retried against an uncached read, since assignment or unrelated
+// status may have changed since the index was read.
+func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *runtimev1alpha1.Workload, hostID string) error {
+	snapshot := workload
+	key := client.ObjectKeyFromObject(workload)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if snapshot == nil {
+			snapshot = &runtimev1alpha1.Workload{}
+			if err := r.apiReader.Get(ctx, key, snapshot); err != nil {
+				return client.IgnoreNotFound(err)
+			}
+		}
+		if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
+			return nil
+		}
+		uid, resourceVersion := snapshot.UID, snapshot.ResourceVersion
+		err := r.Delete(ctx, snapshot, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+		if apierrors.IsConflict(err) {
+			snapshot = nil
+		}
+		return client.IgnoreNotFound(err)
+	})
 }
 
 // deleteUnresponsiveHost is the reconcile post-hook: a Host whose Ready
@@ -233,6 +274,7 @@ func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runti
 // +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=hosts/finalizers,verbs=update
 
 func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.apiReader = mgr.GetAPIReader()
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,
@@ -276,7 +318,16 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	// Keep a worker available to register a replacement while the previous
+	// Host is deleting its assigned Workloads. Respect explicit manager tuning.
+	managerOptions := mgr.GetControllerOptions()
+	hostOptions := controller.Options{}
+	hostGroupKind := runtimev1alpha1.GroupVersion.WithKind("Host").GroupKind().String()
+	if managerOptions.MaxConcurrentReconciles == 0 && managerOptions.GroupKindConcurrency[hostGroupKind] == 0 {
+		hostOptions.MaxConcurrentReconciles = 2
+	}
 	return ctrl.NewControllerManagedBy(mgr).
+		WithOptions(hostOptions).
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
 		Complete(r)
