@@ -158,15 +158,7 @@ func TestReplacementHostBecomesReadyDuringCleanup(t *testing.T) {
 	if err := apiClient.Create(ctx, replacement); err != nil {
 		t.Fatalf("create replacement: %v", err)
 	}
-	if err := wait.PollUntilContextCancel(ctx, 25*time.Millisecond, true, func(ctx context.Context) (bool, error) {
-		current := &runtimev1alpha1.Host{}
-		if err := apiClient.Get(ctx, client.ObjectKeyFromObject(replacement), current); err != nil {
-			return false, err
-		}
-		return current.Status.AllTrue(condition.TypeReady), nil
-	}); err != nil {
-		t.Fatalf("replacement did not become Ready while predecessor cleanup was blocked: %v", err)
-	}
+	waitForReplacementHostReady(t, ctx, apiClient, client.ObjectKeyFromObject(replacement))
 
 	close(releaseDelete)
 	select {
@@ -206,4 +198,17 @@ func startHostRecoveryManager(t *testing.T, ctx context.Context, cancel context.
 	})
 
 	return managerDone
+}
+
+func waitForReplacementHostReady(t *testing.T, ctx context.Context, apiClient client.Client, key client.ObjectKey) {
+	t.Helper()
+	if err := wait.PollUntilContextCancel(ctx, 25*time.Millisecond, true, func(ctx context.Context) (bool, error) {
+		current := &runtimev1alpha1.Host{}
+		if err := apiClient.Get(ctx, key, current); err != nil {
+			return false, err
+		}
+		return current.Status.AllTrue(condition.TypeReady), nil
+	}); err != nil {
+		t.Fatalf("replacement did not become Ready while predecessor cleanup was blocked: %v", err)
+	}
 }

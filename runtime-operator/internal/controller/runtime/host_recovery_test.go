@@ -91,7 +91,7 @@ func TestRecoveryHostFinalizeRefreshesConflict(t *testing.T) {
 			r := &HostReconciler{apiReader: base, Client: &deleteTestClient{Client: base, delete: func(_ context.Context, obj client.Object, opts ...client.DeleteOption) error {
 				deletes++
 				if deletes == 1 {
-					return apierrors.NewConflict(schema.GroupResource{Group: runtimev1alpha1.GroupVersion.Group, Resource: "workloads"}, obj.GetName(), errors.New("version changed"))
+					return apierrors.NewConflict(schema.GroupResource{}, obj.GetName(), errors.New("version changed"))
 				}
 				if version := (&client.DeleteOptions{}).ApplyOptions(opts).Preconditions.ResourceVersion; *version != fresh.ResourceVersion {
 					t.Errorf("delete used resourceVersion %s, want %s", *version, fresh.ResourceVersion)
