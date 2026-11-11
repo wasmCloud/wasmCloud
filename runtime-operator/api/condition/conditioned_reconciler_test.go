@@ -485,7 +485,8 @@ func TestConditionedReconcilerOptimisticLock(t *testing.T) {
 	}
 	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
 
-	for _, locked := range []bool{true, false} {
+	for _, mode := range []string{"per-pass", "controller", "none"} {
+		locked := mode != "none"
 		obj := &conditionedResource{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace:  testNamespace,
@@ -500,9 +501,12 @@ func TestConditionedReconcilerOptimisticLock(t *testing.T) {
 			Build()
 
 		r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+		if mode == "controller" {
+			r.OptimisticStatusWrites()
+		}
 		r.SetFinalizer(finalizerName, func(context.Context, *conditionedResource) error { return nil })
 		r.SetCondition(testCondition, func(ctx context.Context, _ *conditionedResource) error {
-			if locked {
+			if mode == "per-pass" {
 				RequireOptimisticLock(ctx)
 			}
 			newer := &conditionedResource{}

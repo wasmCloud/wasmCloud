@@ -405,6 +405,7 @@ func (r *WorkloadReplicaSetReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		&runtimev1alpha1.WorkloadReplicaSet{},
 		workloadReplicaSetReconcileInterval)
 	reconciler.ReadyRequeueInterval(r.ReadyRequeueInterval)
+	reconciler.OptimisticStatusWrites()
 
 	// WorkloadDeployment reads these conditions and must tell a current one
 	// from one an earlier spec left behind.
