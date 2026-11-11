@@ -13,6 +13,13 @@ import (
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
+const (
+	replacementHostID = "replacement-id"
+	hostUpdated       = "updated"
+	hostRecreated     = "recreated"
+	hostMoved         = "moved"
+)
+
 // Model an indexed cache read that still contains the previous Host snapshot.
 // Deletes go to the real API server so both UID and version preconditions apply.
 type staleHostListClient struct {
@@ -31,20 +38,18 @@ func (c *staleHostListClient) List(ctx context.Context, list client.ObjectList, 
 func TestHostDeletionRejectsStaleSnapshots(t *testing.T) {
 	c, ctx := startHostEnvtest(t)
 	ns := createTestNamespace(t, ctx, c, "host-delete-preconditions")
-	for _, path := range []string{"heartbeat", "pod"} {
-		for _, recreated := range []bool{false, true} {
-			name := path + "-updated"
-			if recreated {
-				name = path + "-recreated"
-			}
-			t.Run(name, func(t *testing.T) {
-				testStaleHostDeletion(t, ctx, c, ns, name, path, recreated)
-			})
+	for _, recreated := range []bool{false, true} {
+		name := "heartbeat-updated"
+		if recreated {
+			name = "heartbeat-recreated"
 		}
+		t.Run(name, func(t *testing.T) {
+			testStaleHostDeletion(t, ctx, c, ns, name, recreated)
+		})
 	}
 }
 
-func testStaleHostDeletion(t *testing.T, ctx context.Context, c client.Client, ns, name, path string, recreated bool) {
+func testStaleHostDeletion(t *testing.T, ctx context.Context, c client.Client, ns, name string, recreated bool) {
 	t.Helper()
 	const podIP = "10.1.2.3"
 	host := hostAt(name, podIP, time.Now())
@@ -62,7 +67,7 @@ func testStaleHostDeletion(t *testing.T, ctx context.Context, c client.Client, n
 			t.Fatal(err)
 		}
 		host = hostAt(name, podIP, time.Now())
-		host.Namespace, host.HostID = ns, "replacement-id"
+		host.Namespace, host.HostID = ns, replacementHostID
 		if err := c.Create(ctx, host); err != nil {
 			t.Fatal(err)
 		}
@@ -73,19 +78,7 @@ func testStaleHostDeletion(t *testing.T, ctx context.Context, c client.Client, n
 		}
 	}
 
-	var err error
-	if path == "heartbeat" {
-		err = (&HostReconciler{Client: c}).deleteUnresponsiveHost(ctx, snapshot)
-	} else {
-		retired := &RetiredHosts{}
-		r := &HostPodReconciler{
-			Client: &staleHostListClient{Client: c, snapshot: snapshot}, OperatorNamespace: ns, RetiredHosts: retired,
-		}
-		err = r.deleteHostForPod(ctx, terminatingPod(podIP, time.Now().Add(time.Minute), 0))
-		if retired.contains(snapshot.HostID) || retired.fromRetiredPod(podIP, time.Time{}) {
-			t.Error("a refused delete retired the Host or Pod")
-		}
-	}
+	err := (&HostReconciler{Client: c}).deleteUnresponsiveHost(ctx, snapshot)
 	if !apierrors.IsConflict(err) {
 		t.Fatalf("stale deletion should conflict, got %v", err)
 	}
@@ -95,5 +88,81 @@ func testStaleHostDeletion(t *testing.T, ctx context.Context, c client.Client, n
 	}
 	if current.UID != host.UID || !current.DeletionTimestamp.IsZero() {
 		t.Fatal("stale deletion removed the current Host")
+	}
+}
+
+// A draining host keeps heartbeating, so the Pod path rereads on conflict. It
+// still deletes the same Host, but spares a replacement or a Host now at a new IP.
+func TestPodHostDeletionRereadsStaleSnapshots(t *testing.T) {
+	c, ctx := startHostEnvtest(t)
+	ns := createTestNamespace(t, ctx, c, "pod-host-delete-reread")
+	for _, change := range []string{hostUpdated, hostRecreated, hostMoved} {
+		t.Run(change, func(t *testing.T) {
+			testPodStaleHostDeletion(t, ctx, c, ns, "pod-"+change, change)
+		})
+	}
+}
+
+func testPodStaleHostDeletion(t *testing.T, ctx context.Context, c client.Client, ns, name, change string) {
+	t.Helper()
+	const podIP = "10.1.2.4"
+	host := hostAt(name, podIP, time.Now())
+	host.Namespace = ns
+	if err := c.Create(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := host.DeepCopy()
+	switch change {
+	case hostUpdated:
+		host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+		if err := c.Status().Update(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+	case hostRecreated:
+		if err := c.Delete(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+		host = hostAt(name, podIP, time.Now())
+		host.Namespace, host.HostID = ns, replacementHostID
+		if err := c.Create(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+	case hostMoved:
+		host.Hostname = "10.1.2.5"
+		if err := c.Update(ctx, host); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	retired := &RetiredHosts{}
+	r := &HostPodReconciler{
+		Client: &staleHostListClient{Client: c, snapshot: snapshot}, OperatorNamespace: ns, RetiredHosts: retired,
+	}
+	if err := r.deleteHostForPod(ctx, terminatingPod(podIP, time.Now().Add(time.Minute), 0)); err != nil {
+		t.Fatalf("deleteHostForPod: %v", err)
+	}
+
+	current := &runtimev1alpha1.Host{}
+	err := c.Get(ctx, client.ObjectKeyFromObject(host), current)
+	if change == hostUpdated {
+		if !apierrors.IsNotFound(err) && (err != nil || current.DeletionTimestamp.IsZero()) {
+			t.Fatalf("updated Host was not deleted: %v", err)
+		}
+		if !retired.contains(snapshot.HostID) {
+			t.Error("deleted Host was not retired")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.UID != host.UID || !current.DeletionTimestamp.IsZero() {
+		t.Fatal("stale deletion removed the current Host")
+	}
+	if retired.contains(host.HostID) {
+		t.Error("the current Host was retired")
+	}
+	if change == hostMoved && retired.contains(snapshot.HostID) {
+		t.Error("a Host that moved to another IP was retired")
 	}
 }
