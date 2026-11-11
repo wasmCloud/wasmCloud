@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
@@ -338,12 +339,25 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// deletes, live Hosts can still become Ready. Include deleting objects in
 	// the initial list so interrupted cleanup resumes after an operator restart.
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
-			return !obj.GetDeletionTimestamp().IsZero()
-		}))).
+		For(&runtimev1alpha1.Host{}, builder.WithPredicates(hostCleanupPredicate())).
 		Named("workload-host-cleanup").
 		WithOptions(controller.Options{MaxConcurrentReconciles: hostCleanupConcurrency}).
 		Complete(cleanup)
+}
+
+// hostCleanupPredicate admits a Host once when it starts deleting, and on the
+// initial list. Later updates (heartbeats) are ignored; failed cleanup requeues
+// with backoff.
+func hostCleanupPredicate() predicate.Funcs {
+	deleting := func(obj client.Object) bool { return !obj.GetDeletionTimestamp().IsZero() }
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool { return deleting(e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return !deleting(e.ObjectOld) && deleting(e.ObjectNew)
+		},
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(e event.GenericEvent) bool { return deleting(e.Object) },
+	}
 }
 
 type hostStatusUpdater struct {

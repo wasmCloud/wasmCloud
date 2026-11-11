@@ -8,7 +8,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -60,6 +62,8 @@ type HostPodReconciler struct {
 	OperatorNamespace string
 	// RetiredHosts records Host IDs and Pod IPs during removal.
 	RetiredHosts *RetiredHosts
+
+	apiReader client.Reader
 }
 
 // Reconcile is called whenever a Pod with HostPodLabel changes.
@@ -129,13 +133,51 @@ func (r *HostPodReconciler) deleteHostForPod(ctx context.Context, pod *corev1.Po
 				"hostCreated", host.CreationTimestamp.Time, "podCondemnedAt", condemnedAt)
 			continue
 		}
-		if err := deleteObservedObject(ctx, r.Client, host); err != nil {
+		gone, err := r.deletePodHost(ctx, host, podIP)
+		if err != nil {
 			return err
 		}
-		r.RetiredHosts.retire(host.HostID)
+		if gone {
+			r.RetiredHosts.retire(host.HostID)
+		}
 	}
 	r.RetiredHosts.retirePod(podIP, condemnedAt)
 	return nil
+}
+
+// deletePodHost deletes host if it is still registered at podIP and reports
+// whether it is gone. A draining host keeps heartbeating, so a conflict is
+// retried against an uncached read rather than failing Pod finalization.
+func (r *HostPodReconciler) deletePodHost(ctx context.Context, host *runtimev1alpha1.Host, podIP string) (bool, error) {
+	reader := r.apiReader
+	if reader == nil {
+		reader = r.Client
+	}
+	snapshot := host
+	gone := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if snapshot == nil {
+			snapshot = &runtimev1alpha1.Host{}
+			if err := reader.Get(ctx, client.ObjectKeyFromObject(host), snapshot); err != nil {
+				gone = apierrors.IsNotFound(err)
+				return client.IgnoreNotFound(err)
+			}
+		}
+		if snapshot.UID != host.UID {
+			gone = true
+			return nil
+		}
+		if snapshot.Hostname != podIP {
+			return nil
+		}
+		err := deleteObservedObject(ctx, r.Client, snapshot)
+		if apierrors.IsConflict(err) {
+			snapshot = nil
+		}
+		gone = err == nil
+		return err
+	})
+	return gone, err
 }
 
 // podCondemnedAt returns the instant the Pod was told to go away, the earliest
@@ -162,6 +204,7 @@ func podCondemnedAt(pod *corev1.Pod) time.Time {
 
 // SetupWithManager registers the controller and the Host field index it depends on.
 func (r *HostPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.apiReader = mgr.GetAPIReader()
 	// Index Host objects by Hostname (= pod IP) so deleteHostForPod can do a
 	// direct lookup rather than listing every Host and filtering in memory.
 	if err := mgr.GetFieldIndexer().IndexField(

@@ -9,7 +9,9 @@ import (
 	"testing/synctest"
 
 	"golang.org/x/sync/semaphore"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
@@ -139,5 +141,32 @@ func assertCleanupDrained(t *testing.T, r *HostReconciler, c client.Client) {
 	}
 	if len(workloads.Items) != 0 {
 		t.Fatalf("cleanup left %d Workloads", len(workloads.Items))
+	}
+}
+
+func TestHostCleanupPredicateAdmitsDeletionOnce(t *testing.T) {
+	live := &runtimev1alpha1.Host{}
+	deleting := live.DeepCopy()
+	now := metav1.Now()
+	deleting.DeletionTimestamp = &now
+	heartbeat := deleting.DeepCopy()
+	heartbeat.Status.SystemCPUUsage = "1"
+
+	p := hostCleanupPredicate()
+	for _, tc := range []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{"create live", p.Create(event.CreateEvent{Object: live}), false},
+		{"create deleting (restart)", p.Create(event.CreateEvent{Object: deleting}), true},
+		{"deletion starts", p.Update(event.UpdateEvent{ObjectOld: live, ObjectNew: deleting}), true},
+		{"heartbeat while deleting", p.Update(event.UpdateEvent{ObjectOld: deleting, ObjectNew: heartbeat}), false},
+		{"live update", p.Update(event.UpdateEvent{ObjectOld: live, ObjectNew: live}), false},
+		{"delete", p.Delete(event.DeleteEvent{Object: deleting}), false},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, tc.got, tc.want)
+		}
 	}
 }
