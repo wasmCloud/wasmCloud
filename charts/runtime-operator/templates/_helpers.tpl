@@ -225,6 +225,9 @@ and parses the result with `fromJson`.
 {{- $fileBacked := list }}
 {{- $cli := list }}
 {{- range concat (default list .plugins) (default list .hostPlugins) }}
+{{- if or .volumes .volumeMounts }}
+{{- fail (printf "host plugin %s: `volumes` and `volumeMounts` are not yet supported by the chart; the plugin would start with no filesystem" .id) }}
+{{- end }}
 {{- if or .config .configFrom .secretFrom .allowedHosts .allowedIpNameLookups .allowedHostLoopbackPorts .ports .workloadConfig .hostOwnedKeys .bindings (not (or .image .file)) }}
 {{- $fileBacked = append $fileBacked . }}
 {{- else }}

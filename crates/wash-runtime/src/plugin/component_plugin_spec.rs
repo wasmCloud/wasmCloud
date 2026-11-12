@@ -60,6 +60,12 @@ pub struct ComponentPluginSpec {
     /// grants concrete addresses the plugin may bind itself. `publish` is
     /// rejected until host-component port splicing is implemented.
     pub ports: Arc<[crate::host::declared_port::DeclaredPort]>,
+    /// Named volumes the plugin's `volume_mounts` can use, as a workload
+    /// declares them. Only host-path volumes are supported for now.
+    pub volumes: Arc<[crate::types::Volume]>,
+    /// Where the plugin sees each volume. Empty (the default) gives the plugin
+    /// no filesystem.
+    pub volume_mounts: Arc<[crate::types::VolumeMount]>,
 }
 
 impl ComponentPluginSpec {
@@ -76,6 +82,8 @@ impl ComponentPluginSpec {
             allowed_ip_name_lookups: Arc::from([]),
             allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
+            volumes: Arc::from([]),
+            volume_mounts: Arc::from([]),
         }
     }
 }
@@ -132,6 +140,12 @@ impl FromStr for ComponentPluginSpec {
                     "host plugin ports cannot be declared on --host-plugin; put them under \
                      `host.hostPlugins[].ports` in the `wash host` config file"
                 ),
+                // Same reason as ports: a volume is a record, and the comma is
+                // already taken.
+                "volume" | "volumes" | "volume-mount" | "volumeMounts" => bail!(
+                    "host plugin volumes cannot be declared on --host-plugin; put them under \
+                     `host.plugins[].volumes` and `volumeMounts` in the `wash host` config file"
+                ),
                 other => bail!(
                     "unknown host plugin field {other:?}; expected id|image|file|pull|max-restarts|digest"
                 ),
@@ -152,6 +166,8 @@ impl FromStr for ComponentPluginSpec {
             allowed_ip_name_lookups: Arc::from([]),
             allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
+            volumes: Arc::from([]),
+            volume_mounts: Arc::from([]),
         })
     }
 }
@@ -198,6 +214,15 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("host.hostPlugins[].ports"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_volumes_on_the_flag_and_says_where_they_go() {
+        let err = "id=kv,file=./kv.wasm,volume=./models"
+            .parse::<ComponentPluginSpec>()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("host.plugins[].volumes"), "got: {err}");
     }
 
     #[test]

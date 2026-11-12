@@ -91,6 +91,7 @@ use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx, WorkloadCaller};
 use crate::engine::instance_pool::InstancePolicy;
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
+use crate::engine::volumes::{HostPathPolicy, ResolvedVolumeMount};
 use crate::engine::workload::{
     ResolvedWorkload, UnresolvedWorkload, WorkloadComponent, WorkloadItem,
 };
@@ -105,7 +106,7 @@ use crate::plugin::component_plugin_spec::ComponentPluginSpec;
 use crate::plugin::wasmcloud_secrets::secret_handle;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::sockets::loopback;
-use crate::types::LocalResources;
+use crate::types::{HostPathVolume, LocalResources, Volume, VolumeMount, VolumeType};
 use crate::wit::{WitInterface, WitWorld, versions_compatible};
 
 mod lifecycle;
@@ -287,6 +288,9 @@ struct PluginStoreContext {
     host_ref: Option<crate::host::HostRef>,
     network: crate::host::ports::NetworkHandle,
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
+    /// The plugin's volumes, opened once at load. Every incarnation's store
+    /// gets the same directory handles.
+    volumes: Arc<[ResolvedVolumeMount]>,
 }
 
 #[derive(Clone)]
@@ -344,8 +348,12 @@ impl ComponentHostPlugin {
     /// omitted, the default keeps host loopback closed; a non-empty loopback
     /// grant then warns and remains denied.
     ///
-    /// Egress lists default to empty. `native_plugins`, `config`, and
-    /// `host_ref` also defaults to `None`.
+    /// `volumes` are named host directories, and `volume_mounts` preopen them
+    /// into the plugin's store, as a workload's volumes and mounts do. A
+    /// declaration that cannot work fails here.
+    ///
+    /// Egress lists, `volumes` and `volume_mounts` default to empty. `native_plugins`, `config`,
+    /// and `host_ref` also defaults to `None`.
     #[builder(finish_fn = build)]
     pub async fn new(
         id: &'static str,
@@ -362,9 +370,13 @@ impl ComponentHostPlugin {
         >,
         host_ref: Option<crate::host::HostRef>,
         #[builder(default)] ports: Arc<[crate::host::declared_port::DeclaredPort]>,
+        #[builder(default)] volumes: Arc<[crate::types::Volume]>,
+        #[builder(default)] volume_mounts: Arc<[crate::types::VolumeMount]>,
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     ) -> anyhow::Result<Self> {
         crate::host::declared_port::validate_plugin_ports(&ports, &format!("host plugin '{id}'"))?;
+        let volumes =
+            resolve_plugin_volumes(id, &volumes, &volume_mounts, engine.host_paths()).await?;
         let socket_policy = socket_policy.unwrap_or_default();
         let egress_policy = crate::plugin::PluginEgressPolicy::new(
             Arc::clone(&allowed_hosts),
@@ -509,6 +521,7 @@ impl ComponentHostPlugin {
                     host_ref,
                     network: crate::host::ports::NetworkHandle::new(),
                     socket_policy,
+                    volumes,
                 },
             },
             egress_policy,
@@ -765,6 +778,8 @@ pub async fn load_component_plugin(
         .allowed_ip_name_lookups(Arc::clone(&spec.allowed_ip_name_lookups))
         .allowed_host_loopback_ports(Arc::clone(&spec.allowed_host_loopback_ports))
         .ports(Arc::clone(&spec.ports))
+        .volumes(Arc::clone(&spec.volumes))
+        .volume_mounts(Arc::clone(&spec.volume_mounts))
         .maybe_host_ref(host_ref)
         .socket_policy(socket_policy)
         .build()
@@ -2232,7 +2247,10 @@ fn build_plugin_store(
     if let Some(host) = &store_context.host_ref {
         ctx_builder = ctx_builder.with_host(host);
     }
-    let ctx = ctx_builder.build();
+    let mut ctx = ctx_builder.build();
+    // The handles pinned at load, handed over the way a workload's store gets
+    // its volume mounts.
+    ctx.volume_mounts = store_context.volumes.to_vec();
     // The registry marks this as the plugin (real) side of the resource bridge
     // and keeps the resources it hands out across the boundary alive.
     // A host component plugin is a guest too: its linear memory is charged to
@@ -2253,6 +2271,90 @@ fn build_plugin_store(
         crate::engine::abandon::AbandonedCallPolicy::WarnThenTrap,
     );
     store
+}
+
+/// Resolve a plugin's declared volumes once, at load: a declaration that cannot
+/// work fails the host's start naming the plugin, rather than failing every
+/// incarnation the supervisor starts. Each directory is opened here and its
+/// handle kept, so what was checked is what every incarnation mounts.
+async fn resolve_plugin_volumes(
+    id: &str,
+    volumes: &[Volume],
+    volume_mounts: &[VolumeMount],
+    host_paths: &HostPathPolicy,
+) -> anyhow::Result<Arc<[ResolvedVolumeMount]>> {
+    let mut opened = HashMap::with_capacity(volumes.len());
+    for volume in volumes {
+        let name = volume.name.as_str();
+        anyhow::ensure!(
+            !name.is_empty(),
+            "host component plugin '{id}': a volume has an empty name"
+        );
+        anyhow::ensure!(
+            !opened.contains_key(name),
+            "host component plugin '{id}': two volumes are named '{name}'"
+        );
+        let local_path = match &volume.volume_type {
+            VolumeType::HostPath(HostPathVolume { local_path }) => local_path.clone(),
+            VolumeType::EmptyDir(_) => anyhow::bail!(
+                "host component plugin '{id}': volume '{name}' is an emptyDir, which host \
+                 component plugins do not support yet"
+            ),
+        };
+        let policy = host_paths.clone();
+        let host_path = std::path::PathBuf::from(&local_path);
+        let dir = tokio::task::spawn_blocking(move || policy.open_host_config_volume(&host_path))
+            .await?
+            .with_context(|| {
+                format!(
+                    "host component plugin '{id}': volume '{name}' hostPath {local_path} cannot \
+                     be mounted"
+                )
+            })?;
+        opened.insert(name, dir);
+    }
+
+    let mut mount_paths = std::collections::HashSet::new();
+    let mut resolved = Vec::with_capacity(volume_mounts.len());
+    for mount in volume_mounts {
+        let dir = opened.get(mount.name.as_str()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "host component plugin '{id}': a volumeMount names volume '{}', which the \
+                 plugin does not declare",
+                mount.name
+            )
+        })?;
+        let mount_path = normalize_mount_path(&mount.mount_path).map_err(|why| {
+            anyhow::anyhow!(
+                "host component plugin '{id}': volumeMount mountPath {:?} {why}",
+                mount.mount_path
+            )
+        })?;
+        anyhow::ensure!(
+            mount_paths.insert(mount_path.clone()),
+            "host component plugin '{id}': two volumeMounts mount at {mount_path:?}"
+        );
+        resolved.push(ResolvedVolumeMount::new(dir, mount_path, mount.read_only)?);
+    }
+    Ok(resolved.into())
+}
+
+/// A guest mount path without empty segments or a trailing `/`, so `/models`
+/// and `/models/` name one mount.
+fn normalize_mount_path(path: &str) -> Result<String, &'static str> {
+    let rest = path.strip_prefix('/').ok_or("must be absolute")?;
+    let mut normalized = String::new();
+    for part in rest.split('/').filter(|part| !part.is_empty()) {
+        if part == "." || part == ".." {
+            return Err("must not contain `.` or `..`");
+        }
+        normalized.push('/');
+        normalized.push_str(part);
+    }
+    if normalized.is_empty() {
+        normalized.push('/');
+    }
+    Ok(normalized)
 }
 
 fn component_plugin_socket_policy(
@@ -2497,6 +2599,7 @@ mod tests {
             host_ref: None,
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: Arc::default(),
+            volumes: Arc::from([]),
         };
         let store = build_plugin_store(
             &engine,
@@ -2531,6 +2634,7 @@ mod tests {
             host_ref: None,
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: policy,
+            volumes: Arc::from([]),
         };
         let mut store = build_plugin_store(
             &engine,
@@ -3398,5 +3502,217 @@ mod tests {
             native.seen_config.lock().unwrap().clone(),
             Some(config.into())
         );
+    }
+
+    fn host_path(name: &str, path: &std::path::Path) -> Volume {
+        Volume {
+            name: name.to_string(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: path.to_string_lossy().into_owned(),
+            }),
+        }
+    }
+
+    fn mount(name: &str, mount_path: &str, read_only: bool) -> VolumeMount {
+        VolumeMount {
+            name: name.to_string(),
+            mount_path: mount_path.to_string(),
+            read_only,
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_resolve_to_one_mount_each() {
+        let models = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let resolved = resolve_plugin_volumes(
+            "vol",
+            &[
+                host_path("models", models.path()),
+                host_path("cache", cache.path()),
+            ],
+            &[
+                mount("models", "/models", true),
+                mount("cache", "/cache/", false),
+            ],
+            &HostPathPolicy::default(),
+        )
+        .await
+        .expect("both volumes resolve");
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].mount_path(), "/models");
+        assert_eq!(resolved[1].mount_path(), "/cache");
+    }
+
+    #[tokio::test]
+    async fn a_plugin_volume_mounts_at_two_paths_or_none() {
+        let models = tempfile::tempdir().unwrap();
+        let unused = tempfile::tempdir().unwrap();
+        let resolved = resolve_plugin_volumes(
+            "vol",
+            &[
+                host_path("models", models.path()),
+                host_path("unused", unused.path()),
+            ],
+            &[
+                mount("models", "/models", true),
+                mount("models", "/rw", false),
+            ],
+            &HostPathPolicy::default(),
+        )
+        .await
+        .expect("one volume at two paths, and a volume nothing mounts, both resolve");
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].mount_path(), "/models");
+        assert_eq!(resolved[1].mount_path(), "/rw");
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_skip_the_allowlist_but_not_reserved_paths() {
+        let scratch = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let meters = Arc::new(crate::host::quota::PolicyMeters::default());
+        // No allowed directories, so this policy refuses every workload hostPath.
+        let policy = HostPathPolicy::new(
+            [],
+            [],
+            Some(scratch.path().to_path_buf()),
+            Some(Arc::clone(&meters)),
+        );
+
+        resolve_plugin_volumes(
+            "vol",
+            &[host_path("data", data.path())],
+            &[mount("data", "/data", false)],
+            &policy,
+        )
+        .await
+        .expect("the allowlist does not apply to a plugin volume");
+        let err = resolve_plugin_volumes(
+            "vol",
+            &[host_path("scratch", scratch.path())],
+            &[mount("scratch", "/scratch", false)],
+            &policy,
+        )
+        .await
+        .err()
+        .expect("the scratch root is reserved");
+        let err = format!("{err:#}");
+        assert!(err.contains("reserves"), "{err}");
+        assert!(err.contains("'vol'"), "error should name the plugin: {err}");
+        assert_eq!(meters.host_path_denied(), 1);
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_refuse_what_cannot_be_preopened() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("weights.gguf");
+        std::fs::write(&file, b"not a directory").unwrap();
+        let models = || vec![host_path("models", dir.path())];
+        let scratch = Volume {
+            name: "scratch".to_string(),
+            volume_type: VolumeType::EmptyDir(crate::types::EmptyDirVolume {}),
+        };
+
+        for (volumes, mounts, expected) in [
+            (
+                models(),
+                vec![mount("models", "models", true)],
+                "must be absolute",
+            ),
+            (
+                models(),
+                vec![
+                    mount("models", "/models", true),
+                    mount("models", "/models", false),
+                ],
+                "two volumeMounts mount at",
+            ),
+            (
+                models(),
+                vec![
+                    mount("models", "/models", true),
+                    mount("models", "/models/", false),
+                ],
+                "two volumeMounts mount at",
+            ),
+            (
+                models(),
+                vec![mount("models", "/a/../models", true)],
+                "must not contain",
+            ),
+            (
+                models(),
+                vec![mount("weights", "/models", true)],
+                "does not declare",
+            ),
+            (
+                vec![
+                    host_path("models", dir.path()),
+                    host_path("models", dir.path()),
+                ],
+                vec![],
+                "two volumes are named 'models'",
+            ),
+            (vec![host_path("", dir.path())], vec![], "empty name"),
+            (vec![scratch.clone()], vec![], "do not support yet"),
+            (
+                vec![host_path("models", &dir.path().join("missing"))],
+                vec![],
+                "failed to resolve hostPath volume",
+            ),
+            (
+                vec![host_path("models", &file)],
+                vec![],
+                "failed to open hostPath volume",
+            ),
+        ] {
+            let err = resolve_plugin_volumes("vol", &volumes, &mounts, &HostPathPolicy::default())
+                .await
+                .err()
+                .expect("declaration should be refused");
+            let err = format!("{err:#}");
+            assert!(err.contains(expected), "expected {expected:?}, got: {err}");
+            assert!(err.contains("'vol'"), "error should name the plugin: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_store_gets_its_volumes_each_time_it_is_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::builder().build().expect("failed to build engine");
+        let mut store_context = PluginStoreContext {
+            allowed_hosts: Arc::from([]),
+            allowed_ip_name_lookups: Arc::from([]),
+            host_ref: None,
+            network: crate::host::ports::NetworkHandle::new(),
+            socket_policy: Arc::new(crate::sockets::policy::SocketPolicy::default()),
+            volumes: resolve_plugin_volumes(
+                "vol",
+                &[host_path("models", dir.path())],
+                &[mount("models", "/models", true)],
+                &HostPathPolicy::default(),
+            )
+            .await
+            .unwrap(),
+        };
+        let store = build_plugin_store(&engine, "vol", &HashMap::new(), &store_context);
+        assert_eq!(store.data().active_ctx.volume_mounts.len(), 1);
+
+        // The directory was opened at load and the handle kept, so an
+        // incarnation started after its path is gone still gets the volume:
+        // nothing is opened by path again.
+        let gone = dir.path().to_path_buf();
+        drop(dir);
+        // Windows keeps a folder while a handle to it is open, and the store
+        // above holds one.
+        if cfg!(not(windows)) {
+            assert!(!gone.exists());
+        }
+        store_context.network = crate::host::ports::NetworkHandle::new();
+        let store = build_plugin_store(&engine, "vol", &HashMap::new(), &store_context);
+        assert_eq!(store.data().active_ctx.volume_mounts.len(), 1);
     }
 }

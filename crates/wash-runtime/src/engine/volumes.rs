@@ -29,14 +29,23 @@ pub(crate) struct ResolvedVolumeMount {
 
 impl ResolvedVolumeMount {
     pub(crate) fn from_opened(volume: &OpenedVolume, mount: &VolumeMount) -> anyhow::Result<Self> {
-        let (perms, mode) = if mount.read_only {
+        Self::new(volume, mount.mount_path.clone(), mount.read_only)
+    }
+
+    /// Mount an opened directory at `mount_path` in the guest.
+    pub(crate) fn new(
+        volume: &OpenedVolume,
+        mount_path: String,
+        read_only: bool,
+    ) -> anyhow::Result<Self> {
+        let (perms, mode) = if read_only {
             (FsPerms::ReadOnly, OpenMode::READ)
         } else {
             (FsPerms::ReadWrite, OpenMode::READ | OpenMode::WRITE)
         };
         Ok(Self {
             dir: Dir::new(volume.dir.try_clone()?, perms, mode, false),
-            mount_path: mount.mount_path.clone(),
+            mount_path,
         })
     }
 
@@ -45,6 +54,12 @@ impl ResolvedVolumeMount {
         let volume =
             tokio::task::spawn_blocking(move || ReservedHostPaths::default().open(&path)).await??;
         Self::from_opened(&volume, mount)
+    }
+
+    /// The path the guest sees the directory at.
+    #[cfg(all(test, feature = "host-component-plugins", feature = "oci"))]
+    pub(crate) fn mount_path(&self) -> &str {
+        &self.mount_path
     }
 }
 
@@ -287,11 +302,28 @@ impl HostPathPolicy {
 
     /// Check a `hostPath` volume and open the directory that was checked.
     pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
+        self.check_and_open(volume, true)
+    }
+
+    /// Open a volume the host config declares: the reserved-path and kernel
+    /// checks apply, the allowlist does not.
+    #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+    pub(crate) fn open_host_config_volume(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
+        self.check_and_open(volume, false)
+    }
+
+    fn check_and_open(&self, volume: &Path, allowlist: bool) -> anyhow::Result<OpenedVolume> {
         let canonical = canonicalize_volume(volume)?;
         let checked = self
             .reserved
             .check_canonical(volume, &canonical)
-            .and_then(|()| self.check_allowed(volume, &canonical));
+            .and_then(|()| {
+                if allowlist {
+                    self.check_allowed(volume, &canonical)
+                } else {
+                    Ok(())
+                }
+            });
         if checked.is_err()
             && let Some(meters) = &self.meters
         {

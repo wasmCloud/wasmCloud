@@ -260,7 +260,7 @@ pub(crate) mod store;
 pub(crate) mod store_settings;
 pub(crate) mod trap_remediation;
 mod value;
-mod volumes;
+pub(crate) mod volumes;
 pub mod workload;
 
 /// How often the engine's epoch advances.
@@ -731,6 +731,12 @@ impl Engine {
     /// overrides. `None` when pooling is off or unsupported.
     pub(crate) fn pool_totals(&self) -> Option<pool_usage::PoolTotals> {
         self.pool_totals
+    }
+
+    /// The host's `hostPath` policy, also used for volumes the host config declares.
+    #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+    pub(crate) fn host_paths(&self) -> &volumes::HostPathPolicy {
+        &self.host_paths
     }
 
     /// Every pooling allocator total against what is in use now, so an
