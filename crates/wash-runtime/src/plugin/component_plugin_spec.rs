@@ -60,29 +60,12 @@ pub struct ComponentPluginSpec {
     /// grants concrete addresses the plugin may bind itself. `publish` is
     /// rejected until host-component port splicing is implemented.
     pub ports: Arc<[crate::host::declared_port::DeclaredPort]>,
-    /// Host directories preopened into the plugin's store. Empty (the default)
-    /// gives the plugin no filesystem, the only thing a plugin got before
-    /// volumes existed.
-    pub volumes: Arc<[PluginVolume]>,
-}
-
-/// A host directory preopened into a host component plugin's store, the
-/// plugin-scoped counterpart of a workload's host-path volume mount.
-///
-/// A plugin outlives every workload it serves and is shared by all of them, so
-/// its directories are declared on the plugin's own entry by the operator rather
-/// than borrowed from any workload. The host path is resolved once, when the
-/// plugin loads, and preopened again for every incarnation the supervisor
-/// starts, so a restart keeps the same view of the filesystem.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginVolume {
-    /// Directory on the host. Relative paths resolve against the host
-    /// process's working directory, like a plugin's `file` source.
-    pub host_path: PathBuf,
-    /// Absolute path the plugin sees the directory at.
-    pub mount_path: String,
-    /// Whether the plugin may only read from the directory.
-    pub read_only: bool,
+    /// Named volumes the plugin's `volume_mounts` can use, as a workload
+    /// declares them. Only host-path volumes are supported for now.
+    pub volumes: Arc<[crate::types::Volume]>,
+    /// Where the plugin sees each volume. Empty (the default) gives the plugin
+    /// no filesystem.
+    pub volume_mounts: Arc<[crate::types::VolumeMount]>,
 }
 
 impl ComponentPluginSpec {
@@ -100,6 +83,7 @@ impl ComponentPluginSpec {
             allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
             volumes: Arc::from([]),
+            volume_mounts: Arc::from([]),
         }
     }
 }
@@ -158,9 +142,9 @@ impl FromStr for ComponentPluginSpec {
                 ),
                 // Same reason as ports: a volume is a record, and the comma is
                 // already taken.
-                "volume" | "volumes" => bail!(
+                "volume" | "volumes" | "volume-mount" | "volumeMounts" => bail!(
                     "host plugin volumes cannot be declared on --host-plugin; put them under \
-                     `host.plugins[].volumes` in the `wash host` config file"
+                     `host.plugins[].volumes` and `volumeMounts` in the `wash host` config file"
                 ),
                 other => bail!(
                     "unknown host plugin field {other:?}; expected id|image|file|pull|max-restarts|digest"
@@ -183,6 +167,7 @@ impl FromStr for ComponentPluginSpec {
             allowed_host_loopback_ports: Arc::from([]),
             ports: Arc::from([]),
             volumes: Arc::from([]),
+            volume_mounts: Arc::from([]),
         })
     }
 }
