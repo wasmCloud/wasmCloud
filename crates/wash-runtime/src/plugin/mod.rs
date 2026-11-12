@@ -78,7 +78,7 @@ pub mod component_host;
 #[cfg(feature = "oci")]
 pub mod component_plugin_spec;
 #[cfg(feature = "oci")]
-pub use component_plugin_spec::{ComponentPluginSpec, PluginVolume};
+pub use component_plugin_spec::ComponentPluginSpec;
 
 /// Every plugin id this codebase has, independent of which cargo features a
 /// given build enabled.

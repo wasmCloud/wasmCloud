@@ -571,11 +571,14 @@ pub struct HostPluginConfig {
     /// implemented.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
-    /// Host directories preopened into a component plugin's store, e.g. model
-    /// weights a plugin serves from. Omitted or empty gives the plugin no
-    /// filesystem.
+    /// Named volumes this plugin's `volumeMounts` use, written as a Workload's
+    /// `volumes` are. Only `hostPath` volumes are supported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<PluginVolumeConfig>,
+    /// Where the plugin sees each volume, e.g. model weights it serves from.
+    /// Omitted or empty gives the plugin no filesystem.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volume_mounts: Vec<PluginVolumeMountConfig>,
 }
 
 /// One named binding under a `host.plugins` entry: the operator's config for
@@ -589,14 +592,52 @@ pub struct PluginBindingConfig {
     pub environment: EnvironmentLayer,
 }
 
-/// A host directory a component plugin sees in its own store. Config-file
-/// spelling of [`wash_runtime::plugin::PluginVolume`].
+/// A named volume on a `host.plugins` entry. Config-file spelling of
+/// [`wash_runtime::types::Volume`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginVolumeConfig {
-    /// Directory on the host. Relative paths resolve against the directory
-    /// `wash` runs in, like a plugin's `file`.
-    pub host_path: PathBuf,
+    /// The name a `volumeMounts` entry uses.
+    pub name: String,
+    /// A directory on the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_path: Option<PluginHostPathConfig>,
+}
+
+impl PluginVolumeConfig {
+    fn to_volume(&self, what: &str) -> Result<wash_runtime::types::Volume> {
+        let Some(host_path) = &self.host_path else {
+            bail!(
+                "{what} volume '{}' has no `hostPath`, the only volume kind host plugins support",
+                self.name
+            );
+        };
+        Ok(wash_runtime::types::Volume {
+            name: self.name.clone(),
+            volume_type: wash_runtime::types::VolumeType::HostPath(
+                wash_runtime::types::HostPathVolume {
+                    local_path: host_path.path.to_string_lossy().into_owned(),
+                },
+            ),
+        })
+    }
+}
+
+/// The host directory of a plugin's `hostPath` volume.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHostPathConfig {
+    /// Relative paths resolve against the directory `wash` runs in, like a
+    /// plugin's `file`.
+    pub path: PathBuf,
+}
+
+/// Where a `host.plugins` entry's plugin sees one of its volumes. Config-file
+/// spelling of [`wash_runtime::types::VolumeMount`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginVolumeMountConfig {
+    /// The `volumes` entry to mount.
+    pub name: String,
     /// Absolute path the plugin sees the directory at.
     pub mount_path: String,
     /// Whether the plugin may only read from the directory.
@@ -672,6 +713,9 @@ impl HostPluginConfig {
         }
         if !self.volumes.is_empty() {
             set.push("volumes");
+        }
+        if !self.volume_mounts.is_empty() {
+            set.push("volumeMounts");
         }
         if set.is_empty() {
             return Ok(());
@@ -792,10 +836,15 @@ impl HostPluginConfig {
             volumes: self
                 .volumes
                 .iter()
-                .map(|v| wash_runtime::plugin::PluginVolume {
-                    host_path: v.host_path.clone(),
-                    mount_path: v.mount_path.clone(),
-                    read_only: v.read_only,
+                .map(|v| v.to_volume(&what))
+                .collect::<Result<_>>()?,
+            volume_mounts: self
+                .volume_mounts
+                .iter()
+                .map(|m| wash_runtime::types::VolumeMount {
+                    name: m.name.clone(),
+                    mount_path: m.mount_path.clone(),
+                    read_only: m.read_only,
                 })
                 .collect(),
         })
@@ -2902,38 +2951,83 @@ dev:
         );
     }
 
-    /// A component plugin's volumes reach its spec as written, `readOnly`
-    /// defaulting to read-write like a workload's mount.
+    /// A component plugin's volumes and mounts reach its spec as written,
+    /// `readOnly` defaulting to read-write like a workload's mount.
     #[test]
     fn host_plugin_volumes_parse_from_yaml_and_convert_to_spec() {
+        use wash_runtime::types::{HostPathVolume, Volume, VolumeMount, VolumeType};
         let yaml = r#"
 host:
   plugins:
-    - id: wasmcloud-llm
-      file: ./build/llm_plugin.wasm
+    - id: model-server
+      file: ./build/model_server.wasm
       volumes:
-        - hostPath: ./models
+        - name: models
+          hostPath:
+            path: ./models
+        - name: cache
+          hostPath:
+            path: /var/cache/models
+      volumeMounts:
+        - name: models
           mountPath: /models
           readOnly: true
-        - hostPath: /var/cache/llm
+        - name: cache
           mountPath: /cache
 "#;
         let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let spec = config.host().plugins[0].to_spec_unresolved().unwrap();
+        let host_path = |name: &str, path: &str| Volume {
+            name: name.into(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: path.into(),
+            }),
+        };
         assert_eq!(
             &*spec.volumes,
             &[
-                wash_runtime::plugin::PluginVolume {
-                    host_path: "./models".into(),
+                host_path("models", "./models"),
+                host_path("cache", "/var/cache/models"),
+            ]
+        );
+        assert_eq!(
+            &*spec.volume_mounts,
+            &[
+                VolumeMount {
+                    name: "models".into(),
                     mount_path: "/models".into(),
                     read_only: true,
                 },
-                wash_runtime::plugin::PluginVolume {
-                    host_path: "/var/cache/llm".into(),
+                VolumeMount {
+                    name: "cache".into(),
                     mount_path: "/cache".into(),
                     read_only: false,
                 },
             ]
+        );
+    }
+
+    /// Only `hostPath` volumes are supported, so a volume without one is
+    /// refused rather than dropped.
+    #[test]
+    fn a_plugin_volume_without_a_host_path_is_refused() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: model-server
+      file: ./build/model_server.wasm
+      volumes:
+        - name: scratch
+          emptyDir: {}
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let err = config.host().plugins[0]
+            .to_spec_unresolved()
+            .expect_err("a volume without a hostPath must be refused")
+            .to_string();
+        assert!(
+            err.contains("volume 'scratch' has no `hostPath`"),
+            "got: {err}"
         );
     }
 
@@ -2946,7 +3040,11 @@ host:
   plugins:
     - id: wasmcloud-nats
       volumes:
-        - hostPath: ./models
+        - name: models
+          hostPath:
+            path: ./models
+      volumeMounts:
+        - name: models
           mountPath: /models
 "#;
         let config: Config = serde_saphyr::from_str(yaml).unwrap();
@@ -2955,7 +3053,7 @@ host:
             .to_plugin_bindings(&config, Path::new("."), None)
             .expect_err("volumes on a native entry must be refused")
             .to_string();
-        assert!(err.contains("`volumes`"), "got: {err}");
+        assert!(err.contains("`volumes`, `volumeMounts`"), "got: {err}");
     }
 
     /// A native entry may declare egress, but not component lifecycle fields.

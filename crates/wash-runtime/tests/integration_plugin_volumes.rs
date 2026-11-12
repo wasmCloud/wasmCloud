@@ -21,9 +21,8 @@ use tokio::time::timeout;
 use wash_runtime::engine::Engine;
 use wash_runtime::host::http::{DevRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
-use wash_runtime::plugin::PluginVolume;
 use wash_runtime::plugin::component_host::ComponentHostPlugin;
-use wash_runtime::types::LocalResources;
+use wash_runtime::types::{HostPathVolume, LocalResources, Volume, VolumeMount, VolumeType};
 use wash_runtime::wit::WitInterface;
 
 mod common;
@@ -44,19 +43,30 @@ fn files_interface() -> WitInterface {
     }
 }
 
-fn volume(host_path: &Path, mount_path: &str, read_only: bool) -> PluginVolume {
-    PluginVolume {
-        host_path: host_path.to_path_buf(),
-        mount_path: mount_path.to_string(),
-        read_only,
-    }
+/// A host-path volume named after its mount path, and its mount.
+fn volume(host_path: &Path, mount_path: &str, read_only: bool) -> (Volume, VolumeMount) {
+    let name = mount_path.trim_start_matches('/').to_string();
+    (
+        Volume {
+            name: name.clone(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: host_path.to_string_lossy().into_owned(),
+            }),
+        },
+        VolumeMount {
+            name,
+            mount_path: mount_path.to_string(),
+            read_only,
+        },
+    )
 }
 
 /// Starts a host with `volume-plugin` registered with `volumes`, plus the
 /// caller workload wired up to drive it.
 async fn start_host_with_volumes(
-    volumes: Vec<PluginVolume>,
+    volumes: Vec<(Volume, VolumeMount)>,
 ) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let (volumes, volume_mounts): (Vec<_>, Vec<_>) = volumes.into_iter().unzip();
     let engine = Engine::builder().build()?;
     let ingress = Ingress::builder(DevRouter::default(), "127.0.0.1:0".parse()?)
         .build()
@@ -75,6 +85,7 @@ async fn start_host_with_volumes(
         .engine(engine)
         .native_plugins(native_plugins)
         .volumes(volumes.into())
+        .volume_mounts(volume_mounts.into())
         .maybe_host_ref(Some(host_ref))
         .build()
         .await
