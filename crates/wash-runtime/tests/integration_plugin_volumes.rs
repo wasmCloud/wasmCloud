@@ -1,5 +1,5 @@
-//! Integration test: a host component plugin's `volumes` — host directories
-//! preopened into the plugin's own store.
+//! Integration test: a host component plugin's `volumes` and `volumeMounts` —
+//! host directories preopened into the plugin's own store.
 //!
 //! `volume-plugin` reads and writes files with plain `std::fs`. A plugin store
 //! has no filesystem of its own, so everything the plugin can reach is what its
@@ -11,26 +11,35 @@
 #![cfg(feature = "host-component-plugins")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::time::timeout;
 
+use wash_runtime::component_source::ComponentSource;
 use wash_runtime::engine::Engine;
 use wash_runtime::host::http::{DevRouter, Ingress};
 use wash_runtime::host::{HostApi, HostBuilder};
-use wash_runtime::plugin::component_host::ComponentHostPlugin;
+use wash_runtime::oci::OciConfig;
+use wash_runtime::plugin::ComponentPluginSpec;
+use wash_runtime::plugin::component_host::load_component_plugin;
 use wash_runtime::types::{HostPathVolume, LocalResources, Volume, VolumeMount, VolumeType};
 use wash_runtime::wit::WitInterface;
 
 mod common;
 use common::{component_workload_request, http_incoming_handler_interface};
 
-const VOLUME_PLUGIN_WASM: &[u8] = include_bytes!("wasm/volume_plugin.wasm");
 const CALLER_WASM: &[u8] = include_bytes!("wasm/volume_plugin_caller.wasm");
 const PLUGIN_ID: &str = "volume-plugin";
+
+fn volume_plugin_path() -> PathBuf {
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/wasm/volume_plugin.wasm"
+    ))
+}
 
 fn files_interface() -> WitInterface {
     WitInterface {
@@ -79,19 +88,25 @@ async fn start_host_with_volumes(
     let native_plugins = builder.native_plugins();
     let host_ref = builder.host_ref();
 
-    let plugin = ComponentHostPlugin::builder()
-        .id(PLUGIN_ID)
-        .wasm(VOLUME_PLUGIN_WASM)
-        .engine(engine)
-        .native_plugins(native_plugins)
-        .volumes(volumes.into())
-        .volume_mounts(volume_mounts.into())
-        .maybe_host_ref(Some(host_ref))
-        .build()
-        .await
-        .context("volume-plugin should link cleanly")?;
+    // Loaded from a spec, as `wash host` loads a config entry.
+    let mut spec = ComponentPluginSpec::from_plugin_source(
+        PLUGIN_ID,
+        ComponentSource::File(volume_plugin_path()),
+    );
+    spec.volumes = volumes.into();
+    spec.volume_mounts = volume_mounts.into();
+    let plugin = load_component_plugin(
+        &spec,
+        &engine,
+        OciConfig::default(),
+        &native_plugins,
+        Some(host_ref),
+        None,
+    )
+    .await
+    .context("volume-plugin should load")?;
 
-    let host = builder.with_plugin(Arc::new(plugin))?.build()?;
+    let host = builder.with_plugin(plugin)?.build()?;
     let host = host.start().await.context("failed to start host")?;
 
     host.workload_start(component_workload_request(
