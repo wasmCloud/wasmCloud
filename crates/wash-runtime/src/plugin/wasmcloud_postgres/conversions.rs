@@ -607,15 +607,29 @@ fn check_scalar_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error +
             WrongType::new::<BitVec>,
         ),
         // Sixteen bytes each, as are an `interval` and one another.
-        PgValue::Uuid(_) => wrong(*base == PgType::UUID, WrongType::new::<Uuid>),
-        PgValue::Point(_) => wrong(*base == PgType::POINT, WrongType::new::<Point<f64>>),
+        PgValue::Uuid(_) | PgValue::UuidArray(_) => {
+            wrong(*base == PgType::UUID, WrongType::new::<Uuid>)
+        }
+        PgValue::Point(_) | PgValue::PointArray(_) => {
+            wrong(*base == PgType::POINT, WrongType::new::<Point<f64>>)
+        }
         // Thirty-two bytes each.
-        PgValue::Box(_) => wrong(*base == PgType::BOX, WrongType::new::<Rect<f64>>),
-        PgValue::Lseg(_) => wrong(*base == PgType::LSEG, WrongType::new::<PgLseg>),
+        PgValue::Box(_) | PgValue::BoxArray(_) => {
+            wrong(*base == PgType::BOX, WrongType::new::<Rect<f64>>)
+        }
+        PgValue::Lseg(_) | PgValue::LsegArray(_) => {
+            wrong(*base == PgType::LSEG, WrongType::new::<PgLseg>)
+        }
         // Eight bytes, as are an `int8`, a `float8` and a `timestamp`.
-        PgValue::PgLsn(_) => wrong(*base == PgType::PG_LSN, WrongType::new::<PgLsn>),
-        PgValue::Path(_) => wrong(*base == PgType::PATH, WrongType::new::<LineString<f64>>),
-        PgValue::Polygon(_) => wrong(*base == PgType::POLYGON, WrongType::new::<PgPolygon>),
+        PgValue::PgLsn(_) | PgValue::PgLsnArray(_) => {
+            wrong(*base == PgType::PG_LSN, WrongType::new::<PgLsn>)
+        }
+        PgValue::Path(_) | PgValue::PathArray(_) => {
+            wrong(*base == PgType::PATH, WrongType::new::<LineString<f64>>)
+        }
+        PgValue::Polygon(_) | PgValue::PolygonArray(_) => {
+            wrong(*base == PgType::POLYGON, WrongType::new::<PgPolygon>)
+        }
         _ => Ok(()),
     }
 }
@@ -747,7 +761,7 @@ impl ToSql for PgValue {
         ty: &PgType,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
-        check_array_type(self, ty)?;
+        check_array_type(self, domain_base(ty))?;
         check_scalar_type(self, ty)?;
         // Some encoders pick their format by type (the `jsonb` and `ltree`
         // version bytes), so they get the type a domain is defined over.
@@ -2142,6 +2156,66 @@ mod tests {
             assert!(bind(&value, &PgType::INT8).is_err(), "{value:?}");
             assert!(bind(&value, &PgType::TEXT).is_ok(), "{value:?}");
         }
+    }
+
+    #[test]
+    fn fixed_width_arrays_are_refused_for_other_element_types() {
+        let point = (1.5_f64.integer_decode(), (-2.5_f64).integer_decode());
+        let uuid = Uuid::from_u128(123).to_string();
+        for (value, own, other) in [
+            (
+                PgValue::UuidArray(vec![uuid]),
+                PgType::UUID_ARRAY,
+                PgType::INTERVAL_ARRAY,
+            ),
+            (
+                PgValue::PointArray(vec![point]),
+                PgType::POINT_ARRAY,
+                PgType::UUID_ARRAY,
+            ),
+            (
+                PgValue::BoxArray(vec![(point, point)]),
+                PgType::BOX_ARRAY,
+                PgType::LSEG_ARRAY,
+            ),
+            (
+                PgValue::LsegArray(vec![(point, point)]),
+                PgType::LSEG_ARRAY,
+                PgType::BOX_ARRAY,
+            ),
+            (
+                PgValue::PgLsnArray(vec![1]),
+                PgType::PG_LSN_ARRAY,
+                PgType::INT8_ARRAY,
+            ),
+            (
+                PgValue::PathArray(vec![vec![point]]),
+                PgType::PATH_ARRAY,
+                PgType::POLYGON_ARRAY,
+            ),
+            (
+                PgValue::PolygonArray(vec![vec![point]]),
+                PgType::POLYGON_ARRAY,
+                PgType::PATH_ARRAY,
+            ),
+        ] {
+            assert!(bind(&value, &own).is_ok(), "{value:?} as {own}");
+            let err = bind(&value, &other).unwrap_err();
+            assert!(err.is::<WrongType>(), "{value:?} as {other}: {err}");
+        }
+    }
+
+    #[test]
+    fn domain_over_an_array_is_checked_as_its_base_array() {
+        let domain = PgType::new(
+            "intarr".into(),
+            0,
+            Kind::Domain(PgType::INT4_ARRAY),
+            "public".into(),
+        );
+        assert!(bind(&PgValue::Int4Array(vec![1]), &domain).is_ok());
+        assert!(bind(&PgValue::Int8Array(vec![1]), &domain).is_err());
+        assert!(bind(&PgValue::Int4(1), &domain).is_err());
     }
 
     #[test]
