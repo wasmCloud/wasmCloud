@@ -57,7 +57,7 @@ impl ResolvedVolumeMount {
     }
 
     /// The path the guest sees the directory at.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "host-component-plugins", feature = "oci"))]
     pub(crate) fn mount_path(&self) -> &str {
         &self.mount_path
     }
