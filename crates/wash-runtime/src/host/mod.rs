@@ -874,6 +874,11 @@ impl Host {
         &self.version
     }
 
+    /// Backend shared by this host's engine, OCI pulls and maintenance.
+    pub fn cache(&self) -> Arc<crate::cache::CacheBackend> {
+        self.engine.cache()
+    }
+
     /// Get host config
     ///
     /// # Returns
@@ -1025,8 +1030,8 @@ impl Host {
         // cheaper than the blocking pool's two thread handoffs. The engine
         // refuses anything that would block on this path.
         //
-        // Anything else may compile with Cranelift, open volumes or build a
-        // service, and goes to the blocking pool. On a runtime thread that
+        // Other starts await cache I/O and send compilation, volume access,
+        // and linking to the blocking pool. On a runtime thread that
         // could stall the async-nats connection task alongside it, and a host
         // that stops draining its socket is disconnected as a slow consumer.
         let engine = self.engine.clone();
@@ -1044,20 +1049,8 @@ impl Host {
         let unresolved_workload = match inline {
             crate::engine::InlineInit::Initialized(initialized) => initialized?,
             crate::engine::InlineInit::WouldBlock { workload, pinned } => {
-                let span = tracing::Span::current();
-                tokio::task::spawn_blocking(move || {
-                    let _entered = span.enter();
-                    // Held so the compiles already found are reused, not
-                    // looked up or compiled again.
-                    let _pinned = pinned;
-                    // The blocking executor can queue this after the check above.
-                    if let Some(guard) = engine.process_memory() {
-                        guard.admit_start().map_err(anyhow::Error::msg)?;
-                    }
-                    engine.initialize_workload(&init_id, workload)
-                })
-                .await
-                .context("workload initialization task failed")??
+                let _pinned = pinned;
+                engine.initialize_workload(&init_id, workload).await?
             }
         };
 
@@ -1696,6 +1689,9 @@ pub struct HostConfig {
     pub allow_oci_insecure: bool,
     pub oci_pull_timeout: Option<Duration>,
     pub oci_cache_dir: Option<PathBuf>,
+    /// Optional backend. `HostBuilder::with_cache` takes precedence. After build,
+    /// this is the effective handle inherited by all workload OCI operations.
+    pub cache: Option<Arc<crate::cache::CacheBackend>>,
     /// PEM CA bundles to trust for OCI pulls, on top of the OS trust store and
     /// `SSL_CERT_FILE` / `SSL_CERT_DIR`. Needed to reach a registry behind a
     /// private CA those do not cover — an in-cluster one, or a corporate mirror.
@@ -1719,6 +1715,7 @@ impl Default for HostConfig {
             allow_oci_insecure: false,
             oci_pull_timeout: Duration::from_secs(30).into(),
             oci_cache_dir: None,
+            cache: None,
             oci_ca_paths: Vec::new(),
         }
     }
@@ -1728,6 +1725,7 @@ impl Default for HostConfig {
 pub struct HostBuilder {
     id: String,
     engine: Option<Engine>,
+    cache: Option<Arc<crate::cache::CacheBackend>>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
     plugin_bindings: crate::plugin::PluginBindings,
     hostname: Option<String>,
@@ -1749,6 +1747,7 @@ impl Default for HostBuilder {
         Self {
             id: crate::ids::now_v7().to_string(),
             engine: Default::default(),
+            cache: None,
             plugins: Default::default(),
             plugin_bindings: Default::default(),
             hostname: Default::default(),
@@ -1791,6 +1790,13 @@ impl HostBuilder {
         );
         self.id = id;
         Ok(self)
+    }
+
+    /// Select the cache for this host. A supplied engine must use the same Arc.
+    /// Overrides default-backend settings regardless of builder call order.
+    pub fn with_cache(mut self, cache: Arc<crate::cache::CacheBackend>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
     pub fn with_engine(mut self, engine: Engine) -> Self {
@@ -1979,7 +1985,7 @@ impl HostBuilder {
     /// cannot be read or does not parse, or if a different set of bundles is
     /// already configured for this process.
     pub fn build(self) -> anyhow::Result<Host> {
-        let config = self.config.unwrap_or_default();
+        let mut config = self.config.unwrap_or_default();
 
         // Trust roots first, before anything this host builds can pull: the
         // host pulls on behalf of every workload, and a bundle that cannot be
@@ -1990,11 +1996,37 @@ impl HostBuilder {
         crate::oci::set_extra_ca_certificates(&config.oci_ca_paths)
             .context("failed to load the OCI CA certificates in the host config")?;
 
-        let engine = if let Some(engine) = self.engine {
+        let requested_cache = self.cache.or(config.cache.take());
+        let engine = if let Some(mut engine) = self.engine {
+            if let Some(cache) = requested_cache {
+                anyhow::ensure!(
+                    Arc::ptr_eq(&cache, &engine.cache()),
+                    "host and supplied engine must use the same cache handle"
+                );
+            } else {
+                #[cfg(feature = "oci")]
+                if let Some(directory) = &config.oci_cache_dir {
+                    engine.configure_default_cache_directory(directory.clone());
+                }
+            }
+            // Include storage roots selected during host construction.
+            engine.reserve_cache_paths();
             engine
         } else {
-            Engine::builder().build()?
+            let mut builder = Engine::builder();
+            if let Some(cache) = requested_cache {
+                builder = builder.with_cache(cache);
+            } else {
+                #[cfg(feature = "oci")]
+                if let Some(directory) = &config.oci_cache_dir {
+                    builder = builder.with_cache(Arc::new(
+                        crate::cache::DefaultCache::default().with_oci_directory(directory.clone()),
+                    ));
+                }
+            }
+            builder.build()?
         };
+        config.cache = Some(engine.cache());
 
         // Resolved here, not in `HostBuilder::default`, so the histograms come
         // from the meter provider an embedder installed rather than whatever

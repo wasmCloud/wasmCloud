@@ -1,17 +1,14 @@
 use super::{Coalescer, docker_config_path};
+use crate::cache::{CredentialKey, Identity, OciCache};
 use anyhow::{Context, Result, anyhow, bail};
 use docker_credential::{CredentialRetrievalError, DockerCredential, get_credential};
 use oci_client::secrets::RegistryAuth;
 use std::{
     collections::BTreeSet,
-    sync::{Mutex, OnceLock, PoisonError},
+    sync::{Arc, Mutex, OnceLock, PoisonError},
     time::Duration,
 };
 use tracing::{debug, instrument, warn};
-
-/// How long a docker credential lookup answers for its registry. A login or
-/// rotation through docker takes effect within this.
-const DOCKER_AUTH_REUSE: Duration = Duration::from_secs(30);
 
 /// The longest a docker credential lookup may take, including waiting for a
 /// helper slot. Past it the pull proceeds anonymously, as for any other
@@ -32,30 +29,56 @@ impl CredentialResolver {
 
     /// Resolve credentials for a given registry
     #[instrument(skip(self), fields(registry = %registry))]
-    pub(super) async fn resolve_credentials(&self, registry: &str) -> RegistryAuth {
+    pub(super) async fn resolve_credentials(
+        &self,
+        registry: &str,
+        cache: Arc<dyn OciCache>,
+    ) -> Result<RegistryAuth> {
         // First, try explicit credentials
         if let Some((username, password)) = &self.explicit_credentials {
             debug!("using explicit credentials");
-            return RegistryAuth::Basic(username.clone(), password.clone());
+            return Ok(RegistryAuth::Basic(username.clone(), password.clone()));
         }
 
-        // Next, try docker credential helper. Its answer is reused for a
-        // short while: asking means reading the docker config and possibly
-        // running a helper process, which once per workload start is a
-        // process spawn per workload on a host restoring thousands.
-        static DOCKER_AUTH: OnceLock<Coalescer<String, RegistryAuth>> = OnceLock::new();
-        let docker_auth = DOCKER_AUTH.get_or_init(|| {
-            Coalescer::with_min_weight(64, DOCKER_HELPER_TIMEOUT, DOCKER_AUTH_REUSE, 1, |_| 1)
-        });
-        let registry = registry.to_owned();
-        cached_credentials(docker_auth, registry.clone(), move || {
-            Ok(Self::get_docker_credentials(&registry)?.unwrap_or(RegistryAuth::Anonymous))
-        })
-        .await
-        .unwrap_or_else(|error| {
-            warn!(%error, "failed to retrieve docker credentials; using anonymous access");
-            RegistryAuth::Anonymous
-        })
+        static HELPERS: OnceLock<Coalescer<(Identity, CredentialKey), RegistryAuth>> =
+            OnceLock::new();
+        let helpers = HELPERS.get_or_init(|| Coalescer::flights(DOCKER_HELPER_TIMEOUT));
+        let key = CredentialKey {
+            registry: registry.into(),
+            config_path: docker_config_path(),
+        };
+        helpers
+            .run((Identity(Arc::clone(&cache)), key.clone()), || async {
+                if let Some(auth) = cache.oci_get_credentials(&key).await
+                    .context("credential cache lookup failed")?
+                {
+                    return Ok(auth);
+                }
+                // Different backends must each perform their own lookup and
+                // publication, but may share the same helper process. Otherwise
+                // the running-helper guard would reject the second backend.
+                static LOOKUPS: OnceLock<Coalescer<CredentialKey, RegistryAuth>> = OnceLock::new();
+                let lookups = LOOKUPS.get_or_init(|| Coalescer::flights(DOCKER_HELPER_TIMEOUT));
+                let registry = key.registry.clone();
+                let lookup_registry = registry.clone();
+                let lookup = lookups.run(key.clone(), || run_helper(registry, move || {
+                    Ok(Self::get_docker_credentials(&lookup_registry)?
+                        .unwrap_or(RegistryAuth::Anonymous))
+                }));
+                let answer = tokio::time::timeout(DOCKER_HELPER_TIMEOUT, lookup).await
+                    .context("docker credential lookup timed out").and_then(|result| result);
+                match answer {
+                    Ok(auth) => {
+                        cache.oci_put_credentials(&key, auth.clone()).await
+                            .context("credential cache publication failed")?;
+                        Ok(auth)
+                    }
+                    Err(error) => {
+                        warn!(%error, "failed to retrieve docker credentials; using anonymous access");
+                        Ok(RegistryAuth::Anonymous)
+                    }
+                }
+            }).await
     }
 
     /// Attempt to retrieve credentials from docker credential helper
@@ -102,7 +125,7 @@ impl CredentialResolver {
     }
 }
 
-/// Cache and coalesce successful helper lookups, including anonymous results.
+/// Coalesce helper lookups in tests, including anonymous results.
 /// Failures are retried next time, so a repaired configuration is usable at once.
 ///
 /// Concurrent lookups for one registry share one helper run, taken before any
@@ -110,6 +133,7 @@ impl CredentialResolver {
 /// run on their own limiter and under [`DOCKER_HELPER_TIMEOUT`]: one that hangs
 /// fails its lookup instead of stalling every pull, and cannot starve client
 /// builds or other registries' lookups of permits.
+#[cfg(test)]
 pub(super) async fn cached_credentials(
     cache: &Coalescer<String, RegistryAuth>,
     registry: String,
@@ -118,6 +142,7 @@ pub(super) async fn cached_credentials(
     cached_credentials_within(cache, registry, DOCKER_HELPER_TIMEOUT, lookup).await
 }
 
+#[cfg(test)]
 async fn cached_credentials_within(
     cache: &Coalescer<String, RegistryAuth>,
     registry: String,
@@ -125,7 +150,7 @@ async fn cached_credentials_within(
     lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
 ) -> Result<RegistryAuth> {
     cache
-        .run_with_reuse(registry.clone(), true, || async move {
+        .run(registry.clone(), || async move {
             tokio::time::timeout(timeout, run_helper(registry, lookup))
                 .await
                 .with_context(|| {
@@ -201,12 +226,8 @@ mod tests {
     /// limiter's permits, and are not started again while they run.
     #[tokio::test(start_paused = true)]
     async fn hung_helpers_do_not_exhaust_the_limiter() {
-        let cache: &'static Coalescer<String, RegistryAuth> = Box::leak(Box::new(Coalescer::new(
-            16,
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            |_| 1,
-        )));
+        let cache: &'static Coalescer<String, RegistryAuth> =
+            Box::leak(Box::new(Coalescer::flights(Duration::from_secs(60))));
         let runs = Arc::new(AtomicUsize::new(0));
         let mut releases = Vec::new();
         // Start twice the limiter's capacity. Helpers stay blocked after timeout.

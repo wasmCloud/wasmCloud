@@ -6,24 +6,21 @@ use std::{
 };
 
 /// Folds concurrent identical requests into one: the first caller does the
-/// work and the others wait for its result, which then answers the same
-/// request until `reuse` after it was produced.
+/// work and the others wait for its result. Completed-result retention is
+/// supplied by the selected cache backend.
 ///
 /// A failure answers only callers that joined while the work ran. Later callers
 /// retry immediately, since the registry, credentials or trust may have changed.
-pub(super) struct Coalescer<K, V> {
+pub(crate) struct Coalescer<K, V> {
     /// Work in flight, held weakly: an entry lives only while some caller is
-    /// still waiting on it. Kept apart from `finished` so it is never refused
-    /// or evicted for space, which would stop coalescing exactly when many
-    /// callers want the same thing.
+    /// still waiting on it. Not subject to cache eviction, which would stop
+    /// coalescing exactly when many callers want the same thing.
     in_flight: Mutex<HashMap<K, InFlight<V>>>,
-    /// Finished successes still within their reuse window, bounded by weight.
-    pub(super) finished: moka::sync::Cache<K, V>,
     /// The longest a request in flight is joined by identical requests.
     join: Duration,
 }
 
-pub(super) type CoalescedCell<V> =
+pub(crate) type CoalescedCell<V> =
     tokio::sync::OnceCell<std::result::Result<V, Arc<anyhow::Error>>>;
 
 struct InFlight<V> {
@@ -64,49 +61,18 @@ where
     K: std::hash::Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    #[cfg(test)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    pub(super) fn new(
-        capacity: u64,
-        join: Duration,
-        reuse: Duration,
-        weigh: fn(&V) -> u32,
-    ) -> Self {
-        Self::with_min_weight(capacity, join, reuse, 1, weigh)
-    }
-
-    pub(super) fn with_min_weight(
-        capacity: u64,
-        join: Duration,
-        reuse: Duration,
-        minimum: u32,
-        weigh: fn(&V) -> u32,
-    ) -> Self {
+    /// Coordinate only work in flight. Retention belongs to the chosen backend.
+    pub(crate) fn flights(join: Duration) -> Self {
         Self {
             in_flight: Mutex::new(HashMap::new()),
-            finished: moka::sync::Cache::builder()
-                .max_capacity(capacity)
-                .weigher(move |_key: &K, value: &V| weigh(value).max(minimum.max(1)))
-                .time_to_live(reuse)
-                .build(),
             join,
         }
-    }
-
-    #[cfg(test)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    pub(super) async fn run<F, Fut>(&self, key: K, work: F) -> Result<V>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<V>>,
-    {
-        self.run_with_reuse(key, true, work).await
     }
 
     /// Requests in flight now, for tests.
     #[cfg(test)]
     #[cfg_attr(coverage_nightly, coverage(off))]
-    pub(super) fn in_flight_count(&self) -> usize {
+    pub(crate) fn in_flight_count(&self) -> usize {
         self.in_flight
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -116,7 +82,7 @@ where
     /// Callers sharing the request in flight for `key`, for tests.
     #[cfg(test)]
     #[cfg_attr(coverage_nightly, coverage(off))]
-    pub(super) fn waiters(&self, key: &K) -> usize {
+    pub(crate) fn waiters(&self, key: &K) -> usize {
         self.in_flight
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -124,20 +90,14 @@ where
             .map_or(0, |entry| entry.waiters)
     }
 
-    /// Join the identical request in flight, or start one. With
-    /// `reuse_finished` false a finished result is never returned, and none is
-    /// kept: nothing could reuse it.
-    pub(super) async fn run_with_reuse<F, Fut>(
-        &self,
-        key: K,
-        reuse_finished: bool,
-        work: F,
-    ) -> Result<V>
+    /// Join the identical request in flight, or start one. Completed results
+    /// answer existing waiters only; a subsequent request starts afresh.
+    pub(crate) async fn run<F, Fut>(&self, key: K, work: F) -> Result<V>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<V>>,
     {
-        let flight = self.join_or_start(&key, reuse_finished);
+        let flight = self.join_or_start(&key);
         let cell = &flight.cell;
         let mut ran = false;
         let result = cell
@@ -149,7 +109,7 @@ where
             .clone();
         if ran {
             // Callers already waiting hold the cell and still get this result.
-            // New callers either reuse a success or start again.
+            // New callers start again and consult their chosen cache.
             let mut in_flight = self
                 .in_flight
                 .lock()
@@ -161,9 +121,6 @@ where
                 .is_some_and(|entry| std::ptr::eq(entry.cell.as_ptr(), Arc::as_ptr(cell)))
             {
                 in_flight.remove(&key);
-                if reuse_finished && let Ok(value) = &result {
-                    self.finished.insert(key, value.clone());
-                }
             }
         }
         // Shared rather than reformatted, so each caller can still walk the
@@ -171,7 +128,7 @@ where
         result.map_err(|err| anyhow::Error::new(crate::engine::SharedError(err)))
     }
 
-    fn join_or_start(&self, key: &K, reuse_finished: bool) -> InFlightGuard<'_, K, V> {
+    fn join_or_start(&self, key: &K) -> InFlightGuard<'_, K, V> {
         let guard = |cell| InFlightGuard {
             in_flight: &self.in_flight,
             key: key.clone(),
@@ -181,27 +138,17 @@ where
             .in_flight
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        // Looked up under the lock, so a result moved here by a leader that
-        // just finished is not missed.
-        if reuse_finished && let Some(value) = self.finished.get(key) {
-            return guard(Arc::new(CoalescedCell::new_with(Some(Ok(value)))));
-        }
         let joinable = in_flight.get_mut(key).and_then(|entry| {
             if entry.started.elapsed() >= self.join {
                 return None;
             }
             let cell = entry.cell.upgrade()?;
-            // Finished between the leader's result and its bookkeeping. A
-            // failure answers only its waiters, and a caller that may not
-            // reuse a finished result starts afresh.
-            match cell.get() {
-                Some(Err(_)) => None,
-                Some(Ok(_)) if !reuse_finished => None,
-                _ => {
-                    entry.waiters += 1;
-                    Some(cell)
-                }
+            // Finished between the leader's result and its bookkeeping.
+            if cell.get().is_some() {
+                return None;
             }
+            entry.waiters += 1;
+            Some(cell)
         });
         if let Some(cell) = joinable {
             return guard(cell);
@@ -226,12 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancelling_a_burst_releases_keys_without_another_request() {
-        let cache = Arc::new(Coalescer::new(
-            16,
-            Duration::from_secs(60),
-            Duration::from_secs(5),
-            |_: &u32| 1,
-        ));
+        let cache = Arc::new(Coalescer::<_, u32>::flights(Duration::from_secs(60)));
         let (started, mut ready) = tokio::sync::mpsc::channel(32);
         let mut callers = tokio::task::JoinSet::new();
         for key in 0..32 {
@@ -259,14 +201,9 @@ mod tests {
 
     #[test]
     fn only_the_last_waiter_removes_its_flight() {
-        let cache = Coalescer::new(
-            16,
-            Duration::from_secs(60),
-            Duration::from_secs(5),
-            |_: &u32| 1,
-        );
-        let first = cache.join_or_start(&"image", false);
-        let second = cache.join_or_start(&"image", false);
+        let cache = Coalescer::<_, u32>::flights(Duration::from_secs(60));
+        let first = cache.join_or_start(&"image");
+        let second = cache.join_or_start(&"image");
         assert!(Arc::ptr_eq(&first.cell, &second.cell));
         drop(first);
         assert_eq!(cache.in_flight_count(), 1);
@@ -276,9 +213,9 @@ mod tests {
 
     #[test]
     fn cancelling_an_expired_flight_keeps_its_replacement() {
-        let cache = Coalescer::new(16, Duration::ZERO, Duration::from_secs(5), |_: &u32| 1);
-        let old = cache.join_or_start(&"image", false);
-        let replacement = cache.join_or_start(&"image", false);
+        let cache = Coalescer::<_, u32>::flights(Duration::ZERO);
+        let old = cache.join_or_start(&"image");
+        let replacement = cache.join_or_start(&"image");
         assert!(!Arc::ptr_eq(&old.cell, &replacement.cell));
         drop(old);
         assert_eq!(cache.in_flight_count(), 1);

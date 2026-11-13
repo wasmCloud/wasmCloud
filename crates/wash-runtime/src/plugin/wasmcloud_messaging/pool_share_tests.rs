@@ -307,29 +307,31 @@ async fn linked_components_reserve_the_complete_store_and_leave_headroom() -> an
       (func $f (canon lift (core func $m "f")))
       (instance $api (export "f" (func $f))) (export "test:callee/api" (instance $api)))"#,
     )?;
-    let unresolved = engine.initialize_workload(
-        "linked",
-        crate::types::Workload {
-            name: "linked".into(),
-            namespace: "test".into(),
-            annotations: Default::default(),
-            service: None,
-            volumes: vec![],
-            host_interfaces: vec![],
-            components: vec![
-                crate::types::Component {
-                    name: "caller".into(),
-                    bytes: caller.into(),
-                    ..Default::default()
-                },
-                crate::types::Component {
-                    name: "callee".into(),
-                    bytes: callee.into(),
-                    ..Default::default()
-                },
-            ],
-        },
-    )?;
+    let unresolved = engine
+        .initialize_workload(
+            "linked",
+            crate::types::Workload {
+                name: "linked".into(),
+                namespace: "test".into(),
+                annotations: Default::default(),
+                service: None,
+                volumes: vec![],
+                host_interfaces: vec![],
+                components: vec![
+                    crate::types::Component {
+                        name: "caller".into(),
+                        bytes: caller.into(),
+                        ..Default::default()
+                    },
+                    crate::types::Component {
+                        name: "callee".into(),
+                        bytes: callee.into(),
+                        ..Default::default()
+                    },
+                ],
+            },
+        )
+        .await?;
     let workload = unresolved
         .resolve(
             None,
@@ -403,22 +405,24 @@ async fn gc_stores_reserve_heap_backing_memory_and_independent_heap_slots() -> a
             (start $start))
           (core instance (instantiate $m)))"#,
         )?;
-        let unresolved = engine.initialize_workload(
-            "gc",
-            crate::types::Workload {
-                name: "gc".into(),
-                namespace: "test".into(),
-                annotations: Default::default(),
-                service: None,
-                volumes: vec![],
-                host_interfaces: vec![],
-                components: vec![crate::types::Component {
-                    name: "handler".into(),
-                    bytes: bytes.into(),
-                    ..Default::default()
-                }],
-            },
-        )?;
+        let unresolved = engine
+            .initialize_workload(
+                "gc",
+                crate::types::Workload {
+                    name: "gc".into(),
+                    namespace: "test".into(),
+                    annotations: Default::default(),
+                    service: None,
+                    volumes: vec![],
+                    host_interfaces: vec![],
+                    components: vec![crate::types::Component {
+                        name: "handler".into(),
+                        bytes: bytes.into(),
+                        ..Default::default()
+                    }],
+                },
+            )
+            .await?;
         let workload = unresolved
             .resolve(
                 None,

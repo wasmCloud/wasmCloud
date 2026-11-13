@@ -106,7 +106,13 @@ impl CliCommand for DevCommand {
             .clone()
             .unwrap_or_else(|| "0.0.0.0:8000".to_string());
 
+        let cache: Arc<wash_runtime::cache::CacheBackend> = Arc::new(
+            wash_runtime::cache::DefaultCache::default()
+                .with_oci_directory(ctx.cache_dir().join(OCI_CACHE_DIR)),
+        );
+        oci_config.cache = Some(Arc::clone(&cache));
         let mut engine_builder = Engine::builder()
+            .with_cache(cache)
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel());
         for name in &dev_config.wasm_proposals {
