@@ -321,6 +321,49 @@ fn an_oci_backend_beside_a_cache_directory_is_refused() -> Result<()> {
     Ok(())
 }
 
+/// A compiled-component backend's own storage is closed to guest volumes,
+/// even where the host path allowlist would otherwise admit it.
+#[tokio::test]
+async fn a_backend_reserves_its_paths_from_guest_volumes() -> Result<()> {
+    use wash_runtime::types::{HostPathVolume, Volume, VolumeType};
+
+    struct OnDisk(std::path::PathBuf);
+    impl Cache for OnDisk {
+        fn reserved_paths(&self) -> Vec<std::path::PathBuf> {
+            vec![self.0.clone()]
+        }
+    }
+    let root = tempfile::tempdir()?;
+    let (storage, data) = (root.path().join("cache"), root.path().join("data"));
+    std::fs::create_dir_all(&storage)?;
+    std::fs::create_dir_all(&data)?;
+    let engine = Engine::builder()
+        .with_pooling_allocator(false)
+        .without_max_process_memory()
+        .with_allowed_host_paths([root.path().to_owned()])
+        .with_cache(Arc::new(OnDisk(storage.clone())))
+        .build()?;
+    let mounting = |path: &std::path::Path| Workload {
+        volumes: vec![Volume {
+            name: "v".into(),
+            volume_type: VolumeType::HostPath(HostPathVolume {
+                local_path: path.to_string_lossy().into_owned(),
+            }),
+        }],
+        ..workload()
+    };
+    engine
+        .initialize_workload("allowed", mounting(&data))
+        .await?;
+    assert!(
+        engine
+            .initialize_workload("reserved", mounting(&storage))
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn default_trait_methods_allow_a_cache_to_disable_all_retention() -> Result<()> {
     struct Disabled;

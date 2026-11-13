@@ -171,8 +171,12 @@ operations accept one with `OciConfig::with_cache`; without it, calls naming
 the same `cache_dir` share a default backend with each other and with a host
 configured with that `oci_cache_dir`, so plugins pulled before a host is built
 need no extra wiring. A backend with scheduled expiry implements `oci_maintain`
-and returns true from `oci_needs_maintenance`; `oci_reserved_paths` protects a
-backend's local storage from guest volume mounts.
+and returns true from `oci_needs_maintenance`.
+
+Either kind of backend can keep guests away from its local storage:
+`Cache::reserved_paths` is reserved when the engine is built, and
+`OciCache::oci_reserved_paths` when the host is. No workload volume may equal,
+contain, or lie inside a reserved path.
 
 Compiled keys contain a process-local engine identity and a digest. Store the
 whole `CacheValue`, including its metadata; compiled values cannot be reused
