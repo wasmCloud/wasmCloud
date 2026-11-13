@@ -24,6 +24,9 @@ const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
 /// Methods default to no retention. All storage operations are asynchronous and
 /// fallible, and returned futures are `Send`. Preserve the supplied key's
 /// authorization, transport and trust scope when storing or returning entries.
+///
+/// Artifact errors fail the pull or push. Completed-pull and credential errors
+/// are logged and the operation continues without reuse.
 #[async_trait::async_trait]
 pub trait OciCache: Cache {
     /// Read bytes, digest and the request's credential-match status together.
