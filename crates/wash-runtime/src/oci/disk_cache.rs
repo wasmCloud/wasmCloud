@@ -1,4 +1,5 @@
-use super::{AuthId, TrustId};
+#[cfg(test)]
+use super::TrustId;
 use anyhow::{Context, Result, bail};
 use hmac::{Hmac, Mac};
 use oci_client::secrets::RegistryAuth;
@@ -51,11 +52,10 @@ impl Principal {
 /// Cache manager for OCI artifacts
 pub(crate) struct CacheManager {
     cache_dir: PathBuf,
-    principal: Principal,
-    /// The full credentials, password included, for [`Self::credential_proof`].
-    credential: AuthId,
-    insecure: bool,
-    trust: TrustId,
+    /// Whose entries these are, and the full credentials, password included,
+    /// for [`Self::credential_proof`]. Its reference is not used: each call
+    /// names its own.
+    scope: crate::cache::ArtifactKey,
     /// HMAC-SHA256 keyed with the cache root's secret, cloned per entry name.
     mac: Hmac<Sha256>,
 }
@@ -93,10 +93,7 @@ impl CacheManager {
             .map_err(|err| anyhow::anyhow!("invalid OCI cache key: {err}"))?;
         Ok(Self {
             cache_dir,
-            principal: scope.principal.clone(),
-            credential: scope.credential,
-            insecure: scope.insecure,
-            trust: scope.trust,
+            scope: scope.clone(),
             mac,
         })
     }
@@ -107,14 +104,8 @@ impl CacheManager {
     /// from the registry user or bearer token, and an unkeyed hash would let
     /// anyone who can list the directory test guesses at them offline.
     pub(crate) fn get_cache_dir(&self, reference: &str) -> PathBuf {
-        let mut mac = self.mac.clone();
-        mac.update(b"wash-oci-cache-v3\0");
-        mac.update(&self.principal.0);
-        mac.update(&[u8::from(self.insecure)]);
-        mac.update(&self.trust.0);
-        mac.update(reference.as_bytes());
-        let hash = mac.finalize().into_bytes();
-        self.cache_dir.join(format!("{ENTRY_PREFIX}{hash:x}"))
+        let name = self.scope.storage_key_with(self.mac.clone(), reference);
+        self.cache_dir.join(format!("{ENTRY_PREFIX}{}", hex(&name)))
     }
 
     /// The digest and component share one file, published by one rename, so
@@ -126,10 +117,7 @@ impl CacheManager {
     /// Keyed like entry names, so the file holding it does not let anyone who
     /// can read the cache test password guesses offline.
     fn credential_proof(&self) -> String {
-        let mut mac = self.mac.clone();
-        mac.update(b"wash-oci-cache-credential-v1\0");
-        mac.update(&self.credential.0);
-        format!("{:x}", mac.finalize().into_bytes())
+        hex(&self.scope.credential_proof_with(self.mac.clone()))
     }
 
     fn get_credential_path(&self, reference: &str) -> PathBuf {
@@ -158,27 +146,22 @@ impl CacheManager {
         .await
     }
 
-    /// Check if an artifact is cached.
+    /// Whether a readable entry is cached: [`Self::read_optional`], for tests.
     #[cfg(test)]
     pub(crate) async fn is_cached(&self, reference: &str) -> bool {
-        tokio::fs::metadata(self.get_entry_path(reference))
-            .await
-            .is_ok()
+        matches!(self.read_optional(reference).await, Ok(Some(_)))
     }
 
-    /// Read cached artifact, returning (component_data, digest)
+    /// [`Self::read_optional`] for tests expecting an entry.
     #[cfg(test)]
     pub(crate) async fn read_cached(&self, reference: &str) -> Result<(Vec<u8>, String)> {
-        let entry_path = self.get_entry_path(reference);
-        debug!(entry_path = %entry_path.display(), "reading cached artifact");
-        let file = tokio::fs::File::open(&entry_path).await.with_context(|| {
-            format!("failed to open cached artifact at {}", entry_path.display())
-        })?;
-        read_entry(file)
-            .await
-            .with_context(|| format!("invalid cached artifact at {}", entry_path.display()))
+        self.read_optional(reference)
+            .await?
+            .context("artifact is not cached")
     }
 
+    /// Read a cached artifact as (component_data, digest), or `None` when
+    /// there is no entry.
     pub(crate) async fn read_optional(&self, reference: &str) -> Result<Option<(Vec<u8>, String)>> {
         let path = self.get_entry_path(reference);
         match tokio::fs::File::open(&path).await {
@@ -219,6 +202,14 @@ impl CacheManager {
         write_replacing(&cache_dir, "entry", entry).await?;
         self.record_credential(reference).await
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
 }
 
 async fn read_entry(mut file: tokio::fs::File) -> Result<(Vec<u8>, String)> {
@@ -425,6 +416,34 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    /// The disk cache names its entries and proves credentials with the same
+    /// derivations `ArtifactKey` offers custom backends, keyed with the secret
+    /// in the cache root.
+    #[tokio::test]
+    async fn entry_names_and_proofs_are_the_public_key_derivations() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = RegistryAuth::Basic("alice".into(), "secret".into());
+        let reference = "registry/ns/component:1";
+        let trust = TrustId([7; 32]);
+        let cache = CacheManager::open(dir.path().to_path_buf(), &auth, true, trust)
+            .await
+            .unwrap();
+        let secret = std::fs::read(dir.path().join(KEY_FILE)).unwrap();
+        let key = crate::cache::ArtifactKey::new(reference, &auth, true, trust);
+
+        assert_eq!(
+            cache.get_cache_dir(reference),
+            dir.path().join(format!(
+                "{ENTRY_PREFIX}{}",
+                hex(&key.storage_key(&secret).unwrap())
+            ))
+        );
+        assert_eq!(
+            cache.credential_proof(),
+            hex(&key.credential_proof(&secret).unwrap())
+        );
     }
 
     /// Writers racing on one reference each publish a whole entry, so every

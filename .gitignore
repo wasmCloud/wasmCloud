@@ -22,6 +22,7 @@ worktrees/
 
 # AI things
 .claude
+.llm
 CLAUDE.md
 
 # WIT dependencies (fetched by wash build / build scripts)

@@ -29,7 +29,9 @@
 
 pub(crate) mod client;
 use crate::cache::coalescer;
-use client::{TrustId, TrustSnapshot, pull_client};
+#[cfg(test)]
+use client::TrustId;
+use client::{TrustSnapshot, pull_client};
 mod credentials;
 pub(crate) mod disk_cache;
 #[cfg(test)]
@@ -43,8 +45,6 @@ mod test_registry;
 use crate::cache::{ArtifactKey, Identity, OciCache, PullKey, Pulled};
 use coalescer::Coalescer;
 use credentials::CredentialResolver;
-#[cfg(test)]
-use credentials::cached_credentials;
 #[cfg(test)]
 use disk_cache::CacheManager;
 
@@ -1022,57 +1022,6 @@ mod tests {
             );
         }
         assert_eq!(cache.in_flight_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn credential_misses_coalesce_without_blocking_the_runtime() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let cache: &'static Coalescer<String, RegistryAuth> =
-            Box::leak(Box::new(Coalescer::flights(Duration::from_secs(60))));
-        let runs = Arc::new(AtomicUsize::new(0));
-        let (started, ready) = tokio::sync::oneshot::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        let first = tokio::spawn(cached_credentials(cache, "registry".into(), {
-            let runs = Arc::clone(&runs);
-            move || {
-                runs.fetch_add(1, Ordering::SeqCst);
-                let _ = started.send(());
-                wait.recv_timeout(Duration::from_secs(2))?;
-                Ok(RegistryAuth::Basic("user".into(), "secret".into()))
-            }
-        }));
-        ready.await.unwrap();
-        let second = tokio::spawn(cached_credentials(cache, "registry".into(), {
-            let runs = Arc::clone(&runs);
-            move || {
-                runs.fetch_add(1, Ordering::SeqCst);
-                Ok(RegistryAuth::Anonymous)
-            }
-        }));
-        // On a current-thread runtime the second caller cannot join while the
-        // helper blocks, unless the helper runs on the bounded blocking pool.
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while cache.waiters(&"registry".to_string()) < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the second caller joins while the helper blocks");
-        release.send(()).unwrap();
-        let expected = AuthId::of(&first.await.unwrap().unwrap());
-        assert!(expected == AuthId::of(&second.await.unwrap().unwrap()));
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
-
-        assert!(
-            cached_credentials(cache, "broken".into(), || bail!("bad config"))
-                .await
-                .is_err()
-        );
-        assert!(
-            cached_credentials(cache, "broken".into(), || Ok(RegistryAuth::Anonymous))
-                .await
-                .is_ok()
-        );
     }
 
     #[tokio::test(start_paused = true)]

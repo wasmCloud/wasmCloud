@@ -79,8 +79,8 @@ where
             .len()
     }
 
-    /// Callers sharing the request in flight for `key`, for tests.
-    #[cfg(test)]
+    /// Callers sharing the request in flight for `key`, for the OCI tests.
+    #[cfg(all(test, feature = "oci"))]
     #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn waiters(&self, key: &K) -> usize {
         self.in_flight

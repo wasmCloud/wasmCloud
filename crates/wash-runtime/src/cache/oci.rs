@@ -189,24 +189,37 @@ impl ArtifactKey {
     /// revalidate existing bytes. Use a backend-owned persistent secret; never
     /// publish an unkeyed credential fingerprint. Different secrets isolate stores.
     pub fn storage_key(&self, secret: &[u8]) -> Result<[u8; 32]> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(secret)
-            .map_err(|error| anyhow::anyhow!("invalid cache secret: {error}"))?;
-        mac.update(b"wash-oci-cache-v3\0");
-        mac.update(&self.principal.0);
-        mac.update(&[u8::from(self.insecure)]);
-        mac.update(&self.trust.0);
-        mac.update(self.reference.as_bytes());
-        Ok(mac.finalize().into_bytes().into())
+        Ok(self.storage_key_with(keyed(secret)?, &self.reference))
     }
     /// Proof of the exact credentials, for offline reuse. Store this only after
     /// the runtime calls `oci_put_artifact` or `oci_record_credentials`.
     pub fn credential_proof(&self, secret: &[u8]) -> Result<[u8; 32]> {
-        let mut mac = Hmac::<Sha256>::new_from_slice(secret)
-            .map_err(|error| anyhow::anyhow!("invalid cache secret: {error}"))?;
+        Ok(self.credential_proof_with(keyed(secret)?))
+    }
+
+    /// [`Self::storage_key`] of this key's scope for `reference`, from a MAC
+    /// already keyed with the secret. The one derivation the built-in disk
+    /// cache and custom backends both use.
+    pub(crate) fn storage_key_with(&self, mut mac: Hmac<Sha256>, reference: &str) -> [u8; 32] {
+        mac.update(b"wash-oci-cache-v3\0");
+        mac.update(&self.principal.0);
+        mac.update(&[u8::from(self.insecure)]);
+        mac.update(&self.trust.0);
+        mac.update(reference.as_bytes());
+        mac.finalize().into_bytes().into()
+    }
+
+    /// [`Self::credential_proof`] from a MAC already keyed with the secret.
+    pub(crate) fn credential_proof_with(&self, mut mac: Hmac<Sha256>) -> [u8; 32] {
         mac.update(b"wash-oci-cache-credential-v1\0");
         mac.update(&self.credential.0);
-        Ok(mac.finalize().into_bytes().into())
+        mac.finalize().into_bytes().into()
     }
+}
+
+fn keyed(secret: &[u8]) -> Result<Hmac<Sha256>> {
+    Hmac::<Sha256>::new_from_slice(secret)
+        .map_err(|error| anyhow::anyhow!("invalid cache secret: {error}"))
 }
 
 impl std::fmt::Debug for ArtifactKey {
