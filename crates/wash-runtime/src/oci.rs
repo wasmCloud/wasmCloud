@@ -516,7 +516,7 @@ pub(crate) async fn pull_component_bytes(
         let cache = config.effective_cache();
         let auth = CredentialResolver::new(config.credentials.clone())
             .resolve_credentials(reference_parsed.registry(), Arc::clone(&cache))
-            .await?;
+            .await;
         let trust = TrustSnapshot::load().await?;
 
         // Everything that can change what a pull returns, or whether it may
@@ -530,13 +530,17 @@ pub(crate) async fn pull_component_bytes(
         let reuse = pull_policy != OciPullPolicy::Always;
         let pulled = pull_coalescer()
             .run((Identity(Arc::clone(&cache)), key.clone()), || async {
-                if reuse
-                    && let Some(pulled) = cache
-                        .oci_get_pull(&key)
-                        .await
-                        .context("completed pull cache lookup failed")?
-                {
-                    return Ok(pulled);
+                // Completed-pull reuse only saves registry work. A backend
+                // that cannot serve or keep it costs that work, not the pull.
+                if reuse {
+                    match cache.oci_get_pull(&key).await {
+                        Ok(Some(pulled)) => return Ok(pulled),
+                        Ok(None) => {}
+                        Err(error) => warn!(
+                            error = format!("{error:#}"),
+                            "completed pull cache lookup failed; pulling instead"
+                        ),
+                    }
                 }
                 let pulled = Box::pin(pull_uncoalesced(
                     reference,
@@ -549,11 +553,11 @@ pub(crate) async fn pull_component_bytes(
                     &key.artifact,
                 ))
                 .await?;
-                if reuse {
-                    cache
-                        .oci_put_pull(&key, Arc::clone(&pulled))
-                        .await
-                        .context("completed pull cache publication failed")?;
+                if reuse && let Err(error) = cache.oci_put_pull(&key, Arc::clone(&pulled)).await {
+                    warn!(
+                        error = format!("{error:#}"),
+                        "completed pull cache publication failed; continuing without reuse"
+                    );
                 }
                 Ok(pulled)
             })
@@ -795,7 +799,7 @@ pub async fn push_component(
     let credential_resolver = CredentialResolver::new(config.credentials);
     let auth = credential_resolver
         .resolve_credentials(reference_parsed.registry(), Arc::clone(&cache))
-        .await?;
+        .await;
 
     // Use one trust snapshot for the client and any disk entry it publishes.
     let trust = TrustSnapshot::load().await?;

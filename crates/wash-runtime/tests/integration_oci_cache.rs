@@ -407,7 +407,7 @@ async fn custom_cache_io_is_inside_the_pull_deadline() {
 }
 
 #[tokio::test]
-async fn credential_cache_hits_and_errors_reach_the_caller() {
+async fn credential_cache_hits_are_used_and_errors_do_not_fail_the_pull() {
     struct Credentials {
         fail: bool,
     }
@@ -437,13 +437,54 @@ async fn credential_cache_hits_and_errors_reach_the_caller() {
     pull_component(&registry.reference(), config(false), OciPullPolicy::Always)
         .await
         .unwrap();
+    // A backend that cannot answer is a miss: the pull falls back to the docker
+    // helper and then to anonymous access, and is settled by the registry.
+    // This one requires credentials, so it is the registry that refuses.
     let requests = registry.requests.load(Ordering::SeqCst);
     let error = pull_component(&registry.reference(), config(true), OciPullPolicy::Always)
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains("credential backend unavailable"),
+        !format!("{error:#}").contains("credential backend unavailable"),
         "{error:#}"
     );
-    assert_eq!(registry.requests.load(Ordering::SeqCst), requests);
+    assert!(registry.requests.load(Ordering::SeqCst) > requests);
+}
+
+/// Completed-pull reuse is an optimisation: a backend that fails to serve or
+/// keep it costs registry work, never the pull.
+#[tokio::test]
+async fn completed_pull_cache_errors_do_not_fail_the_pull() {
+    struct Failing;
+    impl wash_runtime::cache::Cache for Failing {}
+
+    #[async_trait::async_trait]
+    impl wash_runtime::cache::OciCache for Failing {
+        async fn oci_get_pull(
+            &self,
+            _: &wash_runtime::cache::PullKey,
+        ) -> anyhow::Result<Option<std::sync::Arc<wash_runtime::cache::Pulled>>> {
+            anyhow::bail!("completed pull backend unavailable")
+        }
+        async fn oci_put_pull(
+            &self,
+            _: &wash_runtime::cache::PullKey,
+            _: std::sync::Arc<wash_runtime::cache::Pulled>,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("completed pull backend unavailable")
+        }
+    }
+    wash_runtime::init_crypto();
+    let registry = Registry::start().await;
+    let config = OciConfig {
+        credentials: Some(("user".into(), "secret".into())),
+        cache: Some(std::sync::Arc::new(Failing)),
+        insecure: true,
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    };
+    let (bytes, _) = pull_component(&registry.reference(), config, OciPullPolicy::IfNotPresent)
+        .await
+        .unwrap();
+    assert_eq!(bytes, registry.image.read().unwrap().wasm);
 }

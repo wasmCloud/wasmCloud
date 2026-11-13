@@ -4,8 +4,14 @@
 //! no retention, so implementations can support only the domains they need.
 //! The runtime owns compilation, authorization, and in-flight coordination.
 //! Backends must publish whole entries atomically, preserve key isolation, and
-//! never block an async worker. Errors are distinct from misses and propagate
-//! to callers. Cache implementations are trusted embedder code.
+//! never block an async worker. Cache implementations are trusted embedder code.
+//!
+//! A cache saves work, and a failing one costs only that work. An error from
+//! compiled-component, completed-pull or credential retention is logged, then
+//! treated as a miss on a read and as nothing kept on a write: the start or
+//! pull goes on. OCI artifact errors do propagate, as the disk cache's always
+//! have: an entry that cannot be read may be the only copy `Never` may use,
+//! and one that cannot be written would silently stop offline reuse.
 
 #[cfg(feature = "oci")]
 use std::sync::Arc;

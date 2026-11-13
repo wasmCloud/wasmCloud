@@ -1359,12 +1359,19 @@ impl Engine {
                     engine: self.cache_engine_id,
                     digest: digest.clone(),
                 };
-                if let Some(compiled) = self
-                    .cache
-                    .get_compiled(&key)
-                    .await
-                    .context("compilation cache lookup failed")?
-                {
+                // The cache only saves a compile: a backend that cannot answer
+                // costs one, and never the start.
+                let cached = self.cache.get_compiled(&key).await.unwrap_or_else(|error| {
+                    warn!(
+                        cache = self.cache.name(),
+                        error = format!("{error:#}"),
+                        "compilation cache lookup failed; compiling instead"
+                    );
+                    None
+                });
+                if let Some(compiled) = cached {
+                    // Not an outage: instantiating another engine's code is
+                    // unsound, and a backend that returns it is broken.
                     anyhow::ensure!(
                         wasmtime::Engine::same(&self.inner, compiled.component.engine()),
                         "cache returned a component belonging to a different engine"
@@ -1400,11 +1407,15 @@ impl Engine {
                         return Ok(live);
                     }
                     let compiled = engine.compile_owned(bytes, admission).await?;
-                    engine
-                        .cache
-                        .put_compiled(&key, compiled.clone())
-                        .await
-                        .context("compilation cache publication failed")?;
+                    // The compile is in hand: failing to retain it costs the
+                    // next start a compile, not this one its component.
+                    if let Err(error) = engine.cache.put_compiled(&key, compiled.clone()).await {
+                        warn!(
+                            cache = engine.cache.name(),
+                            error = format!("{error:#}"),
+                            "compilation cache publication failed; continuing uncached"
+                        );
+                    }
                     Ok(engine.record_live(&key.digest, compiled))
                 })
                 .await
