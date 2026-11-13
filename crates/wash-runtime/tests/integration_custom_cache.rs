@@ -362,6 +362,26 @@ fn an_oci_backend_beside_a_cache_directory_is_refused() -> Result<()> {
     Ok(())
 }
 
+/// A backend is told an engine is gone once, when its last clone drops.
+#[tokio::test]
+async fn a_backend_is_told_when_its_engine_is_gone() -> Result<()> {
+    #[derive(Default)]
+    struct Forgetting(std::sync::atomic::AtomicUsize);
+    impl Cache for Forgetting {
+        fn forget_engine(&self, _: uuid::Uuid) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let cache = Arc::new(Forgetting::default());
+    let first = engine(cache.clone());
+    let clone = first.clone();
+    drop(first);
+    assert_eq!(cache.0.load(Ordering::SeqCst), 0);
+    drop(clone);
+    assert_eq!(cache.0.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
 /// A compiled-component backend's own storage is closed to guest volumes,
 /// even where the host path allowlist would otherwise admit it.
 #[tokio::test]
