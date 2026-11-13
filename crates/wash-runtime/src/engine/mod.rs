@@ -2668,6 +2668,7 @@ impl EngineBuilder {
                 (Arc::new(default.clone()), Some(default))
             }
         };
+        self.reserved_host_paths.extend(cache.reserved_paths());
         let socket_policy = self.socket_policy.unwrap_or_default();
         let scratch_root = self
             .scratch_root

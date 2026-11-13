@@ -20,7 +20,7 @@
 
 #[cfg(feature = "oci")]
 use std::sync::Arc;
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
 
@@ -59,6 +59,11 @@ pub trait Cache: Send + Sync + 'static {
     /// Retain the component and its metadata as one value.
     async fn put_compiled(&self, _key: &CacheKey, _value: CacheValue) -> Result<()> {
         Ok(())
+    }
+    /// Local paths guests must not mount, for a backend that keeps anything
+    /// on disk. Called when the engine is built, without I/O.
+    fn reserved_paths(&self) -> Vec<PathBuf> {
+        Vec::new()
     }
 }
 
