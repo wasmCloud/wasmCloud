@@ -323,6 +323,10 @@ type WorkloadMap = HashMap<String, HostWorkload>;
 /// - System monitoring and resource tracking
 pub struct Host {
     engine: Engine,
+    /// Artifacts, completed pulls and credential-helper answers for the pulls
+    /// this host makes, and what its cache maintenance expires.
+    #[cfg(feature = "oci")]
+    oci_cache: Arc<dyn crate::cache::OciCache>,
     /// Workloads mapped from ID to the workload and its current state. A sync
     /// lock: no critical section awaits, so an async lock's handoff was pure cost.
     // NOTE: a std lock, formerly a tokio one. Never hold its guard across an
@@ -874,9 +878,19 @@ impl Host {
         &self.version
     }
 
-    /// Backend shared by this host's engine, OCI pulls and maintenance.
-    pub fn cache(&self) -> Arc<crate::cache::CacheBackend> {
+    /// The compiled-component backend of this host's engine.
+    pub fn cache(&self) -> Arc<dyn crate::cache::Cache> {
         self.engine.cache()
+    }
+
+    /// The backend this host's OCI pulls and cache maintenance use: the one
+    /// given to [`HostBuilder::with_oci_cache`], or the default for
+    /// [`HostConfig::oci_cache_dir`]. Pass it to
+    /// [`OciConfig::with_cache`](crate::oci::OciConfig::with_cache) to pull
+    /// through the same backend outside a workload start.
+    #[cfg(feature = "oci")]
+    pub fn oci_cache(&self) -> Arc<dyn crate::cache::OciCache> {
+        Arc::clone(&self.oci_cache)
     }
 
     /// Get host config
@@ -1692,10 +1706,10 @@ async fn consume_workload_failures(
 pub struct HostConfig {
     pub allow_oci_insecure: bool,
     pub oci_pull_timeout: Option<Duration>,
+    /// Directory of the default OCI artifact cache. A host given its own
+    /// backend through [`HostBuilder::with_oci_cache`] refuses to build with
+    /// this set: that backend owns its storage.
     pub oci_cache_dir: Option<PathBuf>,
-    /// Optional backend. `HostBuilder::with_cache` takes precedence. After build,
-    /// this is the effective handle inherited by all workload OCI operations.
-    pub cache: Option<Arc<crate::cache::CacheBackend>>,
     /// PEM CA bundles to trust for OCI pulls, on top of the OS trust store and
     /// `SSL_CERT_FILE` / `SSL_CERT_DIR`. Needed to reach a registry behind a
     /// private CA those do not cover — an in-cluster one, or a corporate mirror.
@@ -1719,7 +1733,6 @@ impl Default for HostConfig {
             allow_oci_insecure: false,
             oci_pull_timeout: Duration::from_secs(30).into(),
             oci_cache_dir: None,
-            cache: None,
             oci_ca_paths: Vec::new(),
         }
     }
@@ -1729,7 +1742,9 @@ impl Default for HostConfig {
 pub struct HostBuilder {
     id: String,
     engine: Option<Engine>,
-    cache: Option<Arc<crate::cache::CacheBackend>>,
+    cache: Option<Arc<dyn crate::cache::Cache>>,
+    #[cfg(feature = "oci")]
+    oci_cache: Option<Arc<dyn crate::cache::OciCache>>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin>>,
     plugin_bindings: crate::plugin::PluginBindings,
     hostname: Option<String>,
@@ -1752,6 +1767,8 @@ impl Default for HostBuilder {
             id: crate::ids::now_v7().to_string(),
             engine: Default::default(),
             cache: None,
+            #[cfg(feature = "oci")]
+            oci_cache: None,
             plugins: Default::default(),
             plugin_bindings: Default::default(),
             hostname: Default::default(),
@@ -1796,10 +1813,21 @@ impl HostBuilder {
         Ok(self)
     }
 
-    /// Select the cache for this host. A supplied engine must use the same Arc.
-    /// Overrides default-backend settings regardless of builder call order.
-    pub fn with_cache(mut self, cache: Arc<crate::cache::CacheBackend>) -> Self {
+    /// Select the compiled-component backend of the engine this host builds.
+    /// With [`Self::with_engine`], it must be the handle that engine was built
+    /// with. OCI retention is separate: see [`Self::with_oci_cache`].
+    pub fn with_cache(mut self, cache: Arc<dyn crate::cache::Cache>) -> Self {
         self.cache = Some(cache);
+        self
+    }
+
+    /// Select the backend for this host's OCI artifacts, completed pulls and
+    /// credential-helper answers, in place of the default one for
+    /// [`HostConfig::oci_cache_dir`]. The backend owns its storage, so
+    /// [`Self::build`] fails if that directory is also set.
+    #[cfg(feature = "oci")]
+    pub fn with_oci_cache(mut self, cache: Arc<dyn crate::cache::OciCache>) -> Self {
+        self.oci_cache = Some(cache);
         self
     }
 
@@ -1989,7 +2017,7 @@ impl HostBuilder {
     /// cannot be read or does not parse, or if a different set of bundles is
     /// already configured for this process.
     pub fn build(self) -> anyhow::Result<Host> {
-        let mut config = self.config.unwrap_or_default();
+        let config = self.config.unwrap_or_default();
 
         // Trust roots first, before anything this host builds can pull: the
         // host pulls on behalf of every workload, and a bundle that cannot be
@@ -2000,37 +2028,39 @@ impl HostBuilder {
         crate::oci::set_extra_ca_certificates(&config.oci_ca_paths)
             .context("failed to load the OCI CA certificates in the host config")?;
 
-        let requested_cache = self.cache.or(config.cache.take());
-        let engine = if let Some(mut engine) = self.engine {
-            if let Some(cache) = requested_cache {
+        // The engine keeps the compiled-component backend it was built with:
+        // a handle taken from it before this host existed stays the host's.
+        #[cfg_attr(not(feature = "oci"), allow(unused_mut))]
+        let mut engine = match (self.engine, self.cache) {
+            (Some(engine), Some(cache)) => {
                 anyhow::ensure!(
                     Arc::ptr_eq(&cache, &engine.cache()),
                     "host and supplied engine must use the same cache handle"
                 );
-            } else {
-                #[cfg(feature = "oci")]
-                if let Some(directory) = &config.oci_cache_dir {
-                    engine.configure_default_cache_directory(directory.clone());
-                }
+                engine
             }
-            // Include storage roots selected during host construction.
-            engine.reserve_cache_paths();
-            engine
-        } else {
-            let mut builder = Engine::builder();
-            if let Some(cache) = requested_cache {
-                builder = builder.with_cache(cache);
-            } else {
-                #[cfg(feature = "oci")]
-                if let Some(directory) = &config.oci_cache_dir {
-                    builder = builder.with_cache(Arc::new(
-                        crate::cache::DefaultCache::default().with_oci_directory(directory.clone()),
-                    ));
-                }
-            }
-            builder.build()?
+            (Some(engine), None) => engine,
+            (None, Some(cache)) => Engine::builder().with_cache(cache).build()?,
+            (None, None) => Engine::builder().build()?,
         };
-        config.cache = Some(engine.cache());
+
+        // An explicit OCI backend owns its storage, so a directory set beside
+        // it would be silently unused: no artifact written, nothing expired,
+        // and every start pulling again. Refuse the combination instead.
+        #[cfg(feature = "oci")]
+        let oci_cache = match (self.oci_cache, &config.oci_cache_dir) {
+            (Some(_), Some(directory)) => anyhow::bail!(
+                "`oci_cache_dir` ({}) has no effect beside an explicit OCI cache backend, which \
+                 owns its storage. Unset it, or keep artifacts there by giving the backend that \
+                 directory (`DefaultOciCache::default().with_directory(..)`)",
+                directory.display()
+            ),
+            (Some(cache), None) => cache,
+            (None, directory) => crate::cache::oci::standalone(directory.clone()),
+        };
+        // Storage chosen here, after a supplied engine was built.
+        #[cfg(feature = "oci")]
+        engine.reserve_host_paths(oci_cache.oci_reserved_paths());
 
         // Resolved here, not in `HostBuilder::default`, so the histograms come
         // from the meter provider an embedder installed rather than whatever
@@ -2127,6 +2157,8 @@ impl HostBuilder {
 
         Ok(Host {
             engine,
+            #[cfg(feature = "oci")]
+            oci_cache,
             workloads: Arc::default(),
             workload_recoveries: Arc::default(),
             workload_cleanup_tasks: {

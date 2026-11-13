@@ -89,36 +89,40 @@ async fn main() -> anyhow::Result<()> {
 
 ### Custom caches
 
-Embedders can provide an `Arc<wash_runtime::cache::CacheBackend>` at host or engine
-construction. `DefaultCache` preserves bounded in-memory compilation retention
-and, with `with_oci_directory`, the existing credential-scoped disk artifact
-cache. The engine builder's compilation capacity and idle timeout configure its
-default backend. An explicit backend takes precedence over those settings and
-over the host/OCI cache directory setting, regardless of builder call order.
+The runtime has two kinds of retention, each behind its own trait and its own
+handle. Replacing one leaves the other on its default.
 
-`Cache` provides compiled-component retention, naming, and reserved paths.
-With the `oci` feature, `OciCache: Cache` adds OCI operations, all prefixed
-with `oci_`, including maintenance. `CacheBackend` aliases `dyn OciCache` with
-OCI enabled and `dyn Cache` otherwise, keeping one shared backend handle.
+- `cache::Cache` retains compiled components. An engine takes it:
+  `Engine::builder().with_cache(Arc<dyn Cache>)`. The default, `DefaultCache`,
+  is bounded and in memory; the engine builder's compilation capacity and idle
+  timeout configure it.
+- `cache::OciCache` (with the `oci` feature) retains pulled artifacts, completed
+  pulls and credential-helper answers. A host takes it:
+  `Host::builder().with_oci_cache(Arc<dyn OciCache>)`. The default,
+  `DefaultOciCache`, keeps completed pulls and helper answers in memory and,
+  given a directory, artifacts in the credential-scoped disk cache.
+  `HostConfig::oci_cache_dir` selects that directory for the default backend.
 
-`Cache::name()` is synchronous and returns `&str`, defaulting to the Rust type
-name. Override it with a stored name to distinguish instances dynamically. Names
-are diagnostic labels, need not be unique, and do not determine cache isolation.
+Neither handle's type depends on which features are enabled, so a `Cache`
+implementation keeps compiling when another crate in the build turns `oci` on.
 
 Both traits use `async-trait`; storage methods return `anyhow::Result`, with
-`Ok(None)` indicating a miss. Defaults decline retention, so a backend can
-implement only the domains it needs. For example, this memory-only backend keeps
-compiled components and disables artifact, completed-pull, and helper-result
-retention (this example assumes the `oci` feature is enabled):
+`Ok(None)` indicating a miss. Every method defaults to no retention.
+`Cache::name()` is a synchronous diagnostic label, defaulting to the Rust type
+name; names need not be unique and do not determine isolation.
+
+This backend replaces compiled-component retention only. OCI retention is
+untouched, so the host still caches artifacts in `oci_cache_dir`:
 
 ```rust,no_run
 use std::{collections::HashMap, sync::Arc};
 use wash_runtime::{
-    cache::{Cache, CacheBackend, CacheKey, CacheValue},
+    cache::{Cache, CacheKey, CacheValue},
     engine::Engine,
-    host::Host,
+    host::{Host, HostConfig},
 };
 
+/// Illustrative only: a real backend bounds what it keeps.
 #[derive(Default)]
 struct MemoryCache(tokio::sync::RwLock<HashMap<CacheKey, CacheValue>>);
 
@@ -134,46 +138,72 @@ impl Cache for MemoryCache {
     }
 }
 
-// Opt out of OCI retention while satisfying the OCI-enabled host contract.
-impl wash_runtime::cache::OciCache for MemoryCache {}
-
 # fn example() -> anyhow::Result<()> {
-let cache: Arc<CacheBackend> = Arc::new(MemoryCache::default());
-let engine = Engine::builder().with_cache(Arc::clone(&cache)).build()?;
-let host = Host::builder().with_engine(engine).with_cache(cache).build()?;
+let engine = Engine::builder()
+    .with_cache(Arc::new(MemoryCache::default()))
+    .build()?;
+let host = Host::builder()
+    .with_engine(engine)
+    .with_config(HostConfig {
+        oci_cache_dir: Some("/var/cache/wash/oci".into()),
+        ..Default::default()
+    })
+    .build()?;
 # Ok(())
 # }
 ```
 
-Use the same handle for plugin loading before host construction:
-`OciConfig::with_cache(engine.cache())`. A host supplied with an engine inherits
-its cache and rejects an explicitly different handle. Standalone OCI operations
-also accept `OciConfig::with_cache`. Pull-secret conversion and host maintenance
-retain the effective handle. A custom backend needs no disk directory; one with
-scheduled expiry implements `oci_maintain` and returns true from
-`oci_needs_maintenance`.
-`reserved_paths` protects a backend's local storage from guest volume mounts.
+A host supplied with an engine uses that engine's `Cache`, and the handle from
+`Engine::cache()` stays valid across host construction. `HostBuilder::with_cache`
+selects the backend for an engine the host builds itself, and rejects a handle
+that differs from a supplied engine's.
+
+An `OciCache` implementation overrides only what it retains; anything left at
+its default is not retained at all. To replace one kind of OCI retention and
+keep the built-in behaviour for the rest, hold a `DefaultOciCache` and delegate
+the other methods to it. An explicit OCI backend owns its storage: building a
+host with both `with_oci_cache` and `oci_cache_dir` is an error, not a silently
+unused directory. Give the directory to the backend instead
+(`DefaultOciCache::default().with_directory(..)`).
+
+`Host::oci_cache()` returns the backend the host pulls through. Standalone OCI
+operations accept one with `OciConfig::with_cache`; without it, calls naming
+the same `cache_dir` share a default backend with each other and with a host
+configured with that `oci_cache_dir`, so plugins pulled before a host is built
+need no extra wiring. A backend with scheduled expiry implements `oci_maintain`
+and returns true from `oci_needs_maintenance`; `oci_reserved_paths` protects a
+backend's local storage from guest volume mounts.
 
 Compiled keys contain a process-local engine identity and a digest. Store the
 whole `CacheValue`, including its metadata; compiled values cannot be reused
 across engines or persisted as arbitrary machine code. Running workloads retain
 their compiles independently of eviction. The runtime coordinates concurrent
 misses, so a no-retention implementation does not need its own compilation locks.
+Host component plugins are compiled once and are not cached.
 
 OCI backends use `ArtifactKey::storage_key` and `credential_proof` with a
 backend-owned secret to preserve principal, transport, trust, and offline
 credential isolation. Publish bytes and digest together and update credential
 proofs only after registry acceptance. Completed pulls expire within five seconds
 and helper results within thirty seconds. `Always` bypasses completed-result
-retention. Backend errors propagate with context; credential-proof refresh and
-background maintenance retain their existing best-effort logging behavior.
+retention.
+
+A failing cache costs the work it would have saved, not the operation. An error
+from compiled-component, completed-pull or credential retention is logged and
+treated as a miss, or as a write that kept nothing: the workload still starts
+and the image is still pulled. OCI artifact errors fail the pull or push, as
+the disk cache's always have, since an unreadable entry may be the only copy
+`Never` is allowed to use. Credential-proof refresh and background maintenance
+log their failures.
 
 `Engine::initialize_workload` and `prepare_host_component` are now async: callers
-must `.await` them. Exhaustive `HostConfig` and `OciConfig` literals also need
-the new `cache` field (`None` preserves default selection), or a
-`..Default::default()` tail. Cache I/O runs asynchronously; hashing and compilation
-run on blocking workers. Cancellation drops pending cache I/O; an already-running
-compilation remains joinable until it finishes. OCI deadlines include cache I/O.
+must `.await` them. Exhaustive `OciConfig` literals also need the new `cache`
+field (`None` preserves default selection), or a `..Default::default()` tail.
+Cache I/O runs asynchronously; hashing and compilation run on blocking workers.
+Cancelling a start drops its pending cache lookup. A compilation already running
+finishes and is published, so a retry finds it, and callers arriving meanwhile
+join it. OCI pull deadlines include cache I/O; the push timeout bounds the
+registry push alone.
 
 Connection pools, quota/accounting state, DNS authorization records, linked
 instances, telemetry memoization, and process configuration remain owned by their
