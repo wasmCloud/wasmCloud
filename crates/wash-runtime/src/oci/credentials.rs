@@ -40,60 +40,21 @@ impl CredentialResolver {
             return RegistryAuth::Basic(username.clone(), password.clone());
         }
 
-        static HELPERS: OnceLock<Coalescer<(Identity, CredentialKey), RegistryAuth>> =
-            OnceLock::new();
-        let helpers = HELPERS.get_or_init(|| Coalescer::flights(DOCKER_HELPER_TIMEOUT));
+        static FLIGHTS: OnceLock<CredentialFlights> = OnceLock::new();
+        let flights = FLIGHTS.get_or_init(|| CredentialFlights::new(DOCKER_HELPER_TIMEOUT));
         let key = CredentialKey {
             registry: registry.into(),
             config_path: docker_config_path(),
         };
-        // Reuse only saves a helper run. A backend that cannot serve or keep an
-        // answer costs that run: it never fails the pull, which falls back to
-        // the helper and then to anonymous access, as it always has.
-        helpers
-            .run((Identity(Arc::clone(&cache)), key.clone()), || async {
-                match cache.oci_get_credentials(&key).await {
-                    Ok(Some(auth)) => return Ok(auth),
-                    Ok(None) => {}
-                    Err(error) => warn!(
-                        error = format!("{error:#}"),
-                        "credential cache lookup failed; asking the docker credential helper"
-                    ),
-                }
-                // Different backends must each perform their own lookup and
-                // publication, but may share the same helper process. Otherwise
-                // the running-helper guard would reject the second backend.
-                static LOOKUPS: OnceLock<Coalescer<CredentialKey, RegistryAuth>> = OnceLock::new();
-                let lookups = LOOKUPS.get_or_init(|| Coalescer::flights(DOCKER_HELPER_TIMEOUT));
-                let registry = key.registry.clone();
-                let lookup_registry = registry.clone();
-                let lookup = lookups.run(key.clone(), || run_helper(registry, move || {
-                    Ok(Self::get_docker_credentials(&lookup_registry)?
-                        .unwrap_or(RegistryAuth::Anonymous))
-                }));
-                let answer = tokio::time::timeout(DOCKER_HELPER_TIMEOUT, lookup).await
-                    .context("docker credential lookup timed out").and_then(|result| result);
-                match answer {
-                    Ok(auth) => {
-                        if let Err(error) = cache.oci_put_credentials(&key, auth.clone()).await {
-                            warn!(
-                                error = format!("{error:#}"),
-                                "credential cache publication failed; continuing without reuse"
-                            );
-                        }
-                        Ok(auth)
-                    }
-                    Err(error) => {
-                        warn!(%error, "failed to retrieve docker credentials; using anonymous access");
-                        Ok(RegistryAuth::Anonymous)
-                    }
-                }
-            })
-            .await
-            .unwrap_or_else(|error| {
-                warn!(%error, "failed to retrieve docker credentials; using anonymous access");
-                RegistryAuth::Anonymous
-            })
+        let registry = key.registry.clone();
+        cached_credentials(flights, cache, key, DOCKER_HELPER_TIMEOUT, move || {
+            Ok(Self::get_docker_credentials(&registry)?.unwrap_or(RegistryAuth::Anonymous))
+        })
+        .await
+        .unwrap_or_else(|error| {
+            warn!(%error, "failed to retrieve docker credentials; using anonymous access");
+            RegistryAuth::Anonymous
+        })
     }
 
     /// Attempt to retrieve credentials from docker credential helper
@@ -140,37 +101,72 @@ impl CredentialResolver {
     }
 }
 
-/// Coalesce helper lookups in tests, including anonymous results.
-/// Failures are retried next time, so a repaired configuration is usable at once.
+/// Credential lookups in flight.
+struct CredentialFlights {
+    /// One backend's requests for a registry: the lookup of its cache, the
+    /// helper run and the publication of its answer.
+    requests: Coalescer<(Identity, CredentialKey), RegistryAuth>,
+    /// Helper runs, shared across backends. Each backend looks up and
+    /// publishes for itself, but they share one helper process: a second
+    /// would be refused while the first runs (see [`RUNNING_HELPERS`]).
+    helpers: Coalescer<CredentialKey, RegistryAuth>,
+}
+
+impl CredentialFlights {
+    fn new(join: Duration) -> Self {
+        Self {
+            requests: Coalescer::flights(join),
+            helpers: Coalescer::flights(join),
+        }
+    }
+}
+
+/// Answer `key` from `cache`, or from a helper lookup whose successful answer,
+/// anonymous included, is published to it. Failures are not kept, so a
+/// repaired configuration is usable at once.
 ///
 /// Concurrent lookups for one registry share one helper run, taken before any
 /// permit, so a registry costs at most one blocking task at a time. Helpers
-/// run on their own limiter and under [`DOCKER_HELPER_TIMEOUT`]: one that hangs
-/// fails its lookup instead of stalling every pull, and cannot starve client
-/// builds or other registries' lookups of permits.
-#[cfg(test)]
-pub(super) async fn cached_credentials(
-    cache: &Coalescer<String, RegistryAuth>,
-    registry: String,
-    lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
-) -> Result<RegistryAuth> {
-    cached_credentials_within(cache, registry, DOCKER_HELPER_TIMEOUT, lookup).await
-}
-
-#[cfg(test)]
-async fn cached_credentials_within(
-    cache: &Coalescer<String, RegistryAuth>,
-    registry: String,
+/// run on their own limiter and under `timeout`: one that hangs fails its
+/// lookup instead of stalling every pull, and cannot starve client builds or
+/// other registries' lookups of permits.
+///
+/// Reuse only saves a helper run. A backend that cannot serve or keep an
+/// answer costs that run and never fails the lookup.
+async fn cached_credentials(
+    flights: &CredentialFlights,
+    cache: Arc<dyn OciCache>,
+    key: CredentialKey,
     timeout: Duration,
     lookup: impl FnOnce() -> Result<RegistryAuth> + Send + 'static,
 ) -> Result<RegistryAuth> {
-    cache
-        .run(registry.clone(), || async move {
-            tokio::time::timeout(timeout, run_helper(registry, lookup))
+    flights
+        .requests
+        .run((Identity(Arc::clone(&cache)), key.clone()), || async {
+            match cache.oci_get_credentials(&key).await {
+                Ok(Some(auth)) => return Ok(auth),
+                Ok(None) => {}
+                Err(error) => warn!(
+                    error = format!("{error:#}"),
+                    "credential cache lookup failed; asking the docker credential helper"
+                ),
+            }
+            let registry = key.registry.clone();
+            let helper = flights
+                .helpers
+                .run(key.clone(), || run_helper(registry, lookup));
+            let auth = tokio::time::timeout(timeout, helper)
                 .await
                 .with_context(|| {
                     format!("docker credential lookup did not finish within {timeout:?}")
-                })?
+                })??;
+            if let Err(error) = cache.oci_put_credentials(&key, auth.clone()).await {
+                warn!(
+                    error = format!("{error:#}"),
+                    "credential cache publication failed; continuing without reuse"
+                );
+            }
+            Ok(auth)
         })
         .await
 }
@@ -232,17 +228,34 @@ impl Drop for HelperRunning {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use crate::cache::DefaultOciCache;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    fn flights() -> &'static CredentialFlights {
+        Box::leak(Box::new(CredentialFlights::new(Duration::from_secs(60))))
+    }
+
+    fn key(registry: &str) -> CredentialKey {
+        CredentialKey {
+            registry: registry.into(),
+            config_path: None,
+        }
+    }
+
+    fn default_cache() -> Arc<dyn OciCache> {
+        Arc::new(DefaultOciCache::default())
+    }
+
+    fn basic() -> RegistryAuth {
+        RegistryAuth::Basic("user".into(), "secret".into())
+    }
 
     /// Helpers that never return time their lookups out without keeping the
     /// limiter's permits, and are not started again while they run.
     #[tokio::test(start_paused = true)]
     async fn hung_helpers_do_not_exhaust_the_limiter() {
-        let cache: &'static Coalescer<String, RegistryAuth> =
-            Box::leak(Box::new(Coalescer::flights(Duration::from_secs(60))));
+        let flights = flights();
+        let cache = default_cache();
         let runs = Arc::new(AtomicUsize::new(0));
         let mut releases = Vec::new();
         // Start twice the limiter's capacity. Helpers stay blocked after timeout.
@@ -251,9 +264,10 @@ mod tests {
             let (started, startup) = std::sync::mpsc::channel();
             releases.push(release);
             let runs = Arc::clone(&runs);
-            let lookup = tokio::spawn(cached_credentials_within(
-                cache,
-                format!("hung-{n}"),
+            let lookup = tokio::spawn(cached_credentials(
+                flights,
+                Arc::clone(&cache),
+                key(&format!("hung-{n}")),
                 DOCKER_HELPER_TIMEOUT,
                 move || {
                     runs.fetch_add(1, Ordering::SeqCst);
@@ -275,21 +289,27 @@ mod tests {
         tokio::time::resume();
 
         // A registry whose helper still runs does not start another.
-        let again =
-            cached_credentials_within(cache, "hung-0".into(), Duration::from_secs(60), || {
-                unreachable!("a second helper started for hung-0")
-            })
-            .await
-            .unwrap_err();
+        let again = cached_credentials(
+            flights,
+            Arc::clone(&cache),
+            key("hung-0"),
+            Duration::from_secs(60),
+            || unreachable!("a second helper started for hung-0"),
+        )
+        .await
+        .unwrap_err();
         assert!(again.to_string().contains("has not finished"), "{again:#}");
 
         // Other registries still get a permit.
-        let auth =
-            cached_credentials_within(cache, "healthy".into(), Duration::from_secs(60), || {
-                Ok(RegistryAuth::Basic("user".into(), "secret".into()))
-            })
-            .await
-            .unwrap();
+        let auth = cached_credentials(
+            flights,
+            Arc::clone(&cache),
+            key("healthy"),
+            Duration::from_secs(60),
+            || Ok(basic()),
+        )
+        .await
+        .unwrap();
         assert!(matches!(auth, RegistryAuth::Basic(..)));
 
         // Once its helper returns, the registry can be looked up again.
@@ -306,10 +326,201 @@ mod tests {
         })
         .await
         .expect("released helpers finish");
-        cached_credentials_within(cache, "hung-0".into(), Duration::from_secs(60), || {
-            Ok(RegistryAuth::Anonymous)
-        })
+        cached_credentials(
+            flights,
+            cache,
+            key("hung-0"),
+            Duration::from_secs(60),
+            || Ok(RegistryAuth::Anonymous),
+        )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn credential_misses_coalesce_without_blocking_the_runtime() {
+        let flights = flights();
+        let cache = default_cache();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let lookup = |key, lookup| {
+            cached_credentials(
+                flights,
+                Arc::clone(&cache),
+                key,
+                DOCKER_HELPER_TIMEOUT,
+                lookup,
+            )
+        };
+        let first = tokio::spawn(lookup(key("coalesced"), {
+            let runs = Arc::clone(&runs);
+            Box::new(move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                let _ = started.send(());
+                wait.recv_timeout(Duration::from_secs(2))?;
+                Ok(basic())
+            }) as Box<dyn FnOnce() -> Result<RegistryAuth> + Send>
+        }));
+        ready.await.unwrap();
+        let second = tokio::spawn(lookup(key("coalesced"), {
+            let runs = Arc::clone(&runs);
+            Box::new(move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Ok(RegistryAuth::Anonymous)
+            })
+        }));
+        // On a current-thread runtime the second caller cannot join while the
+        // helper blocks, unless the helper runs on the bounded blocking pool.
+        let request = (Identity(Arc::clone(&cache)), key("coalesced"));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while flights.requests.waiters(&request) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the second caller joins while the helper blocks");
+        release.send(()).unwrap();
+        assert!(matches!(
+            first.await.unwrap().unwrap(),
+            RegistryAuth::Basic(..)
+        ));
+        assert!(matches!(
+            second.await.unwrap().unwrap(),
+            RegistryAuth::Basic(..)
+        ));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+        // A failure is not kept: the next lookup asks again.
+        assert!(
+            lookup(key("broken"), Box::new(|| bail!("bad config")))
+                .await
+                .is_err()
+        );
+        assert!(
+            lookup(key("broken"), Box::new(|| Ok(RegistryAuth::Anonymous)))
+                .await
+                .is_ok()
+        );
+    }
+
+    /// A published answer, anonymous included, is served without the helper.
+    #[tokio::test]
+    async fn a_published_answer_is_reused_without_the_helper() {
+        let flights = flights();
+        let cache = default_cache();
+        for (registry, answer) in [
+            ("reused-basic", basic()),
+            ("reused-anonymous", RegistryAuth::Anonymous),
+        ] {
+            let expected = crate::oci::AuthId::of(&answer);
+            let first = cached_credentials(
+                flights,
+                Arc::clone(&cache),
+                key(registry),
+                DOCKER_HELPER_TIMEOUT,
+                move || Ok(answer),
+            )
+            .await
+            .unwrap();
+            assert!(crate::oci::AuthId::of(&first) == expected);
+            let second = cached_credentials(
+                flights,
+                Arc::clone(&cache),
+                key(registry),
+                DOCKER_HELPER_TIMEOUT,
+                || unreachable!("a published answer needs no helper"),
+            )
+            .await
+            .unwrap();
+            assert!(crate::oci::AuthId::of(&second) == expected);
+        }
+    }
+
+    /// Two backends each publish for themselves, but share the one helper run
+    /// a registry is allowed: the second is not refused as a duplicate.
+    #[tokio::test]
+    async fn different_backends_share_one_helper_run() {
+        let flights = flights();
+        let (a, b) = (default_cache(), default_cache());
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let first = tokio::spawn(cached_credentials(
+            flights,
+            Arc::clone(&a),
+            key("shared-helper"),
+            DOCKER_HELPER_TIMEOUT,
+            {
+                let runs = Arc::clone(&runs);
+                move || {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    let _ = started.send(());
+                    wait.recv_timeout(Duration::from_secs(10))?;
+                    Ok(basic())
+                }
+            },
+        ));
+        ready.await.unwrap();
+        let second = tokio::spawn(cached_credentials(
+            flights,
+            Arc::clone(&b),
+            key("shared-helper"),
+            DOCKER_HELPER_TIMEOUT,
+            || unreachable!("the helper already runs for this registry"),
+        ));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while flights.helpers.waiters(&key("shared-helper")) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the second backend joins the running helper");
+        release.send(()).unwrap();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        for cache in [a, b] {
+            assert!(
+                cache
+                    .oci_get_credentials(&key("shared-helper"))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "each backend keeps its own answer"
+            );
+        }
+    }
+
+    /// A backend that fails to serve or keep an answer costs a helper run and
+    /// never the lookup.
+    #[tokio::test]
+    async fn a_failing_backend_falls_back_to_the_helper() {
+        #[derive(Default)]
+        struct Failing {
+            asked: AtomicBool,
+        }
+        #[async_trait::async_trait]
+        impl OciCache for Failing {
+            async fn oci_get_credentials(&self, _: &CredentialKey) -> Result<Option<RegistryAuth>> {
+                self.asked.store(true, Ordering::SeqCst);
+                bail!("credential backend unavailable")
+            }
+            async fn oci_put_credentials(&self, _: &CredentialKey, _: RegistryAuth) -> Result<()> {
+                bail!("credential backend unavailable")
+            }
+        }
+        let backend = Arc::new(Failing::default());
+        let auth = cached_credentials(
+            flights(),
+            backend.clone(),
+            key("failing-backend"),
+            DOCKER_HELPER_TIMEOUT,
+            || Ok(basic()),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(auth, RegistryAuth::Basic(..)));
+        assert!(backend.asked.load(Ordering::SeqCst));
     }
 }
