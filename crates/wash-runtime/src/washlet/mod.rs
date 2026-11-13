@@ -179,8 +179,8 @@ impl AttachedHostControlBuilder {
         self
     }
 
-    /// Set cleanup for the host's configured OCI cache. Zero retains the
-    /// default interval; a host without a cache never starts a cleanup timer.
+    /// Schedule maintenance for the host's selected cache. Zero retains the
+    /// default interval; a backend that needs no maintenance gets no timer.
     pub fn with_artifact_cleaner(mut self, frequency: Duration, max_age: Duration) -> Self {
         self.options.cleanup_interval = if frequency.is_zero() {
             CLEANUP_INTERVAL
@@ -845,16 +845,10 @@ fn spawn_control_loop(
         // commands is reported once rather than once each.
         let mut shedding = false;
 
-        // Read once. Nothing changes the host's config after it is
-        // built, so a host with no cache directory has none for its
-        // whole life and gets no timer at all rather than one that
-        // wakes to reach the same answer. The path is behind an `Arc`
-        // so each tick hands it to a task without copying it.
-        let mut oci_cleanup = host
-            .config()
-            .oci_cache_dir
-            .clone()
-            .map(|dir| (Arc::new(dir), control_interval(cleanup_interval)));
+        let cache = host.cache();
+        let mut oci_cleanup = cache
+            .oci_needs_maintenance()
+            .then(|| (cache, control_interval(cleanup_interval)));
 
         // Heartbeats and cache cleanup run as their own tasks, for the
         // reason commands already do: `select!` runs one branch to
@@ -923,14 +917,14 @@ fn spawn_control_loop(
                             }
                         }
 
-                        // OCI cache cleanup
-                        cache_dir = next_cache_cleanup(&mut oci_cleanup) => {
+                        // Cache maintenance
+                        cache = next_cache_cleanup(&mut oci_cleanup) => {
                             if let Ok(slot) = Arc::clone(&cleanup_slot).try_acquire_owned() {
                                 let age = cleanup_age;
                                 background.spawn(async move {
                                     let _slot = slot;
-                                    if let Err(e) = oci::cleanup_cache(&*cache_dir, age).await {
-                                        error!("error during OCI cache cleanup: {e}");
+                                    if let Err(e) = cache.oci_maintain(age).await {
+                                        error!("error during cache maintenance: {e}");
                                     }
                                 });
                             }
@@ -1603,21 +1597,21 @@ pub async fn connect_nats(
     }
 }
 
-/// The directory to clean when the next cleanup falls due, or never for a host
-/// with no cache directory.
+/// The backend to maintain when cleanup falls due, or never when the backend
+/// needs no scheduled maintenance.
 ///
 /// A `select!` branch needs a future whether or not there is anything to wait
 /// for. This gives the branch one that simply never completes, which is what a
 /// host with nothing to clean should do, rather than arming a timer and testing
 /// a condition that was settled before the loop began.
 async fn next_cache_cleanup(
-    cleanup: &mut Option<(Arc<PathBuf>, tokio::time::Interval)>,
-) -> Arc<PathBuf> {
-    let Some((cache_dir, timer)) = cleanup else {
+    cleanup: &mut Option<(Arc<crate::cache::CacheBackend>, tokio::time::Interval)>,
+) -> Arc<crate::cache::CacheBackend> {
+    let Some((cache, timer)) = cleanup else {
         return std::future::pending().await;
     };
     timer.tick().await;
-    Arc::clone(cache_dir)
+    Arc::clone(cache)
 }
 
 pub fn host_subject(host_id: &str) -> String {
@@ -1774,6 +1768,7 @@ fn image_pull_secret_to_oci_config(
         None => OciConfig::default(),
     };
     oci_config.cache_dir = config.oci_cache_dir.clone();
+    oci_config.cache = config.cache.clone();
     oci_config.insecure = config.allow_oci_insecure;
     oci_config.timeout = config.oci_pull_timeout;
 
@@ -3637,5 +3632,47 @@ mod tests {
             config.credentials,
             Some(("testuser".to_string(), "testpass".to_string()))
         );
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod cache_maintenance_tests {
+    use super::*;
+    use crate::cache::{Cache, OciCache};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Maintenance(AtomicUsize);
+    impl Cache for Maintenance {}
+
+    #[async_trait::async_trait]
+    impl OciCache for Maintenance {
+        async fn oci_maintain(&self, age: Duration) -> anyhow::Result<()> {
+            assert_eq!(age, Duration::from_secs(60));
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn oci_needs_maintenance(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cleanup_uses_the_selected_backend_without_a_directory() -> anyhow::Result<()> {
+        let backend = Arc::new(Maintenance(AtomicUsize::new(0)));
+        let host = crate::host::Host::builder()
+            .with_cache(backend.clone())
+            .build()?;
+        assert!(host.config().oci_cache_dir.is_none());
+        let cache = host.cache();
+        let mut cleanup = cache
+            .oci_needs_maintenance()
+            .then(|| (cache, control_interval(Duration::from_secs(10))));
+        next_cache_cleanup(&mut cleanup)
+            .await
+            .oci_maintain(Duration::from_secs(60))
+            .await?;
+        assert_eq!(backend.0.load(Ordering::SeqCst), 1);
+        Ok(())
     }
 }

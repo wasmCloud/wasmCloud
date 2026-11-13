@@ -84,11 +84,14 @@ fn walkdir(dir: &std::path::Path) -> Vec<PathBuf> {
     found
 }
 
-#[test]
-fn a_component_with_invalid_bytes_fails_initialization() {
+#[tokio::test]
+async fn a_component_with_invalid_bytes_fails_initialization() {
     let mut input = workload();
     input.components.push(component("broken", b"invalid"));
-    let Err(err) = engine().initialize_workload("invalid-component", input) else {
+    let Err(err) = engine()
+        .initialize_workload("invalid-component", input)
+        .await
+    else {
         panic!("invalid component bytes should be refused");
     };
     assert!(
@@ -97,11 +100,11 @@ fn a_component_with_invalid_bytes_fails_initialization() {
     );
 }
 
-#[test]
-fn a_service_with_invalid_bytes_fails_initialization() {
+#[tokio::test]
+async fn a_service_with_invalid_bytes_fails_initialization() {
     let mut input = workload();
     input.service = Some(service(b"invalid"));
-    let Err(err) = engine().initialize_workload("invalid-service", input) else {
+    let Err(err) = engine().initialize_workload("invalid-service", input).await else {
         panic!("invalid service bytes should be refused");
     };
     assert!(
@@ -110,8 +113,8 @@ fn a_service_with_invalid_bytes_fails_initialization() {
     );
 }
 
-#[test]
-fn an_empty_dir_is_unavailable_when_the_scratch_root_is_a_file() {
+#[tokio::test]
+async fn an_empty_dir_is_unavailable_when_the_scratch_root_is_a_file() {
     let dir = tempfile::tempdir().unwrap();
     let blocked = dir.path().join("file");
     std::fs::write(&blocked, b"file").unwrap();
@@ -123,7 +126,7 @@ fn an_empty_dir_is_unavailable_when_the_scratch_root_is_a_file() {
         .unwrap();
     let mut input = workload();
     input.volumes.push(empty_dir("scratch"));
-    let Err(err) = engine.initialize_workload("blocked-scratch", input) else {
+    let Err(err) = engine.initialize_workload("blocked-scratch", input).await else {
         panic!("an emptyDir without a usable scratch root should be refused");
     };
     assert!(
@@ -132,12 +135,12 @@ fn an_empty_dir_is_unavailable_when_the_scratch_root_is_a_file() {
     );
 }
 
-#[test]
-fn a_missing_host_path_is_refused() {
+#[tokio::test]
+async fn a_missing_host_path_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let mut input = workload();
     input.volumes.push(host_path(&dir.path().join("missing")));
-    let Err(err) = engine().initialize_workload("missing-path", input) else {
+    let Err(err) = engine().initialize_workload("missing-path", input).await else {
         panic!("a missing host path should be refused");
     };
     assert!(
@@ -146,15 +149,15 @@ fn a_missing_host_path_is_refused() {
     );
 }
 
-#[test]
-fn a_host_path_naming_a_file_is_refused_before_the_policy() {
+#[tokio::test]
+async fn a_host_path_naming_a_file_is_refused_before_the_policy() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("file");
     std::fs::write(&file, b"file").unwrap();
     let (engine, meters) = metered_engine();
     let mut input = workload();
     input.volumes.push(host_path(&file));
-    let Err(err) = engine.initialize_workload("file-path", input) else {
+    let Err(err) = engine.initialize_workload("file-path", input).await else {
         panic!("a host path naming a file should be refused");
     };
     assert!(
@@ -164,8 +167,8 @@ fn a_host_path_naming_a_file_is_refused_before_the_policy() {
     assert_eq!(meters.host_path_denied(), 0);
 }
 
-#[test]
-fn a_start_that_fails_after_scratch_was_created_removes_it() {
+#[tokio::test]
+async fn a_start_that_fails_after_scratch_was_created_removes_it() {
     let dir = tempfile::tempdir().unwrap();
     let engine = Engine::builder()
         .with_pooling_allocator(false)
@@ -178,7 +181,7 @@ fn a_start_that_fails_after_scratch_was_created_removes_it() {
     input.volumes.push(empty_dir("scratch"));
     input.components.push(component("valid", &valid));
     input.components.push(component("broken", b"invalid"));
-    let Err(err) = engine.initialize_workload("failed-start", input) else {
+    let Err(err) = engine.initialize_workload("failed-start", input).await else {
         panic!("a workload with invalid component bytes should be refused");
     };
     assert!(
@@ -221,12 +224,18 @@ fn opened_volumes(
     std::collections::HashMap::from([("data".to_string(), opened)])
 }
 
-#[test]
-fn a_service_mounts_known_volumes_and_skips_unknown_ones() {
+#[tokio::test]
+async fn a_service_mounts_known_volumes_and_skips_unknown_ones() {
     let dir = tempfile::tempdir().unwrap();
     let volumes = opened_volumes(dir.path());
     let bytes = wat::parse_str(CLI_RUN_SERVICE).unwrap();
-    let service = engine()
+    let engine = engine();
+    let mut digest = None;
+    let _pin = engine
+        .prepare_compile(bytes.clone().into(), &mut digest)
+        .await
+        .unwrap();
+    let service = engine
         .initialize_service(
             "workload",
             "contract",
@@ -234,6 +243,7 @@ fn a_service_mounts_known_volumes_and_skips_unknown_ones() {
             Service {
                 local_resources: mounts_for("data"),
                 max_restarts: 2,
+                digest,
                 ..service(&bytes)
             },
             &volumes,
@@ -245,18 +255,25 @@ fn a_service_mounts_known_volumes_and_skips_unknown_ones() {
     assert_eq!(service.volume_mounts[0].1.mount_path, "/data");
 }
 
-#[test]
-fn a_component_mounts_known_volumes_and_skips_unknown_ones() {
+#[tokio::test]
+async fn a_component_mounts_known_volumes_and_skips_unknown_ones() {
     let dir = tempfile::tempdir().unwrap();
     let volumes = opened_volumes(dir.path());
     let bytes = wat::parse_str("(component)").unwrap();
-    let component = engine()
+    let engine = engine();
+    let mut digest = None;
+    let _pin = engine
+        .prepare_compile(bytes.clone().into(), &mut digest)
+        .await
+        .unwrap();
+    let component = engine
         .initialize_workload_component(
             "workload",
             "contract",
             "tests",
             crate::types::Component {
                 local_resources: mounts_for("data"),
+                digest,
                 ..component("component", &bytes)
             },
             &volumes,
@@ -269,21 +286,26 @@ fn a_component_mounts_known_volumes_and_skips_unknown_ones() {
     assert_eq!(component.volume_mounts[0].1.mount_path, "/data");
 }
 
-fn initialize_service(bytes: &[u8]) -> anyhow::Result<WorkloadService> {
-    engine().initialize_service(
+async fn initialize_service(bytes: &[u8]) -> anyhow::Result<WorkloadService> {
+    let engine = engine();
+    let mut service = service(bytes);
+    let _pin = engine
+        .prepare_compile(service.bytes.clone(), &mut service.digest)
+        .await?;
+    engine.initialize_service(
         "workload",
         "contract",
         "tests",
-        service(bytes),
+        service,
         &std::collections::HashMap::new(),
         Arc::default(),
     )
 }
 
-#[test]
-fn a_service_exporting_wasi_cli_run_is_accepted() {
+#[tokio::test]
+async fn a_service_exporting_wasi_cli_run_is_accepted() {
     let bytes = wat::parse_str(CLI_RUN_SERVICE).unwrap();
-    let service = initialize_service(&bytes).unwrap();
+    let service = initialize_service(&bytes).await.unwrap();
     let world = service.world();
     assert_eq!(world.exports.len(), 1);
     assert!(
@@ -294,17 +316,17 @@ fn a_service_exporting_wasi_cli_run_is_accepted() {
     );
 }
 
-#[test]
-fn a_service_with_no_exports_is_refused() {
+#[tokio::test]
+async fn a_service_with_no_exports_is_refused() {
     let bytes = wat::parse_str("(component)").unwrap();
-    let Err(err) = initialize_service(&bytes) else {
+    let Err(err) = initialize_service(&bytes).await else {
         panic!("a service exporting nothing should be refused");
     };
     assert!(format!("{err:#}").contains(SINGLE_INTERFACE), "{err:#}");
 }
 
-#[test]
-fn a_service_with_two_instance_exports_is_refused() {
+#[tokio::test]
+async fn a_service_with_two_instance_exports_is_refused() {
     let bytes = wat::parse_str(
         "(component \
             (instance $a) (instance $b) \
@@ -312,14 +334,14 @@ fn a_service_with_two_instance_exports_is_refused() {
             (export \"contract:two/b\" (instance $b)))",
     )
     .unwrap();
-    let Err(err) = initialize_service(&bytes) else {
+    let Err(err) = initialize_service(&bytes).await else {
         panic!("a service exporting two interfaces should be refused");
     };
     assert!(format!("{err:#}").contains(SINGLE_INTERFACE), "{err:#}");
 }
 
-#[test]
-fn a_service_and_a_component_with_one_digest_share_one_compile() {
+#[tokio::test]
+async fn a_service_and_a_component_with_one_digest_share_one_compile() {
     use std::sync::atomic::Ordering;
     const DIGEST: &str = "sha256:shared";
 
@@ -334,7 +356,7 @@ fn a_service_and_a_component_with_one_digest_share_one_compile() {
         digest: Some(DIGEST.into()),
         ..component("component", &bytes)
     });
-    let workload = engine.initialize_workload("shared", input).unwrap();
+    let workload = engine.initialize_workload("shared", input).await.unwrap();
     assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
     assert_eq!(engine.live_compiles.lock().unwrap().len(), 1);
     drop(workload);

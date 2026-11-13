@@ -71,7 +71,7 @@ async fn pull_client_from_cache(
 const CLIENT_REUSE: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct TrustId(pub(super) [u8; 32]);
+pub(crate) struct TrustId(pub(crate) [u8; 32]);
 
 pub(super) struct TrustSnapshot {
     pub(super) id: TrustId,

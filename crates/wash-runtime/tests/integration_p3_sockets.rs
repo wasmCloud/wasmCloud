@@ -139,7 +139,7 @@ async fn test_p3_socket_component_initialization() -> Result<()> {
         volumes: vec![],
     };
 
-    let result = engine.initialize_workload("socket-test-id", workload);
+    let result = engine.initialize_workload("socket-test-id", workload).await;
     assert!(
         result.is_ok(),
         "P3 socket component should initialize: {:?}",

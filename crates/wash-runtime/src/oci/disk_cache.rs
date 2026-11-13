@@ -22,10 +22,11 @@ const ENTRY_PREFIX: &str = "v3-";
 /// [`CacheManager::credential_matches`].
 /// A different user, or anonymous access, has its own entries. A bearer
 /// token names no user, so the token is its own scope.
-struct Principal([u8; 32]);
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct Principal(pub(crate) [u8; 32]);
 
 impl Principal {
-    fn of(auth: &RegistryAuth) -> Self {
+    pub(crate) fn of(auth: &RegistryAuth) -> Self {
         let mut hasher = Sha256::new();
         // Length-prefixed, so no two different principals hash the same bytes.
         let mut field = |bytes: &[u8]| {
@@ -48,7 +49,7 @@ impl Principal {
 }
 
 /// Cache manager for OCI artifacts
-pub(super) struct CacheManager {
+pub(crate) struct CacheManager {
     cache_dir: PathBuf,
     principal: Principal,
     /// The full credentials, password included, for [`Self::credential_proof`].
@@ -64,11 +65,23 @@ impl CacheManager {
     /// populated the entry. Older layouts cannot establish that provenance.
     ///
     /// Creates the cache root's key on first use.
-    pub(super) async fn open(
+    #[cfg(test)]
+    pub(crate) async fn open(
         cache_dir: PathBuf,
         auth: &RegistryAuth,
         insecure: bool,
         trust: TrustId,
+    ) -> Result<Self> {
+        Self::open_scoped(
+            cache_dir,
+            &crate::cache::ArtifactKey::new("", auth, insecure, trust),
+        )
+        .await
+    }
+
+    pub(crate) async fn open_scoped(
+        cache_dir: PathBuf,
+        scope: &crate::cache::ArtifactKey,
     ) -> Result<Self> {
         let key = tokio::task::spawn_blocking({
             let cache_dir = cache_dir.clone();
@@ -80,10 +93,10 @@ impl CacheManager {
             .map_err(|err| anyhow::anyhow!("invalid OCI cache key: {err}"))?;
         Ok(Self {
             cache_dir,
-            principal: Principal::of(auth),
-            credential: AuthId::of(auth),
-            insecure,
-            trust,
+            principal: scope.principal.clone(),
+            credential: scope.credential,
+            insecure: scope.insecure,
+            trust: scope.trust,
             mac,
         })
     }
@@ -93,7 +106,7 @@ impl CacheManager {
     /// Named by an HMAC keyed with the cache root's secret: the name derives
     /// from the registry user or bearer token, and an unkeyed hash would let
     /// anyone who can list the directory test guesses at them offline.
-    pub(super) fn get_cache_dir(&self, reference: &str) -> PathBuf {
+    pub(crate) fn get_cache_dir(&self, reference: &str) -> PathBuf {
         let mut mac = self.mac.clone();
         mac.update(b"wash-oci-cache-v3\0");
         mac.update(&self.principal.0);
@@ -106,7 +119,7 @@ impl CacheManager {
 
     /// The digest and component share one file, published by one rename, so
     /// a reader cannot pair different pulls. Older two-file entries are ignored.
-    pub(super) fn get_entry_path(&self, reference: &str) -> PathBuf {
+    pub(crate) fn get_entry_path(&self, reference: &str) -> PathBuf {
         self.get_cache_dir(reference).join("entry")
     }
 
@@ -128,7 +141,7 @@ impl CacheManager {
     /// presenting the same user, so `Never`, which cannot ask the registry,
     /// needs this to refuse a wrong password. A rotated password passes once a
     /// pull that asks the registry has revalidated the entry with it.
-    pub(super) async fn credential_matches(&self, reference: &str) -> bool {
+    pub(crate) async fn credential_matches(&self, reference: &str) -> bool {
         tokio::fs::read_to_string(self.get_credential_path(reference))
             .await
             .is_ok_and(|proof| proof == self.credential_proof())
@@ -136,7 +149,7 @@ impl CacheManager {
 
     /// Record that these credentials have just been accepted by the registry
     /// for the entry, without rewriting its bytes.
-    pub(super) async fn record_credential(&self, reference: &str) -> Result<()> {
+    pub(crate) async fn record_credential(&self, reference: &str) -> Result<()> {
         write_replacing(
             &self.get_cache_dir(reference),
             "credential",
@@ -146,14 +159,16 @@ impl CacheManager {
     }
 
     /// Check if an artifact is cached.
-    pub(super) async fn is_cached(&self, reference: &str) -> bool {
+    #[cfg(test)]
+    pub(crate) async fn is_cached(&self, reference: &str) -> bool {
         tokio::fs::metadata(self.get_entry_path(reference))
             .await
             .is_ok()
     }
 
     /// Read cached artifact, returning (component_data, digest)
-    pub(super) async fn read_cached(&self, reference: &str) -> Result<(Vec<u8>, String)> {
+    #[cfg(test)]
+    pub(crate) async fn read_cached(&self, reference: &str) -> Result<(Vec<u8>, String)> {
         let entry_path = self.get_entry_path(reference);
         debug!(entry_path = %entry_path.display(), "reading cached artifact");
         let file = tokio::fs::File::open(&entry_path).await.with_context(|| {
@@ -164,11 +179,23 @@ impl CacheManager {
             .with_context(|| format!("invalid cached artifact at {}", entry_path.display()))
     }
 
+    pub(crate) async fn read_optional(&self, reference: &str) -> Result<Option<(Vec<u8>, String)>> {
+        let path = self.get_entry_path(reference);
+        match tokio::fs::File::open(&path).await {
+            Ok(file) => read_entry(file)
+                .await
+                .map(Some)
+                .context("invalid cached OCI artifact"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context("failed to open cached OCI artifact"),
+        }
+    }
+
     /// Write artifact and digest to cache
     ///
     /// The whole entry is written beside its final name and renamed into
     /// place. Concurrent writers each publish a complete pair; the last wins.
-    pub(super) async fn write_to_cache(
+    pub(crate) async fn write_to_cache(
         &self,
         reference: &str,
         data: &[u8],
@@ -217,7 +244,7 @@ async fn read_entry(mut file: tokio::fs::File) -> Result<(Vec<u8>, String)> {
 
 /// Expire old artifacts from the cache, and remove entries written before
 /// entries were scoped by credentials: they are never read again.
-pub(super) async fn expire_artifacts(cache_dir: &Path, age: Duration) -> Result<()> {
+pub(crate) async fn expire_artifacts(cache_dir: &Path, age: Duration) -> Result<()> {
     // walk the cache directory, looking for artifact dirs
     // and remove those older than the specified age
     let mut dir_entries = match tokio::fs::read_dir(cache_dir).await {

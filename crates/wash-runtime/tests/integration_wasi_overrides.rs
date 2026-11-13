@@ -69,27 +69,29 @@ async fn service_using_only_wasi_receives_its_opted_in_override() -> Result<()> 
         )?;
         let bound = Arc::new(Mutex::new(Vec::new()));
         let plugin: Arc<dyn HostPlugin> = Arc::new(Override(bound.clone()));
-        let unresolved = engine.initialize_workload(
-            "service-clock",
-            Workload {
-                name: "service-clock".into(),
-                namespace: "test".into(),
-                annotations: HashMap::new(),
-                components: vec![],
-                volumes: vec![],
-                service: Some(Service {
-                    bytes: wasm.into(),
-                    digest: None,
-                    local_resources: LocalResources::default(),
-                    max_restarts: 0,
-                }),
-                host_interfaces: if opted_in {
-                    vec!["test:override/opt-in".into()]
-                } else {
-                    vec![]
+        let unresolved = engine
+            .initialize_workload(
+                "service-clock",
+                Workload {
+                    name: "service-clock".into(),
+                    namespace: "test".into(),
+                    annotations: HashMap::new(),
+                    components: vec![],
+                    volumes: vec![],
+                    service: Some(Service {
+                        bytes: wasm.into(),
+                        digest: None,
+                        local_resources: LocalResources::default(),
+                        max_restarts: 0,
+                    }),
+                    host_interfaces: if opted_in {
+                        vec!["test:override/opt-in".into()]
+                    } else {
+                        vec![]
+                    },
                 },
-            },
-        )?;
+            )
+            .await?;
         let service_id = unresolved
             .service_id()
             .ok_or_else(|| anyhow::anyhow!("missing service"))?;

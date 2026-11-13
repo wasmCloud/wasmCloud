@@ -204,6 +204,7 @@ async fn oci_pulls_trust_ssl_cert_env_and_ca_paths() -> Result<()> {
     let config = OciConfig {
         credentials: Some(("user".into(), "secret".into())),
         cache_dir: Some(cache.path().to_path_buf()),
+        cache: None,
         timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     };

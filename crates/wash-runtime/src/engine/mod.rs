@@ -33,7 +33,7 @@
 //! #   volumes: vec![],
 //! };
 //!
-//! let unresolved = engine.initialize_workload("workload-1", workload)?;
+//! let unresolved = engine.initialize_workload("workload-1", workload).await?;
 //! // ... bind to plugins and resolve
 //! # Ok(())
 //! # }
@@ -42,9 +42,9 @@
 use std::hash::Hash;
 use std::time::Duration;
 
+use crate::cache::{CacheBackend, DefaultCache, coalescer::Coalescer};
 use crate::sockets::loopback;
 use anyhow::{Context, bail};
-use moka::sync::Cache;
 use tracing::{instrument, warn};
 use wasmtime::PoolingAllocationConfig;
 use wasmtime::component::{Component, Linker};
@@ -367,6 +367,14 @@ fn on_signal_quiet_thread<T: Send>(
     }
 }
 
+/// Directory handles are released before their scratch directory is removed,
+/// including when asynchronous component preparation fails or is cancelled.
+#[derive(Default)]
+struct WorkloadVolumes {
+    opened: std::collections::HashMap<String, volumes::OpenedVolume>,
+    scratch: Option<Arc<scratch::ScratchDir>>,
+}
+
 /// The core WebAssembly engine for executing components and workloads.
 ///
 /// The `Engine` is responsible for compiling WebAssembly components, managing
@@ -377,7 +385,13 @@ pub struct Engine {
     stream_payloads: Arc<stream_payload::StreamPayloads>,
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
-    pub(crate) cache: Cache<CacheKey, CacheValue>,
+    pub(crate) cache: Arc<CacheBackend>,
+    pub(crate) default_cache: Option<DefaultCache>,
+    cache_engine_id: uuid::Uuid,
+    /// Cancellable lookup, compilation and publication, shared by digest.
+    compile_flights: Arc<Coalescer<String, Arc<LiveCompile>>>,
+    /// Blocking compiles remain joinable when their original caller cancels.
+    compiling: Arc<Coalescer<String, CacheValue>>,
     /// Compiles running workloads hold, consulted before the cache so a live
     /// compile can be reused after cache eviction. See [`LiveCompiles`].
     live_compiles: Arc<LiveCompiles>,
@@ -457,12 +471,26 @@ impl std::fmt::Debug for Engine {
         let mut s = f.debug_struct("Engine");
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
+        s.field("default_cache", &self.default_cache.is_some());
         s.finish_non_exhaustive()
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CacheKey(String);
+pub struct CacheKey {
+    engine: uuid::Uuid,
+    digest: String,
+}
+
+impl CacheKey {
+    /// Process-local identity of the engine that owns this compile.
+    pub fn engine(&self) -> uuid::Uuid {
+        self.engine
+    }
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+}
 
 /// The cache identity of a component's bytes: `sha256:` and their hex hash.
 pub(crate) fn content_digest(bytes: &[u8]) -> String {
@@ -477,6 +505,22 @@ pub(crate) fn content_digest(bytes: &[u8]) -> String {
 pub struct CacheValue {
     component: Component,
     may_use_gc: Arc<std::sync::OnceLock<bool>>,
+}
+
+impl CacheValue {
+    /// Wrap an already compiled component. The runtime verifies its engine and
+    /// initializes GC metadata from the source when a workload first needs it.
+    pub fn new(component: Component) -> Self {
+        Self {
+            component,
+            may_use_gc: Arc::default(),
+        }
+    }
+
+    /// Inspect the compiled component without losing its associated metadata.
+    pub fn component(&self) -> &Component {
+        &self.component
+    }
 }
 
 impl std::fmt::Debug for CacheValue {
@@ -560,9 +604,9 @@ pub(crate) enum InlineInit {
     },
 }
 
-/// A cached compile failure, shared by every caller that raced for the same key.
+/// An in-flight failure, shared by every caller that raced for the same key.
 ///
-/// `moka` hands a failed `try_get_with` back as `Arc<anyhow::Error>`, and an
+/// The coordinator shares failures as `Arc<anyhow::Error>`, and an
 /// `Arc` is not `Into<anyhow::Error>` — so `anyhow!(arc)` takes the *adhoc*
 /// branch and builds a fresh error whose whole content is the `Arc`'s `Display`.
 /// `anyhow::Error`'s `Display` prints only its outermost context, so every cause
@@ -786,12 +830,81 @@ impl Engine {
     /// - Service component validation fails
     /// - Volume paths don't exist or aren't accessible
     /// - Component initialization fails
-    pub fn initialize_workload(
+    pub async fn initialize_workload(
         &self,
         id: impl AsRef<str>,
-        workload: Workload,
+        mut workload: Workload,
     ) -> anyhow::Result<UnresolvedWorkload> {
-        self.initialize_workload_with(id, workload, Blocking::Allowed)
+        let id = id.as_ref().to_owned();
+        let volumes = std::mem::take(&mut workload.volumes);
+        let prepared_volumes = if volumes.is_empty() {
+            WorkloadVolumes::default()
+        } else {
+            let engine = self.clone();
+            tokio::task::spawn_blocking(move || engine.prepare_volumes(volumes, Blocking::Allowed))
+                .await
+                .context("volume preparation task failed")??
+        };
+        let mut pinned = Vec::new();
+        if let Some(service) = &mut workload.service {
+            pinned.push(
+                self.prepare_compile(service.bytes.clone(), &mut service.digest)
+                    .await
+                    .context("failed to create component from bytes")?,
+            );
+        }
+        for component in &mut workload.components {
+            pinned.push(
+                self.prepare_compile(component.bytes.clone(), &mut component.digest)
+                    .await
+                    .context("failed to create component from bytes")?,
+            );
+        }
+        let engine = self.clone();
+        let span = tracing::Span::current();
+        tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
+            let _pinned = pinned;
+            if let Some(guard) = engine.process_memory() {
+                guard.admit_start().map_err(anyhow::Error::msg)?;
+            }
+            engine.initialize_prepared_workload(id, workload, Blocking::Allowed, prepared_volumes)
+        })
+        .await
+        .context("workload initialization task failed")?
+    }
+
+    async fn prepare_compile(
+        &self,
+        bytes: bytes::Bytes,
+        digest: &mut Option<String>,
+    ) -> anyhow::Result<Arc<LiveCompile>> {
+        if digest.is_none() {
+            let bytes = bytes.clone();
+            *digest = Some(tokio::task::spawn_blocking(move || content_digest(&bytes)).await?);
+        }
+        let (_, live) = self
+            .load_live_bytes(bytes, digest.as_deref(), Blocking::Allowed)
+            .await?;
+        Ok(live)
+    }
+
+    /// The effective backend, shared with host and OCI configuration.
+    pub fn cache(&self) -> Arc<CacheBackend> {
+        Arc::clone(&self.cache)
+    }
+
+    #[cfg(feature = "oci")]
+    pub(crate) fn configure_default_cache_directory(&mut self, directory: PathBuf) {
+        if let Some(default) = &self.default_cache {
+            let default = default.clone().with_oci_directory(directory);
+            self.cache = Arc::new(default.clone());
+            self.default_cache = Some(default);
+        }
+    }
+
+    pub(crate) fn reserve_cache_paths(&mut self) {
+        self.host_paths.reserve(self.cache.reserved_paths());
     }
 
     /// Initialize `workload` on the calling thread if doing so compiles
@@ -818,7 +931,7 @@ impl Engine {
             match component
                 .digest
                 .as_deref()
-                .and_then(|digest| self.pin_compile(digest))
+                .and_then(|digest| self.live_compile(digest))
             {
                 Some(live) => pinned.push(live),
                 // Stop at the first miss: the blocking pool loads the rest.
@@ -835,65 +948,37 @@ impl Engine {
     fn initialize_workload_with(
         &self,
         id: impl AsRef<str>,
+        mut workload: Workload,
+        blocking: Blocking,
+    ) -> anyhow::Result<UnresolvedWorkload> {
+        let volumes = self.prepare_volumes(std::mem::take(&mut workload.volumes), blocking)?;
+        self.initialize_prepared_workload(id, workload, blocking, volumes)
+    }
+
+    fn initialize_prepared_workload(
+        &self,
+        id: impl AsRef<str>,
         workload: Workload,
         blocking: Blocking,
+        prepared_volumes: WorkloadVolumes,
     ) -> anyhow::Result<UnresolvedWorkload> {
         let Workload {
             namespace,
             name,
             components,
             service,
-            volumes,
+            volumes: _,
             host_interfaces,
             annotations,
             ..
         } = workload;
         let annotations_arc = Arc::new(annotations);
 
-        // Created on the first `emptyDir`, and removed when the workload is
-        // released or, for a start that fails before then, when this drops.
-        // Declared first to drop last: Windows cannot remove a directory while
-        // the volume handles below are open.
-        let mut workload_scratch: Option<Arc<scratch::ScratchDir>> = None;
-        // Process and validate volumes - create a lookup map from volume name to validated host path
-        let mut validated_volumes = std::collections::HashMap::new();
-
-        for v in volumes {
-            blocking.ensure_allowed("open a volume")?;
-            let host_path = match v.volume_type {
-                VolumeType::HostPath(HostPathVolume { local_path }) => {
-                    let path = PathBuf::from(&local_path);
-                    if !path.is_dir() {
-                        anyhow::bail!(
-                            "HostPath volume '{local_path}' does not exist or is not a directory",
-                        );
-                    }
-                    self.host_paths.open(&path)?
-                }
-                VolumeType::EmptyDir(EmptyDirVolume {}) => {
-                    let workload_scratch = match &mut workload_scratch {
-                        Some(dir) => dir,
-                        None => {
-                            let root = self.scratch.as_ref().map_err(|e| {
-                                anyhow::anyhow!("emptyDir volumes are unavailable: {e}")
-                            })?;
-                            workload_scratch.insert(root.workload_dir()?)
-                        }
-                    };
-                    // Kept on disk: the workload's scratch directory owns it.
-                    let volume_dir = tempfile::Builder::new()
-                        .prefix("volume-")
-                        .tempdir_in(workload_scratch.path())
-                        .context("failed to create an emptyDir volume")?
-                        .keep();
-                    tracing::debug!(path = ?volume_dir, "created emptyDir volume");
-                    volumes::ReservedHostPaths::default().open(&volume_dir)?
-                }
-            };
-
-            // Store the validated volume for later lookup
-            validated_volumes.insert(v.name.clone(), host_path);
-        }
+        // Bind scratch first so it is dropped after all directory handles.
+        let WorkloadVolumes {
+            scratch: workload_scratch,
+            opened: validated_volumes,
+        } = prepared_volumes;
 
         let loopback = Arc::default();
         // One per deploy, shared by every component in it.
@@ -972,6 +1057,62 @@ impl Engine {
         Ok(workload)
     }
 
+    fn prepare_volumes(
+        &self,
+        volumes: Vec<crate::types::Volume>,
+        blocking: Blocking,
+    ) -> anyhow::Result<WorkloadVolumes> {
+        // Created on the first `emptyDir`, and removed when the workload is
+        // released or, for a start that fails before then, when this drops.
+        // Declared first to drop last: Windows cannot remove a directory while
+        // the volume handles below are open.
+        let mut workload_scratch: Option<Arc<scratch::ScratchDir>> = None;
+        // Process and validate volumes - create a lookup map from volume name to validated host path
+        let mut validated_volumes = std::collections::HashMap::new();
+
+        for v in volumes {
+            blocking.ensure_allowed("open a volume")?;
+            let host_path = match v.volume_type {
+                VolumeType::HostPath(HostPathVolume { local_path }) => {
+                    let path = PathBuf::from(&local_path);
+                    if !path.is_dir() {
+                        anyhow::bail!(
+                            "HostPath volume '{local_path}' does not exist or is not a directory",
+                        );
+                    }
+                    self.host_paths.open(&path)?
+                }
+                VolumeType::EmptyDir(EmptyDirVolume {}) => {
+                    let workload_scratch = match &mut workload_scratch {
+                        Some(dir) => dir,
+                        None => {
+                            let root = self.scratch.as_ref().map_err(|e| {
+                                anyhow::anyhow!("emptyDir volumes are unavailable: {e}")
+                            })?;
+                            workload_scratch.insert(root.workload_dir()?)
+                        }
+                    };
+                    // Kept on disk: the workload's scratch directory owns it.
+                    let volume_dir = tempfile::Builder::new()
+                        .prefix("volume-")
+                        .tempdir_in(workload_scratch.path())
+                        .context("failed to create an emptyDir volume")?
+                        .keep();
+                    tracing::debug!(path = ?volume_dir, "created emptyDir volume");
+                    volumes::ReservedHostPaths::default().open(&volume_dir)?
+                }
+            };
+
+            // Store the validated volume for later lookup
+            validated_volumes.insert(v.name.clone(), host_path);
+        }
+
+        Ok(WorkloadVolumes {
+            opened: validated_volumes,
+            scratch: workload_scratch,
+        })
+    }
+
     #[instrument(name = "initialize_service", skip_all)]
     fn initialize_service(
         &self,
@@ -990,7 +1131,7 @@ impl Engine {
             },
             compiled,
         ) = self
-            .load_live_component(service.bytes, service.digest, Blocking::Allowed)
+            .prepared_component(service.digest.as_deref(), Blocking::Allowed)
             .context("failed to create component from bytes")?;
 
         // Create a linker for this component
@@ -1083,10 +1224,7 @@ impl Engine {
         let component = Component::new(&self.inner, bytes)
             .map_err(|e| self.explain_compile_failure(e))
             .context("failed to compile component from bytes")?;
-        Ok(CacheValue {
-            component,
-            may_use_gc: Arc::default(),
-        })
+        Ok(CacheValue::new(component))
     }
 
     /// [`Self::may_use_gc`] for `compiled`, read off `bytes`, its source,
@@ -1095,44 +1233,128 @@ impl Engine {
         *compiled.may_use_gc.get_or_init(|| self.may_use_gc(bytes))
     }
 
-    /// [`Self::load_component_bytes`] for a workload, which holds the returned
-    /// [`LiveCompile`] while it runs: a digest some running workload was
-    /// loaded from is served from that workload's compile, whether or not the
-    /// cache still has it.
-    ///
-    /// Under [`Blocking::Forbidden`] only a live compile is served; nothing is
-    /// compiled.
-    ///
-    /// Bytes without a digest are cached under [`content_digest`], so many
-    /// workloads of one component share a compile however they were loaded.
-    fn load_live_component(
+    /// Load or compile asynchronously, retaining live ownership independently
+    /// of cache eviction. The flight covers lookup, compilation and publication.
+    async fn load_live_bytes(
         &self,
-        bytes: impl AsRef<[u8]>,
+        bytes: bytes::Bytes,
         digest: Option<impl AsRef<str>>,
         blocking: Blocking,
     ) -> anyhow::Result<(CacheValue, Arc<LiveCompile>)> {
         let digest = match digest {
-            Some(digest) => digest.as_ref().to_string(),
+            Some(digest) => digest.as_ref().to_owned(),
             None => {
                 blocking.ensure_allowed("hash a component")?;
-                content_digest(bytes.as_ref())
+                let bytes = bytes.clone();
+                tokio::task::spawn_blocking(move || content_digest(&bytes)).await?
             }
         };
         if let Some(live) = self.live_compile(&digest) {
             return Ok((live.compiled.clone(), live));
         }
         blocking.ensure_allowed("compile a component")?;
-        let live = self.record_live(&digest, self.load_component_bytes(&bytes, Some(&digest))?);
+        let live = self
+            .compile_flights
+            .run(digest.clone(), || async {
+                if let Some(live) = self.live_compile(&digest) {
+                    return Ok(live);
+                }
+                let key = CacheKey {
+                    engine: self.cache_engine_id,
+                    digest: digest.clone(),
+                };
+                if let Some(compiled) = self
+                    .cache
+                    .get_compiled(&key)
+                    .await
+                    .context("compilation cache lookup failed")?
+                {
+                    anyhow::ensure!(
+                        wasmtime::Engine::same(&self.inner, compiled.component.engine()),
+                        "cache returned a component belonging to a different engine"
+                    );
+                    return Ok(self.record_live(&digest, compiled));
+                }
+                let compiled = self.compile_shared(bytes, digest.clone()).await?;
+                self.cache
+                    .put_compiled(&key, compiled.clone())
+                    .await
+                    .context("compilation cache publication failed")?;
+                Ok(self.record_live(&digest, compiled))
+            })
+            .await?;
         Ok((live.compiled.clone(), live))
     }
 
-    /// `digest`'s live compile, recording a cached one as live; never compiles.
-    fn pin_compile(&self, digest: &str) -> Option<Arc<LiveCompile>> {
-        if let Some(live) = self.live_compile(digest) {
-            return Some(live);
-        }
-        let compiled = self.cache.get(&CacheKey(digest.to_string()))?;
-        Some(self.record_live(digest, compiled))
+    // Only compilation outlives cancellation: blocking work cannot be aborted.
+    // Separate coordination lets cache I/O remain cancellable while a new
+    // caller joins a compile that its predecessor stopped waiting for.
+    async fn compile_shared(
+        &self,
+        bytes: bytes::Bytes,
+        digest: String,
+    ) -> anyhow::Result<CacheValue> {
+        let engine = self.clone();
+        tokio::spawn(async move {
+            engine
+                .compiling
+                .run(digest.clone(), || async {
+                    if let Some(live) = engine.live_compile(&digest) {
+                        return Ok(live.compiled.clone());
+                    }
+                    engine.compile_owned(bytes).await
+                })
+                .await
+        })
+        .await
+        .context("component preparation task failed")?
+    }
+
+    async fn compile_owned(&self, bytes: bytes::Bytes) -> anyhow::Result<CacheValue> {
+        let engine = self.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Some(guard) = engine.process_memory() {
+                guard.admit_start().map_err(anyhow::Error::msg)?;
+            }
+            #[cfg(test)]
+            engine
+                .compiles
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            engine.compile(&bytes)
+        })
+        .await
+        .context("component compilation task failed")?
+    }
+
+    #[cfg(test)]
+    async fn load_live_component(
+        &self,
+        bytes: impl AsRef<[u8]>,
+        digest: Option<impl AsRef<str>>,
+        blocking: Blocking,
+    ) -> anyhow::Result<(CacheValue, Arc<LiveCompile>)> {
+        self.load_live_bytes(
+            bytes::Bytes::copy_from_slice(bytes.as_ref()),
+            digest,
+            blocking,
+        )
+        .await
+    }
+
+    fn prepared_component(
+        &self,
+        digest: Option<&str>,
+        blocking: Blocking,
+    ) -> anyhow::Result<(CacheValue, Arc<LiveCompile>)> {
+        let Some(digest) = digest else {
+            blocking.ensure_allowed("hash a component")?;
+            bail!("component was not prepared before initialization");
+        };
+        let Some(live) = self.live_compile(digest) else {
+            blocking.ensure_allowed("compile a component")?;
+            bail!("component was not prepared before initialization");
+        };
+        Ok((live.compiled.clone(), live))
     }
 
     /// Record `compiled` as `digest`'s live compile, or share the one another
@@ -1165,33 +1387,20 @@ impl Engine {
             .and_then(std::sync::Weak::upgrade)
     }
 
-    /// Load a WebAssembly component from raw bytes or yields a previously compiled one.
-    #[instrument(name = "load_component_bytes", skip_all, fields(digest = %digest.as_ref().map(|d| d.as_ref()).unwrap_or("none")))]
-    fn load_component_bytes(
+    #[cfg(test)]
+    async fn load_component_bytes(
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
     ) -> anyhow::Result<CacheValue> {
         match digest {
+            Some(digest) => Ok(self
+                .load_live_component(bytes, Some(digest), Blocking::Allowed)
+                .await?
+                .0),
             None => {
-                tracing::debug!("no digest provided, compiling component without caching");
-                self.compile(bytes.as_ref())
-            }
-            Some(digest) => {
-                let key = CacheKey(digest.as_ref().to_string());
-                let bytes_ref = bytes.as_ref();
-
-                #[cfg(test)]
-                let compiles = Arc::clone(&self.compiles);
-                self.cache
-                    .try_get_with(key, || {
-                        #[cfg(test)]
-                        compiles.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        self.compile(bytes_ref)
-                    })
-                    .map_err(|e: Arc<anyhow::Error>| {
-                        anyhow::Error::new(SharedError(e)).context("compilation cache error")
-                    })
+                self.compile_owned(bytes::Bytes::copy_from_slice(bytes.as_ref()))
+                    .await
             }
         }
     }
@@ -1215,7 +1424,7 @@ impl Engine {
 
         // Create a wasmtime component from the bytes
         let (cached, compiled) = self
-            .load_live_component(&component.bytes, component.digest, blocking)
+            .prepared_component(component.digest.as_deref(), blocking)
             .context("failed to create component from bytes")?;
         let may_use_gc = self.compiled_may_use_gc(&cached, &component.bytes);
         let wasmtime_component = cached.component;
@@ -1297,13 +1506,19 @@ impl Engine {
     /// plugin's own capability imports back to itself) before calling
     /// [`Linker::instantiate_pre`]; the [`Component`] is returned alongside for
     /// exported- and imported-type introspection.
-    pub fn prepare_host_component(
+    pub async fn prepare_host_component(
         &self,
         bytes: &[u8],
     ) -> anyhow::Result<(Component, Linker<SharedCtx>)> {
-        let component = Component::new(&self.inner, bytes)
-            .map_err(anyhow::Error::from)
+        let (compiled, _live) = self
+            .load_live_bytes(
+                bytes::Bytes::copy_from_slice(bytes),
+                None::<&str>,
+                Blocking::Allowed,
+            )
+            .await
             .context("failed to compile host component plugin")?;
+        let component = compiled.component;
 
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
         add_wasi_to_linker(&mut linker).context("failed to add WASI to plugin linker")?;
@@ -1465,6 +1680,7 @@ pub struct EngineBuilder {
     max_core_instances: Option<u32>,
     pooling_config: Option<PoolingAllocationConfig>,
     proposals: std::collections::BTreeSet<WasmProposal>,
+    cache: Option<Arc<CacheBackend>>,
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
@@ -1877,6 +2093,12 @@ impl EngineBuilder {
     /// The builder instance for method chaining.
     pub fn with_config(mut self, config: wasmtime::Config) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    /// Select a backend. Takes precedence over default compilation-cache settings.
+    pub fn with_cache(mut self, cache: Arc<CacheBackend>) -> Self {
+        self.cache = Some(cache);
         self
     }
 
@@ -2302,13 +2524,18 @@ impl EngineBuilder {
                  growth leaves initial memory uncharged"
             );
         }
-        let cache = Cache::builder()
-            .max_capacity(self.compilation_cache_size.unwrap_or(100))
-            .time_to_idle(
-                self.compilation_cache_ttl
-                    .unwrap_or(Duration::from_secs(600)),
-            )
-            .build();
+        let (cache, default_cache): (Arc<CacheBackend>, _) = match self.cache {
+            Some(cache) => (cache, None),
+            None => {
+                let default = DefaultCache::new(
+                    self.compilation_cache_size.unwrap_or(100),
+                    self.compilation_cache_ttl
+                        .unwrap_or(Duration::from_secs(600)),
+                );
+                (Arc::new(default.clone()), Some(default))
+            }
+        };
+        self.reserved_host_paths.extend(cache.reserved_paths());
         let socket_policy = self.socket_policy.unwrap_or_default();
         let scratch_root = self
             .scratch_root
@@ -2322,6 +2549,10 @@ impl EngineBuilder {
             base_linkers: Arc::default(),
             inner,
             cache,
+            default_cache,
+            cache_engine_id: uuid::Uuid::new_v4(),
+            compile_flights: Arc::new(Coalescer::flights(Duration::MAX)),
+            compiling: Arc::new(Coalescer::flights(Duration::MAX)),
             live_compiles: Arc::default(),
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -2775,8 +3006,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_engine_refuses_a_host_path_outside_its_allowlist() {
+    #[tokio::test]
+    async fn an_engine_refuses_a_host_path_outside_its_allowlist() {
         let root = tempfile::tempdir().unwrap();
         let allowed = root.path().join("allowed");
         let other = root.path().join("other");
@@ -2792,8 +3023,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let Err(err) =
-            engine.initialize_workload("w", volume_only_workload(vec![host_path(&other)]))
+        let Err(err) = engine
+            .initialize_workload("w", volume_only_workload(vec![host_path(&other)]))
+            .await
         else {
             panic!("a host path outside the allowlist should be refused");
         };
@@ -2804,6 +3036,7 @@ mod tests {
         assert_eq!(meters.host_path_denied(), 1);
         engine
             .initialize_workload("w", volume_only_workload(vec![host_path(&allowed)]))
+            .await
             .unwrap();
         // An empty directory is the host's own, never a path a workload named.
         engine
@@ -2814,6 +3047,7 @@ mod tests {
                     volume_type: VolumeType::EmptyDir(EmptyDirVolume {}),
                 }]),
             )
+            .await
             .unwrap();
     }
 
@@ -2826,8 +3060,8 @@ mod tests {
 
     /// Scratch lives under the root the engine owns, and a workload that goes
     /// away takes its scratch with it.
-    #[test]
-    fn empty_dir_scratch_lives_under_the_root_and_leaves_with_its_workload() {
+    #[tokio::test]
+    async fn empty_dir_scratch_lives_under_the_root_and_leaves_with_its_workload() {
         let root = tempfile::tempdir().unwrap();
         let engine = Engine::builder()
             .with_scratch_root(root.path())
@@ -2840,10 +3074,13 @@ mod tests {
                 .count()
         };
         let before = scratch_files();
-        let Ok(workload) = engine.initialize_workload(
-            "w",
-            volume_only_workload(vec![empty_dir("a"), empty_dir("b")]),
-        ) else {
+        let Ok(workload) = engine
+            .initialize_workload(
+                "w",
+                volume_only_workload(vec![empty_dir("a"), empty_dir("b")]),
+            )
+            .await
+        else {
             panic!("a workload with emptyDir volumes should initialize");
         };
         // One workload directory holding a directory per volume.
@@ -2855,8 +3092,8 @@ mod tests {
     /// A volume around the scratch root, as `/tmp` is around the default one,
     /// the root itself, or a workload's scratch inside it would expose other
     /// workloads' scratch, so each is refused even when the allowlist names it.
-    #[test]
-    fn a_host_path_exposing_scratch_is_refused_even_when_allowed() {
+    #[tokio::test]
+    async fn a_host_path_exposing_scratch_is_refused_even_when_allowed() {
         let root = tempfile::tempdir().unwrap();
         let scratch = root.path().join("scratch");
         let meters = Arc::new(crate::host::quota::PolicyMeters::default());
@@ -2871,6 +3108,7 @@ mod tests {
             .unwrap();
         let workload = engine
             .initialize_workload("w", volume_only_workload(vec![empty_dir("a")]))
+            .await
             .unwrap();
         let inside = walkdir(&scratch)
             .into_iter()
@@ -2884,6 +3122,7 @@ mod tests {
             assert!(
                 engine
                     .initialize_workload("w2", volume_only_workload(vec![host_path(path)]))
+                    .await
                     .is_err(),
                 "{what} the scratch root"
             );
@@ -2905,8 +3144,8 @@ mod tests {
     }
 
     /// With no allowed host paths configured, no `hostPath` volume is permitted.
-    #[test]
-    fn a_default_engine_refuses_every_host_path() {
+    #[tokio::test]
+    async fn a_default_engine_refuses_every_host_path() {
         let root = tempfile::tempdir().unwrap();
         let meters = Arc::new(crate::host::quota::PolicyMeters::default());
         let engine = Engine::builder()
@@ -2919,6 +3158,7 @@ mod tests {
         assert!(
             engine
                 .initialize_workload("w", volume_only_workload(vec![host_path(root.path())]))
+                .await
                 .is_err()
         );
         assert_eq!(meters.host_path_denied(), 1);
@@ -3298,8 +3538,8 @@ mod tests {
     /// compile, so a workload served from the cache, after the last one
     /// holding the compile let go, still has its answer without a second
     /// compile or a second read of the source.
-    #[test]
-    fn a_cached_compile_carries_its_gc_answer() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn a_cached_compile_carries_its_gc_answer() -> anyhow::Result<()> {
         use std::sync::atomic::Ordering;
 
         let engine = pool_share::test_support::engine(pool_share::test_support::config());
@@ -3320,8 +3560,9 @@ mod tests {
         ];
         for (compiles, (digest, wat, uses_gc)) in (1..).zip(cases) {
             let bytes = wat::parse_str(wat)?;
-            let (first, live) =
-                engine.load_live_component(&bytes, Some(digest), Blocking::Allowed)?;
+            let (first, live) = engine
+                .load_live_component(&bytes, Some(digest), Blocking::Allowed)
+                .await?;
             assert_eq!(
                 first.may_use_gc.get(),
                 None,
@@ -3335,8 +3576,9 @@ mod tests {
             drop((first, live));
             assert!(engine.live_compiles.lock().unwrap().is_empty());
 
-            let (cached, _) =
-                engine.load_live_component(&bytes, Some(digest), Blocking::Allowed)?;
+            let (cached, _) = engine
+                .load_live_component(&bytes, Some(digest), Blocking::Allowed)
+                .await?;
             assert_eq!(engine.compiles.load(Ordering::SeqCst), compiles);
             assert_eq!(cached.may_use_gc.get(), Some(&uses_gc), "{digest}");
         }
@@ -3417,8 +3659,8 @@ mod tests {
 
     /// A digest a running workload holds is never compiled again, even once
     /// the cache has let it go; once nothing holds it, it is forgotten.
-    #[test]
-    fn a_digest_in_use_is_not_recompiled_after_cache_eviction() {
+    #[tokio::test]
+    async fn a_digest_in_use_is_not_recompiled_after_cache_eviction() {
         use std::sync::atomic::Ordering;
         const DIGEST: &str = "sha256:held-image";
 
@@ -3427,29 +3669,52 @@ mod tests {
 
         let (_, first) = engine
             .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .await
             .expect("first load");
-        engine.cache.invalidate_all();
-        engine.cache.run_pending_tasks();
+        engine
+            .default_cache
+            .as_ref()
+            .unwrap()
+            .compiled
+            .invalidate_all();
+        engine
+            .default_cache
+            .as_ref()
+            .unwrap()
+            .compiled
+            .run_pending_tasks();
         let (_, second) = engine
             .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .await
             .expect("second load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&first, &second));
 
         drop((first, second));
         assert!(engine.live_compiles.lock().unwrap().is_empty());
-        engine.cache.invalidate_all();
-        engine.cache.run_pending_tasks();
+        engine
+            .default_cache
+            .as_ref()
+            .unwrap()
+            .compiled
+            .invalidate_all();
+        engine
+            .default_cache
+            .as_ref()
+            .unwrap()
+            .compiled
+            .run_pending_tasks();
         engine
             .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .await
             .expect("third load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
     }
 
     /// Bytes loaded without a digest compile once and share that compile,
     /// with each other and with a file source's content digest.
-    #[test]
-    fn bytes_without_a_digest_share_one_compile() {
+    #[tokio::test]
+    async fn bytes_without_a_digest_share_one_compile() {
         use std::sync::atomic::Ordering;
 
         let bytes = wat::parse_str("(component)").expect("component should assemble");
@@ -3457,15 +3722,18 @@ mod tests {
 
         let (_, first) = engine
             .load_live_component(&bytes, None::<&str>, Blocking::Allowed)
+            .await
             .expect("first load");
         let (_, second) = engine
             .load_live_component(&bytes, None::<&str>, Blocking::Allowed)
+            .await
             .expect("second load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&first, &second));
 
         let (_, by_digest) = engine
             .load_live_component(&bytes, Some(content_digest(&bytes)), Blocking::Allowed)
+            .await
             .expect("load by content digest");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&first, &by_digest));
@@ -3473,6 +3741,7 @@ mod tests {
         let other = wat::parse_str("(component (core module))").expect("component should assemble");
         engine
             .load_live_component(&other, None::<&str>, Blocking::Allowed)
+            .await
             .expect("other load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
     }
@@ -3493,8 +3762,8 @@ mod tests {
     /// A workload whose digest is compiled initializes inline, compiling
     /// nothing, and holds its compile: a later inline start of the same digest
     /// is served from it after a cache eviction.
-    #[test]
-    fn a_compiled_workload_initializes_inline_without_compiling() {
+    #[tokio::test]
+    async fn a_compiled_workload_initializes_inline_without_compiling() {
         use std::sync::atomic::Ordering;
         const DIGEST: &str = "sha256:pinned-image";
 
@@ -3506,8 +3775,9 @@ mod tests {
         ));
 
         let bytes = wat::parse_str("(component)").expect("component should assemble");
-        engine
-            .load_component_bytes(&bytes, Some(DIGEST))
+        let (_, prepared) = engine
+            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .await
             .expect("compile");
         let InlineInit::Initialized(first) =
             engine.initialize_workload_inline("w", workload.clone())
@@ -3515,8 +3785,18 @@ mod tests {
             panic!("a compiled digest initializes inline");
         };
         let first = first.expect("initialize");
-        engine.cache.invalidate_all();
-        engine.cache.run_pending_tasks();
+        engine
+            .default_cache
+            .as_ref()
+            .unwrap()
+            .compiled
+            .invalidate_all();
+        engine
+            .default_cache
+            .as_ref()
+            .unwrap()
+            .compiled
+            .run_pending_tasks();
 
         let InlineInit::Initialized(second) = engine.initialize_workload_inline("w2", workload)
         else {
@@ -3524,7 +3804,7 @@ mod tests {
         };
         let second = second.expect("initialize");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
-        drop((first, second));
+        drop((prepared, first, second));
         assert!(
             engine.live_compiles.lock().unwrap().is_empty(),
             "a pin outlived its holders"
@@ -3533,14 +3813,15 @@ mod tests {
 
     /// A workload that could compile, open files or build a service is handed
     /// back, holding only compiles that exist, and those go with it.
-    #[test]
-    fn a_workload_that_could_block_is_not_initialized_inline() {
+    #[tokio::test]
+    async fn a_workload_that_could_block_is_not_initialized_inline() {
         const DIGEST: &str = "sha256:compiled-image";
 
         let engine = Engine::builder().build().expect("engine should build");
         let bytes = wat::parse_str("(component)").expect("component should assemble");
-        engine
-            .load_component_bytes(&bytes, Some(DIGEST))
+        let (_, prepared) = engine
+            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .await
             .expect("compile");
         let would_block = |workload| {
             matches!(
@@ -3580,7 +3861,7 @@ mod tests {
             panic!("an uncompiled component is not initialized inline");
         };
         assert_eq!(pinned.len(), 1, "the compiled component is handed on");
-        drop(pinned);
+        drop((prepared, pinned));
         assert!(
             engine.live_compiles.lock().unwrap().is_empty(),
             "a handed-back pin outlived its holder"
@@ -3620,24 +3901,25 @@ mod tests {
     // Keying the cache on anything that differs between replicas — a workload
     // id, a component name — would put a Cranelift compile behind every one of
     // them, and nothing in a deployment's behaviour would say so.
-    #[test]
-    fn a_herd_of_replicas_shares_one_compiled_component() {
+    #[tokio::test]
+    async fn a_herd_of_replicas_shares_one_compiled_component() {
         const HERD: usize = 15;
         const DIGEST: &str = "sha256:one-image";
 
         let bytes = wat::parse_str("(component)").expect("component should assemble");
         let engine = Engine::builder().build().expect("engine should build");
 
-        std::thread::scope(|scope| {
-            for _ in 0..HERD {
-                scope.spawn(|| {
-                    engine
-                        .load_component_bytes(&bytes, Some(DIGEST))
-                        .map(|_| ())
-                        .expect("every member of the herd should load");
-                });
-            }
-        });
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..HERD {
+            let engine = engine.clone();
+            let bytes = bytes.clone();
+            tasks.spawn(async move { engine.load_component_bytes(&bytes, Some(DIGEST)).await });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result
+                .expect("task finishes")
+                .expect("every member of the herd should load");
+        }
 
         // The claim is that the herd shares a compile, not merely that it ends
         // up with one entry: a loader that compiled per caller and let them
@@ -3649,9 +3931,19 @@ mod tests {
             "{HERD} replicas of one image ran more than one compile"
         );
 
-        engine.cache.run_pending_tasks();
+        engine
+            .default_cache
+            .as_ref()
+            .unwrap()
+            .compiled
+            .run_pending_tasks();
         assert_eq!(
-            engine.cache.entry_count(),
+            engine
+                .default_cache
+                .as_ref()
+                .unwrap()
+                .compiled
+                .entry_count(),
             1,
             "{HERD} replicas of one image left more than one cache entry"
         );
@@ -3661,6 +3953,7 @@ mod tests {
         // rather than from a compile of its own.
         engine
             .load_component_bytes(b"definitely not a wasm component", Some(DIGEST))
+            .await
             .map(|_| ())
             .expect("a digest the herd already compiled should be served from the cache");
     }
@@ -3669,16 +3962,18 @@ mod tests {
     // uncached path reports. `try_get_with` returns its error as
     // `Arc<anyhow::Error>`, which is easy to collapse into its outermost message
     // alone — leaving logs that say a component failed to compile and never why.
-    #[test]
-    fn cached_compile_failure_keeps_the_cause_chain() {
+    #[tokio::test]
+    async fn cached_compile_failure_keeps_the_cause_chain() {
         let engine = Engine::builder().build().expect("engine should build");
         let garbage = b"definitely not a wasm component";
 
         // `Component` is not `Debug`, so `expect_err` is unavailable here.
-        let Err(uncached) = engine.load_component_bytes(garbage, None::<&str>) else {
+        let Err(uncached) = engine.load_component_bytes(garbage, None::<&str>).await else {
             panic!("garbage bytes should not compile");
         };
-        let Err(cached) = engine.load_component_bytes(garbage, Some("sha256:not-a-real-digest"))
+        let Err(cached) = engine
+            .load_component_bytes(garbage, Some("sha256:not-a-real-digest"))
+            .await
         else {
             panic!("garbage bytes should not compile");
         };

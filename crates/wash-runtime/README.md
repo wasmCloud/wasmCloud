@@ -87,6 +87,99 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### Custom caches
+
+Embedders can provide an `Arc<wash_runtime::cache::CacheBackend>` at host or engine
+construction. `DefaultCache` preserves bounded in-memory compilation retention
+and, with `with_oci_directory`, the existing credential-scoped disk artifact
+cache. The engine builder's compilation capacity and idle timeout configure its
+default backend. An explicit backend takes precedence over those settings and
+over the host/OCI cache directory setting, regardless of builder call order.
+
+`Cache` provides compiled-component retention, naming, and reserved paths.
+With the `oci` feature, `OciCache: Cache` adds OCI operations, all prefixed
+with `oci_`, including maintenance. `CacheBackend` aliases `dyn OciCache` with
+OCI enabled and `dyn Cache` otherwise, keeping one shared backend handle.
+
+`Cache::name()` is synchronous and returns `&str`, defaulting to the Rust type
+name. Override it with a stored name to distinguish instances dynamically. Names
+are diagnostic labels, need not be unique, and do not determine cache isolation.
+
+Both traits use `async-trait`; storage methods return `anyhow::Result`, with
+`Ok(None)` indicating a miss. Defaults decline retention, so a backend can
+implement only the domains it needs. For example, this memory-only backend keeps
+compiled components and disables artifact, completed-pull, and helper-result
+retention (this example assumes the `oci` feature is enabled):
+
+```rust,no_run
+use std::{collections::HashMap, sync::Arc};
+use wash_runtime::{
+    cache::{Cache, CacheBackend, CacheKey, CacheValue},
+    engine::Engine,
+    host::Host,
+};
+
+#[derive(Default)]
+struct MemoryCache(tokio::sync::RwLock<HashMap<CacheKey, CacheValue>>);
+
+#[async_trait::async_trait]
+impl Cache for MemoryCache {
+    async fn get_compiled(&self, key: &CacheKey) -> anyhow::Result<Option<CacheValue>> {
+        Ok(self.0.read().await.get(key).cloned())
+    }
+
+    async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> anyhow::Result<()> {
+        self.0.write().await.insert(key.clone(), value);
+        Ok(())
+    }
+}
+
+// Opt out of OCI retention while satisfying the OCI-enabled host contract.
+impl wash_runtime::cache::OciCache for MemoryCache {}
+
+# fn example() -> anyhow::Result<()> {
+let cache: Arc<CacheBackend> = Arc::new(MemoryCache::default());
+let engine = Engine::builder().with_cache(Arc::clone(&cache)).build()?;
+let host = Host::builder().with_engine(engine).with_cache(cache).build()?;
+# Ok(())
+# }
+```
+
+Use the same handle for plugin loading before host construction:
+`OciConfig::with_cache(engine.cache())`. A host supplied with an engine inherits
+its cache and rejects an explicitly different handle. Standalone OCI operations
+also accept `OciConfig::with_cache`. Pull-secret conversion and host maintenance
+retain the effective handle. A custom backend needs no disk directory; one with
+scheduled expiry implements `oci_maintain` and returns true from
+`oci_needs_maintenance`.
+`reserved_paths` protects a backend's local storage from guest volume mounts.
+
+Compiled keys contain a process-local engine identity and a digest. Store the
+whole `CacheValue`, including its metadata; compiled values cannot be reused
+across engines or persisted as arbitrary machine code. Running workloads retain
+their compiles independently of eviction. The runtime coordinates concurrent
+misses, so a no-retention implementation does not need its own compilation locks.
+
+OCI backends use `ArtifactKey::storage_key` and `credential_proof` with a
+backend-owned secret to preserve principal, transport, trust, and offline
+credential isolation. Publish bytes and digest together and update credential
+proofs only after registry acceptance. Completed pulls expire within five seconds
+and helper results within thirty seconds. `Always` bypasses completed-result
+retention. Backend errors propagate with context; credential-proof refresh and
+background maintenance retain their existing best-effort logging behavior.
+
+`Engine::initialize_workload` and `prepare_host_component` are now async: callers
+must `.await` them. Exhaustive `HostConfig` and `OciConfig` literals also need
+the new `cache` field (`None` preserves default selection), or a
+`..Default::default()` tail. Cache I/O runs asynchronously; hashing and compilation
+run on blocking workers. Cancellation drops pending cache I/O; an already-running
+compilation remains joinable until it finishes. OCI deadlines include cache I/O.
+
+Connection pools, quota/accounting state, DNS authorization records, linked
+instances, telemetry memoization, and process configuration remain owned by their
+existing runtime subsystems. CLI WIT package caching remains with its package
+client; it is not host artifact storage.
+
 ### Embedded commands
 
 An embedder can resolve a workload and run one of its components as a command:
@@ -94,7 +187,7 @@ An embedder can resolve a workload and run one of its components as a command:
 ```rust,ignore
 use wash_runtime::engine::command::CommandOptions;
 
-let resolved = engine.initialize_workload("shell-run", workload)?
+let resolved = engine.initialize_workload("shell-run", workload).await?
     .resolve(Some(&plugins), &bindings, &host_ref, &meters).await?;
 let options = CommandOptions::new()
     .args(["agent", "hello"])

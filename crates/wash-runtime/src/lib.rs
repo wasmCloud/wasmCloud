@@ -3,6 +3,7 @@
 #![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 #![doc = include_str!("../README.md")]
 
+pub mod cache;
 pub mod engine;
 /// Setting a named environment variable in a test without racing the others.
 #[cfg(test)]

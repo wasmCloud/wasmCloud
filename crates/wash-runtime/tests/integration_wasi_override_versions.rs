@@ -111,7 +111,8 @@ async fn compatible_partial_overrides_preserve_other_host_functions() -> Result<
                         ..Default::default()
                     }],
                 },
-            )?
+            )
+            .await?
             .resolve(
                 Some(&HashMap::from([(plugin.id(), plugin)])),
                 &Default::default(),

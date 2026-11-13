@@ -413,7 +413,7 @@ impl ComponentHostPlugin {
         // so this is a no-op today, but it makes the cycle-safety invariant
         // hold by construction here too, not just at the caller.
         let native_plugins = native_only(&native_plugins);
-        let (component, base_linker) = engine.prepare_host_component(wasm)?;
+        let (component, base_linker) = engine.prepare_host_component(wasm).await?;
         let (exports, (lifecycle, secret_source)) = introspect_capability_exports(id, &component)?;
         let workload_imports = classify_workload_imports(
             id,

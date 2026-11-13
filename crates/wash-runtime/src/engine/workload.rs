@@ -5734,8 +5734,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn engine_hostcall_fuel_reaches_component_and_service_metadata() {
+    #[tokio::test]
+    async fn engine_hostcall_fuel_reaches_component_and_service_metadata() {
         let engine = crate::engine::Engine::builder()
             .with_pooling_allocator(false)
             .without_max_process_memory()
@@ -5777,6 +5777,7 @@ mod tests {
                     volumes: vec![],
                 },
             )
+            .await
             .unwrap();
         assert_eq!(unresolved.components.len(), 1);
         for component in unresolved.components.values() {

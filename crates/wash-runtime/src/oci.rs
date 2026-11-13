@@ -27,11 +27,11 @@
 //! }
 //! ```
 
-mod client;
-mod coalescer;
+pub(crate) mod client;
+use crate::cache::coalescer;
 use client::{TrustId, TrustSnapshot, pull_client};
 mod credentials;
-mod disk_cache;
+pub(crate) mod disk_cache;
 #[cfg(test)]
 #[path = "../tests/common/oci_ca.rs"]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -40,10 +40,12 @@ mod test_ca;
 #[path = "../tests/common/oci_registry.rs"]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test_registry;
+use crate::cache::{ArtifactKey, Identity, OciCache, PullKey, Pulled};
 use coalescer::Coalescer;
 use credentials::CredentialResolver;
 #[cfg(test)]
 use credentials::cached_credentials;
+#[cfg(test)]
 use disk_cache::CacheManager;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -347,12 +349,26 @@ pub struct OciConfig {
     /// them. Entry names are keyed with a random secret the cache creates in
     /// `cache.key` (owner-only on Unix); removing it orphans every entry.
     pub cache_dir: Option<PathBuf>,
+    /// Explicit backend, taking precedence over `cache_dir`.
+    pub cache: Option<Arc<dyn OciCache>>,
     /// Timeout for OCI operations (pull, push, etc.)
     /// If None, uses default timeout from oci-client
     pub timeout: Option<Duration>,
 }
 
 impl OciConfig {
+    /// Use an embedder's backend, including for helper and completed-pull reuse.
+    pub fn with_cache(mut self, cache: Arc<dyn OciCache>) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    pub(crate) fn effective_cache(&self) -> Arc<dyn OciCache> {
+        self.cache
+            .clone()
+            .unwrap_or_else(|| crate::cache::oci::standalone(self.cache_dir.clone()))
+    }
+
     /// Create a new OciConfig with a specific cache directory
     pub fn new_with_cache(cache_dir: PathBuf) -> Self {
         Self {
@@ -481,7 +497,7 @@ pub fn parse_reference(reference: &str) -> Result<Reference> {
 ///
 /// Concurrent pulls of one reference with the same credentials and settings
 /// are folded into one. Except for `Always`, its result answers the same
-/// request for [`PULL_REUSE`] after it finishes: a host restoring workloads
+/// request for five seconds after it finishes: a host restoring workloads
 /// from a few images would otherwise read each image from disk and ask the
 /// registry for its digest once per workload.
 #[instrument(skip(config), fields(reference = %reference, pull_policy = ?pull_policy))]
@@ -497,33 +513,49 @@ pub(crate) async fn pull_component_bytes(
     Box::pin(with_pull_timeout(reference, config.timeout, async {
         let reference_parsed = parse_reference(reference)?;
 
+        let cache = config.effective_cache();
         let auth = CredentialResolver::new(config.credentials.clone())
-            .resolve_credentials(reference_parsed.registry())
-            .await;
+            .resolve_credentials(reference_parsed.registry(), Arc::clone(&cache))
+            .await?;
         let trust = TrustSnapshot::load().await?;
 
         // Everything that can change what a pull returns, or whether it may
         // return at all, is in the key. The credentials above all: a result one
         // caller was authorised to fetch must never answer a caller who was not.
         let key = PullKey {
-            reference: reference.to_string(),
-            auth: AuthId::of(&auth),
-            insecure: config.insecure,
-            cache_dir: config.cache_dir.clone(),
+            artifact: ArtifactKey::new(reference, &auth, config.insecure, trust.id),
             pull_policy: pull_policy.clone(),
             timeout: config.timeout,
-            trust: trust.id,
         };
+        let reuse = pull_policy != OciPullPolicy::Always;
         let pulled = pull_coalescer()
-            .run_with_reuse(key, pull_policy != OciPullPolicy::Always, || {
-                Box::pin(pull_uncoalesced(
+            .run((Identity(Arc::clone(&cache)), key.clone()), || async {
+                if reuse
+                    && let Some(pulled) = cache
+                        .oci_get_pull(&key)
+                        .await
+                        .context("completed pull cache lookup failed")?
+                {
+                    return Ok(pulled);
+                }
+                let pulled = Box::pin(pull_uncoalesced(
                     reference,
                     &reference_parsed,
                     &config,
                     &auth,
                     &pull_policy,
                     &trust,
+                    cache.as_ref(),
+                    &key.artifact,
                 ))
+                .await?;
+                if reuse {
+                    cache
+                        .oci_put_pull(&key, Arc::clone(&pulled))
+                        .await
+                        .context("completed pull cache publication failed")?;
+                }
+                Ok(pulled)
             })
             .await?;
         Ok((pulled.bytes.clone(), pulled.digest.clone()))
@@ -546,40 +578,15 @@ async fn with_pull_timeout<T>(
     }
 }
 
-/// What one pull produced, shared by every caller it answered.
-struct Pulled {
-    bytes: bytes::Bytes,
-    digest: String,
-}
-
-/// How long a finished pull answers identical requests: long enough to fold a
-/// burst of starts of one image into one pull, short enough that a re-pushed
-/// tag is seen almost at once.
-const PULL_REUSE: Duration = Duration::from_secs(5);
-
-/// The longest a pull still in flight is joined by identical requests. Past it
-/// a new caller starts its own pull rather than wait on one that may be stuck.
+/// The longest a pull in flight is joined by identical requests.
 const PULL_JOIN: Duration = Duration::from_secs(600);
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct PullKey {
-    reference: String,
-    auth: AuthId,
-    insecure: bool,
-    cache_dir: Option<PathBuf>,
-    pull_policy: OciPullPolicy,
-    /// A caller joining a pull waits as long as that pull is allowed to take,
-    /// so callers that set different timeouts must not wait on each other.
-    timeout: Option<Duration>,
-    trust: TrustId,
-}
 
 /// Which credentials a pull or a client uses, without holding the secret.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct AuthId([u8; 32]);
+pub(crate) struct AuthId(pub(crate) [u8; 32]);
 
 impl AuthId {
-    fn of(auth: &RegistryAuth) -> Self {
+    pub(crate) fn of(auth: &RegistryAuth) -> Self {
         let mut hasher = Sha256::new();
         // Length-prefixed, so no two different credentials hash the same bytes.
         let mut field = |bytes: &[u8]| {
@@ -602,33 +609,10 @@ impl AuthId {
     }
 }
 
-fn pull_coalescer() -> &'static Coalescer<PullKey, Arc<Pulled>> {
-    static PULLS: OnceLock<Coalescer<PullKey, Arc<Pulled>>> = OnceLock::new();
-    // Bounded by the bytes finished pulls hold, not their count: each keeps
-    // its whole component for the reuse window, and a burst of large images
-    // would otherwise all stay resident. Pulls in flight are not counted and
-    // never refused: they hold only what their callers are waiting on.
-    PULLS.get_or_init(|| {
-        Coalescer::with_min_weight(
-            PULL_REUSE_BYTES,
-            PULL_JOIN,
-            PULL_REUSE,
-            PULL_ENTRY_WEIGHT,
-            |pulled| {
-                u32::try_from(pulled.bytes.len())
-                    .unwrap_or(u32::MAX)
-                    .saturating_add(PULL_ENTRY_WEIGHT)
-            },
-        )
-    })
+fn pull_coalescer() -> &'static Coalescer<(Identity, PullKey), Arc<Pulled>> {
+    static PULLS: OnceLock<Coalescer<(Identity, PullKey), Arc<Pulled>>> = OnceLock::new();
+    PULLS.get_or_init(|| Coalescer::flights(PULL_JOIN))
 }
-
-/// The most component bytes finished pulls hold for reuse at once.
-const PULL_REUSE_BYTES: u64 = 256 * 1024 * 1024;
-/// Account for keys and bookkeeping even when a result holds few bytes.
-/// This also limits the cache to about 16k small results. Moka's
-/// maintenance is eventual; this is a retention target, not a strict RSS cap.
-const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
 
 /// Bound synchronous client and trust-store work without blocking Tokio's
 /// worker threads. A cancelled caller does not release a running task's permit.
@@ -662,6 +646,7 @@ async fn blocking_on<T: Send + 'static>(
 
 /// One pull as [`pull_component`] documents it, with nothing shared but the
 /// client.
+#[allow(clippy::too_many_arguments)]
 async fn pull_uncoalesced(
     reference: &str,
     reference_parsed: &Reference,
@@ -669,64 +654,36 @@ async fn pull_uncoalesced(
     auth: &RegistryAuth,
     pull_policy: &OciPullPolicy,
     trust: &TrustSnapshot,
+    cache: &dyn OciCache,
+    key: &ArtifactKey,
 ) -> Result<Arc<Pulled>> {
-    // Initialize cache manager
-    let cache_manager = match &config.cache_dir {
-        Some(dir) => Some(
-            CacheManager::open(dir.clone(), auth, config.insecure, trust.id)
-                .await
-                .context("failed to open the OCI cache")?,
-        ),
-        None => None,
-    };
-    if let Some(cache_manager) = &cache_manager {
-        // Check cache first
-        if *pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
-            debug!("Found cached artifact");
-            let (component_data, digest) = cache_manager.read_cached(reference).await?;
-
-            // Never explicitly requests offline reuse. The cache key covers
-            // configured extra roots, but cannot encode all native trust-store
-            // policies or changes to the registry's authorization decisions.
-            // Entries are shared by user, so the password must be the one the
-            // registry last accepted for this entry.
-            if *pull_policy == OciPullPolicy::Never {
-                if !cache_manager.credential_matches(reference).await {
-                    bail!(
-                        "component is cached for this user under other credentials, and pull \
-                         policy 'Never' cannot check these with the registry; pull it once \
-                         with another policy"
-                    );
-                }
-                return Ok(Arc::new(Pulled {
-                    bytes: component_data.into(),
-                    digest,
-                }));
+    if *pull_policy != OciPullPolicy::Always
+        && let Some(entry) = cache
+            .oci_get_artifact(key)
+            .await
+            .context("OCI artifact cache lookup failed")?
+    {
+        if *pull_policy == OciPullPolicy::Never {
+            if !entry.credentials_match {
+                bail!(
+                    "component is cached for this user under other credentials, and pull policy 'Never' cannot check these with the registry; pull it once with another policy"
+                );
             }
-
-            // Even a pinned digest must pass the caller's current registry
-            // authorization and TLS policy before a disk entry can be reused.
-            let fetched_digest = pull_client(reference_parsed, config.insecure, auth, trust)
-                .await?
-                .fetch_manifest_digest(reference_parsed, auth)
-                .await?;
-
-            if digest == fetched_digest {
-                // The registry has just accepted these credentials, e.g. a
-                // rotated password: let Never reuse the entry with them.
-                if !cache_manager.credential_matches(reference).await
-                    && let Err(error) = cache_manager.record_credential(reference).await
-                {
-                    warn!(%error, "failed to record revalidated OCI cache credentials");
-                }
-                return Ok(Arc::new(Pulled {
-                    bytes: component_data.into(),
-                    digest,
-                }));
-            }
-
-            debug!("Cached artifact expired; pulling new component version");
+            return Ok(Arc::new(entry.artifact));
         }
+        let fetched_digest = pull_client(reference_parsed, config.insecure, auth, trust)
+            .await?
+            .fetch_manifest_digest(reference_parsed, auth)
+            .await?;
+        if entry.artifact.digest == fetched_digest {
+            if !entry.credentials_match
+                && let Err(error) = cache.oci_record_credentials(key).await
+            {
+                warn!(%error, "failed to record revalidated OCI cache credentials");
+            }
+            return Ok(Arc::new(entry.artifact));
+        }
+        debug!("Cached artifact expired; pulling new component version");
     }
 
     if *pull_policy == OciPullPolicy::Never {
@@ -767,18 +724,15 @@ async fn pull_uncoalesced(
         .await
         .with_context(|| "pulled artifact is not a valid WebAssembly component")?;
 
-    // Cache the component with its digest
-    if let Some(cache_manager) = &cache_manager {
-        cache_manager
-            .write_to_cache(reference, &component_data, &digest)
-            .await
-            .with_context(|| "failed to cache component")?;
-    }
-
-    Ok(Arc::new(Pulled {
+    let pulled = Arc::new(Pulled {
         bytes: component_data,
         digest,
-    }))
+    });
+    cache
+        .oci_put_artifact(key, &pulled)
+        .await
+        .context("failed to cache component")?;
+    Ok(pulled)
 }
 
 /// Push a WebAssembly component to an OCI registry
@@ -829,6 +783,27 @@ pub async fn push_component(
     config: OciConfig,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<String> {
+    let timeout = config.timeout;
+    let work = Box::pin(push_component_inner(
+        reference,
+        component_data,
+        config,
+        annotations,
+    ));
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, work).await.with_context(|| {
+            format!("timeout pushing component to {reference} after {timeout:?}")
+        })?,
+        None => work.await,
+    }
+}
+
+async fn push_component_inner(
+    reference: &str,
+    component_data: &[u8],
+    config: OciConfig,
+    annotations: Option<HashMap<String, String>>,
+) -> Result<String> {
     let reference_parsed = parse_reference(reference)?;
 
     // Validate the component before pushing
@@ -837,10 +812,11 @@ pub async fn push_component(
         .with_context(|| "component data is not a valid WebAssembly component")?;
 
     // Setup credential resolver
+    let cache = config.effective_cache();
     let credential_resolver = CredentialResolver::new(config.credentials);
     let auth = credential_resolver
-        .resolve_credentials(reference_parsed.registry())
-        .await;
+        .resolve_credentials(reference_parsed.registry(), Arc::clone(&cache))
+        .await?;
 
     // Use one trust snapshot for the client and any disk entry it publishes.
     let trust = TrustSnapshot::load().await?;
@@ -896,17 +872,9 @@ pub async fn push_component(
     // Push the component
     let push_future = client.push(&reference_parsed, &layers, config_obj, &auth, manifest);
 
-    // Apply timeout if configured, otherwise just await the push
-    let push_result = if let Some(timeout) = config.timeout {
-        tokio::time::timeout(timeout, push_future)
-            .await
-            .with_context(|| format!("timeout pushing component to {reference} after {timeout:?}"))?
-            .with_context(|| format!("failed to push component to {reference}"))?
-    } else {
-        push_future
-            .await
-            .with_context(|| format!("failed to push component to {reference}"))?
-    };
+    let push_result = push_future
+        .await
+        .with_context(|| format!("failed to push component to {reference}"))?;
 
     // Extract the digest from the manifest URL
     // The manifest URL typically contains the digest in the format: registry/repo@sha256:digest
@@ -919,16 +887,16 @@ pub async fn push_component(
             .await
             .with_context(|| format!("failed to fetch manifest digest for {reference}"))?
     };
-    // Cache the pushed component with its digest
-    if let Some(cache_dir) = config.cache_dir {
-        let cache_manager = CacheManager::open(cache_dir, &auth, config.insecure, trust.id)
-            .await
-            .context("failed to open the OCI cache")?;
-        cache_manager
-            .write_to_cache(reference, component_data, &digest)
-            .await
-            .with_context(|| "failed to cache pushed component")?;
-    }
+    cache
+        .oci_put_artifact(
+            &ArtifactKey::new(reference, &auth, config.insecure, trust.id),
+            &Pulled {
+                bytes: bytes::Bytes::copy_from_slice(component_data),
+                digest: digest.clone(),
+            },
+        )
+        .await
+        .context("failed to cache pushed component")?;
 
     Ok(digest)
 }
@@ -966,7 +934,10 @@ pub async fn validate_component(data: &[u8]) -> Result<()> {
 /// Cleanup cached OCI artifacts
 #[instrument(skip(cache_dir))]
 pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result<()> {
-    disk_cache::expire_artifacts(cache_dir.as_ref(), age).await
+    crate::cache::DefaultCache::default()
+        .with_oci_directory(cache_dir.as_ref().to_owned())
+        .oci_maintain(age)
+        .await
 }
 
 #[cfg(test)]
@@ -1045,14 +1016,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_and_oversized_pulls_have_bounded_retention() {
-        let cache: Coalescer<String, u32> = Coalescer::with_min_weight(
-            16 * u64::from(PULL_ENTRY_WEIGHT),
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            PULL_ENTRY_WEIGHT,
-            |size| *size,
-        );
+    async fn failed_pulls_release_their_flights() {
+        let cache: Coalescer<String, u32> = Coalescer::flights(Duration::from_secs(60));
         for index in 0..256 {
             assert!(
                 cache
@@ -1063,56 +1028,14 @@ mod tests {
                     .is_err()
             );
         }
-        cache.finished.run_pending_tasks();
-        assert_eq!(cache.finished.entry_count(), 0);
         assert_eq!(cache.in_flight_count(), 0);
-        assert_eq!(
-            cache
-                .run("oversized".into(), || async { Ok(u32::MAX) })
-                .await
-                .unwrap(),
-            u32::MAX
-        );
-        cache.finished.run_pending_tasks();
-        assert!(!cache.finished.contains_key("oversized"));
-        assert_eq!(cache.in_flight_count(), 0);
-    }
-
-    /// Requests in flight are never refused for space: a full reuse cache,
-    /// here one too small to hold any result, must not stop coalescing.
-    #[tokio::test]
-    async fn a_full_reuse_cache_still_coalesces() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let coalescer: Coalescer<&str, u32> =
-            Coalescer::new(1, Duration::from_secs(60), Duration::from_secs(60), |_| {
-                u32::MAX
-            });
-        let runs = AtomicUsize::new(0);
-        let (open, gate) = tokio::sync::watch::channel(false);
-        let work = || async {
-            runs.fetch_add(1, Ordering::SeqCst);
-            gate.clone().wait_for(|open| *open).await.unwrap();
-            Ok(1)
-        };
-        let (a, b, c, ()) = tokio::join!(
-            coalescer.run("ref", work),
-            coalescer.run("ref", work),
-            coalescer.run("ref", work),
-            open_once(|| coalescer.waiters(&"ref") == 3, &open),
-        );
-        assert_eq!((a.unwrap(), b.unwrap(), c.unwrap()), (1, 1, 1));
-        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn credential_misses_coalesce_without_blocking_the_runtime() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let cache: &'static Coalescer<String, RegistryAuth> = Box::leak(Box::new(Coalescer::new(
-            16,
-            Duration::from_secs(60),
-            Duration::from_secs(60),
-            |_| 1,
-        )));
+        let cache: &'static Coalescer<String, RegistryAuth> =
+            Box::leak(Box::new(Coalescer::flights(Duration::from_secs(60))));
         let runs = Arc::new(AtomicUsize::new(0));
         let (started, ready) = tokio::sync::oneshot::channel();
         let (release, wait) = std::sync::mpsc::channel();
@@ -1161,12 +1084,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_cancelled_leader_does_not_extend_the_waiters_deadline() {
-        let coalescer = Arc::new(Coalescer::<&str, u32>::new(
-            16,
-            Duration::from_secs(60),
-            Duration::from_secs(5),
-            |_| 1,
-        ));
+        let coalescer = Arc::new(Coalescer::<&str, u32>::flights(Duration::from_secs(60)));
         let deadline = Some(Duration::from_secs(30));
         let began = tokio::time::Instant::now();
         let leader = tokio::spawn({
@@ -1191,7 +1109,7 @@ mod tests {
     #[tokio::test]
     async fn fresh_pulls_share_active_work_but_never_completed_results() {
         use std::sync::atomic::{AtomicUsize, Ordering};
-        let coalescer = Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let coalescer = Coalescer::flights(Duration::from_secs(60));
         let runs = AtomicUsize::new(0);
         let (open, gate) = tokio::sync::watch::channel(false);
         let work = || async {
@@ -1200,19 +1118,13 @@ mod tests {
             Ok(value)
         };
         let (a, b, ()) = tokio::join!(
-            coalescer.run_with_reuse("ref", false, work),
-            coalescer.run_with_reuse("ref", false, work),
+            coalescer.run("ref", work),
+            coalescer.run("ref", work),
             open_once(|| coalescer.waiters(&"ref") == 2, &open),
         );
         assert_eq!(a.unwrap(), 0);
         assert_eq!(b.unwrap(), 0);
-        assert_eq!(
-            coalescer.run_with_reuse("ref", false, work).await.unwrap(),
-            1
-        );
-        // Nothing could reuse an `Always` result, so none is kept.
-        coalescer.finished.run_pending_tasks();
-        assert_eq!(coalescer.finished.entry_count(), 0);
+        assert_eq!(coalescer.run("ref", work).await.unwrap(), 1);
         assert_eq!(coalescer.in_flight_count(), 0);
     }
     use tempfile::TempDir;
@@ -1223,8 +1135,7 @@ mod tests {
     async fn concurrent_identical_pulls_run_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let coalescer: Coalescer<&str, u32> =
-            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let coalescer: Coalescer<&str, u32> = Coalescer::flights(Duration::from_secs(60));
         let runs = AtomicUsize::new(0);
         let (open, gate) = tokio::sync::watch::channel(false);
         let work = |value| {
@@ -1250,29 +1161,11 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 
-    /// Finished results are bounded by their weight, not their count, so a
-    /// burst of large pulls cannot all stay resident for the reuse window.
-    #[tokio::test]
-    async fn finished_results_are_bounded_by_weight() {
-        let coalescer: Coalescer<&str, u32> =
-            Coalescer::new(10, Duration::from_secs(60), Duration::from_secs(60), |v| *v);
-        for key in ["a", "b", "c"] {
-            assert_eq!(coalescer.run(key, || async { Ok(8) }).await.unwrap(), 8);
-        }
-        coalescer.finished.run_pending_tasks();
-        assert!(
-            coalescer.finished.weighted_size() <= 10,
-            "three results of 8 cannot all fit in 10: {}",
-            coalescer.finished.weighted_size()
-        );
-    }
-
     /// Every caller sharing a failure gets its whole chain, not just the top
     /// message: the cause underneath is usually the part worth reading.
     #[tokio::test]
     async fn a_shared_failure_keeps_its_chain() {
-        let coalescer: Coalescer<&str, u32> =
-            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let coalescer: Coalescer<&str, u32> = Coalescer::flights(Duration::from_secs(60));
         let err = coalescer
             .run("ref", || async {
                 Err(anyhow!("certificate not trusted").context("pulling ref"))
@@ -1287,8 +1180,7 @@ mod tests {
     /// retry in turn, but the next request after it tries again at once.
     #[tokio::test]
     async fn a_failed_pull_answers_only_its_waiters() {
-        let coalescer: Coalescer<&str, u32> =
-            Coalescer::new(16, Duration::from_secs(60), Duration::from_secs(60), |_| 1);
+        let coalescer: Coalescer<&str, u32> = Coalescer::flights(Duration::from_secs(60));
 
         let (open, gate) = tokio::sync::watch::channel(false);
         let (a, b, ()) = tokio::join!(

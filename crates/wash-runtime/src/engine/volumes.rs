@@ -270,6 +270,10 @@ pub(crate) struct HostPathPolicy {
 }
 
 impl HostPathPolicy {
+    pub(crate) fn reserve(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        self.reserved = ReservedHostPaths::new(self.reserved.0.iter().cloned().chain(paths));
+    }
+
     /// Relative paths in either list are taken against the working directory.
     /// The scratch root is reserved alongside `reserved`.
     pub(crate) fn new(
