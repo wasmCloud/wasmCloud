@@ -82,6 +82,10 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		return nil
 	}
 
+	if err := replicaSet.Spec.ValidateMessagingConsumerGroups(); err != nil {
+		return err
+	}
+
 	templateHash := replicaSet.Spec.Template.Hash()
 	workloads := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(

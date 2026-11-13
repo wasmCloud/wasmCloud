@@ -10,6 +10,7 @@ const (
 	kvStore       = "store"
 	kvBackend     = "backend"
 	natsBackend   = "nats"
+	httpPackage   = "http"
 )
 
 // kvCache is a named wasi:keyvalue host interface at the given version.
@@ -95,13 +96,13 @@ func TestEnsureHostInterface_UnnamedBackwardsCompatible(t *testing.T) {
 	// Two unnamed entries with same namespace:package should merge (backwards compatible)
 	spec.EnsureHostInterface(HostInterface{
 		Namespace:  wasiNamespace,
-		Package:    "http",
+		Package:    httpPackage,
 		Interfaces: []string{"incoming-handler"},
 	})
 
 	spec.EnsureHostInterface(HostInterface{
 		Namespace:  wasiNamespace,
-		Package:    "http",
+		Package:    httpPackage,
 		Interfaces: []string{"outgoing-handler"},
 	})
 

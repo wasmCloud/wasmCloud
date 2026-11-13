@@ -149,11 +149,13 @@ Two kinds of per-component config are at work:
   what makes `tasks.leet` route to task-leet and `tasks.reverse` to
   task-reverse rather than both workers competing for every message.
 - **`consumer_group`** controls NATS delivery across replicas. When omitted,
-  the runtime derives a stable group from the workload namespace, workload
-  name, and component name, so one replica handles each message. Set a custom
-  non-empty value to share a group explicitly, or set it to `broadcast` when
-  every replica must receive every message. Component-local configuration
-  overrides the value on the workload's messaging host interface.
+  the runtime derives the group from the workload namespace, workload name, and
+  component name — and because every replica is a workload of its own name,
+  each one lands in a group of its own. A `WorkloadDeployment` with
+  `replicas` above 1 therefore has to say which it wants: a shared non-empty
+  value so one replica handles each message, or `broadcast` when every replica
+  must receive every message. Component-local configuration overrides the value
+  on the workload's messaging host interface.
 - **`leet.*` / `reverse.*`** are read by the worker itself via
   `wasi:config/store` (see `task-leet/src/lib.rs`, `task-reverse/src/lib.rs`).
   `leet.mode` toggles whether `l`/`t` are also substituted; `reverse.mode`
@@ -245,9 +247,11 @@ needs. No separate HTTP server or NATS messaging component is required; both are
 provided by the runtime. `subscriptions` is comma-separated NATS subject
 patterns; e.g. `tasks.>` matches any subject starting with `tasks.`. 
 
-Replicas join a per-component consumer group by default. 
-Add `consumer_group: broadcast` to a component's `localResources.config` when
-each replica should receive its own copy (i.e. N components, N copies delivered).
+Above `replicas: 1`, every component of a messaging workload needs an explicit
+`consumer_group` in its `localResources.config` (or one on the messaging host
+interface, which covers every component): a shared name so the replicas
+load-balance, or `broadcast` when each replica should receive its own copy
+(i.e. N replicas, N copies delivered).
 
 For Kubernetes deployment, see the
 [runtime-operator documentation](https://github.com/wasmCloud/wasmCloud/tree/main/runtime-operator).
