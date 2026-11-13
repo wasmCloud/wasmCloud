@@ -270,7 +270,8 @@ async fn exercise(registration: Registration) -> Result<()> {
                         ..Default::default()
                     }],
                 },
-            )?
+            )
+            .await?
             .resolve(
                 Some(&HashMap::from([
                     (plugin_trait.id(), plugin_trait),

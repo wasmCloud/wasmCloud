@@ -9,6 +9,7 @@ use mimalloc as _;
 #[cfg(all(feature = "bench-jemalloc", not(target_env = "msvc")))]
 use tikv_jemallocator as _;
 
+pub mod cache;
 pub mod duration;
 pub mod engine;
 /// Setting a named environment variable in a test without racing the others.

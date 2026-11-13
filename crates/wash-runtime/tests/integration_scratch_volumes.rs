@@ -115,7 +115,9 @@ async fn stopped_workloads_leave_no_scratch() -> Result<()> {
 async fn a_restarted_host_sweeps_what_a_crashed_one_left() -> Result<()> {
     let root = tempfile::tempdir()?;
     let live = Engine::builder().with_scratch_root(root.path()).build()?;
-    let live_workload = live.initialize_workload("live", workload_with_scratch("live").workload);
+    let live_workload = live
+        .initialize_workload("live", workload_with_scratch("live").workload)
+        .await;
     assert!(live_workload.is_ok());
 
     let crashed = root.path().join("host-crashed");
