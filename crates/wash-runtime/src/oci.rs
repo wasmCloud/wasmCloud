@@ -554,11 +554,14 @@ pub(crate) async fn pull_component_bytes(
                     &key.artifact,
                 ))
                 .await?;
-                if reuse && let Err(error) = cache.oci_put_pull(&key, Arc::clone(&pulled)).await {
-                    warn!(
-                        error = format!("{error:#}"),
-                        "completed pull cache publication failed; continuing without reuse"
-                    );
+                if reuse {
+                    // The pull is done: keeping it must not delay or fail it.
+                    let write = {
+                        let (cache, key, pulled) =
+                            (Arc::clone(&cache), key.clone(), Arc::clone(&pulled));
+                        async move { cache.oci_put_pull(&key, pulled).await }
+                    };
+                    crate::cache::publish("oci", "completed pull", write).await;
                 }
                 Ok(pulled)
             })
