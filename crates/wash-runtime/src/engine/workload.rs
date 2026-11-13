@@ -5534,8 +5534,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn services_share_engine_linkers_without_sharing_bindings() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn services_share_engine_linkers_without_sharing_bindings() -> anyhow::Result<()> {
         let engine = crate::engine::Engine::builder()
             .with_pooling_allocator(false)
             .without_max_process_memory()
@@ -5567,8 +5567,8 @@ mod tests {
                 host_interfaces: vec![],
                 volumes: vec![],
             };
-            let mut first = engine.initialize_workload("first", input.clone())?;
-            let second = engine.clone().initialize_workload("second", input)?;
+            let mut first = engine.initialize_workload("first", input.clone()).await?;
+            let second = engine.clone().initialize_workload("second", input).await?;
             let mut service = first.service.take().unwrap();
             let sibling = second.service.as_ref().unwrap();
             let component = first.components.values().next().unwrap();
@@ -5891,8 +5891,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn engine_hostcall_fuel_reaches_component_and_service_metadata() {
+    #[tokio::test]
+    async fn engine_hostcall_fuel_reaches_component_and_service_metadata() {
         let engine = crate::engine::Engine::builder()
             .with_pooling_allocator(false)
             .without_max_process_memory()
@@ -5934,6 +5934,7 @@ mod tests {
                     volumes: vec![],
                 },
             )
+            .await
             .unwrap();
         assert_eq!(unresolved.components.len(), 1);
         for component in unresolved.components.values() {
