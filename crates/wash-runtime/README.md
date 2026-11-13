@@ -209,8 +209,10 @@ task rechecks the cache, compiles if needed, and publishes the result even if th
 start is cancelled. A retry reuses the published compile, and callers arriving
 while that task is running join it. No start waits on that publication: a
 write the backend does not finish at once continues on its own task, for at
-most thirty seconds. OCI pull deadlines include cache I/O; the
-push timeout bounds the registry push alone.
+most thirty seconds. OCI pull deadlines include cache I/O, except
+keeping a completed pull or a credential answer, which no pull waits on. A
+credential lookup in the backend shares the helper deadline. The push timeout
+bounds the registry push alone.
 
 Connection pools, quota/accounting state, DNS authorization records, linked
 instances, telemetry memoization, and process configuration remain owned by their
