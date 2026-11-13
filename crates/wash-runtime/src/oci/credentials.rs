@@ -132,7 +132,8 @@ impl CredentialFlights {
 /// other registries' lookups of permits.
 ///
 /// Reuse only saves a helper run. A backend that cannot serve or keep an
-/// answer costs that run and never fails the lookup.
+/// answer costs that run and never fails the lookup. Its lookup shares the
+/// helper deadline, and its write does not delay the answer.
 async fn cached_credentials(
     flights: &CredentialFlights,
     cache: Arc<dyn OciCache>,
@@ -143,12 +144,16 @@ async fn cached_credentials(
     flights
         .requests
         .run((Identity(Arc::clone(&cache)), key.clone()), || async {
-            match cache.oci_get_credentials(&key).await {
-                Ok(Some(auth)) => return Ok(auth),
-                Ok(None) => {}
-                Err(error) => warn!(
+            // The backend answers within the lookup deadline or is passed over.
+            match tokio::time::timeout(timeout, cache.oci_get_credentials(&key)).await {
+                Ok(Ok(Some(auth))) => return Ok(auth),
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => warn!(
                     error = format!("{error:#}"),
                     "credential cache lookup failed; asking the docker credential helper"
+                ),
+                Err(_) => warn!(
+                    "credential cache lookup did not finish within {timeout:?}; asking the docker credential helper"
                 ),
             }
             let registry = key.registry.clone();
@@ -160,12 +165,12 @@ async fn cached_credentials(
                 .with_context(|| {
                     format!("docker credential lookup did not finish within {timeout:?}")
                 })??;
-            if let Err(error) = cache.oci_put_credentials(&key, auth.clone()).await {
-                warn!(
-                    error = format!("{error:#}"),
-                    "credential cache publication failed; continuing without reuse"
-                );
-            }
+            // The answer is in hand: keeping it must not hold up the pull.
+            let write = {
+                let (cache, key, auth) = (Arc::clone(&cache), key.clone(), auth.clone());
+                async move { cache.oci_put_credentials(&key, auth).await }
+            };
+            crate::cache::publish("oci", "credential", write).await;
             Ok(auth)
         })
         .await
@@ -522,5 +527,33 @@ mod tests {
         .unwrap();
         assert!(matches!(auth, RegistryAuth::Basic(..)));
         assert!(backend.asked.load(Ordering::SeqCst));
+    }
+
+    /// A backend that never answers is passed over at the lookup deadline, and
+    /// one that never finishes keeping the answer does not hold it back.
+    #[tokio::test]
+    async fn a_stalled_backend_falls_back_to_the_helper() {
+        struct Stalled;
+        #[async_trait::async_trait]
+        impl OciCache for Stalled {
+            async fn oci_get_credentials(&self, _: &CredentialKey) -> Result<Option<RegistryAuth>> {
+                std::future::pending().await
+            }
+            async fn oci_put_credentials(&self, _: &CredentialKey, _: RegistryAuth) -> Result<()> {
+                std::future::pending().await
+            }
+        }
+        let lookup = cached_credentials(
+            flights(),
+            Arc::new(Stalled),
+            key("stalled-backend"),
+            Duration::from_millis(50),
+            || Ok(basic()),
+        );
+        let auth = tokio::time::timeout(Duration::from_secs(30), lookup)
+            .await
+            .expect("a stalled backend must not stall the lookup")
+            .unwrap();
+        assert!(matches!(auth, RegistryAuth::Basic(..)));
     }
 }
