@@ -1459,7 +1459,6 @@ impl CliCommand for HostCommand {
             allow_oci_insecure: self.allow_insecure_registries,
             oci_pull_timeout: Some(self.registry_pull_timeout),
             oci_cache_dir: self.oci_cache_dir.clone(),
-            cache: None,
             oci_ca_paths: self.oci_ca_paths.clone(),
         };
 
@@ -1476,13 +1475,7 @@ impl CliCommand for HostCommand {
             None => tracing::debug!("descriptor limit is not known on this platform"),
         }
 
-        let default_cache = wash_runtime::cache::DefaultCache::default();
-        let default_cache = match &self.oci_cache_dir {
-            Some(directory) => default_cache.with_oci_directory(directory.clone()),
-            None => default_cache,
-        };
         let mut engine_builder = Engine::builder()
-            .with_cache(Arc::new(default_cache))
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel())
             .with_reserved_host_paths(self.reserved_paths(&config, ctx))
@@ -1751,7 +1744,9 @@ impl CliCommand for HostCommand {
                 ),
                 insecure: self.allow_insecure_registries,
                 cache_dir: self.oci_cache_dir.clone(),
-                cache: Some(engine.cache()),
+                // The default backend for this directory, which the host
+                // built below shares.
+                cache: None,
                 timeout: Some(self.registry_pull_timeout),
             };
             let native_plugins = cluster_host_builder.native_plugins();

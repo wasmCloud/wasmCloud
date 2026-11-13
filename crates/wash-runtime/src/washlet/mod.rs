@@ -845,7 +845,7 @@ fn spawn_control_loop(
         // commands is reported once rather than once each.
         let mut shedding = false;
 
-        let cache = host.cache();
+        let cache = host.oci_cache();
         let mut oci_cleanup = cache
             .oci_needs_maintenance()
             .then(|| (cache, control_interval(cleanup_interval)));
@@ -1605,8 +1605,8 @@ pub async fn connect_nats(
 /// host with nothing to clean should do, rather than arming a timer and testing
 /// a condition that was settled before the loop began.
 async fn next_cache_cleanup(
-    cleanup: &mut Option<(Arc<crate::cache::CacheBackend>, tokio::time::Interval)>,
-) -> Arc<crate::cache::CacheBackend> {
+    cleanup: &mut Option<(Arc<dyn crate::cache::OciCache>, tokio::time::Interval)>,
+) -> Arc<dyn crate::cache::OciCache> {
     let Some((cache, timer)) = cleanup else {
         return std::future::pending().await;
     };
@@ -1761,6 +1761,7 @@ async fn handle_command(
 /// Convert ImagePullSecret from protobuf to OciConfig
 fn image_pull_secret_to_oci_config(
     config: &HostConfig,
+    cache: Arc<dyn crate::cache::OciCache>,
     pull_secret: &Option<types::v2::ImagePullSecret>,
 ) -> oci::OciConfig {
     let mut oci_config = match &pull_secret {
@@ -1768,7 +1769,8 @@ fn image_pull_secret_to_oci_config(
         None => OciConfig::default(),
     };
     oci_config.cache_dir = config.oci_cache_dir.clone();
-    oci_config.cache = config.cache.clone();
+    // The host's own backend, so every workload pull shares it.
+    oci_config.cache = Some(cache);
     oci_config.insecure = config.allow_oci_insecure;
     oci_config.timeout = config.oci_pull_timeout;
 
@@ -1907,8 +1909,11 @@ async fn workload_start(
             let mut pulled_components = Vec::with_capacity(wit_world.components.len());
             for component in &wit_world.components {
                 host.check_start_memory()?;
-                let oci_config =
-                    image_pull_secret_to_oci_config(config, &component.image_pull_secret);
+                let oci_config = image_pull_secret_to_oci_config(
+                    config,
+                    host.oci_cache(),
+                    &component.image_pull_secret,
+                );
                 let source = ComponentSource::Oci {
                     image: component.image.clone(),
                     pull_policy: component.image_pull_policy().into(),
@@ -1950,7 +1955,11 @@ async fn workload_start(
 
         let service = if let Some(service) = service {
             host.check_start_memory()?;
-            let oci_config = image_pull_secret_to_oci_config(config, &service.image_pull_secret);
+            let oci_config = image_pull_secret_to_oci_config(
+                config,
+                host.oci_cache(),
+                &service.image_pull_secret,
+            );
             let source = ComponentSource::Oci {
                 image: service.image.clone(),
                 pull_policy: service.image_pull_policy().into(),
@@ -3611,7 +3620,11 @@ mod tests {
             ..Default::default()
         };
         let secret: Option<types::v2::ImagePullSecret> = None;
-        let config = image_pull_secret_to_oci_config(&host_config, &secret);
+        let config = image_pull_secret_to_oci_config(
+            &host_config,
+            crate::cache::oci::standalone(None),
+            &secret,
+        );
         assert!(config.credentials.is_none());
         assert!(!config.insecure);
     }
@@ -3627,7 +3640,11 @@ mod tests {
             allow_oci_insecure: false,
             ..Default::default()
         };
-        let config = image_pull_secret_to_oci_config(&host_config, &secret);
+        let config = image_pull_secret_to_oci_config(
+            &host_config,
+            crate::cache::oci::standalone(None),
+            &secret,
+        );
         assert_eq!(
             config.credentials,
             Some(("testuser".to_string(), "testpass".to_string()))
@@ -3639,12 +3656,10 @@ mod tests {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod cache_maintenance_tests {
     use super::*;
-    use crate::cache::{Cache, OciCache};
+    use crate::cache::OciCache;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Maintenance(AtomicUsize);
-    impl Cache for Maintenance {}
-
     #[async_trait::async_trait]
     impl OciCache for Maintenance {
         async fn oci_maintain(&self, age: Duration) -> anyhow::Result<()> {
@@ -3661,10 +3676,10 @@ mod cache_maintenance_tests {
     async fn cleanup_uses_the_selected_backend_without_a_directory() -> anyhow::Result<()> {
         let backend = Arc::new(Maintenance(AtomicUsize::new(0)));
         let host = crate::host::Host::builder()
-            .with_cache(backend.clone())
+            .with_oci_cache(backend.clone())
             .build()?;
         assert!(host.config().oci_cache_dir.is_none());
-        let cache = host.cache();
+        let cache = host.oci_cache();
         let mut cleanup = cache
             .oci_needs_maintenance()
             .then(|| (cache, control_interval(Duration::from_secs(10))));

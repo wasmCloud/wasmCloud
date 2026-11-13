@@ -1,7 +1,12 @@
 //! Replaceable retention for compiled components and OCI artifacts.
 //!
-//! Supply an `Arc<CacheBackend>` to an engine or host builder. Methods default to
-//! no retention, so implementations can support only the domains they need.
+//! The two domains are separate traits with separate handles. An engine takes
+//! an `Arc<dyn Cache>` for compiled components. A host, or an
+//! [`OciConfig`](crate::oci::OciConfig), takes an `Arc<dyn OciCache>` for
+//! artifacts, completed pulls and credential-helper answers. Replacing one
+//! leaves the other on its default, and neither handle's type depends on which
+//! crate features are enabled.
+//!
 //! The runtime owns compilation, authorization, and in-flight coordination.
 //! Backends must publish whole entries atomically, preserve key isolation, and
 //! never block an async worker. Cache implementations are trusted embedder code.
@@ -15,7 +20,7 @@
 
 #[cfg(feature = "oci")]
 use std::sync::Arc;
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -25,20 +30,13 @@ pub(crate) mod coalescer;
 #[cfg(feature = "oci")]
 pub(crate) mod oci;
 #[cfg(feature = "oci")]
-pub use oci::{ArtifactEntry, ArtifactKey, CredentialKey, OciCache, PullKey, Pulled};
+pub use oci::{
+    ArtifactEntry, ArtifactKey, CredentialKey, DefaultOciCache, OciCache, PullKey, Pulled,
+};
 #[cfg(feature = "oci")]
 pub use oci_client::secrets::RegistryAuth;
 
-/// The backend accepted by engine and host builders. With OCI enabled, it
-/// implements [`OciCache`] as well as [`Cache`]; an empty `impl OciCache` opts
-/// out of OCI retention. Without OCI, only [`Cache`] is required.
-#[cfg(feature = "oci")]
-pub type CacheBackend = dyn OciCache;
-/// The backend accepted by engine and host builders without OCI support.
-#[cfg(not(feature = "oci"))]
-pub type CacheBackend = dyn Cache;
-
-/// Storage operations used by the runtime. All futures are `Send`.
+/// Retention of compiled components, used by an engine. All futures are `Send`.
 ///
 /// A backend may decline to retain a value. A successful write does not promise
 /// a subsequent hit, but a returned entry must belong to the exact supplied key.
@@ -62,10 +60,6 @@ pub trait Cache: Send + Sync + 'static {
     async fn put_compiled(&self, _key: &CacheKey, _value: CacheValue) -> Result<()> {
         Ok(())
     }
-    /// Paths guests must not mount. Called during construction, without I/O.
-    fn reserved_paths(&self) -> Vec<PathBuf> {
-        Vec::new()
-    }
 }
 
 impl std::fmt::Debug for dyn Cache {
@@ -76,13 +70,11 @@ impl std::fmt::Debug for dyn Cache {
     }
 }
 
-/// The built-in backend: bounded memory retention and optional OCI disk storage.
-/// Clones share memory entries. No directory is created until an artifact is used.
+/// The built-in compiled-component backend: bounded memory retention.
+/// Clones share entries.
 #[derive(Clone)]
 pub struct DefaultCache {
     pub(crate) compiled: moka::sync::Cache<CacheKey, CacheValue>,
-    #[cfg(feature = "oci")]
-    oci: oci::Storage,
 }
 
 impl Default for DefaultCache {
@@ -99,19 +91,7 @@ impl DefaultCache {
                 .max_capacity(capacity)
                 .time_to_idle(idle)
                 .build(),
-            #[cfg(feature = "oci")]
-            oci: oci::Storage::default(),
         }
-    }
-
-    /// Enable the existing credential-scoped disk cache at `directory`.
-    #[cfg(feature = "oci")]
-    pub fn with_oci_directory(mut self, directory: PathBuf) -> Self {
-        self.oci = oci::Storage {
-            directory: Some(directory),
-            ..Default::default()
-        };
-        self
     }
 }
 
@@ -123,16 +103,6 @@ impl Cache for DefaultCache {
     async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> Result<()> {
         self.compiled.insert(key.clone(), value);
         Ok(())
-    }
-    fn reserved_paths(&self) -> Vec<PathBuf> {
-        #[cfg(feature = "oci")]
-        {
-            self.oci.directory.iter().cloned().collect()
-        }
-        #[cfg(not(feature = "oci"))]
-        {
-            Vec::new()
-        }
     }
 }
 

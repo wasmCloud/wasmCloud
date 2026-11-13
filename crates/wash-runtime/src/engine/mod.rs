@@ -42,7 +42,7 @@
 use std::hash::Hash;
 use std::time::Duration;
 
-use crate::cache::{CacheBackend, DefaultCache, coalescer::Coalescer};
+use crate::cache::{Cache, DefaultCache, coalescer::Coalescer};
 use crate::sockets::loopback;
 use anyhow::{Context, bail};
 use tracing::{instrument, warn};
@@ -385,7 +385,9 @@ pub struct Engine {
     stream_payloads: Arc<stream_payload::StreamPayloads>,
     // wasmtime engine
     pub(crate) inner: wasmtime::Engine,
-    pub(crate) cache: Arc<CacheBackend>,
+    pub(crate) cache: Arc<dyn Cache>,
+    /// The built-in backend, when no other was selected, for tests to inspect.
+    #[cfg(test)]
     pub(crate) default_cache: Option<DefaultCache>,
     cache_engine_id: uuid::Uuid,
     /// Cache lookups in flight, shared by digest and abandoned with their
@@ -473,7 +475,6 @@ impl std::fmt::Debug for Engine {
         let mut s = f.debug_struct("Engine");
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
-        s.field("default_cache", &self.default_cache.is_some());
         s.finish_non_exhaustive()
     }
 }
@@ -975,22 +976,17 @@ impl Engine {
         Ok(live)
     }
 
-    /// The effective backend, shared with host and OCI configuration.
-    pub fn cache(&self) -> Arc<CacheBackend> {
+    /// The compiled-component backend this engine was built with. The handle
+    /// is fixed for the engine's life and shared by its clones.
+    pub fn cache(&self) -> Arc<dyn Cache> {
         Arc::clone(&self.cache)
     }
 
+    /// Reserve further paths from guest volume mounts, for storage a host
+    /// selects after this engine was built.
     #[cfg(feature = "oci")]
-    pub(crate) fn configure_default_cache_directory(&mut self, directory: PathBuf) {
-        if let Some(default) = &self.default_cache {
-            let default = default.clone().with_oci_directory(directory);
-            self.cache = Arc::new(default.clone());
-            self.default_cache = Some(default);
-        }
-    }
-
-    pub(crate) fn reserve_cache_paths(&mut self) {
-        self.host_paths.reserve(self.cache.reserved_paths());
+    pub(crate) fn reserve_host_paths(&mut self, paths: Vec<PathBuf>) {
+        self.host_paths.reserve(paths);
     }
 
     /// Initialize `workload` on the calling thread if doing so compiles
@@ -1802,7 +1798,7 @@ pub struct EngineBuilder {
     max_core_instances: Option<u32>,
     pooling_config: Option<PoolingAllocationConfig>,
     proposals: std::collections::BTreeSet<WasmProposal>,
-    cache: Option<Arc<CacheBackend>>,
+    cache: Option<Arc<dyn Cache>>,
     compilation_cache_size: Option<u64>,
     compilation_cache_ttl: Option<Duration>,
     fuel_consumption: Option<bool>,
@@ -2218,8 +2214,9 @@ impl EngineBuilder {
         self
     }
 
-    /// Select a backend. Takes precedence over default compilation-cache settings.
-    pub fn with_cache(mut self, cache: Arc<CacheBackend>) -> Self {
+    /// Select the compiled-component backend. Takes precedence over the
+    /// default backend's settings from [`Self::with_compilation_cache`].
+    pub fn with_cache(mut self, cache: Arc<dyn Cache>) -> Self {
         self.cache = Some(cache);
         self
     }
@@ -2646,7 +2643,8 @@ impl EngineBuilder {
                  growth leaves initial memory uncharged"
             );
         }
-        let (cache, default_cache): (Arc<CacheBackend>, _) = match self.cache {
+        #[cfg_attr(not(test), allow(unused_variables))]
+        let (cache, default_cache): (Arc<dyn Cache>, _) = match self.cache {
             Some(cache) => (cache, None),
             None => {
                 let default = DefaultCache::new(
@@ -2657,7 +2655,6 @@ impl EngineBuilder {
                 (Arc::new(default.clone()), Some(default))
             }
         };
-        self.reserved_host_paths.extend(cache.reserved_paths());
         let socket_policy = self.socket_policy.unwrap_or_default();
         let scratch_root = self
             .scratch_root
@@ -2671,6 +2668,7 @@ impl EngineBuilder {
             base_linkers: Arc::default(),
             inner,
             cache,
+            #[cfg(test)]
             default_cache,
             cache_engine_id: uuid::Uuid::new_v4(),
             compile_flights: Arc::new(Coalescer::flights(Duration::MAX)),

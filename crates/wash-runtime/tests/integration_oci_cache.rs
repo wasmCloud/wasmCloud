@@ -227,10 +227,8 @@ struct MemoryArtifacts {
     reads: std::sync::atomic::AtomicUsize,
     writes: std::sync::atomic::AtomicUsize,
     refreshes: std::sync::atomic::AtomicUsize,
-    completed: wash_runtime::cache::DefaultCache,
+    completed: wash_runtime::cache::DefaultOciCache,
 }
-
-impl wash_runtime::cache::Cache for MemoryArtifacts {}
 
 #[async_trait::async_trait]
 impl wash_runtime::cache::OciCache for MemoryArtifacts {
@@ -376,8 +374,6 @@ async fn completed_pulls_do_not_bypass_a_different_backend() {
 #[tokio::test]
 async fn custom_cache_io_is_inside_the_pull_deadline() {
     struct Pending;
-    impl wash_runtime::cache::Cache for Pending {}
-
     #[async_trait::async_trait]
     impl wash_runtime::cache::OciCache for Pending {
         async fn oci_get_artifact(
@@ -411,8 +407,6 @@ async fn credential_cache_hits_are_used_and_errors_do_not_fail_the_pull() {
     struct Credentials {
         fail: bool,
     }
-    impl wash_runtime::cache::Cache for Credentials {}
-
     #[async_trait::async_trait]
     impl wash_runtime::cache::OciCache for Credentials {
         async fn oci_get_credentials(
@@ -456,8 +450,6 @@ async fn credential_cache_hits_are_used_and_errors_do_not_fail_the_pull() {
 #[tokio::test]
 async fn completed_pull_cache_errors_do_not_fail_the_pull() {
     struct Failing;
-    impl wash_runtime::cache::Cache for Failing {}
-
     #[async_trait::async_trait]
     impl wash_runtime::cache::OciCache for Failing {
         async fn oci_get_pull(

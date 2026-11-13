@@ -270,6 +270,7 @@ pub(crate) struct HostPathPolicy {
 }
 
 impl HostPathPolicy {
+    #[cfg(feature = "oci")]
     pub(crate) fn reserve(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
         self.reserved = ReservedHostPaths::new(self.reserved.0.iter().cloned().chain(paths));
     }

@@ -349,7 +349,8 @@ pub struct OciConfig {
     /// them. Entry names are keyed with a random secret the cache creates in
     /// `cache.key` (owner-only on Unix); removing it orphans every entry.
     pub cache_dir: Option<PathBuf>,
-    /// Explicit backend, taking precedence over `cache_dir`.
+    /// Explicit backend. It owns its storage: `cache_dir` is not used with it.
+    /// Without one, calls naming the same `cache_dir` share a default backend.
     pub cache: Option<Arc<dyn OciCache>>,
     /// Timeout for OCI operations (pull, push, etc.)
     /// If None, uses default timeout from oci-client
@@ -926,8 +927,8 @@ pub async fn validate_component(data: &[u8]) -> Result<()> {
 /// Cleanup cached OCI artifacts
 #[instrument(skip(cache_dir))]
 pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result<()> {
-    crate::cache::DefaultCache::default()
-        .with_oci_directory(cache_dir.as_ref().to_owned())
+    crate::cache::DefaultOciCache::default()
+        .with_directory(cache_dir.as_ref().to_owned())
         .oci_maintain(age)
         .await
 }

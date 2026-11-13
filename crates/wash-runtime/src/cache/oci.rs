@@ -9,8 +9,6 @@ use hmac::{Hmac, Mac};
 use oci_client::secrets::RegistryAuth;
 use sha2::Sha256;
 
-use super::{Cache, DefaultCache};
-
 use crate::oci::{
     AuthId, OciPullPolicy,
     client::TrustId,
@@ -19,16 +17,22 @@ use crate::oci::{
 
 const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
 
-/// OCI retention and maintenance, extending the common cache contract.
+/// OCI retention and maintenance, used by a host and by standalone OCI calls.
 ///
-/// Methods default to no retention. All storage operations are asynchronous and
-/// fallible, and returned futures are `Send`. Preserve the supplied key's
-/// authorization, transport and trust scope when storing or returning entries.
+/// Independent of [`Cache`](super::Cache): a backend for compiled components
+/// need not implement this, and leaves OCI retention on [`DefaultOciCache`].
+///
+/// Methods default to no retention, so an implementation overrides only what
+/// it keeps. To replace one kind of retention and keep the built-in behaviour
+/// for the rest, hold a [`DefaultOciCache`] and delegate the other methods to
+/// it. All storage operations are asynchronous and fallible, and returned
+/// futures are `Send`. Preserve the supplied key's authorization, transport
+/// and trust scope when storing or returning entries.
 ///
 /// Artifact errors fail the pull or push. Completed-pull and credential errors
 /// are logged and the operation continues without reuse.
 #[async_trait::async_trait]
-pub trait OciCache: Cache {
+pub trait OciCache: Send + Sync + 'static {
     /// Read bytes, digest and the request's credential-match status together.
     async fn oci_get_artifact(&self, _key: &ArtifactKey) -> Result<Option<ArtifactEntry>> {
         Ok(None)
@@ -66,49 +70,72 @@ pub trait OciCache: Cache {
     fn oci_needs_maintenance(&self) -> bool {
         false
     }
+    /// Local paths guests must not mount. Called when a host is built, without
+    /// I/O.
+    fn oci_reserved_paths(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 impl std::fmt::Debug for dyn OciCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OciCache")
-            .field("name", &self.name())
-            .finish_non_exhaustive()
+        f.debug_struct("OciCache").finish_non_exhaustive()
+    }
+}
+
+/// The built-in OCI backend: completed pulls for five seconds and
+/// credential-helper answers for thirty, both bounded and in memory, and an
+/// optional credential-scoped artifact directory. Clones share memory entries.
+/// No directory is created until an artifact is used.
+#[derive(Clone, Default)]
+pub struct DefaultOciCache {
+    storage: Storage,
+}
+
+impl DefaultOciCache {
+    /// Keep artifacts in the credential-scoped disk cache at `directory`.
+    pub fn with_directory(mut self, directory: PathBuf) -> Self {
+        self.storage.directory = Some(directory);
+        self
     }
 }
 
 #[async_trait::async_trait]
-impl OciCache for DefaultCache {
+impl OciCache for DefaultOciCache {
     async fn oci_get_artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactEntry>> {
-        self.oci.oci_get_artifact(key).await
+        self.storage.oci_get_artifact(key).await
     }
     async fn oci_put_artifact(&self, key: &ArtifactKey, value: &Pulled) -> Result<()> {
-        self.oci.oci_put_artifact(key, value).await
+        self.storage.oci_put_artifact(key, value).await
     }
     async fn oci_record_credentials(&self, key: &ArtifactKey) -> Result<()> {
-        self.oci.oci_record_credentials(key).await
+        self.storage.oci_record_credentials(key).await
     }
     async fn oci_get_pull(&self, key: &PullKey) -> Result<Option<Arc<Pulled>>> {
-        Ok(self.oci.pulls.get(key))
+        Ok(self.storage.pulls.get(key))
     }
     async fn oci_put_pull(&self, key: &PullKey, value: Arc<Pulled>) -> Result<()> {
-        self.oci.pulls.insert(key.clone(), value);
+        self.storage.pulls.insert(key.clone(), value);
         Ok(())
     }
     async fn oci_get_credentials(&self, key: &CredentialKey) -> Result<Option<RegistryAuth>> {
-        Ok(self.oci.credentials.get(key))
+        Ok(self.storage.credentials.get(key))
     }
     async fn oci_put_credentials(&self, key: &CredentialKey, value: RegistryAuth) -> Result<()> {
-        self.oci.credentials.insert(key.clone(), value);
+        self.storage.credentials.insert(key.clone(), value);
         Ok(())
     }
     async fn oci_maintain(&self, age: Duration) -> Result<()> {
-        if let Some(directory) = &self.oci.directory {
+        if let Some(directory) = &self.storage.directory {
             crate::oci::disk_cache::expire_artifacts(directory, age).await?;
         }
         Ok(())
     }
     fn oci_needs_maintenance(&self) -> bool {
-        self.oci.directory.is_some()
+        self.storage.directory.is_some()
+    }
+    fn oci_reserved_paths(&self) -> Vec<PathBuf> {
+        self.storage.directory.iter().cloned().collect()
     }
 }
 
@@ -227,10 +254,10 @@ pub struct CredentialKey {
 }
 
 #[derive(Clone)]
-pub(super) struct Storage {
-    pub directory: Option<PathBuf>,
-    pub pulls: moka::sync::Cache<PullKey, Arc<Pulled>>,
-    pub credentials: moka::sync::Cache<CredentialKey, RegistryAuth>,
+struct Storage {
+    directory: Option<PathBuf>,
+    pulls: moka::sync::Cache<PullKey, Arc<Pulled>>,
+    credentials: moka::sync::Cache<CredentialKey, RegistryAuth>,
 }
 impl Default for Storage {
     fn default() -> Self {
@@ -263,7 +290,7 @@ impl Storage {
             None => Ok(None),
         }
     }
-    pub async fn oci_get_artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactEntry>> {
+    async fn oci_get_artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactEntry>> {
         let Some(manager) = self.manager(key).await? else {
             return Ok(None);
         };
@@ -278,7 +305,7 @@ impl Storage {
             credentials_match: manager.credential_matches(key.reference()).await,
         }))
     }
-    pub async fn oci_put_artifact(&self, key: &ArtifactKey, value: &Pulled) -> Result<()> {
+    async fn oci_put_artifact(&self, key: &ArtifactKey, value: &Pulled) -> Result<()> {
         if let Some(manager) = self.manager(key).await? {
             manager
                 .write_to_cache(key.reference(), &value.bytes, &value.digest)
@@ -286,7 +313,7 @@ impl Storage {
         }
         Ok(())
     }
-    pub async fn oci_record_credentials(&self, key: &ArtifactKey) -> Result<()> {
+    async fn oci_record_credentials(&self, key: &ArtifactKey) -> Result<()> {
         if let Some(manager) = self.manager(key).await? {
             manager.record_credential(key.reference()).await?;
         }
@@ -294,8 +321,12 @@ impl Storage {
     }
 }
 
-/// Standalone OCI calls historically share completed results. Keep bounded
-/// default instances per directory; explicitly injected caches never use this.
+/// The default backend for `directory`, shared across the process.
+///
+/// A host with no explicit backend and standalone OCI calls naming the same
+/// directory get one instance, so plugins pulled before a host is built and
+/// the workloads it then starts share completed pulls and helper answers, as
+/// they always have. Explicitly injected caches never use this.
 pub(crate) fn standalone(directory: Option<PathBuf>) -> Arc<dyn OciCache> {
     static DEFAULTS: OnceLock<moka::sync::Cache<Option<PathBuf>, Arc<dyn OciCache>>> =
         OnceLock::new();
@@ -307,9 +338,9 @@ pub(crate) fn standalone(directory: Option<PathBuf>) -> Arc<dyn OciCache> {
                 .build()
         })
         .get_with(directory.clone(), || {
-            let cache = DefaultCache::default();
+            let cache = DefaultOciCache::default();
             Arc::new(match directory {
-                Some(dir) => cache.with_oci_directory(dir),
+                Some(dir) => cache.with_directory(dir),
                 None => cache,
             })
         })
@@ -336,12 +367,11 @@ mod tests {
     #[tokio::test]
     async fn completed_pulls_are_bounded_by_bytes_and_entry_overhead() -> Result<()> {
         let capacity = 2 * u64::from(PULL_ENTRY_WEIGHT) + 15;
-        let cache = DefaultCache {
-            oci: Storage {
+        let cache = DefaultOciCache {
+            storage: Storage {
                 pulls: pull_cache(capacity),
                 ..Default::default()
             },
-            ..Default::default()
         };
         for reference in ["a", "b", "c"] {
             cache
@@ -354,20 +384,19 @@ mod tests {
                 )
                 .await?;
         }
-        cache.oci.pulls.run_pending_tasks();
-        assert!(cache.oci.pulls.weighted_size() <= capacity);
-        assert!(cache.oci.pulls.entry_count() < 3);
+        cache.storage.pulls.run_pending_tasks();
+        assert!(cache.storage.pulls.weighted_size() <= capacity);
+        assert!(cache.storage.pulls.entry_count() < 3);
         Ok(())
     }
 
     #[tokio::test]
     async fn an_oversized_pull_is_not_retained() -> Result<()> {
-        let cache = DefaultCache {
-            oci: Storage {
+        let cache = DefaultOciCache {
+            storage: Storage {
                 pulls: pull_cache(u64::from(PULL_ENTRY_WEIGHT) - 1),
                 ..Default::default()
             },
-            ..Default::default()
         };
         let key = key("oversized");
         cache
@@ -379,7 +408,7 @@ mod tests {
                 }),
             )
             .await?;
-        cache.oci.pulls.run_pending_tasks();
+        cache.storage.pulls.run_pending_tasks();
         assert!(cache.oci_get_pull(&key).await?.is_none());
         Ok(())
     }
