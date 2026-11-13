@@ -20,7 +20,7 @@
 
 #[cfg(feature = "oci")]
 use std::sync::Arc;
-use std::{path::PathBuf, time::Duration};
+use std::{future::Future, path::PathBuf, task::Poll, time::Duration};
 
 use anyhow::Result;
 
@@ -108,6 +108,54 @@ impl Cache for DefaultCache {
     async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> Result<()> {
         self.compiled.insert(key.clone(), value);
         Ok(())
+    }
+}
+
+/// The longest a cache write runs once its caller has moved on.
+pub(crate) const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Run a cache write whose result its caller does not need, without making
+/// that caller wait on the backend.
+///
+/// The write is polled once here, so a backend that answers at once, as one
+/// in memory does, has published before this returns. Any other finishes on a
+/// task of its own, within [`PUBLISH_TIMEOUT`]: the work it retains is already
+/// in hand, and a backend that stalls must not stall a start or a pull.
+/// A failure is logged and otherwise ignored, as for every such write.
+pub(crate) async fn publish<F>(cache: &str, what: &'static str, write: F)
+where
+    F: Future<Output = Result<()>> + Send + 'static,
+{
+    use tracing::Instrument as _;
+
+    fn report(cache: &str, what: &str, result: Result<()>) {
+        if let Err(error) = result {
+            tracing::warn!(
+                cache,
+                error = format!("{error:#}"),
+                "{what} cache publication failed; continuing uncached"
+            );
+        }
+    }
+
+    let mut write = Box::pin(write);
+    match std::future::poll_fn(|cx| Poll::Ready(write.as_mut().poll(cx))).await {
+        Poll::Ready(result) => report(cache, what, result),
+        Poll::Pending => {
+            let cache = cache.to_owned();
+            tokio::spawn(
+                async move {
+                    match tokio::time::timeout(PUBLISH_TIMEOUT, write).await {
+                        Ok(result) => report(&cache, what, result),
+                        Err(_) => tracing::warn!(
+                            cache,
+                            "{what} cache publication timed out; continuing uncached"
+                        ),
+                    }
+                }
+                .in_current_span(),
+            );
+        }
     }
 }
 
