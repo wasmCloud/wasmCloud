@@ -190,6 +190,64 @@ async fn a_pending_cache_read_is_async_and_cancellation_releases_the_flight() ->
     Ok(())
 }
 
+/// Holds the first write until released.
+struct GatedWrite {
+    first: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+    inner: MemoryCache,
+}
+#[cfg(feature = "oci")]
+impl wash_runtime::cache::OciCache for GatedWrite {}
+
+#[async_trait::async_trait]
+impl Cache for GatedWrite {
+    async fn get_compiled(&self, key: &CacheKey) -> Result<Option<CacheValue>> {
+        self.inner.get_compiled(key).await
+    }
+    async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> Result<()> {
+        if self.first.swap(false, Ordering::SeqCst) {
+            self.entered.add_permits(1);
+            self.release.acquire().await?.forget();
+        }
+        self.inner.put_compiled(key, value).await
+    }
+}
+
+/// A start cancelled after its compile began leaves that compile in the cache:
+/// the retry is answered by it instead of compiling again.
+#[tokio::test]
+async fn a_cancelled_start_still_publishes_its_compile() -> Result<()> {
+    let cache = Arc::new(GatedWrite {
+        first: AtomicBool::new(true),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+        inner: MemoryCache::default(),
+    });
+    let engine = engine(cache.clone());
+    let task = tokio::spawn({
+        let engine = engine.clone();
+        async move { engine.initialize_workload("cancelled", workload()).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(30), cache.entered.acquire())
+        .await??
+        .forget();
+    task.abort();
+    assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+
+    cache.release.add_permits(1);
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while cache.inner.writes.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    engine.initialize_workload("retry", workload()).await?;
+    assert_eq!(cache.inner.writes.load(Ordering::SeqCst), 1);
+    assert_eq!(cache.inner.reads.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
 #[test]
 fn host_construction_preserves_one_handle_and_rejects_conflicts() -> Result<()> {
     let cache: Arc<CacheBackend> = Arc::new(MemoryCache::default());
