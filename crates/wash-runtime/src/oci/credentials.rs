@@ -33,11 +33,11 @@ impl CredentialResolver {
         &self,
         registry: &str,
         cache: Arc<dyn OciCache>,
-    ) -> Result<RegistryAuth> {
+    ) -> RegistryAuth {
         // First, try explicit credentials
         if let Some((username, password)) = &self.explicit_credentials {
             debug!("using explicit credentials");
-            return Ok(RegistryAuth::Basic(username.clone(), password.clone()));
+            return RegistryAuth::Basic(username.clone(), password.clone());
         }
 
         static HELPERS: OnceLock<Coalescer<(Identity, CredentialKey), RegistryAuth>> =
@@ -47,12 +47,18 @@ impl CredentialResolver {
             registry: registry.into(),
             config_path: docker_config_path(),
         };
+        // Reuse only saves a helper run. A backend that cannot serve or keep an
+        // answer costs that run: it never fails the pull, which falls back to
+        // the helper and then to anonymous access, as it always has.
         helpers
             .run((Identity(Arc::clone(&cache)), key.clone()), || async {
-                if let Some(auth) = cache.oci_get_credentials(&key).await
-                    .context("credential cache lookup failed")?
-                {
-                    return Ok(auth);
+                match cache.oci_get_credentials(&key).await {
+                    Ok(Some(auth)) => return Ok(auth),
+                    Ok(None) => {}
+                    Err(error) => warn!(
+                        error = format!("{error:#}"),
+                        "credential cache lookup failed; asking the docker credential helper"
+                    ),
                 }
                 // Different backends must each perform their own lookup and
                 // publication, but may share the same helper process. Otherwise
@@ -69,8 +75,12 @@ impl CredentialResolver {
                     .context("docker credential lookup timed out").and_then(|result| result);
                 match answer {
                     Ok(auth) => {
-                        cache.oci_put_credentials(&key, auth.clone()).await
-                            .context("credential cache publication failed")?;
+                        if let Err(error) = cache.oci_put_credentials(&key, auth.clone()).await {
+                            warn!(
+                                error = format!("{error:#}"),
+                                "credential cache publication failed; continuing without reuse"
+                            );
+                        }
                         Ok(auth)
                     }
                     Err(error) => {
@@ -78,7 +88,12 @@ impl CredentialResolver {
                         Ok(RegistryAuth::Anonymous)
                     }
                 }
-            }).await
+            })
+            .await
+            .unwrap_or_else(|error| {
+                warn!(%error, "failed to retrieve docker credentials; using anonymous access");
+                RegistryAuth::Anonymous
+            })
     }
 
     /// Attempt to retrieve credentials from docker credential helper
