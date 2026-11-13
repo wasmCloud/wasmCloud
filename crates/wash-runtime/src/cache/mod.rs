@@ -65,6 +65,11 @@ pub trait Cache: Send + Sync + 'static {
     fn reserved_paths(&self) -> Vec<PathBuf> {
         Vec::new()
     }
+    /// The engine that owned every key with this [`CacheKey::engine`] is gone:
+    /// its compiles can never be asked for again, and retaining them keeps
+    /// that engine's code and memory alive. Called once, without I/O, when
+    /// the last clone of an engine drops.
+    fn forget_engine(&self, _engine: uuid::Uuid) {}
 }
 
 impl std::fmt::Debug for dyn Cache {
@@ -95,6 +100,7 @@ impl DefaultCache {
             compiled: moka::sync::Cache::builder()
                 .max_capacity(capacity)
                 .time_to_idle(idle)
+                .support_invalidation_closures()
                 .build(),
         }
     }
@@ -108,6 +114,12 @@ impl Cache for DefaultCache {
     async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> Result<()> {
         self.compiled.insert(key.clone(), value);
         Ok(())
+    }
+    fn forget_engine(&self, engine: uuid::Uuid) {
+        // Only fails where the cache was built without closure support.
+        let _ = self
+            .compiled
+            .invalidate_entries_if(move |key, _| key.engine() == engine);
     }
 }
 

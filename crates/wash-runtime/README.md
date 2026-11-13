@@ -176,9 +176,13 @@ and returns true from `oci_needs_maintenance`.
 Either kind of backend can keep guests away from its local storage:
 `Cache::reserved_paths` is reserved when the engine is built, and
 `OciCache::oci_reserved_paths` when the host is. No workload volume may equal,
-contain, or lie inside a reserved path.
+contain, or lie inside a reserved path. A backend that wraps another
+forwards these, and `oci_needs_maintenance`: their defaults reserve and
+schedule nothing.
 
-Compiled keys contain a process-local engine identity and a digest. Store the
+Compiled keys contain a process-local engine identity and a digest. When the
+last clone of an engine drops, `Cache::forget_engine` names that identity so
+the backend can release its entries, as `DefaultCache` does. Store the
 whole `CacheValue`, including its metadata; compiled values cannot be reused
 across engines or persisted as arbitrary machine code. Running workloads retain
 their compiles independently of eviction. The runtime coordinates concurrent
