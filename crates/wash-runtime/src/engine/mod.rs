@@ -1357,23 +1357,7 @@ impl Engine {
                     engine: self.cache_engine_id,
                     digest: digest.clone(),
                 };
-                // The cache only saves a compile: a backend that cannot answer
-                // costs one, and never the start.
-                let cached = self.cache.get_compiled(&key).await.unwrap_or_else(|error| {
-                    warn!(
-                        cache = self.cache.name(),
-                        error = format!("{error:#}"),
-                        "compilation cache lookup failed; compiling instead"
-                    );
-                    None
-                });
-                if let Some(compiled) = cached {
-                    // Not an outage: instantiating another engine's code is
-                    // unsound, and a backend that returns it is broken.
-                    anyhow::ensure!(
-                        wasmtime::Engine::same(&self.inner, compiled.component.engine()),
-                        "cache returned a component belonging to a different engine"
-                    );
+                if let Some(compiled) = self.cached_compile(&key).await? {
                     return Ok(self.record_live(&digest, compiled));
                 }
                 self.compile_shared(bytes, key, admission).await
@@ -1382,7 +1366,30 @@ impl Engine {
         Ok((live.compiled.clone(), live))
     }
 
-    /// Compile and publish `key` on a task of its own.
+    /// Treat unavailable retention as a miss, but reject another engine's code.
+    async fn cached_compile(&self, key: &CacheKey) -> anyhow::Result<Option<CacheValue>> {
+        // The cache only saves a compile: a backend that cannot answer
+        // costs one, and never the start.
+        let cached = self.cache.get_compiled(key).await.unwrap_or_else(|error| {
+            warn!(
+                cache = self.cache.name(),
+                error = format!("{error:#}"),
+                "compilation cache lookup failed; compiling instead"
+            );
+            None
+        });
+        if let Some(compiled) = &cached {
+            // Not an outage: instantiating another engine's code is
+            // unsound, and a backend that returns it is broken.
+            anyhow::ensure!(
+                wasmtime::Engine::same(&self.inner, compiled.component.engine()),
+                "cache returned a component belonging to a different engine"
+            );
+        }
+        Ok(cached)
+    }
+
+    /// Recheck retention, compile if needed, and publish on a task of its own.
     ///
     /// Blocking work cannot be aborted, so a compile always finishes. Running
     /// it, and its publication, apart from the caller means a start that is
@@ -1403,6 +1410,11 @@ impl Engine {
                 .run(key.digest.clone(), || async {
                     if let Some(live) = engine.live_compile(&key.digest) {
                         return Ok(live);
+                    }
+                    // A cancelled start may have published after this caller's
+                    // earlier miss, then left the flight and released its live compile.
+                    if let Some(compiled) = engine.cached_compile(&key).await? {
+                        return Ok(engine.record_live(&key.digest, compiled));
                     }
                     let compiled = engine.compile_owned(bytes, admission).await?;
                     // The compile is in hand: failing to retain it costs the
@@ -4134,6 +4146,97 @@ mod tests {
         // Direct engine use remains outside host start admission.
         drop(engine.initialize_workload("direct", workload).await?);
         assert_eq!(guard.refused_starts(), 1);
+        Ok(())
+    }
+
+    /// A retry can miss while a cancelled start's detached publication is
+    /// pending, then obtain the compile flight only after that publication ends.
+    #[tokio::test]
+    async fn a_retry_reuses_a_compile_published_after_its_cache_miss() -> anyhow::Result<()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use tokio::sync::Semaphore;
+
+        struct PausedCache {
+            cache: DefaultCache,
+            pause_write: AtomicBool,
+            writing: Semaphore,
+            publish: Semaphore,
+            pause_read: AtomicBool,
+            reading: Semaphore,
+            finish_read: Semaphore,
+        }
+        #[async_trait::async_trait]
+        impl Cache for PausedCache {
+            async fn get_compiled(&self, key: &CacheKey) -> anyhow::Result<Option<CacheValue>> {
+                let snapshot = self.cache.get_compiled(key).await?;
+                if self.pause_read.swap(false, Ordering::SeqCst) {
+                    assert!(snapshot.is_none(), "the retry reads before publication");
+                    self.reading.add_permits(1);
+                    self.finish_read.acquire().await?.forget();
+                }
+                Ok(snapshot)
+            }
+            async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> anyhow::Result<()> {
+                if self.pause_write.swap(false, Ordering::SeqCst) {
+                    self.writing.add_permits(1);
+                    self.publish.acquire().await?.forget();
+                }
+                self.cache.put_compiled(key, value).await
+            }
+        }
+
+        let cache = Arc::new(PausedCache {
+            cache: DefaultCache::default(),
+            pause_write: AtomicBool::new(true),
+            writing: Semaphore::new(0),
+            publish: Semaphore::new(0),
+            pause_read: AtomicBool::new(false),
+            reading: Semaphore::new(0),
+            finish_read: Semaphore::new(0),
+        });
+        let engine = Engine::builder()
+            .with_pooling_allocator(false)
+            .without_max_process_memory()
+            .with_cache(cache.clone())
+            .build()?;
+        let workload = component_workload(Some("sha256:publication-race"), vec![]);
+        let first = tokio::spawn({
+            let engine = engine.clone();
+            let workload = workload.clone();
+            async move { engine.initialize_workload("cancelled", workload).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), cache.writing.acquire())
+            .await??
+            .forget();
+        first.abort();
+        assert!(matches!(first.await, Err(error) if error.is_cancelled()));
+
+        cache.pause_read.store(true, Ordering::SeqCst);
+        let retry = tokio::spawn({
+            let engine = engine.clone();
+            async move { engine.initialize_workload("retry", workload).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), cache.reading.acquire())
+            .await??
+            .forget();
+        cache.publish.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while engine.compiling.in_flight_count() != 0
+                || !engine.live_compiles.lock().unwrap().is_empty()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        cache.finish_read.add_permits(1);
+        let retried = tokio::time::timeout(Duration::from_secs(30), retry).await???;
+        assert_eq!(
+            engine.compiles.load(Ordering::SeqCst),
+            1,
+            "the published compile must be reused"
+        );
+        drop(retried);
         Ok(())
     }
 

@@ -75,16 +75,19 @@ async fn custom_retention_is_used_and_live_components_survive_eviction() -> Resu
     let cache = Arc::new(MemoryCache::default());
     let engine = engine(cache.clone());
     let first = engine.initialize_workload("first", workload()).await?;
+    let cold_reads = cache.reads.load(Ordering::SeqCst);
+    assert!(cold_reads > 0);
     cache.compiled.lock().unwrap().clear();
     let second = engine.initialize_workload("second", workload()).await?;
-    assert_eq!(cache.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(cache.reads.load(Ordering::SeqCst), cold_reads);
     assert_eq!(cache.writes.load(Ordering::SeqCst), 1);
     drop((first, second));
     let third = engine.initialize_workload("third", workload()).await?;
     assert_eq!(cache.writes.load(Ordering::SeqCst), 2);
     drop(third);
+    let reads_before_hit = cache.reads.load(Ordering::SeqCst);
     engine.initialize_workload("fourth", workload()).await?;
-    assert_eq!(cache.reads.load(Ordering::SeqCst), 3);
+    assert_eq!(cache.reads.load(Ordering::SeqCst), reads_before_hit + 1);
     assert_eq!(cache.writes.load(Ordering::SeqCst), 2);
     Ok(())
 }
@@ -242,9 +245,13 @@ async fn a_cancelled_start_still_publishes_its_compile() -> Result<()> {
         }
     })
     .await?;
+    let reads_before_retry = cache.inner.reads.load(Ordering::SeqCst);
     engine.initialize_workload("retry", workload()).await?;
     assert_eq!(cache.inner.writes.load(Ordering::SeqCst), 1);
-    assert_eq!(cache.inner.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        cache.inner.reads.load(Ordering::SeqCst),
+        reads_before_retry + 1
+    );
     Ok(())
 }
 
