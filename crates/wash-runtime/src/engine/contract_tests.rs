@@ -232,7 +232,11 @@ async fn a_service_mounts_known_volumes_and_skips_unknown_ones() {
     let engine = engine();
     let mut digest = None;
     let _pin = engine
-        .prepare_compile(bytes.clone().into(), &mut digest)
+        .prepare_compile(
+            bytes.clone().into(),
+            &mut digest,
+            super::Admission::Unchecked,
+        )
         .await
         .unwrap();
     let service = engine
@@ -263,7 +267,11 @@ async fn a_component_mounts_known_volumes_and_skips_unknown_ones() {
     let engine = engine();
     let mut digest = None;
     let _pin = engine
-        .prepare_compile(bytes.clone().into(), &mut digest)
+        .prepare_compile(
+            bytes.clone().into(),
+            &mut digest,
+            super::Admission::Unchecked,
+        )
         .await
         .unwrap();
     let component = engine
@@ -290,7 +298,11 @@ async fn initialize_service(bytes: &[u8]) -> anyhow::Result<WorkloadService> {
     let engine = engine();
     let mut service = service(bytes);
     let _pin = engine
-        .prepare_compile(service.bytes.clone(), &mut service.digest)
+        .prepare_compile(
+            service.bytes.clone(),
+            &mut service.digest,
+            super::Admission::Unchecked,
+        )
         .await?;
     engine.initialize_service(
         "workload",

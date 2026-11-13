@@ -388,10 +388,12 @@ pub struct Engine {
     pub(crate) cache: Arc<CacheBackend>,
     pub(crate) default_cache: Option<DefaultCache>,
     cache_engine_id: uuid::Uuid,
-    /// Cancellable lookup, compilation and publication, shared by digest.
+    /// Cache lookups in flight, shared by digest and abandoned with their
+    /// last caller.
     compile_flights: Arc<Coalescer<String, Arc<LiveCompile>>>,
-    /// Blocking compiles remain joinable when their original caller cancels.
-    compiling: Arc<Coalescer<String, CacheValue>>,
+    /// Compiles and their publication, which finish whether or not the caller
+    /// that began them still waits.
+    compiling: Arc<Coalescer<String, Arc<LiveCompile>>>,
     /// Compiles running workloads hold, consulted before the cache so a live
     /// compile can be reused after cache eviction. See [`LiveCompiles`].
     live_compiles: Arc<LiveCompiles>,
@@ -586,6 +588,32 @@ impl Blocking {
             self == Blocking::Allowed,
             "initializing this workload inline would {step} on an async worker"
         );
+        Ok(())
+    }
+}
+
+/// Whether a start answers to the host's `max_process_memory` admission.
+///
+/// Only a [`crate::host::Host`] admits workload starts, and counts the ones it
+/// refuses. An engine used directly, or compiling a host component plugin, is
+/// not a workload start and is never refused as one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admission {
+    /// A start the host admitted. Its compile and its initialization queue on
+    /// the blocking pool, so each rechecks when it begins. A start that joins
+    /// a compile already in flight shares that compile's check.
+    Recheck,
+    /// Not a host's workload start.
+    Unchecked,
+}
+
+impl Admission {
+    fn check(self, engine: &Engine) -> anyhow::Result<()> {
+        if self == Admission::Recheck
+            && let Some(guard) = engine.process_memory()
+        {
+            guard.admit_start().map_err(anyhow::Error::msg)?;
+        }
         Ok(())
     }
 }
@@ -833,41 +861,98 @@ impl Engine {
     pub async fn initialize_workload(
         &self,
         id: impl AsRef<str>,
+        workload: Workload,
+    ) -> anyhow::Result<UnresolvedWorkload> {
+        self.initialize_workload_admitting(id, workload, Admission::Unchecked)
+            .await
+    }
+
+    /// [`Self::initialize_workload`] for a start a [`crate::host::Host`] has
+    /// admitted against `max_process_memory`, rechecked where the start's
+    /// queued blocking work begins.
+    pub(crate) async fn initialize_admitted_workload(
+        &self,
+        id: impl AsRef<str>,
+        workload: Workload,
+    ) -> anyhow::Result<UnresolvedWorkload> {
+        self.initialize_workload_admitting(id, workload, Admission::Recheck)
+            .await
+    }
+
+    async fn initialize_workload_admitting(
+        &self,
+        id: impl AsRef<str>,
         mut workload: Workload,
+        admission: Admission,
     ) -> anyhow::Result<UnresolvedWorkload> {
         let id = id.as_ref().to_owned();
+        // Blocking tasks do not inherit the caller's span: enter it in each, so
+        // what they log is tied to the start that caused it.
+        let span = tracing::Span::current();
         let volumes = std::mem::take(&mut workload.volumes);
-        let prepared_volumes = if volumes.is_empty() {
-            WorkloadVolumes::default()
-        } else {
+        let has_volumes = !volumes.is_empty();
+        let prepared_volumes = if has_volumes {
             let engine = self.clone();
-            tokio::task::spawn_blocking(move || engine.prepare_volumes(volumes, Blocking::Allowed))
-                .await
-                .context("volume preparation task failed")??
+            let span = span.clone();
+            tokio::task::spawn_blocking(move || {
+                let _entered = span.enter();
+                engine.prepare_volumes(volumes, Blocking::Allowed)
+            })
+            .await
+            .context("volume preparation task failed")??
+        } else {
+            WorkloadVolumes::default()
         };
         let mut pinned = Vec::new();
         if let Some(service) = &mut workload.service {
             pinned.push(
-                self.prepare_compile(service.bytes.clone(), &mut service.digest)
+                self.prepare_compile(service.bytes.clone(), &mut service.digest, admission)
                     .await
                     .context("failed to create component from bytes")?,
             );
         }
         for component in &mut workload.components {
             pinned.push(
-                self.prepare_compile(component.bytes.clone(), &mut component.digest)
+                self.prepare_compile(component.bytes.clone(), &mut component.digest, admission)
                     .await
                     .context("failed to create component from bytes")?,
             );
         }
+        // Every compile is now held. With no volumes or service, and nothing
+        // left to read off a component's source, what remains blocks nothing:
+        // finish here, as `initialize_workload_inline` does for live compiles.
+        // This is the path of a digest the cache kept after its last workload
+        // stopped, a scale from zero or a replaced last replica.
+        if !has_volumes
+            && workload.service.is_none()
+            && pinned.iter().all(|live| self.knows_gc_use(&live.compiled))
+        {
+            // A panic fails this start, as it does on the blocking pool.
+            return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.initialize_prepared_workload(
+                    id,
+                    workload,
+                    Blocking::Forbidden,
+                    prepared_volumes,
+                )
+            }))
+            .unwrap_or_else(|panic| {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("unknown panic");
+                Err(anyhow::anyhow!(
+                    "workload initialization panicked: {message}"
+                ))
+            });
+        }
         let engine = self.clone();
-        let span = tracing::Span::current();
         tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
             let _pinned = pinned;
-            if let Some(guard) = engine.process_memory() {
-                guard.admit_start().map_err(anyhow::Error::msg)?;
-            }
+            // The blocking executor can queue this after the host's own check.
+            admission.check(&engine)?;
             engine.initialize_prepared_workload(id, workload, Blocking::Allowed, prepared_volumes)
         })
         .await
@@ -878,13 +963,14 @@ impl Engine {
         &self,
         bytes: bytes::Bytes,
         digest: &mut Option<String>,
+        admission: Admission,
     ) -> anyhow::Result<Arc<LiveCompile>> {
         if digest.is_none() {
             let bytes = bytes.clone();
             *digest = Some(tokio::task::spawn_blocking(move || content_digest(&bytes)).await?);
         }
         let (_, live) = self
-            .load_live_bytes(bytes, digest.as_deref(), Blocking::Allowed)
+            .load_live_bytes(bytes, digest.as_deref(), Blocking::Allowed, admission)
             .await?;
         Ok(live)
     }
@@ -1233,13 +1319,22 @@ impl Engine {
         *compiled.may_use_gc.get_or_init(|| self.may_use_gc(bytes))
     }
 
+    /// Whether [`Self::compiled_may_use_gc`] answers for `compiled` without
+    /// reading its source.
+    fn knows_gc_use(&self, compiled: &CacheValue) -> bool {
+        self.pool_totals.is_none() || compiled.may_use_gc.get().is_some()
+    }
+
     /// Load or compile asynchronously, retaining live ownership independently
-    /// of cache eviction. The flight covers lookup, compilation and publication.
+    /// of cache eviction. The flight covers the cache lookup, which a caller
+    /// that stops waiting abandons, and waits on [`Self::compile_shared`].
+    #[instrument(name = "load_component_bytes", skip_all, fields(digest = tracing::field::Empty))]
     async fn load_live_bytes(
         &self,
         bytes: bytes::Bytes,
         digest: Option<impl AsRef<str>>,
         blocking: Blocking,
+        admission: Admission,
     ) -> anyhow::Result<(CacheValue, Arc<LiveCompile>)> {
         let digest = match digest {
             Some(digest) => digest.as_ref().to_owned(),
@@ -1249,6 +1344,7 @@ impl Engine {
                 tokio::task::spawn_blocking(move || content_digest(&bytes)).await?
             }
         };
+        tracing::Span::current().record("digest", digest.as_str());
         if let Some(live) = self.live_compile(&digest) {
             return Ok((live.compiled.clone(), live));
         }
@@ -1275,47 +1371,59 @@ impl Engine {
                     );
                     return Ok(self.record_live(&digest, compiled));
                 }
-                let compiled = self.compile_shared(bytes, digest.clone()).await?;
-                self.cache
-                    .put_compiled(&key, compiled.clone())
-                    .await
-                    .context("compilation cache publication failed")?;
-                Ok(self.record_live(&digest, compiled))
+                self.compile_shared(bytes, key, admission).await
             })
             .await?;
         Ok((live.compiled.clone(), live))
     }
 
-    // Only compilation outlives cancellation: blocking work cannot be aborted.
-    // Separate coordination lets cache I/O remain cancellable while a new
-    // caller joins a compile that its predecessor stopped waiting for.
+    /// Compile and publish `key` on a task of its own.
+    ///
+    /// Blocking work cannot be aborted, so a compile always finishes. Running
+    /// it, and its publication, apart from the caller means a start that is
+    /// cancelled still leaves its compile in the cache for the retry, and a
+    /// caller arriving meanwhile joins the compile instead of starting another.
     async fn compile_shared(
         &self,
         bytes: bytes::Bytes,
-        digest: String,
-    ) -> anyhow::Result<CacheValue> {
+        key: CacheKey,
+        admission: Admission,
+    ) -> anyhow::Result<Arc<LiveCompile>> {
+        use tracing::Instrument as _;
+
         let engine = self.clone();
-        tokio::spawn(async move {
+        let work = async move {
             engine
                 .compiling
-                .run(digest.clone(), || async {
-                    if let Some(live) = engine.live_compile(&digest) {
-                        return Ok(live.compiled.clone());
+                .run(key.digest.clone(), || async {
+                    if let Some(live) = engine.live_compile(&key.digest) {
+                        return Ok(live);
                     }
-                    engine.compile_owned(bytes).await
+                    let compiled = engine.compile_owned(bytes, admission).await?;
+                    engine
+                        .cache
+                        .put_compiled(&key, compiled.clone())
+                        .await
+                        .context("compilation cache publication failed")?;
+                    Ok(engine.record_live(&key.digest, compiled))
                 })
                 .await
-        })
-        .await
-        .context("component preparation task failed")?
+        };
+        tokio::spawn(work.in_current_span())
+            .await
+            .context("component preparation task failed")?
     }
 
-    async fn compile_owned(&self, bytes: bytes::Bytes) -> anyhow::Result<CacheValue> {
+    async fn compile_owned(
+        &self,
+        bytes: bytes::Bytes,
+        admission: Admission,
+    ) -> anyhow::Result<CacheValue> {
         let engine = self.clone();
+        let span = tracing::Span::current();
         tokio::task::spawn_blocking(move || {
-            if let Some(guard) = engine.process_memory() {
-                guard.admit_start().map_err(anyhow::Error::msg)?;
-            }
+            let _entered = span.enter();
+            admission.check(&engine)?;
             #[cfg(test)]
             engine
                 .compiles
@@ -1337,6 +1445,7 @@ impl Engine {
             bytes::Bytes::copy_from_slice(bytes.as_ref()),
             digest,
             blocking,
+            Admission::Unchecked,
         )
         .await
     }
@@ -1399,8 +1508,11 @@ impl Engine {
                 .await?
                 .0),
             None => {
-                self.compile_owned(bytes::Bytes::copy_from_slice(bytes.as_ref()))
-                    .await
+                self.compile_owned(
+                    bytes::Bytes::copy_from_slice(bytes.as_ref()),
+                    Admission::Unchecked,
+                )
+                .await
             }
         }
     }
@@ -1510,15 +1622,14 @@ impl Engine {
         &self,
         bytes: &[u8],
     ) -> anyhow::Result<(Component, Linker<SharedCtx>)> {
-        let (compiled, _live) = self
-            .load_live_bytes(
-                bytes::Bytes::copy_from_slice(bytes),
-                None::<&str>,
-                Blocking::Allowed,
-            )
+        // Not a workload: compiled off the caller's thread, but neither cached,
+        // since a plugin is loaded once and holds its component for good, nor
+        // refused as a workload start.
+        let component = self
+            .compile_owned(bytes::Bytes::copy_from_slice(bytes), Admission::Unchecked)
             .await
-            .context("failed to compile host component plugin")?;
-        let component = compiled.component;
+            .context("failed to compile host component plugin")?
+            .component;
 
         let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
         add_wasi_to_linker(&mut linker).context("failed to add WASI to plugin linker")?;
@@ -3866,6 +3977,90 @@ mod tests {
             engine.live_compiles.lock().unwrap().is_empty(),
             "a handed-back pin outlived its holder"
         );
+    }
+
+    /// A digest the cache kept after its last workload stopped, as on a scale
+    /// from zero, initializes on the calling task. The only blocking thread is
+    /// held, so a start that needed the blocking pool would never finish.
+    #[test]
+    fn a_cached_idle_digest_initializes_without_the_blocking_pool() {
+        use std::sync::atomic::Ordering;
+        const DIGEST: &str = "sha256:idle-image";
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .expect("runtime should build");
+        runtime.block_on(async {
+            let engine = Engine::builder().build().expect("engine should build");
+            let workload = component_workload(Some(DIGEST), vec![]);
+            engine
+                .initialize_workload("first", workload.clone())
+                .await
+                .map(drop)
+                .expect("first start");
+            assert!(engine.live_compiles.lock().unwrap().is_empty());
+
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = started.send(());
+                let _ = held.recv();
+            });
+            ready.await.expect("the blocking thread is held");
+
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                engine.initialize_workload("second", workload),
+            )
+            .await
+            .expect("a cached digest should not wait for the blocking pool")
+            .map(drop)
+            .expect("second start");
+            assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+
+            drop(release);
+            blocker.await.expect("blocker finishes");
+        });
+    }
+
+    /// Only a host's workload start answers to `max_process_memory`. A plugin
+    /// compile and an engine used directly are neither refused nor counted.
+    #[tokio::test]
+    async fn only_host_starts_answer_to_process_memory_admission() {
+        let engine = Engine::builder()
+            .with_max_process_memory_bytes(1024 * 1024)
+            .build()
+            .expect("engine should build");
+        let guard = Arc::clone(engine.process_memory().expect("guard is on"));
+        assert!(guard.admit_start().is_err(), "a test process is past 1 MiB");
+        let refused = guard.refused_starts();
+
+        let bytes = wat::parse_str("(component)").expect("component should assemble");
+        engine
+            .prepare_host_component(&bytes)
+            .await
+            .map(drop)
+            .expect("a plugin compile is not a workload start");
+        engine
+            .initialize_workload("direct", component_workload(None, vec![]))
+            .await
+            .map(drop)
+            .expect("direct engine use is not admitted by a host");
+        assert_eq!(guard.refused_starts(), refused);
+
+        let Err(err) = engine
+            .initialize_admitted_workload(
+                "host",
+                component_workload(Some("sha256:not-compiled"), vec![]),
+            )
+            .await
+        else {
+            panic!("a host start past the limit should be refused");
+        };
+        assert!(format!("{err:#}").contains("max-process-memory"), "{err:#}");
+        assert_eq!(guard.refused_starts(), refused + 1);
     }
 
     /// Initialization with blocking forbidden refuses every step that blocks,

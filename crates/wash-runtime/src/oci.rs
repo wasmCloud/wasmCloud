@@ -783,27 +783,6 @@ pub async fn push_component(
     config: OciConfig,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<String> {
-    let timeout = config.timeout;
-    let work = Box::pin(push_component_inner(
-        reference,
-        component_data,
-        config,
-        annotations,
-    ));
-    match timeout {
-        Some(timeout) => tokio::time::timeout(timeout, work).await.with_context(|| {
-            format!("timeout pushing component to {reference} after {timeout:?}")
-        })?,
-        None => work.await,
-    }
-}
-
-async fn push_component_inner(
-    reference: &str,
-    component_data: &[u8],
-    config: OciConfig,
-    annotations: Option<HashMap<String, String>>,
-) -> Result<String> {
     let reference_parsed = parse_reference(reference)?;
 
     // Validate the component before pushing
@@ -872,9 +851,18 @@ async fn push_component_inner(
     // Push the component
     let push_future = client.push(&reference_parsed, &layers, config_obj, &auth, manifest);
 
-    let push_result = push_future
-        .await
-        .with_context(|| format!("failed to push component to {reference}"))?;
+    // The timeout bounds the push alone. Once the registry has accepted it,
+    // a slow digest fetch or cache write must not report the push as timed out.
+    let push_result = if let Some(timeout) = config.timeout {
+        tokio::time::timeout(timeout, push_future)
+            .await
+            .with_context(|| format!("timeout pushing component to {reference} after {timeout:?}"))?
+            .with_context(|| format!("failed to push component to {reference}"))?
+    } else {
+        push_future
+            .await
+            .with_context(|| format!("failed to push component to {reference}"))?
+    };
 
     // Extract the digest from the manifest URL
     // The manifest URL typically contains the digest in the format: registry/repo@sha256:digest
