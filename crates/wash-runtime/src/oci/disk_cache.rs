@@ -168,9 +168,10 @@ impl CacheManager {
             Ok(file) => read_entry(file)
                 .await
                 .map(Some)
-                .context("invalid cached OCI artifact"),
+                .with_context(|| format!("invalid cached artifact at {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e).context("failed to open cached OCI artifact"),
+            Err(e) => Err(e)
+                .with_context(|| format!("failed to open cached artifact at {}", path.display())),
         }
     }
 

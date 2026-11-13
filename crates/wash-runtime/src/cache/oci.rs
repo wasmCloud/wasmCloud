@@ -1,6 +1,7 @@
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex, OnceLock, PoisonError, Weak},
     time::Duration,
 };
 
@@ -67,12 +68,14 @@ pub trait OciCache: Send + Sync + 'static {
         Ok(())
     }
     /// Whether the host should schedule maintenance. Automatic-expiry backends
-    /// can return false. This method must not perform I/O.
+    /// can return false. This method must not perform I/O. A backend wrapping
+    /// another forwards this: the default schedules nothing.
     fn oci_needs_maintenance(&self) -> bool {
         false
     }
     /// Local paths guests must not mount. Called when a host is built, without
-    /// I/O.
+    /// I/O. A backend wrapping another forwards this: the default reserves
+    /// nothing, which would open the wrapped storage to guest volumes.
     fn oci_reserved_paths(&self) -> Vec<PathBuf> {
         Vec::new()
     }
@@ -340,35 +343,61 @@ impl Storage {
     }
 }
 
+type StandaloneKey = Option<PathBuf>;
+static STANDALONE_RETAINED: OnceLock<moka::sync::Cache<StandaloneKey, Arc<DefaultOciCache>>> =
+    OnceLock::new();
+static STANDALONE_HELD: Mutex<BTreeMap<StandaloneKey, Weak<DefaultOciCache>>> =
+    Mutex::new(BTreeMap::new());
+
 /// The default backend for `directory`, shared across the process.
 ///
 /// A host with no explicit backend and standalone OCI calls naming the same
 /// directory get one instance, so plugins pulled before a host is built and
 /// the workloads it then starts share completed pulls and helper answers, as
 /// they always have. Explicitly injected caches never use this.
+///
+/// Recently used instances are retained. One evicted while a host or a pull
+/// still holds it is found again through that holder, so a directory never
+/// has two instances with separate memory at once.
 pub(crate) fn standalone(directory: Option<PathBuf>) -> Arc<dyn OciCache> {
-    static DEFAULTS: OnceLock<moka::sync::Cache<Option<PathBuf>, Arc<dyn OciCache>>> =
-        OnceLock::new();
-    DEFAULTS
-        .get_or_init(|| {
-            moka::sync::Cache::builder()
-                .max_capacity(64)
-                .time_to_idle(Duration::from_secs(600))
-                .build()
-        })
-        .get_with(directory.clone(), || {
-            let cache = DefaultOciCache::default();
-            Arc::new(match directory {
-                Some(dir) => cache.with_directory(dir),
-                None => cache,
-            })
-        })
+    let retained = STANDALONE_RETAINED.get_or_init(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(64)
+            .time_to_idle(Duration::from_secs(600))
+            .build()
+    });
+    retained.get_with(directory.clone(), || {
+        let mut held = STANDALONE_HELD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(cache) = held.get(&directory).and_then(Weak::upgrade) {
+            return cache;
+        }
+        held.retain(|_, cache| cache.strong_count() > 0);
+        let cache = DefaultOciCache::default();
+        let cache = Arc::new(match directory.clone() {
+            Some(dir) => cache.with_directory(dir),
+            None => cache,
+        });
+        held.insert(directory, Arc::downgrade(&cache));
+        cache
+    })
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    /// A default evicted from retention while something still holds it is the
+    /// instance the next caller for that directory gets.
+    #[test]
+    fn a_held_standalone_default_keeps_its_identity_past_eviction() {
+        let directory = Some(PathBuf::from("/standalone-identity-test"));
+        let held = standalone(directory.clone());
+        STANDALONE_RETAINED.get().unwrap().invalidate_all();
+        assert!(Arc::ptr_eq(&held, &standalone(directory)));
+    }
 
     fn key(reference: &str) -> PullKey {
         PullKey {

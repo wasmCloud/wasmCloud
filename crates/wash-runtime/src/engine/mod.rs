@@ -390,6 +390,8 @@ pub struct Engine {
     #[cfg(test)]
     pub(crate) default_cache: Option<DefaultCache>,
     cache_engine_id: uuid::Uuid,
+    /// Tells the backend this engine is gone when its last clone drops.
+    _forget: Arc<ForgetEngine>,
     /// Cache lookups in flight, shared by digest and abandoned with their
     /// last caller.
     compile_flights: Arc<Coalescer<(String, Admission), Arc<LiveCompile>>>,
@@ -476,6 +478,18 @@ impl std::fmt::Debug for Engine {
         #[cfg(feature = "wasi-tls")]
         s.field("tls_provider", &self.tls_provider.is_some());
         s.finish_non_exhaustive()
+    }
+}
+
+/// Releases an engine's cache entries with its last clone.
+struct ForgetEngine {
+    cache: Arc<dyn Cache>,
+    engine: uuid::Uuid,
+}
+
+impl Drop for ForgetEngine {
+    fn drop(&mut self) {
+        self.cache.forget_engine(self.engine);
     }
 }
 
@@ -2690,14 +2704,19 @@ impl EngineBuilder {
             tracing::warn!(root = %scratch_root.display(), err = %e, "cannot claim the scratch root; emptyDir volumes will be refused");
             Arc::from(format!("{e:#}"))
         });
+        let cache_engine_id = uuid::Uuid::new_v4();
         Ok(Engine {
             stream_payloads: Arc::default(),
             base_linkers: Arc::default(),
             inner,
+            _forget: Arc::new(ForgetEngine {
+                cache: Arc::clone(&cache),
+                engine: cache_engine_id,
+            }),
             cache,
             #[cfg(test)]
             default_cache,
-            cache_engine_id: uuid::Uuid::new_v4(),
+            cache_engine_id,
             compile_flights: Arc::new(Coalescer::flights(Duration::MAX)),
             compiling: Arc::new(Coalescer::flights(Duration::MAX)),
             live_compiles: Arc::default(),
