@@ -303,7 +303,7 @@ impl From<&HostWorkload> for WorkloadState {
 }
 
 /// The message a panic was raised with, as a `JoinError` would report it.
-fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+pub(crate) fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
     panic
         .downcast_ref::<&str>()
         .copied()

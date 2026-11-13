@@ -1768,8 +1768,8 @@ fn image_pull_secret_to_oci_config(
         Some(creds) => oci::OciConfig::new_with_credentials(&creds.username, &creds.password),
         None => OciConfig::default(),
     };
-    oci_config.cache_dir = config.oci_cache_dir.clone();
-    // The host's own backend, so every workload pull shares it.
+    // The host's own backend, so every workload pull shares it. It carries
+    // the host's cache directory, which `cache_dir` would only repeat.
     oci_config.cache = Some(cache);
     oci_config.insecure = config.allow_oci_insecure;
     oci_config.timeout = config.oci_pull_timeout;

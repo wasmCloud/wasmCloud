@@ -813,6 +813,8 @@ pub async fn push_component(
     let (wasm_config, image_layer) = WasmConfig::from_raw_component(component_data.to_vec(), None)
         .with_context(|| "failed to create WebAssembly configuration from component")?;
 
+    // The layer owns the one copy made of the component.
+    let component = image_layer.data.clone();
     let layers = vec![image_layer];
     let config_obj = wasm_config
         .to_config()
@@ -887,7 +889,7 @@ pub async fn push_component(
         .oci_put_artifact(
             &ArtifactKey::new(reference, &auth, config.insecure, trust.id),
             &Pulled {
-                bytes: bytes::Bytes::copy_from_slice(component_data),
+                bytes: component,
                 digest: digest.clone(),
             },
         )
@@ -930,10 +932,7 @@ pub async fn validate_component(data: &[u8]) -> Result<()> {
 /// Cleanup cached OCI artifacts
 #[instrument(skip(cache_dir))]
 pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result<()> {
-    crate::cache::DefaultOciCache::default()
-        .with_directory(cache_dir.as_ref().to_owned())
-        .oci_maintain(age)
-        .await
+    disk_cache::expire_artifacts(cache_dir.as_ref(), age).await
 }
 
 #[cfg(test)]

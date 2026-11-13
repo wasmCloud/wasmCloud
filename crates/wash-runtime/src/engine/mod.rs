@@ -955,13 +955,9 @@ impl Engine {
                 )
             }))
             .unwrap_or_else(|panic| {
-                let message = panic
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
-                    .unwrap_or("unknown panic");
                 Err(anyhow::anyhow!(
-                    "workload initialization panicked: {message}"
+                    "workload initialization panicked: {}",
+                    crate::host::panic_message(panic.as_ref())
                 ))
             });
         }
@@ -983,13 +979,14 @@ impl Engine {
         digest: &mut Option<String>,
         admission: Admission,
     ) -> anyhow::Result<Arc<LiveCompile>> {
-        if digest.is_none() {
-            let bytes = bytes.clone();
-            *digest = Some(tokio::task::spawn_blocking(move || content_digest(&bytes)).await?);
-        }
-        let (_, live) = self
-            .load_live_bytes(bytes, digest.as_deref(), Blocking::Allowed, admission)
-            .await?;
+        let digest = match digest {
+            Some(digest) => digest,
+            None => {
+                let bytes = bytes.clone();
+                digest.insert(tokio::task::spawn_blocking(move || content_digest(&bytes)).await?)
+            }
+        };
+        let (_, live) = self.load_live_bytes(bytes, digest, admission).await?;
         Ok(live)
     }
 
@@ -1350,23 +1347,14 @@ impl Engine {
     async fn load_live_bytes(
         &self,
         bytes: bytes::Bytes,
-        digest: Option<impl AsRef<str>>,
-        blocking: Blocking,
+        digest: &str,
         admission: Admission,
     ) -> anyhow::Result<(CacheValue, Arc<LiveCompile>)> {
-        let digest = match digest {
-            Some(digest) => digest.as_ref().to_owned(),
-            None => {
-                blocking.ensure_allowed("hash a component")?;
-                let bytes = bytes.clone();
-                tokio::task::spawn_blocking(move || content_digest(&bytes)).await?
-            }
-        };
-        tracing::Span::current().record("digest", digest.as_str());
-        if let Some(live) = self.live_compile(&digest) {
+        tracing::Span::current().record("digest", digest);
+        if let Some(live) = self.live_compile(digest) {
             return Ok((live.compiled.clone(), live));
         }
-        blocking.ensure_allowed("compile a component")?;
+        let digest = digest.to_owned();
         let live = self
             .compile_flights
             .run((digest.clone(), admission), || async {
@@ -1486,12 +1474,14 @@ impl Engine {
         &self,
         bytes: impl AsRef<[u8]>,
         digest: Option<impl AsRef<str>>,
-        blocking: Blocking,
     ) -> anyhow::Result<(CacheValue, Arc<LiveCompile>)> {
+        let digest = match digest {
+            Some(digest) => digest.as_ref().to_owned(),
+            None => content_digest(bytes.as_ref()),
+        };
         self.load_live_bytes(
             bytes::Bytes::copy_from_slice(bytes.as_ref()),
-            digest,
-            blocking,
+            &digest,
             Admission::Unchecked,
         )
         .await
@@ -1550,10 +1540,7 @@ impl Engine {
         digest: Option<impl AsRef<str>>,
     ) -> anyhow::Result<CacheValue> {
         match digest {
-            Some(digest) => Ok(self
-                .load_live_component(bytes, Some(digest), Blocking::Allowed)
-                .await?
-                .0),
+            Some(digest) => Ok(self.load_live_component(bytes, Some(digest)).await?.0),
             None => {
                 self.compile_owned(
                     bytes::Bytes::copy_from_slice(bytes.as_ref()),
@@ -3726,9 +3713,7 @@ mod tests {
         ];
         for (compiles, (digest, wat, uses_gc)) in (1..).zip(cases) {
             let bytes = wat::parse_str(wat)?;
-            let (first, live) = engine
-                .load_live_component(&bytes, Some(digest), Blocking::Allowed)
-                .await?;
+            let (first, live) = engine.load_live_component(&bytes, Some(digest)).await?;
             assert_eq!(
                 first.may_use_gc.get(),
                 None,
@@ -3742,9 +3727,7 @@ mod tests {
             drop((first, live));
             assert!(engine.live_compiles.lock().unwrap().is_empty());
 
-            let (cached, _) = engine
-                .load_live_component(&bytes, Some(digest), Blocking::Allowed)
-                .await?;
+            let (cached, _) = engine.load_live_component(&bytes, Some(digest)).await?;
             assert_eq!(engine.compiles.load(Ordering::SeqCst), compiles);
             assert_eq!(cached.may_use_gc.get(), Some(&uses_gc), "{digest}");
         }
@@ -3834,7 +3817,7 @@ mod tests {
         let engine = Engine::builder().build().expect("engine should build");
 
         let (_, first) = engine
-            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .load_live_component(&bytes, Some(DIGEST))
             .await
             .expect("first load");
         engine
@@ -3850,7 +3833,7 @@ mod tests {
             .compiled
             .run_pending_tasks();
         let (_, second) = engine
-            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .load_live_component(&bytes, Some(DIGEST))
             .await
             .expect("second load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
@@ -3871,7 +3854,7 @@ mod tests {
             .compiled
             .run_pending_tasks();
         engine
-            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .load_live_component(&bytes, Some(DIGEST))
             .await
             .expect("third load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
@@ -3887,18 +3870,18 @@ mod tests {
         let engine = Engine::builder().build().expect("engine should build");
 
         let (_, first) = engine
-            .load_live_component(&bytes, None::<&str>, Blocking::Allowed)
+            .load_live_component(&bytes, None::<&str>)
             .await
             .expect("first load");
         let (_, second) = engine
-            .load_live_component(&bytes, None::<&str>, Blocking::Allowed)
+            .load_live_component(&bytes, None::<&str>)
             .await
             .expect("second load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&first, &second));
 
         let (_, by_digest) = engine
-            .load_live_component(&bytes, Some(content_digest(&bytes)), Blocking::Allowed)
+            .load_live_component(&bytes, Some(content_digest(&bytes)))
             .await
             .expect("load by content digest");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
@@ -3906,7 +3889,7 @@ mod tests {
 
         let other = wat::parse_str("(component (core module))").expect("component should assemble");
         engine
-            .load_live_component(&other, None::<&str>, Blocking::Allowed)
+            .load_live_component(&other, None::<&str>)
             .await
             .expect("other load");
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 2);
@@ -3942,7 +3925,7 @@ mod tests {
 
         let bytes = wat::parse_str("(component)").expect("component should assemble");
         let (_, prepared) = engine
-            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .load_live_component(&bytes, Some(DIGEST))
             .await
             .expect("compile");
         // Until a start has sized the compile for the pooling allocator, doing
@@ -3993,7 +3976,7 @@ mod tests {
         let engine = Engine::builder().build().expect("engine should build");
         let bytes = wat::parse_str("(component)").expect("component should assemble");
         let (_, prepared) = engine
-            .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
+            .load_live_component(&bytes, Some(DIGEST))
             .await
             .expect("compile");
         let would_block = |workload| {
