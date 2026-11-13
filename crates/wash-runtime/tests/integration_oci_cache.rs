@@ -480,3 +480,56 @@ async fn completed_pull_cache_errors_do_not_fail_the_pull() {
         .unwrap();
     assert_eq!(bytes, registry.image.read().unwrap().wasm);
 }
+
+/// Changing a clone's artifact directory must not let completed reuse skip
+/// publication into the new directory. Ordinary clones still share reuse.
+#[tokio::test]
+async fn cloned_backends_with_different_directories_each_persist_the_artifact() {
+    use std::sync::Arc;
+    use wash_runtime::cache::{DefaultOciCache, OciCache};
+
+    wash_runtime::init_crypto();
+    let registry = Registry::start().await;
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+    let first = DefaultOciCache::default().with_directory(first_dir.path().to_owned());
+    let same_dir = first.clone().with_directory(first_dir.path().to_owned());
+    let second = first.clone().with_directory(second_dir.path().to_owned());
+    let config = |cache: Arc<dyn OciCache>| OciConfig {
+        credentials: Some(("user".into(), "secret".into())),
+        insecure: true,
+        cache: Some(cache),
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    };
+    let reference = registry.reference();
+    pull_component(
+        &reference,
+        config(Arc::new(first)),
+        OciPullPolicy::IfNotPresent,
+    )
+    .await
+    .unwrap();
+    let requests = registry.requests.load(Ordering::SeqCst);
+    pull_component(
+        &reference,
+        config(Arc::new(same_dir)),
+        OciPullPolicy::IfNotPresent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        registry.requests.load(Ordering::SeqCst),
+        requests,
+        "unchanged directories retain shared reuse"
+    );
+
+    let second = config(Arc::new(second));
+    pull_component(&reference, second.clone(), OciPullPolicy::IfNotPresent)
+        .await
+        .unwrap();
+    registry.unavailable.store(true, Ordering::SeqCst);
+    pull_component(&reference, second, OciPullPolicy::Never)
+        .await
+        .expect("a successful pull through the second backend must populate its directory");
+}

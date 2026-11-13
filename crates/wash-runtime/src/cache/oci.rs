@@ -16,6 +16,7 @@ use crate::oci::{
 };
 
 const PULL_ENTRY_WEIGHT: u32 = 16 * 1024;
+const PULL_CACHE_CAPACITY: u64 = 256 * 1024 * 1024;
 
 /// OCI retention and maintenance, used by a host and by standalone OCI calls.
 ///
@@ -85,7 +86,8 @@ impl std::fmt::Debug for dyn OciCache {
 
 /// The built-in OCI backend: completed pulls for five seconds and
 /// credential-helper answers for thirty, both bounded and in memory, and an
-/// optional credential-scoped artifact directory. Clones share memory entries.
+/// optional credential-scoped artifact directory. Clones share memory entries
+/// unless their artifact directory changes, which separates completed pulls.
 /// No directory is created until an artifact is used.
 #[derive(Clone, Default)]
 pub struct DefaultOciCache {
@@ -95,6 +97,10 @@ pub struct DefaultOciCache {
 impl DefaultOciCache {
     /// Keep artifacts in the credential-scoped disk cache at `directory`.
     pub fn with_directory(mut self, directory: PathBuf) -> Self {
+        if self.storage.directory.as_ref() != Some(&directory) {
+            // Reuse must not skip publishing an artifact into the new directory.
+            self.storage.pulls = pull_cache(PULL_CACHE_CAPACITY);
+        }
         self.storage.directory = Some(directory);
         self
     }
@@ -276,7 +282,7 @@ impl Default for Storage {
     fn default() -> Self {
         Self {
             directory: None,
-            pulls: pull_cache(256 * 1024 * 1024),
+            pulls: pull_cache(PULL_CACHE_CAPACITY),
             credentials: moka::sync::Cache::builder()
                 .max_capacity(64)
                 .time_to_live(Duration::from_secs(30))
