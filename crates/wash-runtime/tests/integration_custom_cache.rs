@@ -217,6 +217,39 @@ impl Cache for GatedWrite {
     }
 }
 
+/// A backend slow to retain a compile does not hold up the start that produced
+/// it. A start arriving before the write lands reuses the compile in hand.
+#[tokio::test]
+async fn a_slow_write_does_not_delay_the_start() -> Result<()> {
+    let cache = Arc::new(GatedWrite {
+        first: AtomicBool::new(true),
+        entered: tokio::sync::Semaphore::new(0),
+        release: tokio::sync::Semaphore::new(0),
+        inner: MemoryCache::default(),
+    });
+    let engine = engine(cache.clone());
+    let wait = std::time::Duration::from_secs(30);
+    let first =
+        tokio::time::timeout(wait, engine.initialize_workload("first", workload())).await??;
+    assert_eq!(cache.entered.available_permits(), 1, "the write began");
+    assert_eq!(cache.inner.writes.load(Ordering::SeqCst), 0);
+
+    let reads = cache.inner.reads.load(Ordering::SeqCst);
+    drop(first);
+    engine.initialize_workload("second", workload()).await?;
+    assert_eq!(cache.inner.reads.load(Ordering::SeqCst), reads);
+
+    cache.release.add_permits(1);
+    tokio::time::timeout(wait, async {
+        while cache.inner.writes.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert_eq!(cache.inner.writes.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
 /// A start cancelled after its compile began leaves that compile in the cache:
 /// the retry is answered by it instead of compiling again.
 #[tokio::test]
@@ -236,7 +269,8 @@ async fn a_cancelled_start_still_publishes_its_compile() -> Result<()> {
         .await??
         .forget();
     task.abort();
-    assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+    // Publication never gates the start, which may have finished already.
+    drop(task.await);
 
     cache.release.add_permits(1);
     tokio::time::timeout(std::time::Duration::from_secs(30), async {

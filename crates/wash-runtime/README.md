@@ -207,7 +207,9 @@ Cache I/O runs asynchronously; hashing and compilation run on blocking workers.
 Cancelling a start drops its initial pending cache lookup. After a miss, a shared
 task rechecks the cache, compiles if needed, and publishes the result even if the
 start is cancelled. A retry reuses the published compile, and callers arriving
-while that task is running join it. OCI pull deadlines include cache I/O; the
+while that task is running join it. No start waits on that publication: a
+write the backend does not finish at once continues on its own task, for at
+most thirty seconds. OCI pull deadlines include cache I/O; the
 push timeout bounds the registry push alone.
 
 Connection pools, quota/accounting state, DNS authorization records, linked
