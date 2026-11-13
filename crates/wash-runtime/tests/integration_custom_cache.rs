@@ -110,26 +110,35 @@ async fn sharing_a_backend_does_not_share_compiles_between_engines() -> Result<(
 }
 
 #[tokio::test]
-async fn backend_errors_keep_their_causes_and_subsequent_starts_retry() -> Result<()> {
+async fn backend_errors_cost_a_compile_and_never_the_start() -> Result<()> {
     let cache = Arc::new(MemoryCache::default());
     let engine = engine(cache.clone());
-    for (failure, message) in [
-        (&cache.fail_read, "backend read unavailable"),
-        (&cache.fail_write, "backend write unavailable"),
-    ] {
-        failure.store(true, Ordering::SeqCst);
-        let error = engine
-            .initialize_workload("failed", workload())
-            .await
-            .err()
-            .unwrap();
-        assert!(
-            error.chain().any(|cause| cause.to_string() == message),
-            "{error:#}"
-        );
-    }
-    engine.initialize_workload("recovered", workload()).await?;
+
+    // A failed read is a miss: the start compiles and publishes.
+    cache.fail_read.store(true, Ordering::SeqCst);
+    drop(
+        engine
+            .initialize_workload("read-failed", workload())
+            .await?,
+    );
     assert_eq!(cache.writes.load(Ordering::SeqCst), 1);
+
+    // A failed write keeps nothing, and the start still has its component.
+    cache.compiled.lock().unwrap().clear();
+    cache.fail_write.store(true, Ordering::SeqCst);
+    drop(
+        engine
+            .initialize_workload("write-failed", workload())
+            .await?,
+    );
+    assert_eq!(cache.writes.load(Ordering::SeqCst), 1);
+    assert!(cache.compiled.lock().unwrap().is_empty());
+
+    // Once the backend recovers, retention resumes.
+    drop(engine.initialize_workload("recovered", workload()).await?);
+    assert_eq!(cache.writes.load(Ordering::SeqCst), 2);
+    engine.initialize_workload("cached", workload()).await?;
+    assert_eq!(cache.writes.load(Ordering::SeqCst), 2);
     Ok(())
 }
 
