@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::Result;
 use wash_runtime::{
-    cache::{Cache, CacheBackend, DefaultCache},
+    cache::{Cache, DefaultCache},
     engine::{CacheKey, CacheValue, Engine},
     host::Host,
     types::{Component, Workload},
@@ -25,9 +25,6 @@ struct MemoryCache {
     fail_read: AtomicBool,
     fail_write: AtomicBool,
 }
-
-#[cfg(feature = "oci")]
-impl wash_runtime::cache::OciCache for MemoryCache {}
 
 #[async_trait::async_trait]
 impl Cache for MemoryCache {
@@ -48,7 +45,7 @@ impl Cache for MemoryCache {
     }
 }
 
-fn engine(cache: Arc<CacheBackend>) -> Engine {
+fn engine(cache: Arc<dyn Cache>) -> Engine {
     Engine::builder()
         .with_pooling_allocator(false)
         .without_max_process_memory()
@@ -155,9 +152,6 @@ impl Drop for Waiting<'_> {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
-#[cfg(feature = "oci")]
-impl wash_runtime::cache::OciCache for GatedCache {}
-
 #[async_trait::async_trait]
 impl Cache for GatedCache {
     async fn get_compiled(&self, key: &CacheKey) -> Result<Option<CacheValue>> {
@@ -206,9 +200,6 @@ struct GatedWrite {
     release: tokio::sync::Semaphore,
     inner: MemoryCache,
 }
-#[cfg(feature = "oci")]
-impl wash_runtime::cache::OciCache for GatedWrite {}
-
 #[async_trait::async_trait]
 impl Cache for GatedWrite {
     async fn get_compiled(&self, key: &CacheKey) -> Result<Option<CacheValue>> {
@@ -259,14 +250,13 @@ async fn a_cancelled_start_still_publishes_its_compile() -> Result<()> {
 
 #[test]
 fn host_construction_preserves_one_handle_and_rejects_conflicts() -> Result<()> {
-    let cache: Arc<CacheBackend> = Arc::new(MemoryCache::default());
+    let cache: Arc<dyn Cache> = Arc::new(MemoryCache::default());
     let engine = engine(cache.clone());
     let host = Host::builder()
         .with_engine(engine.clone())
         .with_cache(cache.clone())
         .build()?;
     assert!(Arc::ptr_eq(&cache, &host.cache()));
-    assert!(Arc::ptr_eq(&cache, host.config().cache.as_ref().unwrap()));
     assert!(
         Host::builder()
             .with_engine(engine)
@@ -277,13 +267,63 @@ fn host_construction_preserves_one_handle_and_rejects_conflicts() -> Result<()> 
     Ok(())
 }
 
+/// A compiled-component backend is only that: it implements no OCI trait, and
+/// the host's OCI retention stays on the default, configured directory included.
+/// The engine's handle is the one taken before the host was built.
+#[cfg(feature = "oci")]
+#[test]
+fn a_compile_backend_leaves_oci_retention_on_the_configured_default() -> Result<()> {
+    use wash_runtime::host::HostConfig;
+
+    let directory = tempfile::tempdir()?;
+    let engine = engine(Arc::new(MemoryCache::default()));
+    let before = engine.cache();
+    let host = Host::builder()
+        .with_engine(engine)
+        .with_config(HostConfig {
+            oci_cache_dir: Some(directory.path().to_owned()),
+            ..Default::default()
+        })
+        .build()?;
+    assert!(Arc::ptr_eq(&before, &host.cache()));
+    let oci = host.oci_cache();
+    assert_eq!(oci.oci_reserved_paths(), [directory.path().to_owned()]);
+    assert!(oci.oci_needs_maintenance());
+    Ok(())
+}
+
+/// An explicit OCI backend owns its storage, so a cache directory beside it
+/// would go unused. The host refuses to build instead of dropping it silently.
+#[cfg(feature = "oci")]
+#[test]
+fn an_oci_backend_beside_a_cache_directory_is_refused() -> Result<()> {
+    use wash_runtime::{
+        cache::{DefaultOciCache, OciCache},
+        host::HostConfig,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let backend: Arc<dyn OciCache> = Arc::new(DefaultOciCache::default());
+    let host = Host::builder().with_oci_cache(backend.clone()).build()?;
+    assert!(Arc::ptr_eq(&backend, &host.oci_cache()));
+
+    let Err(error) = Host::builder()
+        .with_oci_cache(backend)
+        .with_config(HostConfig {
+            oci_cache_dir: Some(directory.path().to_owned()),
+            ..Default::default()
+        })
+        .build()
+    else {
+        panic!("a directory beside an explicit backend should be refused");
+    };
+    assert!(format!("{error:#}").contains("oci_cache_dir"), "{error:#}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn default_trait_methods_allow_a_cache_to_disable_all_retention() -> Result<()> {
     struct Disabled;
-    #[async_trait::async_trait]
-    #[cfg(feature = "oci")]
-    impl wash_runtime::cache::OciCache for Disabled {}
-
     impl Cache for Disabled {}
     let engine = engine(Arc::new(Disabled));
     engine.initialize_workload("first", workload()).await?;
@@ -294,9 +334,6 @@ async fn default_trait_methods_allow_a_cache_to_disable_all_retention() -> Resul
 #[tokio::test]
 async fn an_entry_from_the_wrong_engine_is_rejected() -> Result<()> {
     struct Foreign(CacheValue);
-    #[cfg(feature = "oci")]
-    impl wash_runtime::cache::OciCache for Foreign {}
-
     #[async_trait::async_trait]
     impl Cache for Foreign {
         async fn get_compiled(&self, _: &CacheKey) -> Result<Option<CacheValue>> {
@@ -322,20 +359,15 @@ async fn an_entry_from_the_wrong_engine_is_rejected() -> Result<()> {
 }
 
 #[test]
-fn backend_names_support_owned_labels_and_supertrait_access() {
+fn backend_names_support_owned_labels() {
     struct Named(String);
     impl Cache for Named {
         fn name(&self) -> &str {
             &self.0
         }
     }
-    #[cfg(feature = "oci")]
-    impl wash_runtime::cache::OciCache for Named {}
-
-    let backend: Arc<CacheBackend> = Arc::new(Named(format!("tenant-{}", 42)));
+    let backend: Arc<dyn Cache> = Arc::new(Named(format!("tenant-{}", 42)));
     assert_eq!(backend.name(), "tenant-42");
-    let common: Arc<dyn Cache> = backend.clone();
-    assert_eq!(common.name(), "tenant-42");
     assert!(format!("{backend:?}").contains("tenant-42"));
     assert!(MemoryCache::default().name().ends_with("MemoryCache"));
 }
