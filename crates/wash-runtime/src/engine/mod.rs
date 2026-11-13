@@ -928,6 +928,8 @@ impl Engine {
             && workload.service.is_none()
             && pinned.iter().all(|live| self.knows_gc_use(&live.compiled))
         {
+            // Cache preparation may have waited since the host admitted the start.
+            admission.check(self)?;
             // A panic fails this start, as it does on the blocking pool.
             return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.initialize_prepared_workload(
@@ -4071,6 +4073,68 @@ mod tests {
         };
         assert!(format!("{err:#}").contains("max-process-memory"), "{err:#}");
         assert_eq!(guard.refused_starts(), refused + 1);
+    }
+
+    /// A cache hit can arrive after pressure has changed since the host admitted
+    /// the start. Even initialization that needs no blocking work must recheck.
+    #[tokio::test]
+    async fn a_cached_start_rechecks_memory_after_awaiting_the_backend() -> anyhow::Result<()> {
+        struct PressureOnHit {
+            cache: DefaultCache,
+            guard: Arc<process_memory::ProcessMemoryGuard>,
+        }
+        #[async_trait::async_trait]
+        impl Cache for PressureOnHit {
+            async fn get_compiled(&self, key: &CacheKey) -> anyhow::Result<Option<CacheValue>> {
+                let cached = self.cache.get_compiled(key).await?;
+                if cached.is_some() {
+                    tokio::task::yield_now().await;
+                    self.guard.observe(2048);
+                }
+                Ok(cached)
+            }
+            async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> anyhow::Result<()> {
+                self.cache.put_compiled(key, value).await
+            }
+        }
+
+        // This guard is not registered with the OS sampler: pressure changes
+        // deterministically when the backend returns, without allocating RAM.
+        let guard = Arc::new(process_memory::ProcessMemoryGuard::new(1024));
+        let mut engine = Engine::builder()
+            .with_pooling_allocator(false)
+            .without_max_process_memory()
+            .with_cache(Arc::new(PressureOnHit {
+                cache: DefaultCache::default(),
+                guard: Arc::clone(&guard),
+            }))
+            .build()?;
+        let workload = component_workload(Some("sha256:pressure-on-hit"), vec![]);
+        drop(engine.initialize_workload("warm", workload.clone()).await?);
+        assert!(engine.live_compiles.lock().unwrap().is_empty());
+        engine.process_memory = Some(Arc::clone(&guard));
+        guard.observe(0);
+        guard
+            .admit_start()
+            .expect("the host initially admits this start");
+
+        let result = engine
+            .initialize_admitted_workload("host", workload.clone())
+            .await;
+        assert!(guard.is_over(), "the cache lookup raised memory pressure");
+        let Err(error) = result else {
+            panic!("a cached start must recheck memory admission");
+        };
+        assert!(
+            format!("{error:#}").contains("max-process-memory"),
+            "{error:#}"
+        );
+        assert_eq!(guard.refused_starts(), 1);
+
+        // Direct engine use remains outside host start admission.
+        drop(engine.initialize_workload("direct", workload).await?);
+        assert_eq!(guard.refused_starts(), 1);
+        Ok(())
     }
 
     /// Initialization with blocking forbidden refuses every step that blocks,
