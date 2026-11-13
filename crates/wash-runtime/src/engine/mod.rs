@@ -392,10 +392,10 @@ pub struct Engine {
     cache_engine_id: uuid::Uuid,
     /// Cache lookups in flight, shared by digest and abandoned with their
     /// last caller.
-    compile_flights: Arc<Coalescer<String, Arc<LiveCompile>>>,
+    compile_flights: Arc<Coalescer<(String, Admission), Arc<LiveCompile>>>,
     /// Compiles and their publication, which finish whether or not the caller
     /// that began them still waits.
-    compiling: Arc<Coalescer<String, Arc<LiveCompile>>>,
+    compiling: Arc<Coalescer<(String, Admission), Arc<LiveCompile>>>,
     /// Compiles running workloads hold, consulted before the cache so a live
     /// compile can be reused after cache eviction. See [`LiveCompiles`].
     live_compiles: Arc<LiveCompiles>,
@@ -598,11 +598,12 @@ impl Blocking {
 /// Only a [`crate::host::Host`] admits workload starts, and counts the ones it
 /// refuses. An engine used directly, or compiling a host component plugin, is
 /// not a workload start and is never refused as one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Admission {
     /// A start the host admitted. Its compile and its initialization queue on
-    /// the blocking pool, so each rechecks when it begins. A start that joins
-    /// a compile already in flight shares that compile's check.
+    /// the blocking pool, so each rechecks when it begins. A start joins only
+    /// compiles in flight for other admitted starts, and shares their check:
+    /// a refusal never reaches a caller that is not a host start.
     Recheck,
     /// Not a host's workload start.
     Unchecked,
@@ -1022,6 +1023,11 @@ impl Engine {
                 None => return InlineInit::WouldBlock { workload, pinned },
             }
         }
+        // Sizing a compile for the pooling allocator the first time reads its
+        // whole source, which belongs on the blocking pool.
+        if !pinned.iter().all(|live| self.knows_gc_use(&live.compiled)) {
+            return InlineInit::WouldBlock { workload, pinned };
+        }
         // `pinned` keeps every compile live, so none can be evicted and
         // recompiled while this initializes.
         let initialized = self.initialize_workload_with(id, workload, Blocking::Forbidden);
@@ -1349,7 +1355,7 @@ impl Engine {
         blocking.ensure_allowed("compile a component")?;
         let live = self
             .compile_flights
-            .run(digest.clone(), || async {
+            .run((digest.clone(), admission), || async {
                 if let Some(live) = self.live_compile(&digest) {
                     return Ok(live);
                 }
@@ -1395,6 +1401,7 @@ impl Engine {
     /// it, and its publication, apart from the caller means a start that is
     /// cancelled still leaves its compile in the cache for the retry, and a
     /// caller arriving meanwhile joins the compile instead of starting another.
+    /// Publication does not delay the answer: see [`crate::cache::publish`].
     async fn compile_shared(
         &self,
         bytes: bytes::Bytes,
@@ -1407,7 +1414,7 @@ impl Engine {
         let work = async move {
             engine
                 .compiling
-                .run(key.digest.clone(), || async {
+                .run((key.digest.clone(), admission), || async {
                     if let Some(live) = engine.live_compile(&key.digest) {
                         return Ok(live);
                     }
@@ -1417,16 +1424,21 @@ impl Engine {
                         return Ok(engine.record_live(&key.digest, compiled));
                     }
                     let compiled = engine.compile_owned(bytes, admission).await?;
-                    // The compile is in hand: failing to retain it costs the
-                    // next start a compile, not this one its component.
-                    if let Err(error) = engine.cache.put_compiled(&key, compiled.clone()).await {
-                        warn!(
-                            cache = engine.cache.name(),
-                            error = format!("{error:#}"),
-                            "compilation cache publication failed; continuing uncached"
-                        );
-                    }
-                    Ok(engine.record_live(&key.digest, compiled))
+                    let live = engine.record_live(&key.digest, compiled.clone());
+                    // The compile is in hand, and no start waits on a backend
+                    // to retain it. The write holds the live compile, so a
+                    // start arriving before it lands neither misses nor
+                    // compiles again.
+                    let write = {
+                        let engine = engine.clone();
+                        let live = Arc::clone(&live);
+                        async move {
+                            let _live = live;
+                            engine.cache.put_compiled(&key, compiled).await
+                        }
+                    };
+                    crate::cache::publish(engine.cache.name(), "compiled component", write).await;
+                    Ok(live)
                 })
                 .await
         };
@@ -3914,6 +3926,13 @@ mod tests {
             .load_live_component(&bytes, Some(DIGEST), Blocking::Allowed)
             .await
             .expect("compile");
+        // Until a start has sized the compile for the pooling allocator, doing
+        // so reads its source: that start is handed back with its pin.
+        assert!(matches!(
+            engine.initialize_workload_inline("w", workload.clone()),
+            InlineInit::WouldBlock { pinned, .. } if pinned.len() == 1
+        ));
+        engine.compiled_may_use_gc(&prepared.compiled, &bytes);
         let InlineInit::Initialized(first) =
             engine.initialize_workload_inline("w", workload.clone())
         else {
@@ -4149,8 +4168,9 @@ mod tests {
         Ok(())
     }
 
-    /// A retry can miss while a cancelled start's detached publication is
-    /// pending, then obtain the compile flight only after that publication ends.
+    /// A start can miss the cache, then reach the shared preparation task
+    /// only after another start has compiled, published and released the same
+    /// digest. It rechecks there instead of compiling again.
     #[tokio::test]
     async fn a_retry_reuses_a_compile_published_after_its_cache_miss() -> anyhow::Result<()> {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -4158,9 +4178,6 @@ mod tests {
 
         struct PausedCache {
             cache: DefaultCache,
-            pause_write: AtomicBool,
-            writing: Semaphore,
-            publish: Semaphore,
             pause_read: AtomicBool,
             reading: Semaphore,
             finish_read: Semaphore,
@@ -4177,20 +4194,13 @@ mod tests {
                 Ok(snapshot)
             }
             async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> anyhow::Result<()> {
-                if self.pause_write.swap(false, Ordering::SeqCst) {
-                    self.writing.add_permits(1);
-                    self.publish.acquire().await?.forget();
-                }
                 self.cache.put_compiled(key, value).await
             }
         }
 
         let cache = Arc::new(PausedCache {
             cache: DefaultCache::default(),
-            pause_write: AtomicBool::new(true),
-            writing: Semaphore::new(0),
-            publish: Semaphore::new(0),
-            pause_read: AtomicBool::new(false),
+            pause_read: AtomicBool::new(true),
             reading: Semaphore::new(0),
             finish_read: Semaphore::new(0),
         });
@@ -4200,35 +4210,25 @@ mod tests {
             .with_cache(cache.clone())
             .build()?;
         let workload = component_workload(Some("sha256:publication-race"), vec![]);
-        let first = tokio::spawn({
-            let engine = engine.clone();
-            let workload = workload.clone();
-            async move { engine.initialize_workload("cancelled", workload).await }
-        });
-        tokio::time::timeout(Duration::from_secs(30), cache.writing.acquire())
-            .await??
-            .forget();
-        first.abort();
-        assert!(matches!(first.await, Err(error) if error.is_cancelled()));
-
-        cache.pause_read.store(true, Ordering::SeqCst);
         let retry = tokio::spawn({
             let engine = engine.clone();
+            let workload = workload.clone();
             async move { engine.initialize_workload("retry", workload).await }
         });
         tokio::time::timeout(Duration::from_secs(30), cache.reading.acquire())
             .await??
             .forget();
-        cache.publish.add_permits(1);
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while engine.compiling.in_flight_count() != 0
-                || !engine.live_compiles.lock().unwrap().is_empty()
-            {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await?;
+
+        // A host's start does not join a direct caller's lookup: it compiles,
+        // publishes and, once dropped, releases the live compile.
+        drop(
+            engine
+                .initialize_admitted_workload("published", workload)
+                .await?,
+        );
         assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert!(engine.live_compiles.lock().unwrap().is_empty());
+
         cache.finish_read.add_permits(1);
         let retried = tokio::time::timeout(Duration::from_secs(30), retry).await???;
         assert_eq!(
