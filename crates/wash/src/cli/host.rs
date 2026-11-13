@@ -1468,7 +1468,6 @@ impl CliCommand for HostCommand {
             allow_oci_insecure: self.allow_insecure_registries,
             oci_pull_timeout: Some(self.registry_pull_timeout),
             oci_cache_dir: self.oci_cache_dir.clone(),
-            cache: None,
             oci_ca_paths: self.oci_ca_paths.clone(),
         };
 
@@ -1488,13 +1487,7 @@ impl CliCommand for HostCommand {
         // Use the same resolved bindings for path reservations and the host.
         // File-backed config sources can change during startup.
         let plugin_bindings = self.plugin_bindings(&config, project_dir)?;
-        let default_cache = wash_runtime::cache::DefaultCache::default();
-        let default_cache = match &self.oci_cache_dir {
-            Some(directory) => default_cache.with_oci_directory(directory.clone()),
-            None => default_cache,
-        };
         let mut engine_builder = Engine::builder()
-            .with_cache(Arc::new(default_cache))
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel())
             .with_reserved_host_paths(self.reserved_paths(&config, ctx, &plugin_bindings)?)
@@ -1759,7 +1752,9 @@ impl CliCommand for HostCommand {
                 ),
                 insecure: self.allow_insecure_registries,
                 cache_dir: self.oci_cache_dir.clone(),
-                cache: Some(engine.cache()),
+                // The default backend for this directory, which the host
+                // built below shares.
+                cache: None,
                 timeout: Some(self.registry_pull_timeout),
                 ..Default::default()
             };
