@@ -1025,15 +1025,17 @@ impl Host {
 
         // Initialize the workload using the engine, receiving the unresolved workload.
         //
-        // A workload whose every component is already compiled, with no
-        // volumes or service, initializes here: nothing blocks, and that is
-        // cheaper than the blocking pool's two thread handoffs. The engine
-        // refuses anything that would block on this path.
+        // A workload whose every component a running workload already holds
+        // compiled, with no volumes or service, initializes here: nothing
+        // blocks, and that is cheaper than the blocking pool's two thread
+        // handoffs. The engine refuses anything that would block on this path.
         //
-        // Other starts await cache I/O and send compilation, volume access,
-        // and linking to the blocking pool. On a runtime thread that
-        // could stall the async-nats connection task alongside it, and a host
-        // that stops draining its socket is disconnected as a slow consumer.
+        // Other starts await the compilation cache. One that finds every
+        // component there, and has no volumes or service, still initializes
+        // on this task. The rest send compilation, volume access and linking
+        // to the blocking pool: on a runtime thread those could stall the
+        // async-nats connection task alongside it, and a host that stops
+        // draining its socket is disconnected as a slow consumer.
         let engine = self.engine.clone();
         let init_id = request.workload_id;
         // A panic fails this start, as it does on the blocking pool.
@@ -1050,7 +1052,9 @@ impl Host {
             crate::engine::InlineInit::Initialized(initialized) => initialized?,
             crate::engine::InlineInit::WouldBlock { workload, pinned } => {
                 let _pinned = pinned;
-                engine.initialize_workload(&init_id, workload).await?
+                engine
+                    .initialize_admitted_workload(&init_id, workload)
+                    .await?
             }
         };
 
