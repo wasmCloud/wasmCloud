@@ -187,6 +187,217 @@ async fn fetching_waits_for_the_cache_lock() -> Result<()> {
     Ok(())
 }
 
+/// A fetcher whose `contracttest:api` comes from a local override in `dir`.
+async fn overridden(dir: &Path) -> Result<(WkgFetcher, PathBuf)> {
+    let path = package(dir)?;
+    let root = root(dir)?;
+    let mut fetcher = fetcher(dir).await?;
+    fetcher.wkg_config.overrides = Some(HashMap::from([(
+        "contracttest:api".into(),
+        wasm_pkg_core::manifest::Override {
+            path: Some(path),
+            version: None,
+        },
+    )]));
+    Ok((fetcher, root))
+}
+
+fn hold_cache_lock(dir: &Path) -> Result<std::fs::File> {
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("cache").join(CACHE_LOCK_FILE))?;
+    held.lock()?;
+    Ok(held)
+}
+
+/// A lock file this user cannot write is still taken, read-only.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_lock_file_this_user_cannot_write_does_not_fail_the_fetch() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let lock_file = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    std::fs::write(&lock_file, b"")?;
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o444))?;
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open(&lock_file)
+        .is_ok()
+    {
+        return Ok(()); // root ignores the mode
+    }
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await
+}
+
+/// Where no lock file can be made, as in a read-only cache, a fetch that writes
+/// nothing to the cache still works.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_read_only_cache_that_needs_no_writes_still_fetches() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let cache = dir.path().join("cache");
+    std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o555))?;
+    let _restore = scopeguard::guard(cache.clone(), |cache| {
+        let _ = std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o755));
+    });
+    if std::fs::write(cache.join("probe"), b"").is_ok() {
+        return Ok(()); // root ignores the mode
+    }
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await
+}
+
+/// Diagnosing a failed fetch only asks registries, so it does not wait for the
+/// cache lock.
+#[tokio::test]
+async fn diagnosing_does_not_wait_for_the_cache_lock() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let _held = hold_cache_lock(dir.path())?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fetcher.diagnose_wit(&root),
+    )
+    .await
+    .context("diagnose_wit waited for the cache lock")??;
+    Ok(())
+}
+
+/// Records the message of every event on the thread it is set for.
+#[derive(Clone, Default)]
+struct Messages(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for Messages {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(message.0);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A fetch that waits for another wash process says so instead of hanging
+/// silently.
+#[tokio::test]
+async fn waiting_for_the_cache_lock_is_logged() -> Result<()> {
+    let messages = Messages::default();
+    let _subscriber = tracing::subscriber::set_default(messages.clone());
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let held = hold_cache_lock(dir.path())?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    let mut fetch = std::pin::pin!(fetcher.fetch_wit_dependencies(&root, &mut lock));
+    let early = tokio::time::timeout(std::time::Duration::from_millis(300), fetch.as_mut()).await;
+    assert!(
+        early.is_err(),
+        "fetched while another process held the cache lock"
+    );
+    let logged = messages
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|m| m.contains("waiting for another wash process"));
+    assert!(logged, "waited for the cache lock without saying so");
+    drop(held);
+    fetch.await
+}
+
+/// Waits until `call` reaches `registry`, then checks the cache lock is held
+/// exclusively.
+async fn assert_lock_held_on_the_network<F: std::future::Future>(
+    registry: &tokio::net::TcpListener,
+    lock_path: &Path,
+    call: F,
+    name: &str,
+) -> Result<()> {
+    let mut call = std::pin::pin!(call);
+    let _connection = tokio::select! {
+        _ = call.as_mut() => anyhow::bail!("{name} finished without waiting on the registry"),
+        accepted = tokio::time::timeout(std::time::Duration::from_secs(30), registry.accept()) =>
+            accepted.with_context(|| format!("{name} never reached the registry"))??.0,
+    };
+    let probe = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path)?;
+    match probe.try_lock_shared() {
+        Err(std::fs::TryLockError::WouldBlock) => Ok(()),
+        Ok(()) => anyhow::bail!("{name} reached the registry without holding the cache lock"),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+/// The lock is held, exclusively, for as long as a call may fill the cache.
+#[tokio::test]
+async fn the_cache_lock_is_held_exclusively_while_a_registry_is_read() -> Result<()> {
+    let registry = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address: Registry = registry
+        .local_addr()?
+        .to_string()
+        .parse()
+        .context("invalid registry")?;
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    fetcher.wkg_client_config.set_namespace_registry(
+        "contracttest".parse().context("invalid label")?,
+        RegistryMapping::Registry(address),
+    );
+    let lock_path = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    let mut lock = load_lock_file(dir.path()).await?;
+    assert_lock_held_on_the_network(
+        &registry,
+        &lock_path,
+        fetcher.fetch_wit_dependencies(&root, &mut lock),
+        "fetch",
+    )
+    .await?;
+    assert_lock_held_on_the_network(
+        &registry,
+        &lock_path,
+        fetcher.build_wit_package(&root, &mut lock),
+        "build",
+    )
+    .await?;
+    let package = "contracttest:api".parse()?;
+    assert_lock_held_on_the_network(
+        &registry,
+        &lock_path,
+        fetcher.load_package(&package, None, None),
+        "load",
+    )
+    .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn fetching_a_local_override_populates_deps_and_builds_the_root() -> Result<()> {
     let dir = tempfile::tempdir()?;
