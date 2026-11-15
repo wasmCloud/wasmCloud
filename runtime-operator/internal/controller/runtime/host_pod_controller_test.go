@@ -63,6 +63,14 @@ func hostPodClientBuilder(t *testing.T, objs ...client.Object) *fake.ClientBuild
 				}
 				return []string{host.Hostname}
 			}).
+		WithIndex(&runtimev1alpha1.Host{}, hostIDIndex,
+			func(obj client.Object) []string {
+				host, ok := obj.(*runtimev1alpha1.Host)
+				if !ok || host.HostID == "" {
+					return nil
+				}
+				return []string{host.HostID}
+			}).
 		WithIndex(&corev1.Pod{}, hostPodIPFieldIndex, hostPodIPIndexValue)
 }
 
@@ -181,7 +189,8 @@ func TestHeartbeatHandler_SkipsRetiredHostAfterPodIsGone(t *testing.T) {
 func TestHeartbeatHandler_AcceptsRetiredIDStartedLater(t *testing.T) {
 	// No Pod was retired at this IP, so only the ID can refuse a heartbeat.
 	const idOnlyIP = "10.9.9.9"
-	retired := &RetiredHosts{}
+	now := time.Now()
+	retired := &RetiredHosts{ids: map[string]time.Time{testHeartbeatHostID: now.Add(-2 * time.Minute)}}
 	writes := 0
 	c := hostPodClientBuilder(t).WithInterceptorFuncs(interceptor.Funcs{
 		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
@@ -193,8 +202,6 @@ func TestHeartbeatHandler_AcceptsRetiredIDStartedLater(t *testing.T) {
 			return nil
 		},
 	}).Build()
-	retired.retire(testHeartbeatHostID)
-	retiredAt := time.Now()
 	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
 	send := func(heartbeat []byte) int {
 		writes = 0
@@ -202,15 +209,63 @@ func TestHeartbeatHandler_AcceptsRetiredIDStartedLater(t *testing.T) {
 			"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
 		return writes
 	}
+	old := heartbeatBytesAt(t, "hb-host", testHeartbeatHostID, idOnlyIP, now.Add(-3*time.Minute))
 
 	if n := send(heartbeatBytes(t, "hb-host", testHeartbeatHostID, idOnlyIP)); n != 0 {
 		t.Errorf("a retired ID with no start time wrote its Host %d times", n)
 	}
-	if n := send(heartbeatBytesAt(t, "hb-host", testHeartbeatHostID, idOnlyIP, retiredAt.Add(-time.Minute))); n != 0 {
+	if n := send(old); n != 0 {
 		t.Errorf("the retired host wrote its Host %d times", n)
 	}
-	if n := send(heartbeatBytesAt(t, "hb-host", testHeartbeatHostID, idOnlyIP, retiredAt.Add(time.Minute))); n == 0 {
+	if n := send(heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, idOnlyIP, now.Add(-time.Minute))); n == 0 {
 		t.Error("a host started after its ID was retired was not registered")
+	}
+	if n := send(old); n != 0 {
+		t.Errorf("the retired host wrote a Host %d times after its replacement registered", n)
+	}
+}
+
+// While the retired Host is still being deleted, its replacement waits: the old
+// Host's cleanup removes Workloads by host ID, the replacement's among them.
+func TestHeartbeatHandler_ReplacementWaitsForRetiredHostCleanup(t *testing.T) {
+	const idOnlyIP = "10.9.9.9"
+	now := time.Now()
+	deleting := metav1.NewTime(now.Add(-20 * time.Second))
+	old := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "old-host",
+			Namespace:         testNamespace,
+			Finalizers:        []string{hostFinalizerName},
+			DeletionTimestamp: &deleting,
+		},
+		HostID:   testHeartbeatHostID,
+		Hostname: "10.9.9.8",
+	}
+	c := hostPodClientBuilder(t, old).Build()
+	retired := &RetiredHosts{ids: map[string]time.Time{testHeartbeatHostID: deleting.Time}}
+	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
+	heartbeat := heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, idOnlyIP, now.Add(-10*time.Second))
+	hostsWithID := func() int {
+		hosts := &runtimev1alpha1.HostList{}
+		if err := c.List(context.Background(), hosts, client.InNamespace(testNamespace),
+			client.MatchingFields{hostIDIndex: testHeartbeatHostID}); err != nil {
+			t.Fatal(err)
+		}
+		return len(hosts.Items)
+	}
+
+	updater.handleHeartbeat(context.Background(), logr.Discard(), "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
+	if n := hostsWithID(); n != 1 {
+		t.Fatalf("%d Hosts share the ID while the retired one is being deleted, want 1", n)
+	}
+
+	old.Finalizers = nil
+	if err := c.Update(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	updater.handleHeartbeat(context.Background(), logr.Discard(), "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
+	if n := hostsWithID(); n != 1 {
+		t.Fatalf("%d Hosts with the ID after the retired one went, want the replacement", n)
 	}
 }
 
