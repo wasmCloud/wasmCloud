@@ -1187,6 +1187,33 @@ mod tests {
             .expect("the port of a torn-down store is free");
     }
 
+    /// A client store's ephemeral port, bound by its connect, goes with the store.
+    #[tokio::test]
+    async fn store_teardown_releases_a_connected_clients_ephemeral_port() {
+        let network: std::sync::Arc<std::sync::Mutex<crate::sockets::loopback::Network>> =
+            std::sync::Arc::default();
+        let mut service = Harness::on_network(std::sync::Arc::clone(&network));
+        let (_listener, address) = service.listen().await;
+        let mut client = Harness::on_network(std::sync::Arc::clone(&network));
+        let (_rep, _input, _output) = client.connect(address).await;
+        assert_eq!(
+            network.lock().unwrap().tcp_ipv4.len(),
+            2,
+            "listener and ephemeral port"
+        );
+        drop(client);
+        let net = network.lock().unwrap();
+        assert_eq!(
+            net.tcp_ipv4.len(),
+            1,
+            "the client's ephemeral port is freed"
+        );
+        assert!(
+            net.tcp_ipv4
+                .contains_key(&std::num::NonZeroU16::new(address.port()).unwrap())
+        );
+    }
+
     /// Teardown frees only the ports the store still holds: a port it gave up
     /// and another store bound again stays bound.
     #[tokio::test]

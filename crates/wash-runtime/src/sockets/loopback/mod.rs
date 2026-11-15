@@ -202,3 +202,29 @@ impl Network {
         Ok(Some(endpoint))
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    /// Release frees an owner's ports in each family and protocol, and spares
+    /// the same port number held by another owner.
+    #[test]
+    fn release_frees_each_family_and_protocol_and_spares_other_owners() {
+        let mut net = Network::default();
+        let (a, b) = (Owner::new(), Owner::new());
+        let v4: SocketAddr = "127.0.0.1:7000".parse().unwrap();
+        let v6: SocketAddr = "[::1]:7001".parse().unwrap();
+        net.bind_tcp(v4, a).unwrap();
+        net.bind_tcp(v6, a).unwrap();
+        let _a_udp = net.bind_udp(v6, Arc::new(Semaphore::new(0)), a).unwrap();
+        let _b_udp = net.bind_udp(v4, Arc::new(Semaphore::new(0)), b).unwrap();
+        net.release(a);
+        assert!(net.tcp_ipv4.is_empty() && net.tcp_ipv6.is_empty() && net.udp_ipv6.is_empty());
+        assert_eq!(net.udp_ipv4.len(), 1, "the other owner's UDP port survives");
+    }
+}
