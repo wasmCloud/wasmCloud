@@ -146,4 +146,11 @@ func TestServiceToRequestSkipsUnroutedServices(t *testing.T) {
 	if got := r.serviceToRequest(ctx, newRouteService("unrelated")); len(got) != 0 {
 		t.Fatalf("unrouted Service requests = %v, want none", got)
 	}
+	// A reconcile of a same-named Service elsewhere would delete that
+	// namespace's slice of the same name.
+	elsewhere := newRouteService(testServiceName)
+	elsewhere.Namespace = "other-namespace"
+	if got := r.serviceToRequest(ctx, elsewhere); len(got) != 0 {
+		t.Fatalf("same-named Service in another namespace requests = %v, want none", got)
+	}
 }
