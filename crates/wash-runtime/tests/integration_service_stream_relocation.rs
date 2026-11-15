@@ -31,6 +31,8 @@ use common::{http_only_host_interfaces, json_u64_field, start_host_with_p3_http_
 
 const BRIDGE_SERVICE_WASM: &[u8] = include_bytes!("wasm/bridge_service.wasm");
 const BRIDGE_BACKEND_WASM: &[u8] = include_bytes!("wasm/bridge_backend.wasm");
+const STREAM_PRODUCER_P3_WASM: &[u8] = include_bytes!("wasm/stream_producer_p3.wasm");
+const STREAM_CONSUMER_P3_WASM: &[u8] = include_bytes!("wasm/stream_consumer_p3.wasm");
 
 const RELOCATED_CALL: &str = "invoking relocated ephemeral dynamic export";
 
@@ -91,6 +93,35 @@ fn bridge_workload(host: &str) -> WorkloadStartRequest {
     }
 }
 
+/// A workload with no service, whose HTTP component pulls a stream from another.
+fn service_less_stream_workload(host: &str) -> WorkloadStartRequest {
+    let component = |name: &str, bytes: &'static [u8]| Component {
+        name: name.to_string(),
+        digest: None,
+        bytes: bytes::Bytes::from_static(bytes),
+        local_resources: LocalResources::default(),
+        pool_size: 1,
+        max_invocations: 100,
+        max_concurrency: 1,
+        ..Default::default()
+    };
+    WorkloadStartRequest {
+        workload_id: uuid::Uuid::new_v4().to_string(),
+        workload: Workload {
+            namespace: "test".to_string(),
+            name: host.to_string(),
+            annotations: HashMap::new(),
+            service: None,
+            components: vec![
+                component("stream-consumer", STREAM_CONSUMER_P3_WASM),
+                component("stream-producer", STREAM_PRODUCER_P3_WASM),
+            ],
+            host_interfaces: http_only_host_interfaces(host),
+            volumes: vec![],
+        },
+    }
+}
+
 #[tokio::test]
 async fn service_stream_imports_run_relocated() -> Result<()> {
     let recorder = MessageRecorder::default();
@@ -104,8 +135,31 @@ async fn service_stream_imports_run_relocated() -> Result<()> {
         .try_init()
         .context("failed to install tracing subscriber")?;
 
-    let host = "service-stream-relocation";
     let (addr, h) = start_host_with_p3_http_handler("127.0.0.1:0").await?;
+
+    // Without a service, a stream-carrying call stays on the shared store.
+    let local = "service-less-stream";
+    h.workload_start(service_less_stream_workload(local))
+        .await?;
+    messages.lock().unwrap().clear();
+    let body = timeout(
+        Duration::from_secs(15),
+        reqwest::Client::new()
+            .get(format!("http://{addr}/"))
+            .header("HOST", local)
+            .send(),
+    )
+    .await
+    .context("request timed out")??
+    .text()
+    .await?;
+    assert_eq!(body, "abcdefghijklmnop", "the stream should cross intact");
+    assert!(
+        !messages.lock().unwrap().iter().any(|m| m == RELOCATED_CALL),
+        "a workload without a service relocated a stream-carrying call"
+    );
+
+    let host = "service-stream-relocation";
     h.workload_start(bridge_workload(host)).await?;
 
     for path in ["/consume", "/produce"] {
