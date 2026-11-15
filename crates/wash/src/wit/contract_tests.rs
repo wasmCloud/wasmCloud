@@ -145,6 +145,48 @@ async fn lookup_distinguishes_invalid_versions_missing_packages_and_bad_override
     Ok(())
 }
 
+/// A fetch waits while another wash process holds the cache lock: its scrub
+/// would otherwise delete a blob that process is still writing.
+#[tokio::test]
+async fn fetching_waits_for_the_cache_lock() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = package(dir.path())?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    fetcher.wkg_config.overrides = Some(HashMap::from([(
+        "contracttest:api".into(),
+        wasm_pkg_core::manifest::Override {
+            path: Some(path),
+            version: None,
+        },
+    )]));
+    let cache = dir.path().join("cache");
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(cache.join(".wash-cache.lock"))?;
+    held.lock()?;
+    let writing = cache.join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&writing, b"partial")?;
+
+    let mut lock = load_lock_file(dir.path()).await?;
+    let mut fetch = std::pin::pin!(fetcher.fetch_wit_dependencies(&root, &mut lock));
+    let early = tokio::time::timeout(std::time::Duration::from_millis(500), fetch.as_mut()).await;
+    assert!(
+        early.is_err(),
+        "fetched while another process held the cache lock"
+    );
+    assert!(
+        writing.exists(),
+        "the scrub deleted a blob another process was writing"
+    );
+
+    drop(held);
+    fetch.await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn fetching_a_local_override_populates_deps_and_builds_the_root() -> Result<()> {
     let dir = tempfile::tempdir()?;
