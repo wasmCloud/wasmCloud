@@ -1,17 +1,52 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
+
+// bumpGenerationOnSpecChange does what the API server does with
+// metadata.generation, which the fake client leaves alone.
+func bumpGenerationOnSpecChange() interceptor.Funcs {
+	return interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			obj.SetGeneration(1)
+			return c.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			stored := obj.DeepCopyObject().(client.Object)
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), stored); err != nil {
+				return err
+			}
+			was, err := runtime.DefaultUnstructuredConverter.ToUnstructured(stored)
+			if err != nil {
+				return err
+			}
+			now, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+			if err != nil {
+				return err
+			}
+			generation := stored.GetGeneration()
+			if !equality.Semantic.DeepEqual(was["spec"], now["spec"]) {
+				generation++
+			}
+			obj.SetGeneration(generation)
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+}
 
 // newPipelineReconciler runs the real condition pipeline on a fake client
 // that keeps status writes apart from spec writes, as the API server does.
@@ -23,6 +58,7 @@ func newPipelineReconciler(t *testing.T, objs ...client.Object) *WorkloadDeploym
 		WithObjects(objs...).
 		WithStatusSubresource(&runtimev1alpha1.WorkloadDeployment{}, &runtimev1alpha1.WorkloadReplicaSet{}).
 		WithIndex(&runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentOwnerIndex, replicaSetOwnerIndex(t, s)).
+		WithInterceptorFuncs(bumpGenerationOnSpecChange()).
 		Build()
 	r := &WorkloadDeploymentReconciler{Client: c, Scheme: s}
 	r.reconciler = r.newReconciler()
@@ -86,10 +122,6 @@ func markReplicaSetStarted(t *testing.T, r *WorkloadDeploymentReconciler, wd *ru
 	if rs == nil {
 		return
 	}
-	rs.Generation = 1
-	if err := r.Update(t.Context(), rs); err != nil {
-		t.Fatal(err)
-	}
 	c := condition.ReadyCondition(runtimev1alpha1.WorkloadReplicaSetConditionScaleUp)
 	c.ObservedGeneration = rs.Generation
 	rs.Status.SetConditions(c)
@@ -124,7 +156,6 @@ func TestDeploymentObservedGenerationFollowsReady(t *testing.T) {
 	}
 	firstSet := got.Status.CurrentReplicaSet.Name
 
-	got.Generation = 2
 	got.Spec.Template.Spec.HostSelector = map[string]string{"edited": "true"}
 	if err := r.Update(t.Context(), got); err != nil {
 		t.Fatal(err)
@@ -153,20 +184,28 @@ func TestDeploymentObservedGenerationFollowsReady(t *testing.T) {
 			got.Status.IsAvailable(), got.Status.ObservedGeneration, got.Status.CurrentReplicaSet.Name)
 	}
 
-	// A replicas-only edit, as from an autoscaler, changes no condition: Ready
-	// stays True and still reports the new generation.
-	got.Generation = 3
+	// A replicas-only edit, as from an autoscaler, keeps Ready True. Its
+	// generation is reported once the ReplicaSet has caught up with the count.
 	more := testReplicas + 1
 	got.Spec.Replicas = &more
 	if err := r.Update(t.Context(), got); err != nil {
 		t.Fatal(err)
 	}
 	for pass := range 3 {
-		if got = reconcilePass(t, r, key); !got.Status.IsAvailable() {
+		got = reconcilePass(t, r, key)
+		if !got.Status.IsAvailable() {
 			t.Fatalf("pass %d: a replicas-only edit took Ready from True", pass)
 		}
+		if got.Status.ObservedGeneration == got.Generation {
+			t.Fatalf("pass %d: observedGeneration reached %d before the ReplicaSet caught up", pass, got.Generation)
+		}
 	}
-	if got.Status.ObservedGeneration != 3 {
-		t.Fatalf("observedGeneration = %d after a replicas-only edit, want 3", got.Status.ObservedGeneration)
+	for range 3 {
+		got = reconcilePass(t, r, key)
+		markReplicaSetAvailable(t, r, got)
+	}
+	if got.Generation != 3 || got.Status.ObservedGeneration != 3 {
+		t.Fatalf("generation=%d observedGeneration=%d after the ReplicaSet caught up, want 3 and 3",
+			got.Generation, got.Status.ObservedGeneration)
 	}
 }
