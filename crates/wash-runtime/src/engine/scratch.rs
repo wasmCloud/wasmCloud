@@ -70,6 +70,7 @@ impl ScratchRoot {
             .keep();
         Ok(Arc::new(ScratchDir {
             path,
+            removed: std::sync::atomic::AtomicBool::new(false),
             _root: Arc::clone(self),
         }))
     }
@@ -87,6 +88,8 @@ impl Drop for ScratchRoot {
 #[derive(Debug)]
 pub(crate) struct ScratchDir {
     path: PathBuf,
+    /// Set once `remove` succeeded; the name may since belong to another workload.
+    removed: std::sync::atomic::AtomicBool,
     /// Keeps the host directory, and its lock, alive while this lives.
     _root: Arc<ScratchRoot>,
 }
@@ -99,21 +102,30 @@ impl ScratchDir {
     /// Remove the directory now, whoever else still holds it. An open handle
     /// keeps working on an unlinked directory on Unix; nothing new is written.
     pub(crate) fn remove(&self) {
-        remove(&self.path);
+        if remove(&self.path) {
+            self.removed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        remove(&self.path);
+        if !*self.removed.get_mut() {
+            remove(&self.path);
+        }
     }
 }
 
-fn remove(path: &Path) {
+/// Whether `path` is gone afterwards.
+fn remove(path: &Path) -> bool {
     match std::fs::remove_dir_all(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => tracing::warn!(path = %path.display(), err = %e, "failed to remove scratch"),
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), err = %e, "failed to remove scratch");
+            false
+        }
     }
 }
 
@@ -176,6 +188,26 @@ mod tests {
         let path = dropped.path().to_path_buf();
         drop(dropped);
         assert!(!path.exists());
+    }
+
+    /// Once removed, a directory's name may go to another workload, so a handle
+    /// that outlives the release must not remove it again.
+    #[test]
+    fn a_removed_dir_never_deletes_what_later_takes_its_name() {
+        let root = tempfile::tempdir().unwrap();
+        let scratch = ScratchRoot::open(root.path()).unwrap();
+        let released = scratch.workload_dir().unwrap();
+        let stale = Arc::clone(&released);
+        let path = released.path().to_path_buf();
+        released.remove();
+        drop(released);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("data"), "the next workload's").unwrap();
+        drop(stale);
+        assert!(
+            path.join("data").exists(),
+            "a stale handle removed a directory it no longer owns"
+        );
     }
 
     #[test]
