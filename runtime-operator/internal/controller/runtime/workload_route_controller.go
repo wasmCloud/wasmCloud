@@ -232,14 +232,14 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	sortEndpoints(existing.Endpoints)
 
-	if reflect.DeepEqual(existing.Labels, desiredSlice.Labels) &&
-		existing.AddressType == desiredSlice.AddressType &&
-		reflect.DeepEqual(existing.Ports, desiredSlice.Ports) &&
-		reflect.DeepEqual(existing.Endpoints, desiredSlice.Endpoints) {
+	if endpointSliceCurrent(existing, desiredSlice, svc) {
 		return ctrl.Result{}, nil
 	}
 
 	// Update if the existing slice differs.
+	if !metav1.IsControlledBy(existing, svc) {
+		existing.OwnerReferences = desiredSlice.OwnerReferences
+	}
 	existing.Labels = desiredSlice.Labels
 	existing.AddressType = desiredSlice.AddressType
 	existing.Ports = desiredSlice.Ports
@@ -250,6 +250,16 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	log.Info("updated EndpointSlice", "endpointSlice", sliceName, "endpoints", len(endpoints))
 
 	return ctrl.Result{}, nil
+}
+
+// endpointSliceCurrent reports whether existing matches desired and is owned by
+// svc, not by a deleted Service of the same name that GC would follow.
+func endpointSliceCurrent(existing, desired *discoveryv1.EndpointSlice, svc *corev1.Service) bool {
+	return metav1.IsControlledBy(existing, svc) &&
+		reflect.DeepEqual(existing.Labels, desired.Labels) &&
+		existing.AddressType == desired.AddressType &&
+		reflect.DeepEqual(existing.Ports, desired.Ports) &&
+		reflect.DeepEqual(existing.Endpoints, desired.Endpoints)
 }
 
 // findPodByHostname locates the HostPodLabel-bearing Pod whose OS hostname
@@ -358,6 +368,28 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Watches(&runtimev1alpha1.Workload{}, handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest)).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.serviceToRequest)).
 		Named("workload-route").
 		Complete(r)
+}
+
+// serviceToRequest enqueues a Service only when a Workload routes to it, so
+// the other Services in the cluster are never reconciled.
+func (r *WorkloadRouteReconciler) serviceToRequest(ctx context.Context, obj client.Object) []reconcile.Request {
+	request := []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: obj.GetNamespace(),
+		Name:      obj.GetName(),
+	}}}
+	workloads := &runtimev1alpha1.WorkloadList{}
+	if err := r.List(ctx, workloads,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{workloadKubernetesServiceIndex: obj.GetName()},
+	); err != nil {
+		// Reconciling is idempotent; an extra pass is cheaper than a lost one.
+		return request
+	}
+	if len(workloads.Items) == 0 {
+		return nil
+	}
+	return request
 }
