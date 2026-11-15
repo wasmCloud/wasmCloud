@@ -24,6 +24,9 @@ func (r failingRegistry) RegisterHost(context.Context, types.NamespacedName, str
 func (r failingRegistry) DeregisterHost(context.Context, types.NamespacedName) error {
 	return r.err
 }
+func (r failingRegistry) SuspendHost(context.Context, types.NamespacedName) error {
+	return r.err
+}
 func (r failingRegistry) RegisterWorkload(context.Context, types.NamespacedName, string, string, string) error {
 	return r.err
 }
@@ -145,6 +148,9 @@ func TestHostReconcilerReadinessTransitions(t *testing.T) {
 			}
 			if _, found := registry.hosts[key]; found != (state == "available") {
 				t.Fatalf("host registration present=%v for %s host", found, state)
+			}
+			if registry.suspended[key] != (state == "unavailable") {
+				t.Fatalf("host suspended=%v for %s host", registry.suspended[key], state)
 			}
 			if state == "available" && registry.hosts[key] != host.HostID {
 				t.Fatalf("host registration = %q, want %q", registry.hosts[key], host.HostID)
