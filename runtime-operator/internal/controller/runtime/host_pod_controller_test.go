@@ -175,6 +175,45 @@ func TestHeartbeatHandler_SkipsRetiredHostAfterPodIsGone(t *testing.T) {
 	}
 }
 
+// A host restarted under the same ID, as with a fixed --host-id, is a
+// replacement once it started after the ID was retired. A heartbeat started
+// before that, or with no start time, still comes from the retired host.
+func TestHeartbeatHandler_AcceptsRetiredIDStartedLater(t *testing.T) {
+	// No Pod was retired at this IP, so only the ID can refuse a heartbeat.
+	const idOnlyIP = "10.9.9.9"
+	retired := &RetiredHosts{}
+	writes := 0
+	c := hostPodClientBuilder(t).WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+			writes++
+			return nil
+		},
+		SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+			writes++
+			return nil
+		},
+	}).Build()
+	retired.retire(testHeartbeatHostID)
+	retiredAt := time.Now()
+	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
+	send := func(heartbeat []byte) int {
+		writes = 0
+		updater.handleHeartbeat(context.Background(), logr.Discard(),
+			"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
+		return writes
+	}
+
+	if n := send(heartbeatBytes(t, "hb-host", testHeartbeatHostID, idOnlyIP)); n != 0 {
+		t.Errorf("a retired ID with no start time wrote its Host %d times", n)
+	}
+	if n := send(heartbeatBytesAt(t, "hb-host", testHeartbeatHostID, idOnlyIP, retiredAt.Add(-time.Minute))); n != 0 {
+		t.Errorf("the retired host wrote its Host %d times", n)
+	}
+	if n := send(heartbeatBytesAt(t, "hb-host", testHeartbeatHostID, idOnlyIP, retiredAt.Add(time.Minute))); n == 0 {
+		t.Error("a host started after its ID was retired was not registered")
+	}
+}
+
 func TestHeartbeatHandler_SkipsRetiredPodWhenHostWasAlreadyGone(t *testing.T) {
 	const podIP = "10.1.2.3"
 	condemnedAt := time.Now().Add(-time.Minute)

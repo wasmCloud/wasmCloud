@@ -479,7 +479,7 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 	if req.GetStartedAt() != nil {
 		startedAt = req.GetStartedAt().AsTime()
 	}
-	if h.retiredHosts.contains(req.Id) || h.retiredHosts.fromRetiredPod(req.Hostname, startedAt) {
+	if h.retiredHosts.retiredID(req.Id, startedAt) || h.retiredHosts.fromRetiredPod(req.Hostname, startedAt) {
 		return
 	}
 
