@@ -322,6 +322,9 @@ func (r *WorkloadDeploymentReconciler) reconcileScale(ctx context.Context, deplo
 		return condition.ErrSkipReconciliation()
 	}
 
+	// Only here does Scale hold for the current spec, and Ready follows in this
+	// pass; an ErrNoop above keeps an older Scale that must not count.
+	deployment.Status.ObservedGeneration = deployment.Generation
 	return nil
 }
 
@@ -426,13 +429,9 @@ func (r *WorkloadDeploymentReconciler) reconcileReady(_ context.Context, deploym
 	return nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
-// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments/finalizers,verbs=update
-
-func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.APIReader = mgr.GetAPIReader()
+// newReconciler builds the condition pipeline Reconcile runs on r.Client. Each
+// condition gates the ones after it, so the order is part of the behavior.
+func (r *WorkloadDeploymentReconciler) newReconciler() *condition.ConditionedReconciler[*runtimev1alpha1.WorkloadDeployment] {
 	reconciler := condition.NewConditionedReconciler(
 		r.Client,
 		r.Scheme,
@@ -447,8 +446,17 @@ func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	reconciler.SetCondition(runtimev1alpha1.WorkloadDeploymentConditionDeploy, r.reconcileDeploy)
 	reconciler.SetCondition(runtimev1alpha1.WorkloadDeploymentConditionScale, r.reconcileScale)
 	reconciler.SetCondition(condition.TypeReady, r.reconcileReady)
+	return reconciler
+}
 
-	r.reconciler = reconciler
+// SetupWithManager sets up the controller with the Manager.
+// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=runtime.wasmcloud.dev,resources=workloaddeployments/finalizers,verbs=update
+
+func (r *WorkloadDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
+	r.reconciler = r.newReconciler()
 
 	// NOTE(lxf): We only touch Replicas that have been setup via Deployment
 	deploymentGvk, err := gvkForType(&runtimev1alpha1.WorkloadDeployment{}, r.Scheme)
