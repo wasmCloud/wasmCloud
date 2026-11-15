@@ -29,7 +29,7 @@ use std::sync::{Arc, Weak};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 use wasmtime::component::{
     Accessor, ComponentExportIndex, InstancePre, Val,
     types::{ComponentFunc, Type},
@@ -45,7 +45,7 @@ use crate::engine::ctx::{AccessorActiveCtxGuard, Ctx, SharedCtx, StoreActiveCtxG
 use crate::engine::instance_driver::{InstanceJob, LinkedCall, LinkedJob};
 use crate::engine::instance_pool::{self, ComponentInstance, InstancePool};
 use crate::engine::store::relocate::{self, Relocated};
-use crate::engine::store::stream_pump::Done;
+use crate::engine::store::stream_pump::{Cut, Done};
 use crate::engine::value::{carries_cross_store_handle, lift_results, lower_params};
 use crate::engine::volumes::{ResolvedVolumeMount, resolve_component_volume_mounts_in_map};
 use crate::engine::workload::{WorkloadComponent, WorkloadMetadata};
@@ -746,9 +746,12 @@ async fn invoke_ephemeral_relocated(
         // Lent to the call rather than moved into it: a trap ends
         // `run_concurrent` before the call can report it, so a failure before
         // the results are handed over is answered below. A trap while they
-        // drain only cuts their streams short.
+        // drain cuts their streams, which their readers then see as an error.
         let mut pending = Some(ready_tx);
         let reply = &mut pending;
+        let mut cuts: Vec<Cut> = Vec::new();
+        let cut_handles = &mut cuts;
+        let call_name = format!("{import_name}.{export_name}");
         let ran = store
             .run_concurrent(async move |accessor| {
                 let (relocated, dones) = async {
@@ -798,6 +801,7 @@ async fn invoke_ephemeral_relocated(
                 }
                 .await?;
 
+                cut_handles.extend(dones.iter().map(Done::cut_handle));
                 if let Some(tx) = reply.take() {
                     let _ = tx.send(Ok(relocated));
                 }
@@ -805,7 +809,7 @@ async fn invoke_ephemeral_relocated(
                 // it: a consumer that never reads (or never drops) its result
                 // stream would otherwise pin this ephemeral store — and its
                 // core-instance slots — indefinitely. A transfer still making
-                // progress past this bound is truncated when the store drops.
+                // progress past this bound is cut when the store drops.
                 // The `timeout` below is a future on this store, so it
                 // cannot fire if the guest stops yielding mid-drain.
                 // This timer runs off-store, and is cancelled when the
@@ -834,6 +838,24 @@ async fn invoke_ephemeral_relocated(
                 Some(e)
             }
         };
+        // Result streams still open end with this store: mark them before it
+        // drops, so their readers see an error rather than a finished stream.
+        let cut = cuts.iter().filter(|c| c.mark()).count();
+        match &failed {
+            Some(e) if pending.is_none() => warn!(
+                call = %call_name,
+                cut,
+                error = ?e,
+                "relocated call failed after returning its results"
+            ),
+            None if cut > 0 => warn!(
+                call = %call_name,
+                cut,
+                limit = ?crate::timeouts::stream_drain(),
+                "relocated call's results did not drain in time and were cut"
+            ),
+            _ => {}
+        }
         if let (Some(e), Some(tx)) = (failed, pending.take()) {
             let _ = tx.send(Err(e));
         }

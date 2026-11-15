@@ -249,6 +249,10 @@ name = "integration_service_stream_relocation"
 required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
 
 [[test]]
+name = "integration_relocated_stream_errors"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
 name = "integration_http_call_timeout"
 required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
 

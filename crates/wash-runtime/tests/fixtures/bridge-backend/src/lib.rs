@@ -63,6 +63,22 @@ impl Guest for Component {
         rx
     }
 
+    async fn produce_then_trap(count: u64) -> StreamReader<u8> {
+        let (mut tx, rx) = bindings::wit_stream::new();
+        wit_bindgen::spawn_local(async move {
+            let chunk = vec![b'x'; 256];
+            let mut written: u64 = 0;
+            while written < count {
+                let n = ((count - written) as usize).min(chunk.len());
+                tx.write_all(chunk[..n].to_vec()).await;
+                written += n as u64;
+            }
+            // Trap before the writer closes, so the stream never finishes.
+            std::process::abort();
+        });
+        rx
+    }
+
     async fn sum(mut data: StreamReader<u32>) -> u64 {
         let mut total: u64 = 0;
         loop {
