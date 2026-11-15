@@ -1662,6 +1662,12 @@ impl ResolvedWorkload {
     /// the exporting component has already had its imports resolved and can be
     /// pre-instantiated.
     async fn resolve_workload_imports(&mut self, exports: &ExportMaps) -> anyhow::Result<()> {
+        // Read now: the service is taken out below while its own imports resolve.
+        let p3_service = self
+            .service
+            .as_ref()
+            .is_some_and(|s| s.metadata.targets_p3());
+
         // Build a dependency graph: for each component, track which other components it imports from
         let mut dependencies: HashMap<Arc<str>, HashSet<Arc<str>>> = HashMap::new();
 
@@ -1765,6 +1771,7 @@ impl ResolvedWorkload {
                     exports,
                     &plugin_bound_instances,
                     Some(component_id.as_ref()),
+                    p3_service,
                 )
                 .await
             {
@@ -1799,6 +1806,7 @@ impl ResolvedWorkload {
                     exports,
                     &plugin_bound_instances,
                     None,
+                    p3_service,
                 )
                 .await
             {
@@ -1834,19 +1842,17 @@ impl ResolvedWorkload {
         // path too, where it turns that hard deploy failure into a silent skip
         // to host - which is what the unlabelled case meant all along.
         importer_id: Option<&str>,
-    ) -> anyhow::Result<HashSet<Arc<str>>> {
-        let mut linked_components = HashSet::new();
-        let ty = component.component_type();
-        let imports: Vec<_> = ty.imports(component.engine()).collect();
         // The cross-store stream bridge engages only for a p3-service workload:
         // there a long-lived service store must never be pinned/frozen by a
         // stream-carrying backend call, so such calls run ephemerally (relocated)
         // instead of on the shared store. In service-less / per-request workloads
         // stream-carrying calls stay on the shared store.
-        let is_service_workload = self
-            .service
-            .as_ref()
-            .is_some_and(|s| s.metadata.targets_p3());
+        // Passed in: the service is taken out of `self` while its imports resolve.
+        p3_service: bool,
+    ) -> anyhow::Result<HashSet<Arc<str>>> {
+        let mut linked_components = HashSet::new();
+        let ty = component.component_type();
+        let imports: Vec<_> = ty.imports(component.engine()).collect();
 
         for (import_name, import_item) in imports.into_iter() {
             match import_item.ty {
@@ -2009,7 +2015,7 @@ impl ResolvedWorkload {
                                 // the service store.
                                 let plain_safe = func_is_ephemeral_safe(&func_ty);
                                 let relocate = !plain_safe
-                                    && is_service_workload
+                                    && p3_service
                                     && func_is_bridge_safe(&func_ty, &self.stream_payloads);
                                 let target = if export_is_async && (plain_safe || relocate) {
                                     let mode = if relocate {
