@@ -242,32 +242,6 @@ pub enum HostWorkload {
     Error(String),
 }
 
-/// Give back everything binding a workload allocated: its service, then its
-/// plugins.
-///
-/// Plugin failures release committed workloads here. Starts and stops use
-/// their [`crate::engine::workload::WorkloadResources`] journal so cancellation
-/// can resume cleanup without repeating completed steps.
-///
-/// Which slot in the workload map may be written, and by whom, is what keeps
-/// this safe to run outside the map's lock: `unbind_all_plugins` is keyed by
-/// workload id, so the id must stay reserved until this returns or a new
-/// workload could claim it and be torn down by someone else's teardown. Every
-/// caller therefore leaves a [`HostWorkload::Stopping`] carrying its own
-/// [`Reservation`] over the whole call. See [`HostApi::workload_stop`] for the
-/// ownership rules that guarantee it.
-async fn release(workload_id: &str, resolved: &ResolvedWorkload) {
-    resolved.begin_teardown();
-    if let Err(e) = resolved.unbind_all_plugins().await {
-        warn!(
-            workload_id,
-            error = ?e,
-            "error unbinding plugins during teardown, continuing"
-        );
-    }
-    resolved.remove_scratch();
-}
-
 /// What a stop does to the slot it found, decided before anything is written.
 enum StopAction {
     /// Mark the id `Stopping` under this reservation, holding it for the
@@ -699,10 +673,10 @@ impl Host {
         // Mark `Stopping` under a reservation of this failure's own rather than
         // writing `Error` straight away. `Error` is a state a stop frees the id
         // from, and freeing it here would let a redeploy claim the same id while
-        // `release` — keyed by workload id — is still unbinding, tearing down
-        // the new workload's bindings instead. The reservation is what makes the
-        // marker this failure's: nobody else writes over it, and the `Error`
-        // below lands only if it is still there.
+        // `release_unjournaled` — keyed by workload id — is still unbinding,
+        // tearing down the new workload's bindings instead. The reservation is
+        // what makes the marker this failure's: nobody else writes over it, and
+        // the `Error` below lands only if it is still there.
         let reservation = self.reserve();
         let resolved = {
             let mut workloads = self
@@ -738,7 +712,8 @@ impl Host {
             }
         };
         if let Some(resolved) = resolved {
-            release(workload_id, &resolved).await;
+            // The id is held as `Stopping` over this call, as release_unjournaled requires.
+            resolved.release_unjournaled().await;
             // The id was held as `Stopping` for the teardown; publish the
             // failure now that letting a stop free it is safe.
             self.finish_teardown(workload_id, reservation, Some(reason.clone()));
