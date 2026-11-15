@@ -2,6 +2,7 @@ use crate::sockets::util::ErrorCode;
 use core::net::{IpAddr, SocketAddr};
 use core::num::NonZeroU16;
 use std::collections::{HashMap, hash_map};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
 mod tcp;
@@ -10,12 +11,39 @@ mod udp;
 pub use tcp::*;
 pub use udp::*;
 
+/// The store a virtual port was bound from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Owner(u64);
+
+impl Owner {
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for Owner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Port {
+    TcpV4(NonZeroU16),
+    TcpV6(NonZeroU16),
+    UdpV4(NonZeroU16),
+    UdpV6(NonZeroU16),
+}
+
 #[derive(Default)]
 pub struct Network {
     pub tcp_ipv4: HashMap<NonZeroU16, TcpEndpoint>,
     pub tcp_ipv6: HashMap<NonZeroU16, TcpEndpoint>,
     pub udp_ipv4: HashMap<NonZeroU16, UdpEndpoint>,
     pub udp_ipv6: HashMap<NonZeroU16, UdpEndpoint>,
+    /// The store that last bound each port.
+    owners: HashMap<Port, Owner>,
 }
 
 fn bind<T>(net: &mut HashMap<NonZeroU16, T>, port: u16, ep: T) -> Result<NonZeroU16, ErrorCode> {
@@ -68,11 +96,44 @@ impl Network {
         }
     }
 
-    pub fn bind_tcp(&mut self, mut addr: SocketAddr) -> Result<SocketAddr, ErrorCode> {
+    pub fn bind_tcp(
+        &mut self,
+        mut addr: SocketAddr,
+        owner: Owner,
+    ) -> Result<SocketAddr, ErrorCode> {
         let net = self.get_tcp_net_mut(addr.ip());
         let port = bind(net, addr.port(), TcpEndpoint::Bound)?;
+        let key = match addr.ip() {
+            IpAddr::V4(..) => Port::TcpV4(port),
+            IpAddr::V6(..) => Port::TcpV6(port),
+        };
+        self.owners.insert(key, owner);
         addr.set_port(port.into());
         Ok(addr)
+    }
+
+    /// Free the ports `owner` still holds. Its store is gone, so its sockets
+    /// were dropped without releasing them.
+    pub(crate) fn release(&mut self, owner: Owner) {
+        let Self {
+            tcp_ipv4,
+            tcp_ipv6,
+            udp_ipv4,
+            udp_ipv6,
+            owners,
+        } = self;
+        owners.retain(|port, holder| {
+            if *holder != owner {
+                return true;
+            }
+            match *port {
+                Port::TcpV4(port) => drop(tcp_ipv4.remove(&port)),
+                Port::TcpV6(port) => drop(tcp_ipv6.remove(&port)),
+                Port::UdpV4(port) => drop(udp_ipv4.remove(&port)),
+                Port::UdpV6(port) => drop(udp_ipv6.remove(&port)),
+            }
+            false
+        });
     }
 
     /// Release the TCP endpoint bound at `addr`, returning it if one was bound.
@@ -85,6 +146,7 @@ impl Network {
         &mut self,
         mut addr: SocketAddr,
         receive_permits: std::sync::Arc<tokio::sync::Semaphore>,
+        owner: Owner,
     ) -> Result<
         (
             SocketAddr,
@@ -100,6 +162,11 @@ impl Network {
             receive_permits,
         };
         let port = bind(net, addr.port(), ep)?;
+        let key = match addr.ip() {
+            IpAddr::V4(..) => Port::UdpV4(port),
+            IpAddr::V6(..) => Port::UdpV6(port),
+        };
+        self.owners.insert(key, owner);
         addr.set_port(port.into());
         Ok((addr, rx))
     }

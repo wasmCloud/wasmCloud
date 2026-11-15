@@ -2230,9 +2230,6 @@ fn build_plugin_store(
     let policy = Arc::clone(&store_context.socket_policy);
     // A fresh network per incarnation, published on the handle so a
     // `PublishedPort` bound before this incarnation existed splices into it.
-    // It must be fresh: tearing down a store does not release the virtual ports
-    // its sockets registered, so reusing one would fail the next incarnation's
-    // bind with `AddressInUse`.
     let loopback = store_context.network.replace();
     // The policy is reused by every incarnation; the lookup history
     // `for_store` allocates is this incarnation's alone.
