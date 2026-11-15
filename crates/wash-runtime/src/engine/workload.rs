@@ -1518,8 +1518,8 @@ impl ResolvedWorkload {
     }
 
     /// Let go of everything this workload is running, as the first step of
-    /// tearing it down (see `crate::host::release`, the one funnel every
-    /// teardown path goes through).
+    /// tearing it down (see [`WorkloadResources::release`] and
+    /// [`Self::release_unjournaled`], the two teardown paths).
     ///
     /// Dispatch stops here rather than when the plugins are unbound: a plugin
     /// still holding a [`DispatchTarget`] must not build — or park — an
@@ -1532,6 +1532,25 @@ impl ResolvedWorkload {
         // is about to be aborted.
         self.service_calls.shutdown();
         self.stop_service();
+    }
+
+    /// Give back everything binding this workload allocated, with no journal to
+    /// resume from: its service, then its plugins, then its scratch.
+    ///
+    /// Inside a host, the caller must keep the workload's id reserved over the
+    /// whole call: `unbind_all_plugins` is keyed by workload id, so a new
+    /// workload that claimed the id could be torn down by this teardown. See
+    /// [`crate::host::HostApi::workload_stop`] for the ownership rules.
+    pub(crate) async fn release_unjournaled(&self) {
+        self.begin_teardown();
+        if let Err(e) = self.unbind_all_plugins().await {
+            warn!(
+                workload_id = %self.id,
+                error = ?e,
+                "error unbinding plugins during teardown, continuing"
+            );
+        }
+        self.remove_scratch();
     }
 
     /// The service, for one of the few writes after resolution. Copies it
@@ -3157,6 +3176,7 @@ impl WorkloadResources {
         let mut failure = None;
         if let Some(resolved) = &state.resolved {
             resolved.begin_teardown();
+            resolved.remove_scratch();
             for component in resolved.components.read().await.values() {
                 component.instances.close();
             }
@@ -4079,7 +4099,7 @@ impl UnresolvedWorkload {
                 "failed to link components, unbinding all plugins"
             );
             if cleanup.is_none() {
-                let _ = resolved_workload.unbind_all_plugins().await;
+                resolved_workload.release_unjournaled().await;
             }
             bail!(e);
         }
@@ -4106,7 +4126,7 @@ impl UnresolvedWorkload {
                 "failed to resolve component volume mounts, unbinding all plugins"
             );
             if cleanup.is_none() {
-                let _ = resolved_workload.unbind_all_plugins().await;
+                resolved_workload.release_unjournaled().await;
             }
             bail!(e);
         }
@@ -4137,7 +4157,7 @@ impl UnresolvedWorkload {
                         "failed to notify plugin of resolved workload, unbinding all plugins"
                     );
                     if cleanup.is_none() {
-                        let _ = resolved_workload.unbind_all_plugins().await;
+                        resolved_workload.release_unjournaled().await;
                     }
                     bail!(e);
                 }
@@ -4156,7 +4176,7 @@ impl UnresolvedWorkload {
                 "failed to notify HTTP handler of resolved workload, unbinding all plugins"
             );
             if cleanup.is_none() {
-                let _ = resolved_workload.unbind_all_plugins().await;
+                resolved_workload.release_unjournaled().await;
             }
             bail!(e);
         }
