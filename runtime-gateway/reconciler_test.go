@@ -274,6 +274,9 @@ func TestHostReconcilerDeregistersMissingHost(t *testing.T) {
 	if _, ok := registry.hosts[key]; ok {
 		t.Error("a deleted Host is still registered")
 	}
+	if registry.suspended[key] {
+		t.Error("a deleted Host was suspended, keeping its routes")
+	}
 }
 
 func TestHostReconcilerDropsGatewayFinalizer(t *testing.T) {
