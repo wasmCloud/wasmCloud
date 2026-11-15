@@ -91,6 +91,9 @@ pub struct NetworkUdpSocket {
     /// and a concrete address is an operator-declared listener that is
     /// *supposed* to accept unsolicited traffic.
     egress_peers: Option<Arc<Mutex<BTreeSet<SocketAddr>>>>,
+
+    /// The store this socket's loopback ports are bound for.
+    loopback_owner: super::loopback::Owner,
 }
 
 impl NetworkUdpSocket {
@@ -114,6 +117,7 @@ impl NetworkUdpSocket {
             connected_until: None,
             connection_changed: Arc::default(),
             egress_peers: None,
+            loopback_owner: cx.loopback.owner(),
         })
     }
 
@@ -378,7 +382,8 @@ impl UdpSocket {
         };
 
         let receive_permits = Arc::new(tokio::sync::Semaphore::new(0));
-        let (addr, rx) = loopback.bind_udp(addr, Arc::clone(&receive_permits))?;
+        let (addr, rx) =
+            loopback.bind_udp(addr, Arc::clone(&receive_permits), socket.loopback_owner)?;
         let lo = super::loopback::UdpSocket::new(
             socket,
             super::loopback::UdpState::BindStarted {

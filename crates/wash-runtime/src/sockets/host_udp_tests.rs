@@ -30,6 +30,15 @@ impl Default for Harness {
 }
 
 impl Harness {
+    /// A store on `network`, as the stores of one workload share theirs.
+    fn on_network(
+        network: std::sync::Arc<std::sync::Mutex<crate::sockets::loopback::Network>>,
+    ) -> Self {
+        let mut h = Self::default();
+        h.ctx.loopback = network.into();
+        h
+    }
+
     fn view(&mut self) -> WasiSocketsCtxView<'_> {
         WasiSocketsCtxView {
             ctx: &mut self.ctx,
@@ -641,4 +650,18 @@ async fn full_receiver_releases_dropped_p2_sender_permits() {
     // queued datagram. This oversized-for-the-receiver send is dropped too.
     assert_eq!(h.send(tx, vec![4; 2], Some(peer)).unwrap(), 1);
     assert!(h.receive(rx, 10).is_empty());
+}
+
+/// A store torn down without dropping its sockets frees their loopback ports,
+/// so the next store on the same network can bind them.
+#[tokio::test]
+async fn store_teardown_releases_loopback_ports() {
+    let network = std::sync::Arc::default();
+    let mut first = Harness::on_network(std::sync::Arc::clone(&network));
+    let (_socket, address) = first.bind("127.0.0.1:0").await;
+    drop(first);
+
+    let mut second = Harness::on_network(network);
+    let (_socket, rebound) = second.bind(&address.to_string()).await;
+    assert_eq!(rebound, address);
 }
