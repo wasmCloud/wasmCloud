@@ -267,6 +267,15 @@ async fn discard_cache_entry(path: &Path) -> Result<()> {
     })
 }
 
+/// Held by the wash process that is checking or filling the package cache.
+const CACHE_LOCK_FILE: &str = ".wash-cache.lock";
+
+/// The package cache, held by this process until dropped. Another process's
+/// scrub would otherwise delete a blob this one is still writing.
+struct CacheLock {
+    _file: std::fs::File,
+}
+
 #[cfg(windows)]
 #[allow(unsafe_code)]
 // Colons in FileCache names become NTFS alternate data streams.
@@ -620,6 +629,27 @@ impl WkgFetcher {
         )
     }
 
+    /// Take the cache lock, waiting while another wash process holds it.
+    async fn lock_cache(&self) -> Result<CacheLock> {
+        let path = self.cache_dir.join(CACHE_LOCK_FILE);
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .with_context(|| {
+                    format!("failed to open WIT package cache lock [{}]", path.display())
+                })?;
+            file.lock().with_context(|| {
+                format!("failed to lock WIT package cache [{}]", path.display())
+            })?;
+            Ok(CacheLock { _file: file })
+        })
+        .await
+        .context("failed to wait for the WIT package cache lock")?
+    }
+
     async fn discard_invalid_cache_entries(&self) -> Result<()> {
         let cache_dir = &self.cache_dir;
         let mut entries = tokio::fs::read_dir(cache_dir).await.with_context(|| {
@@ -806,6 +836,7 @@ impl WkgFetcher {
         let wit_dir = wit_dir.as_ref();
         let manifest = self.resolution_manifest(wit_dir)?;
         self.warn_of_unused_namespace_sources(&manifest);
+        let _cache = self.lock_cache().await?;
         let mut attempt = 1;
         loop {
             self.discard_invalid_cache_entries().await?;
@@ -843,6 +874,7 @@ impl WkgFetcher {
     )> {
         let wit_dir = wit_dir.as_ref();
         let manifest = self.resolution_manifest(wit_dir)?;
+        let _cache = self.lock_cache().await?;
         let mut attempt = 1;
         loop {
             self.discard_invalid_cache_entries().await?;
@@ -879,6 +911,7 @@ impl WkgFetcher {
         }
 
         let overrides = self.wkg_config.overrides.clone().unwrap_or_default();
+        let _cache = self.lock_cache().await?;
         let client = self.client();
 
         let mut problems = Vec::new();
@@ -959,6 +992,7 @@ impl WkgFetcher {
         let local = package_override
             .as_ref()
             .is_some_and(|package_override| package_override.path.is_some());
+        let _cache = self.lock_cache().await?;
         let client = self.client();
 
         // The lock file goes in so that a version it already pins is the one selected here, the
