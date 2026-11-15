@@ -3176,7 +3176,6 @@ impl WorkloadResources {
         let mut failure = None;
         if let Some(resolved) = &state.resolved {
             resolved.begin_teardown();
-            resolved.remove_scratch();
             for component in resolved.components.read().await.values() {
                 component.instances.close();
             }
@@ -3245,6 +3244,10 @@ impl WorkloadResources {
                     failure = Some(error);
                 }
             }
+        }
+        // Last, as in release_unjournaled, and even when an unbind failed.
+        if let Some(resolved) = &state.resolved {
+            resolved.remove_scratch();
         }
         match failure {
             Some(error) => Err(error),

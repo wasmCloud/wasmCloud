@@ -294,6 +294,9 @@ struct RecordingPlugin {
     overrides: WitWorld,
     /// The workload it was handed, kept as a plugin may keep it.
     kept: Mutex<Option<ResolvedWorkload>>,
+    /// A path whose presence the plugin records when it is unbound.
+    scratch: Option<std::path::PathBuf>,
+    saw_scratch: Mutex<Option<bool>>,
 }
 
 impl RecordingPlugin {
@@ -308,6 +311,8 @@ impl RecordingPlugin {
             entered: tokio::sync::Notify::new(),
             overrides: WitWorld::default(),
             kept: Mutex::default(),
+            scratch: None,
+            saw_scratch: Mutex::default(),
         }
     }
 
@@ -374,6 +379,9 @@ impl HostPlugin for RecordingPlugin {
         self.callback(Callback::Resolved)
     }
     async fn on_workload_unbind(&self, _: &str, _: WitInterfaces<'_>) -> anyhow::Result<()> {
+        if let Some(scratch) = &self.scratch {
+            *self.saw_scratch.lock().unwrap() = Some(scratch.exists());
+        }
         self.entered.notify_one();
         if let Some(gate) = &self.unbind_gate {
             gate.acquire().await?.forget();
@@ -487,6 +495,49 @@ async fn release_removes_scratch_while_the_workload_is_held() -> anyhow::Result<
         !dir.exists(),
         "the stop left the scratch to the last handle"
     );
+    Ok(())
+}
+
+/// A stop removes the scratch after the plugins are unbound, as the unjournaled
+/// teardown does, and also when an unbind fails.
+#[tokio::test]
+async fn release_removes_scratch_after_unbinding_even_on_failure() -> anyhow::Result<()> {
+    for fail in [false, true] {
+        let tmp = tempfile::tempdir()?;
+        let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+        let dir = scratch.path().to_path_buf();
+        let events = Arc::default();
+        let mut plugin = RecordingPlugin::new("recording", API, &events);
+        plugin.scratch = Some(dir.clone());
+        if fail {
+            plugin.unbind_failures.store(1, Ordering::SeqCst);
+        }
+        let plugin = Arc::new(plugin);
+        let registered = HashMap::from([("recording", Arc::clone(&plugin) as Arc<dyn HostPlugin>)]);
+        let resources = WorkloadResources::default();
+        let mut resolved = requesting(&[API], false)
+            .with_scratch(Some(scratch))
+            .resolve_for_start(
+                Some(&registered),
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+                Some(&resources),
+            )
+            .await?;
+        resources.commit(&mut resolved);
+        let released = WorkloadResources::for_teardown(&resolved)
+            .release("contracts")
+            .await;
+        plugin.kept.lock().unwrap().take();
+        assert_eq!(released.is_err(), fail, "{released:?}");
+        assert_eq!(
+            *plugin.saw_scratch.lock().unwrap(),
+            Some(true),
+            "fail={fail}: the scratch was gone before the plugin was unbound"
+        );
+        assert!(!dir.exists(), "fail={fail}: the stop left the scratch");
+    }
     Ok(())
 }
 
