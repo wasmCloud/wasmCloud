@@ -167,6 +167,21 @@ pub struct PolicySpec {
     pub bucket_delete_allow: Vec<String>,
     /// Largest bucket a workload may create, in bytes. `None` is unlimited.
     pub bucket_max_bytes: Option<u64>,
+    /// Replicas for a bucket a workload creates. `None` is the server's
+    /// default, a single replica.
+    pub bucket_replicas: Option<usize>,
+}
+
+/// JetStream's cap on replicas per stream.
+pub const MAX_BUCKET_REPLICAS: usize = 5;
+
+impl PolicySpec {
+    /// Whether a workload may create buckets with no host size limit, leaving
+    /// only the JetStream account limits (and, for memory storage, server RAM).
+    #[must_use]
+    pub fn creates_unbounded_buckets(&self) -> bool {
+        !self.bucket_create_allow.is_empty() && self.bucket_max_bytes.is_none()
+    }
 }
 
 /// Backpressure and concurrency bounds, all per-workload.
@@ -604,6 +619,22 @@ fn read<A>(
         None => None,
     };
 
+    let bucket_replicas = match r.get("bucket-replicas") {
+        Some(raw) => Some(
+            raw.expose()
+                .parse::<usize>()
+                .ok()
+                .filter(|n| (1..=MAX_BUCKET_REPLICAS).contains(n))
+                .with_context(|| {
+                    format!(
+                        "`bucket-replicas` must be an integer from 1 to {MAX_BUCKET_REPLICAS}, \
+                         got `{raw}`"
+                    )
+                })?,
+        ),
+        None => None,
+    };
+
     let limits = Limits {
         max_in_flight: r.parse_usize("max-in-flight", DEFAULT_MAX_IN_FLIGHT)?,
         subscription_capacity: r
@@ -684,6 +715,7 @@ fn read<A>(
             bucket_create_allow: r.list("bucket-create-allow"),
             bucket_delete_allow: r.list("bucket-delete-allow"),
             bucket_max_bytes,
+            bucket_replicas,
         },
         limits,
         ack_mode,
@@ -788,6 +820,7 @@ impl NatsConfig {
             sorted.hash(&mut hasher);
         }
         self.policy.bucket_max_bytes.hash(&mut hasher);
+        self.policy.bucket_replicas.hash(&mut hasher);
         self.ack_mode.hash(&mut hasher);
         self.limits.max_in_flight.hash(&mut hasher);
         self.limits.subscription_capacity.hash(&mut hasher);
@@ -1241,10 +1274,12 @@ mod tests {
         assert!(base.policy.bucket_create_allow.is_empty());
         assert!(base.policy.bucket_delete_allow.is_empty());
         assert_eq!(base.policy.bucket_max_bytes, None);
+        assert_eq!(base.policy.bucket_replicas, None);
         for (key, value) in [
             ("bucket-create-allow", "cache"),
             ("bucket-delete-allow", "cache"),
             ("bucket-max-bytes", "1048576"),
+            ("bucket-replicas", "3"),
         ] {
             let grant =
                 NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222"), (key, value)]))
@@ -1274,6 +1309,42 @@ mod tests {
                 "{bad}: {err:#}"
             );
         }
+    }
+
+    #[test]
+    fn bucket_replicas_must_be_within_jetstreams_range() {
+        for (good, want) in [("1", 1), ("3", 3), ("5", 5)] {
+            let config = NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("bucket-replicas", good),
+            ]))
+            .unwrap();
+            assert_eq!(config.policy.bucket_replicas, Some(want));
+        }
+        for bad in ["0", "6", "-1", "three"] {
+            let err = NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("bucket-replicas", bad),
+            ]))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("bucket-replicas"),
+                "{bad}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_create_grant_without_a_size_ceiling_is_unbounded() {
+        let spec = |create: &[&str], max_bytes| PolicySpec {
+            bucket_create_allow: create.iter().map(|s| s.to_string()).collect(),
+            bucket_max_bytes: max_bytes,
+            ..Default::default()
+        };
+        assert!(spec(&["cache"], None).creates_unbounded_buckets());
+        assert!(!spec(&["cache"], Some(1024)).creates_unbounded_buckets());
+        // Nothing to bound when the workload may not create at all.
+        assert!(!spec(&[], None).creates_unbounded_buckets());
     }
 
     #[test]

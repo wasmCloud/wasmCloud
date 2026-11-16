@@ -123,6 +123,8 @@ pub const KEYS: &[Key] = &[
     client_cert("tls-cert"),
     client_cert("tls-key"),
     host("tls-first"),
+    // How a bucket a workload creates is laid out on the cluster.
+    host("bucket-replicas"),
     // Grants — what it may reach.
     ceiling("subject-allow"),
     ceiling("stream-allow"),

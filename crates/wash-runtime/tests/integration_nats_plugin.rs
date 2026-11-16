@@ -43,6 +43,9 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
 const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
 /// Imports `wasmcloud:nats/core@0.1.4` twice, under `hub` and `leaf`.
 const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
+/// Imports `wasmcloud:nats/kv-admin@0.1.4` under `tenant`, and nothing plainly
+/// but the `kv` its `bucket` resource comes from.
+const NATS_KV_ADMIN_LABELED_WASM: &[u8] = include_bytes!("wasm/nats_kv_admin_labeled_p3.wasm");
 
 const STREAM: &str = "TESTS";
 const COUNTS_BUCKET: &str = "test-counts";
@@ -2369,7 +2372,10 @@ async fn kv_admin_bucket_lifecycle_from_a_guest() -> Result<()> {
         ),
     )
     .await?;
-    assert!(message.contains("bucket-create-allow"), "{message}");
+    assert!(
+        message.contains("`bucket-create-allow: guest-made,guest-readonly` is not within"),
+        "{message}"
+    );
 
     h.js.create_key_value(async_nats::jetstream::kv::Config {
         bucket: "guest-readonly".into(),
@@ -2416,10 +2422,9 @@ async fn kv_admin_bucket_lifecycle_from_a_guest() -> Result<()> {
         api_probe(&h, "kv-admin:create:guest-made:0:1500").await?,
         "created"
     );
-    assert!(
-        api_probe(&h, "kv-admin:create:guest-made:4096:1500")
-            .await?
-            .contains("different configuration")
+    assert_eq!(
+        api_probe(&h, "kv-admin:create:guest-made:4096:1500").await?,
+        "conflict:history=3,max-bytes=1048576,marker=2000,storage=memory"
     );
 
     // Create without delete: `guest-kept` stays.
@@ -2442,6 +2447,203 @@ async fn kv_admin_bucket_lifecycle_from_a_guest() -> Result<()> {
     );
     host.workload_stop(wash_runtime::types::WorkloadStopRequest {
         workload_id: "wl-kv-admin".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+/// Three JetStream nodes on one Docker network, reachable from the test
+/// through the first. `--no_advertise` keeps clients off the other nodes'
+/// container addresses.
+async fn start_nats_cluster() -> Result<(String, Vec<ContainerAsync<GenericImage>>)> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init()
+        .ok();
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let network = format!("kvr-{id}");
+    let names: Vec<String> = (1..=3).map(|n| format!("kvr-{id}-n{n}")).collect();
+    let routes = names
+        .iter()
+        .map(|n| format!("nats://{n}:6222"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut nodes = Vec::new();
+    for name in &names {
+        nodes.push(
+            GenericImage::new("nats", "2.12.15-alpine")
+                .with_exposed_port(4222.tcp())
+                .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+                .with_network(network.clone())
+                .with_container_name(name.clone())
+                .with_cmd([
+                    "-js",
+                    "--server_name",
+                    name,
+                    "--cluster_name",
+                    "kvr",
+                    "--cluster",
+                    "nats://0.0.0.0:6222",
+                    "--routes",
+                    &routes,
+                    "--no_advertise",
+                ])
+                .start()
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to start NATS node {name}: {e}"))?,
+        );
+    }
+    let port = nodes
+        .first()
+        .context("the cluster has nodes")?
+        .get_host_port_ipv4(4222)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to get NATS port: {e}"))?;
+    Ok((format!("nats://127.0.0.1:{port}"), nodes))
+}
+
+/// The operator's `bucket-replicas` gives a guest-created bucket that many
+/// copies across the cluster.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_buckets_take_the_hosts_replica_count() -> Result<()> {
+    let (nats_url, _nodes) = start_nats_cluster().await?;
+    let client = connect_with_retry(&nats_url, Duration::from_secs(30)).await?;
+    let js = async_nats::jetstream::new(client.clone());
+    // The JetStream API answers once the cluster has elected a meta leader.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while js.query_account().await.is_err() {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the JetStream cluster never elected a leader"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    // One host per `bucket-replicas` value the operator declares.
+    let start = |replicas: &'static str| {
+        let nats_url = nats_url.clone();
+        async move {
+            let host = start_host_with(
+                PluginBindingSet::new(PLUGIN_NATS_ID)
+                    .with_workload_config(WorkloadConfigPolicy::Deny)
+                    .with_base(declared(&[
+                        ("servers", &nats_url),
+                        ("subject-allow", "test.>"),
+                        ("bucket-allow", "replicated"),
+                        ("bucket-create-allow", "replicated"),
+                        ("bucket-replicas", replicas),
+                    ])),
+            )
+            .await?;
+            host.workload_start(workload_request(
+                "wl-kv-replicas",
+                nats_async_interface(&[("core-subscriptions", "test.api")]),
+            ))
+            .await?;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            anyhow::Ok(host)
+        }
+    };
+    let stop = |host| async move {
+        HostApi::workload_stop(
+            &host,
+            wash_runtime::types::WorkloadStopRequest {
+                workload_id: "wl-kv-replicas".into(),
+            },
+        )
+        .await
+    };
+    let probe = |spec: &'static str| {
+        let client = client.clone();
+        async move {
+            let reply = timeout(
+                Duration::from_secs(20),
+                client.request("test.api", spec.into()),
+            )
+            .await??;
+            anyhow::Ok(String::from_utf8(reply.payload.to_vec())?)
+        }
+    };
+
+    let host = start("3").await?;
+    assert_eq!(probe("kv-admin:create:replicated:0:-").await?, "created");
+    let mut stream = js.get_key_value("replicated").await?.stream;
+    let info = stream.info().await?;
+    assert_eq!(info.config.num_replicas, 3);
+    // The leader plus two followers, each on its own node.
+    let cluster = info
+        .cluster
+        .clone()
+        .context("a clustered stream reports its peers")?;
+    assert_eq!(cluster.replicas.len(), 2, "{cluster:?}");
+    assert_eq!(probe("kv-admin:create:replicated:0:-").await?, "created");
+    stop(host).await?;
+
+    // The operator lowers `bucket-replicas`: a workload's startup create
+    // still opens the bucket, which keeps the three copies it was made with.
+    let host = start("1").await?;
+    assert_eq!(probe("kv-admin:create:replicated:0:-").await?, "created");
+    assert_eq!(stream.info().await?.config.num_replicas, 3);
+    stop(host).await?;
+    Ok(())
+}
+
+/// `kv-admin` under a label, with no plain binding at all. Its `bucket`
+/// resource is the plain `kv` interface's, so that has to link anyway.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_under_a_label_creates_and_writes_without_a_plain_binding() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+    let mut request = bridge_workload_request(
+        "wl-tenant",
+        vec![named_nats_interface(
+            "tenant",
+            &["types", "kv-admin", "core-handler"],
+            &[
+                ("servers", &h.nats_url),
+                ("subject-allow", "tenant.create"),
+                ("bucket-allow", "tenant-made"),
+                ("bucket-create-allow", "tenant-made"),
+                ("core-subscriptions", "tenant.create"),
+            ],
+        )],
+    );
+    request
+        .workload
+        .components
+        .first_mut()
+        .context("the request has a component")?
+        .bytes = bytes::Bytes::from_static(NATS_KV_ADMIN_LABELED_WASM);
+    let response = host.workload_start(request).await?;
+    anyhow::ensure!(
+        response.workload_status.workload_state != WorkloadState::Error,
+        "the labeled kv-admin workload failed to start: {}",
+        response.workload_status.message
+    );
+
+    // Re-trigger until it lands: core NATS drops a message published before
+    // the subscription attaches.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        h.client
+            .publish("tenant.create", "tenant-made".into())
+            .await?;
+        h.client.flush().await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if let Ok(kv) = h.js.get_key_value("tenant-made").await
+            && let Some(status) = kv.get("status").await?
+        {
+            break Some(status);
+        }
+        if tokio::time::Instant::now() > deadline {
+            break None;
+        }
+    };
+    assert_eq!(status, Some(bytes::Bytes::from_static(b"created")));
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-tenant".into(),
     })
     .await?;
     Ok(())

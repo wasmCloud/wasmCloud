@@ -39,6 +39,7 @@ pub(crate) const P3_FIXTURES: &[&str] = &[
     "messaging-sleeper-p3",
     "nats-async-handler-p3",
     "nats-implements-p3",
+    "nats-kv-admin-labeled-p3",
     "messaging-dual-handler",
     "http-handler-p3",
     "http-local-caller-p3",
