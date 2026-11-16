@@ -63,6 +63,7 @@ const (
 type WorkloadReconciler struct {
 	APIReader     client.Reader
 	objectSlots   hostSlots
+	busyWaits     busyBackoff
 	statusBatches *statusBatches
 	client.Client
 	ReadyRequeueInterval time.Duration
@@ -1039,15 +1040,17 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		return nil
 	}
 	// A failed stop has already established that this host is unreachable.
-	// Preserve the existing failed-host cleanup policy without paying that
-	// timeout once for every remaining replica. Unknown hosts still retry.
-	if r.cleanupStalls.stalled(workload.Status.HostID) {
-		host, err := r.lookupHostByID(ctx, workload.Status.HostID)
-		if err != nil {
-			return err
-		}
-		if hostFailed(host) {
+	// Apply the same give-up policy the stop below would (hostUnavailable)
+	// without paying that timeout once for every remaining replica.
+	if dropped, decided := ctx.Value(stalledVerdictKey{}).(bool); decided {
+		// withHostBudget already looked the stalled host up.
+		if dropped {
 			return nil
+		}
+	} else if r.cleanupStalls.stalled(workload.Status.HostID) {
+		giveUp, err := r.stalledCleanupGivesUp(ctx, workload)
+		if err != nil || giveUp {
+			return err
 		}
 	}
 	// Deletion gives up sooner than eviction, on any host not heartbeating:
@@ -1059,6 +1062,22 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		r.cleanupStalls.failed(workload.Status.HostID)
 	}
 	return err
+}
+
+// stalledCleanupGivesUp reports whether a deletion on a stalled host can be
+// dropped without another stop: the same hostUnavailable policy finalize's
+// stop applies after its timeout. Callers check cleanupStalls first.
+func (r *WorkloadReconciler) stalledCleanupGivesUp(ctx context.Context, workload *runtimev1alpha1.Workload) (bool, error) {
+	host, err := r.lookupHostByID(ctx, workload.Status.HostID)
+	if err != nil {
+		return false, err
+	}
+	if !hostUnavailable(host) {
+		return false, nil
+	}
+	ctrl.LoggerFrom(ctx).Info("dropping workload on a stalled, unavailable host without another stop",
+		"hostID", workload.Status.HostID, "workloadID", string(workload.GetUID()))
+	return true, nil
 }
 
 // hostUnavailable reports whether host is gone or not heartbeating.
@@ -1134,9 +1153,6 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.CleanupConcurrency <= 0 {
 		r.CleanupConcurrency = DefaultCleanupConcurrency
-	}
-	if r.HostConcurrency <= 0 {
-		r.HostConcurrency = DefaultHostConcurrency
 	}
 	r.statusBatches = &statusBatches{}
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, statusBucketIndex, statusBucketValue); err != nil {

@@ -14,15 +14,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+const batchHost = "batch-host"
+
 func TestBatchStatusReusesObservationsAndFallsBackOnIncompleteReply(t *testing.T) {
 	objects := make([]client.Object, 0, 8)
 	for i := 0; len(objects) < cap(objects); i++ {
 		id := fmt.Sprintf("replica-%d", i)
-		if statusBucket("batch-host", id) != statusBucket("batch-host", "replica-0") {
+		if statusBucket(batchHost, id) != statusBucket(batchHost, "replica-0") {
 			continue
 		}
 		w := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: id}}
-		w.Status.HostID, w.Status.WorkloadID = "batch-host", id
+		w.Status.HostID, w.Status.WorkloadID = batchHost, id
 		objects = append(objects, w)
 	}
 	c := fake.NewClientBuilder().WithScheme(newScaleTestScheme(t)).WithObjects(objects...).
@@ -43,7 +45,8 @@ func TestBatchStatusReusesObservationsAndFallsBackOnIncompleteReply(t *testing.T
 		return &wasmbus.Message{Data: data}, err
 	}}
 	r := &WorkloadReconciler{Client: c, Bus: bus}
-	s := &statusBatches{}
+	// A host already seen answering gets full batches rather than a probe.
+	s := &statusBatches{supported: map[string]time.Time{batchHost: time.Now()}}
 	for _, obj := range objects {
 		w := obj.(*runtimev1alpha1.Workload)
 		got := s.status(t.Context(), r, w)
@@ -54,7 +57,7 @@ func TestBatchStatusReusesObservationsAndFallsBackOnIncompleteReply(t *testing.T
 	if len(bus.requests) != 1 {
 		t.Fatalf("8 observations required %d RPCs", len(bus.requests))
 	}
-	if s.cached("batch-host", "replica-0", time.Now().Add(time.Second)) != nil {
+	if s.cached(batchHost, "replica-0", time.Now().Add(time.Second), true) != nil {
 		t.Fatal("observation predating placement was reused")
 	}
 	s = &statusBatches{}
@@ -75,5 +78,44 @@ func TestBatchStatusRejectsForeignOrMissingIDs(t *testing.T) {
 		if validateStatusBatch([]string{"wanted"}, statuses) == nil {
 			t.Fatalf("accepted %+v", statuses)
 		}
+	}
+}
+
+func TestBatchStatusReusesOnlySettledObservations(t *testing.T) {
+	const settlingID = "settling-replica"
+	w := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Name: settlingID}}
+	w.Status.HostID, w.Status.WorkloadID = batchHost, settlingID
+	c := fake.NewClientBuilder().WithScheme(newScaleTestScheme(t)).WithObjects(w).
+		WithIndex(&runtimev1alpha1.Workload{}, statusBucketIndex, statusBucketValue).Build()
+	state := runtimev2.WorkloadState_WORKLOAD_STATE_STARTING
+	bus := &mockBus{respond: func(msg *wasmbus.Message) (*wasmbus.Message, error) {
+		data, err := protojson.Marshal(&runtimev2.WorkloadStatusBatchResponse{Workloads: []*runtimev2.WorkloadStatus{
+			{WorkloadId: settlingID, WorkloadState: state},
+		}})
+		return &wasmbus.Message{Data: data}, err
+	}}
+	r := &WorkloadReconciler{Client: c, Bus: bus}
+	s := &statusBatches{}
+	if got := s.status(t.Context(), r, w); got.GetWorkloadState() != runtimev2.WorkloadState_WORKLOAD_STATE_STARTING {
+		t.Fatalf("first observation: %v", got)
+	}
+	state = runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING
+	// Within statusUnsettledTTL the batch still answers its bucket.
+	if got := s.status(t.Context(), r, w); got.GetWorkloadState() != runtimev2.WorkloadState_WORKLOAD_STATE_STARTING || len(bus.requests) != 1 {
+		t.Fatalf("fresh starting observation not reused: %v after %d requests", got, len(bus.requests))
+	}
+	entry := s.entries["batch-host/"+settlingID]
+	entry.at = entry.at.Add(-2 * statusUnsettledTTL)
+	s.entries["batch-host/"+settlingID] = entry
+	if got := s.status(t.Context(), r, w); got.GetWorkloadState() != runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING {
+		t.Fatalf("starting observation was reused past its ttl: %v", got)
+	}
+	if got := s.status(t.Context(), r, w); got.GetWorkloadState() != runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING || len(bus.requests) != 2 {
+		t.Fatalf("running observation was not reused: %v after %d requests", got, len(bus.requests))
+	}
+	// The first batch to an unproven host is a short probe; once it answered,
+	// later batches get the full status timeout.
+	if probe, full := time.Until(bus.deadlines[0]), time.Until(bus.deadlines[1]); probe > statusBatchProbeTimeout || full <= statusBatchProbeTimeout {
+		t.Fatalf("probe deadline %v, supported deadline %v", probe, full)
 	}
 }

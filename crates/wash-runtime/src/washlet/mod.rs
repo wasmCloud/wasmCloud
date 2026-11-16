@@ -1731,27 +1731,39 @@ async fn handle_command(
                         .all(|id| !id.is_empty() && id.len() <= 128),
                 "status batch requires 1..128 workload IDs of at most 128 bytes"
             );
-            let mut workloads = Vec::with_capacity(req.workload_ids.len());
-            for workload_id in req.workload_ids {
-                let request = types::v2::WorkloadStatusRequest { workload_id };
-                // Preserve custom status authorization; do not bypass the handler.
-                let response = match handler {
-                    Some(handler) => handler.status(defaults, request).await?,
-                    None => defaults.status(request).await?,
-                };
-                let mut status = response
-                    .workload_status
-                    .context("missing workload status")?;
-                // Bound the reply even when a plugin supplies a large diagnostic.
-                if status.message.len() > 1024 {
-                    let mut end = 1024;
-                    while !status.message.is_char_boundary(end) {
-                        end -= 1;
+            // Lookups run concurrently so a slow status plugin cannot push a full
+            // batch past the caller's timeout. `buffered` keeps request order.
+            let workloads = futures::stream::iter(req.workload_ids)
+                .map(|workload_id| async move {
+                    let request = types::v2::WorkloadStatusRequest {
+                        workload_id: workload_id.clone(),
+                    };
+                    // Preserve custom status authorization; do not bypass the handler.
+                    let response = match handler {
+                        Some(handler) => handler.status(defaults, request).await,
+                        None => defaults.status(request).await,
+                    };
+                    // One failing lookup must not cost the whole batch its reply.
+                    // Report it the way the single status subject does.
+                    let mut status = match response.and_then(|response| {
+                        response.workload_status.context("missing workload status")
+                    }) {
+                        Ok(status) => status,
+                        Err(error) => command_error(&workload_id, format!("{error:#}")),
+                    };
+                    // Bound the reply even when a plugin supplies a large diagnostic.
+                    if status.message.len() > 1024 {
+                        let mut end = 1024;
+                        while !status.message.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        status.message.truncate(end);
                     }
-                    status.message.truncate(end);
-                }
-                workloads.push(status);
-            }
+                    status
+                })
+                .buffered(STATUS_BATCH_CONCURRENCY)
+                .collect::<Vec<_>>()
+                .await;
             to_api(&types::v2::WorkloadStatusBatchResponse { workloads })
         }
         "workload.status" => {
@@ -1851,6 +1863,9 @@ fn workload_start_error(workload_id: &str, message: String) -> types::v2::Worklo
         workload_status: Some(command_error(workload_id, message)),
     }
 }
+
+/// Status lookups a single `workload.status.batch` request runs at once.
+const STATUS_BATCH_CONCURRENCY: usize = 16;
 
 fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatus {
     types::v2::WorkloadStatus {
@@ -2364,11 +2379,19 @@ mod tests {
                 .iter()
                 .all(|s| s.workload_state == types::v2::WorkloadState::NotFound as i32)
         );
-        assert!(
-            handle_command(&defaults, &msg, Some(&RefusingCommands), None)
-                .await
-                .is_err()
-        );
+        // A refused lookup is reported per entry, as on the single status
+        // subject, so the rest of the batch still gets an answer.
+        let reply = handle_command(&defaults, &msg, Some(&RefusingCommands), None).await?;
+        let reply: types::v2::WorkloadStatusBatchResponse = from_api(&reply)?;
+        assert_eq!(reply.workloads.len(), 2);
+        for (status, id) in reply.workloads.iter().zip(["absent-a", "absent-b"]) {
+            assert_eq!(status.workload_id, id);
+            assert_eq!(
+                status.workload_state,
+                types::v2::WorkloadState::Error as i32
+            );
+            assert!(status.message.contains("status denied"));
+        }
         for ids in [vec![], vec!["id"; 129]] {
             let msg = command_message(
                 "workload.status.batch",

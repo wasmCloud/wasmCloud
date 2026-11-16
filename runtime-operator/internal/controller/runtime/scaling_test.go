@@ -105,7 +105,7 @@ func TestHostBudgetsYieldWithoutBlockingOtherHostsOrLiveWork(t *testing.T) {
 		return reconcile.Result{}, nil
 	})
 	result, err := r.withHostBudget(next, true).Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(deleting)})
-	if err != nil || result.RequeueAfter != busyRetry || calls.Load() != 0 {
+	if err != nil || result.RequeueAfter < busyRetry || result.RequeueAfter > busyRetry*3/2 || calls.Load() != 0 {
 		t.Fatalf("busy cleanup: %+v %v", result, err)
 	}
 	_, err = r.withHostBudget(next, false).Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(live)})
@@ -169,7 +169,7 @@ func TestEndpointSlicesStayBoundedAndStableDuringRemoval(t *testing.T) {
 
 func TestStatusObservationExpiresAndCannotPrecedePlacement(t *testing.T) {
 	s := &statusBatches{entries: map[string]statusObservation{"host/id": {status: &runtimev2.WorkloadStatus{WorkloadId: "id"}, at: time.Now().Add(-time.Hour)}}}
-	if s.cached("host", "id", time.Time{}) != nil {
+	if s.cached("host", "id", time.Time{}, true) != nil {
 		t.Fatal("expired status reused")
 	}
 }
@@ -210,7 +210,7 @@ func TestCleanupCannotOverlapLiveReconciliationOfSameWorkload(t *testing.T) {
 		return reconcile.Result{}, nil
 	})
 	result, err := r.withHostBudget(next, true).Reconcile(t.Context(), reconcile.Request{NamespacedName: key})
-	if err != nil || result.RequeueAfter != busyRetry {
+	if err != nil || result.RequeueAfter < busyRetry || result.RequeueAfter > busyRetry*3/2 {
 		t.Fatalf("cleanup did not yield: %+v %v", result, err)
 	}
 }
@@ -253,7 +253,7 @@ func TestReplicaDeleteCostIsBoundedAcrossFleetSizes(t *testing.T) {
 	}
 }
 
-func TestCleanupSuppressionRetainsUnknownAndReadyHosts(t *testing.T) {
+func TestCleanupSuppressionRetainsReadyHostsOnly(t *testing.T) {
 	for _, status := range []corev1.ConditionStatus{condition.ConditionTrue, condition.ConditionUnknown, condition.ConditionFalse} {
 		t.Run(string(status), func(t *testing.T) {
 			w := placedWorkload()
@@ -272,12 +272,45 @@ func TestCleanupSuppressionRetainsUnknownAndReadyHosts(t *testing.T) {
 			if err != nil || len(bus.requests) != 0 {
 				t.Fatalf("suppression repeated a stop: %v, calls=%d", err, len(bus.requests))
 			}
-			if status != condition.ConditionFalse && result.RequeueAfter != workloadEvictionStopTimeout {
-				t.Fatal("possibly running host must retain cleanup responsibility")
+			// Ready hosts keep their finalizers and back off. Unknown and failed
+			// hosts are dropped as finalize's stop would after one timeout, so a
+			// stalled host does not drain at HostConcurrency per stall window.
+			if status == condition.ConditionTrue && result.RequeueAfter != workloadEvictionStopTimeout {
+				t.Fatal("ready host must retain cleanup responsibility")
 			}
-			if status == condition.ConditionFalse && result.RequeueAfter != 0 {
-				t.Fatal("known failed host must not repeat the timeout for each workload")
+			if status != condition.ConditionTrue && result.RequeueAfter != 0 {
+				t.Fatal("unavailable host must not repeat the timeout for each workload")
 			}
 		})
+	}
+}
+
+func TestBusyBackoffSpreadsWaitersByHostBacklog(t *testing.T) {
+	var b busyBackoff
+	upper := func(rounds int) time.Duration {
+		d := min(busyRetry*time.Duration(rounds), busyRetryMax)
+		return d + d/2
+	}
+	// Two slots: the first two waiters retry within a round; later waiters,
+	// new or old, get the delay of the backlog ahead of them.
+	for i := range 6 {
+		got := b.retry("h", fmt.Sprintf("cleanup/w%d", i), 2).RequeueAfter
+		if rounds := i/2 + 1; got < busyRetry*time.Duration(rounds) || got > upper(rounds) {
+			t.Fatalf("waiter %d: %v", i, got)
+		}
+	}
+	// A repeat miss does not count twice, and another host has its own backlog.
+	if got := b.retry("h", "cleanup/w0", 2).RequeueAfter; got > upper(3) {
+		t.Fatalf("repeat waiter: %v", got)
+	}
+	if got := b.retry("other", "cleanup/x", 2).RequeueAfter; got > upper(1) {
+		t.Fatalf("other host inherited backlog: %v", got)
+	}
+	for i := range 6 {
+		b.done(fmt.Sprintf("cleanup/w%d", i))
+	}
+	b.done("cleanup/x")
+	if len(b.waiting) != 0 || len(b.hostOf) != 0 {
+		t.Fatalf("waiters leaked: %v %v", b.waiting, b.hostOf)
 	}
 }
