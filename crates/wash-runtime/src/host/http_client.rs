@@ -695,7 +695,7 @@ impl PooledClient {
             tls,
             None,
             quota,
-            crate::host::quota::QuotaRegistry::new(Default::default(), None).http_wait(),
+            crate::host::quota::DEFAULT_HTTP_WAIT,
             MIN_IDLE_PER_AUTHORITY,
         )
     }
@@ -1158,16 +1158,16 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         let permit_wait = self.permit_wait;
         let last_permit_warning = self.last_permit_warning.clone();
         Box::pin(async move {
-            let slot = tokio::time::timeout(permit_wait, quota.acquire_outbound_http())
+            let slot = quota
+                .acquire_outbound_http(permit_wait)
                 .await
-                .map_err(|_| {
+                .ok_or_else(|| {
                     warn_permits_exhausted(&last_permit_warning, workload.as_deref(), &quota);
                     std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         "outbound connection limit reached (per-workload or host-wide)",
                     )
-                })?
-                .map_err(|_| std::io::Error::other("outbound connection limiter closed"))?;
+                })?;
             let stream = tower_service::Service::call(&mut inner, uri).await?;
             Ok(PermittedStream {
                 inner: stream,
@@ -1201,7 +1201,13 @@ fn warn_permits_exhausted(
         warn!(
             workload_id = workload.unwrap_or("<none>"),
             workload_permits_available = quota.outbound_http_available(),
-            global_permits_available = ?quota.global_permits().map(|permits| permits.available_permits()),
+            // An unset host-wide ceiling reads as unbounded, keeping the
+            // field numeric for log pipelines that alert on it.
+            global_permits_available = quota
+                .global_permits()
+                .map_or(tokio::sync::Semaphore::MAX_PERMITS, |permits| {
+                    permits.available_permits()
+                }),
             "outbound connect timed out waiting for a connection permit; \
              a connection quota is exhausted (logged at most once per \
              {PERMIT_WARN_INTERVAL:?} per workload)"
