@@ -6359,6 +6359,7 @@ dependencies = [
  "wat",
  "windows-sys 0.61.2",
  "wit-component 0.263.0",
+ "zeroize",
 ]
 
 [[package]]

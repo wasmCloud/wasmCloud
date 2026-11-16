@@ -1523,6 +1523,17 @@ impl OutgoingHandler for DefaultOutgoingHandler {
 #[derive(Default)]
 pub struct DevRouter {
     last_workload_id: std::sync::RwLock<Option<String>>,
+    secrets: Arc<[EgressSecret]>,
+}
+
+impl DevRouter {
+    /// Every workload may send these secrets by placeholder.
+    pub fn with_secrets(secrets: impl IntoIterator<Item = EgressSecret>) -> Self {
+        Self {
+            secrets: secrets.into_iter().collect(),
+            ..Default::default()
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1577,6 +1588,10 @@ impl Router for DevRouter {
         allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()> {
         check_allowed_hosts(request, allowed_hosts)
+    }
+
+    fn egress_secrets(&self, _caller: EgressCaller<'_>) -> anyhow::Result<Arc<[EgressSecret]>> {
+        Ok(Arc::clone(&self.secrets))
     }
 
     /// Pick a workload ID based on the incoming request

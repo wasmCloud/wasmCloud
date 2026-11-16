@@ -4,6 +4,8 @@ use std::{
     sync::Arc,
 };
 
+mod secrets;
+
 use anyhow::{Context as _, bail, ensure};
 use bytes::Bytes;
 use clap::Args;
@@ -265,7 +267,10 @@ impl CliCommand for DevCommand {
         // Checked anyway, so an entry a host would refuse fails in dev first.
         check_local_routes(&dev_config.host_interfaces)?;
 
-        let http_handler = wash_runtime::host::http::DevRouter::default();
+        let dev_secrets = secrets::mint(&dev_config.secrets, project_dir)?;
+        let http_handler = wash_runtime::host::http::DevRouter::with_secrets(
+            dev_secrets.iter().map(|m| m.secret.clone()),
+        );
 
         // Outbound (egress) trust roots for the component's outgoing HTTPS
         // calls. Distinct from `tls_*_path` below, which configure the ingress
@@ -486,8 +491,9 @@ impl CliCommand for DevCommand {
         // running the component) so that bad config or missing secrets fail
         // before we deploy. Pass project_dir as the repo root for the
         // gitignored-secret warning.
-        let resolved_workload = resolve_workload(&config, project_dir, Some(project_dir))
+        let mut resolved_workload = resolve_workload(&config, project_dir, Some(project_dir))
             .context("failed to resolve workload-level configuration")?;
+        secrets::deliver(&dev_secrets, &mut resolved_workload.environment)?;
         if resolved_workload
             .allowed_hosts
             .contains(&wash_runtime::host::allowed_hosts::AllowedHost::Any)

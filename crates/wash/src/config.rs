@@ -290,6 +290,35 @@ pub use wash_runtime::config_source::{
     ConfigSource, EnvironmentLayer, PluginSecretSource, SecretEntry, SecretSource,
 };
 
+/// A secret `wash dev` substitutes into the component's outgoing requests.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DevSecret {
+    /// The component's environment variable that receives the placeholder.
+    pub env: String,
+    /// A variable in the `wash dev` process's environment holding the value.
+    /// Exactly one of `from_env` and `from_file`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_env: Option<String>,
+    /// A file holding the value, read on every request so it can rotate.
+    /// Relative to the project directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_file: Option<PathBuf>,
+    /// Exact https hosts the secret may be sent to, e.g. `https://api.github.com`.
+    pub destinations: Vec<String>,
+    /// Headers it may be sent in. Defaults to `authorization`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<String>,
+    /// Query parameters whose value may be the placeholder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query: Vec<String>,
+    /// Routes it may be sent on, as `/path` or `METHOD /path`. Empty allows any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+    /// Prepended to the placeholder for SDKs that check a key's shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder_prefix: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DevVolume {
     /// Host path to mount
@@ -1355,6 +1384,12 @@ pub struct DevConfig {
     /// Volumes to mount into the dev environment
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<DevVolume>,
+
+    /// Secrets the component sends by placeholder, as it would under a host
+    /// that brokers them. The component's `env` variable holds a placeholder;
+    /// `wash dev` writes the real value into outgoing requests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<DevSecret>,
 
     /// Environment variables exported into the `wash dev` process before the
     /// host is built. Surfaces values to plugins and runtime crates that read
