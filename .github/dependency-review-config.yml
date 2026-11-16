@@ -22,6 +22,10 @@ allow-licenses:
   - UPL-1.0
   - X11
   - Zlib
+  # Additional patent grant shipped as PATENTS alongside BSD-3-Clause in the Go
+  # project's golang.org/x modules. It adds rights and restricts nothing. No
+  # Cargo crate uses it, so deny.toml has no matching entry.
+  - LicenseRef-scancode-google-patent-license-golang
 allow-dependencies-licenses:
   - pkg:cargo/imbl
   - pkg:cargo/imbl-sized-chunks
