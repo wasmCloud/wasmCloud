@@ -15,12 +15,11 @@ name: tools-bump
 # wash is installed via wasmcloud/setup-wash-action (which defaults to
 # the latest wash release) and is not tracked here.
 #
-# Caveat: PRs opened by GITHUB_TOKEN do not trigger downstream workflow
-# runs (GitHub's recursion guard), so the workflows that consume these
-# pins (wit.yml, wash.yml, examples.yml, codeql.yml) won't auto-run on the
-# bump PR. Close-and-reopen the PR (or push an empty commit) to validate.
-# To remove that step, swap GITHUB_TOKEN here for a PAT or GitHub App
-# token stored as a repo secret.
+# The PR is opened with a short-lived octo-sts token (trust policy in
+# .github/chainguard/tools-bump.sts.yaml) rather than GITHUB_TOKEN. The
+# repo does not allow GITHUB_TOKEN to create pull requests, and PRs opened
+# by GITHUB_TOKEN would not trigger the workflows that consume these pins
+# (wit.yml, wash.yml, examples.yml, codeql.yml).
 
 on:
   schedule:
@@ -38,9 +37,16 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      id-token: write
     steps:
+      - name: Get a PR token from octo-sts
+        id: octo-sts
+        uses: octo-sts/action@f603d3be9d8dd9871a265776e625a27b00effe05 # v1.1.1
+        with:
+          scope: ${{ github.repository }}
+          identity: tools-bump
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -55,6 +61,7 @@ jobs:
         if: steps.update.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
+          token: ${{ steps.octo-sts.outputs.token }}
           branch: bump/tool-versions
           delete-branch: true
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
@@ -72,9 +79,3 @@ jobs:
             Bumps the CI pipeline's pinned tool versions (wasm-tools, protoc, cargo-llvm-cov) to upstream's latest stable releases.
 
             ${{ steps.update.outputs.body }}
-
-            > [!NOTE]
-            > GitHub doesn't trigger downstream workflows for PRs opened by `GITHUB_TOKEN`,
-            > so the workflows consuming these pins (wit.yml, wash.yml, examples.yml,
-            > codeql.yml) will not auto-run here. Close-and-reopen this PR (or push
-            > an empty commit) to validate.
