@@ -52,7 +52,8 @@ pub trait Cache: Send + Sync + 'static {
         std::any::type_name::<Self>()
     }
 
-    /// Look up a compiled component for the exact engine/digest key.
+    /// Look up a compiled component for the exact engine/digest key. A lookup
+    /// not answered within thirty seconds is treated as a miss.
     async fn get_compiled(&self, _key: &CacheKey) -> Result<Option<CacheValue>> {
         Ok(None)
     }
@@ -126,6 +127,18 @@ impl Cache for DefaultCache {
 /// The longest a cache write runs once its caller has moved on.
 pub(crate) const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The longest a start waits on a compiled-component lookup before treating
+/// it as a miss. A lookup only saves a compile, so one that takes longer than
+/// this costs more than it could save, and one that never answers must not
+/// hold the start, or the starts sharing its compile, with it.
+pub(crate) const LOOKUP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Cache writes that may be unfinished at once, across every backend in the
+/// process. Each holds what it publishes, a compile or a pulled artifact, for
+/// up to [`PUBLISH_TIMEOUT`], so without a bound a backend that stalls would
+/// retain everything compiled or pulled in that window.
+const PENDING_PUBLISHES: usize = 64;
+
 /// Run a cache write whose result its caller does not need, without making
 /// that caller wait on the backend.
 ///
@@ -133,7 +146,10 @@ pub(crate) const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
 /// in memory does, has published before this returns. Any other finishes on a
 /// task of its own, within [`PUBLISH_TIMEOUT`]: the work it retains is already
 /// in hand, and a backend that stalls must not stall a start or a pull.
-/// A failure is logged and otherwise ignored, as for every such write.
+/// At most [`PENDING_PUBLISHES`] such writes are unfinished at once: past
+/// that, a write that does not finish at once is dropped and its entry is
+/// not kept. A failure is logged and otherwise ignored, as for every such
+/// write.
 pub(crate) async fn publish<F>(cache: &str, what: &'static str, write: F)
 where
     F: Future<Output = Result<()>> + Send + 'static,
@@ -150,13 +166,24 @@ where
         }
     }
 
+    static PENDING: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(PENDING_PUBLISHES);
+
     let mut write = Box::pin(write);
     match std::future::poll_fn(|cx| Poll::Ready(write.as_mut().poll(cx))).await {
         Poll::Ready(result) => report(cache, what, result),
         Poll::Pending => {
+            let Ok(permit) = PENDING.try_acquire() else {
+                tracing::warn!(
+                    cache,
+                    "{what} cache publication dropped: {PENDING_PUBLISHES} cache writes are \
+                     already unfinished; continuing uncached"
+                );
+                return;
+            };
             let cache = cache.to_owned();
             tokio::spawn(
                 async move {
+                    let _permit = permit;
                     match tokio::time::timeout(PUBLISH_TIMEOUT, write).await {
                         Ok(result) => report(&cache, what, result),
                         Err(_) => tracing::warn!(

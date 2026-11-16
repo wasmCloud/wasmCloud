@@ -398,6 +398,9 @@ pub struct Engine {
     /// Compiles and their publication, which finish whether or not the caller
     /// that began them still waits.
     compiling: Arc<Coalescer<(String, Admission), Arc<LiveCompile>>>,
+    /// Compiled-component writes finished, so a start whose lookup missed
+    /// asks the backend again only if one could have landed since.
+    compile_publications: Arc<std::sync::atomic::AtomicU64>,
     /// Compiles running workloads hold, consulted before the cache so a live
     /// compile can be reused after cache eviction. See [`LiveCompiles`].
     live_compiles: Arc<LiveCompiles>,
@@ -631,6 +634,85 @@ impl Admission {
             guard.admit_start().map_err(anyhow::Error::msg)?;
         }
         Ok(())
+    }
+
+    /// [`Self::check`] for a compile several starts share. A refusal answers
+    /// every start that joined, so it is not counted here: each of them counts
+    /// its own with [`Self::count_shared_refusal`].
+    fn check_shared(self, engine: &Engine) -> anyhow::Result<()> {
+        if self == Admission::Recheck
+            && let Some(guard) = engine.process_memory()
+            && let Some(message) = guard.start_refusal()
+        {
+            return Err(anyhow::Error::new(SharedRefusal).context(message));
+        }
+        Ok(())
+    }
+
+    /// Count this start as refused if `error` is a [`Self::check_shared`]
+    /// refusal, whether this start made the check or joined the one that did.
+    fn count_shared_refusal(self, engine: &Engine, error: &anyhow::Error) {
+        if self == Admission::Recheck
+            && error.chain().any(|cause| cause.is::<SharedRefusal>())
+            && let Some(guard) = engine.process_memory()
+        {
+            guard.count_refused_start(&error.to_string());
+        }
+    }
+}
+
+/// Marks a failure as a [`Admission::check_shared`] refusal. It sits under the
+/// refusal's message as its source, where [`SharedError`] keeps it reachable
+/// for every start the failure is shared with.
+#[derive(Debug)]
+struct SharedRefusal;
+
+impl std::fmt::Display for SharedRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the start was refused by max-process-memory admission")
+    }
+}
+
+impl std::error::Error for SharedRefusal {}
+
+/// Hands volumes prepared for a start to the blocking pool if the start ends
+/// before using them.
+///
+/// Releasing them closes directory handles and removes the scratch directory,
+/// which blocks. A start holds them across its compiles on an async task, and
+/// one that fails or is cancelled there would otherwise do that on a runtime
+/// worker.
+struct PreparedVolumes(Option<WorkloadVolumes>);
+
+impl PreparedVolumes {
+    /// The volumes, for a caller that may block when it releases them.
+    fn into_inner(mut self) -> WorkloadVolumes {
+        self.0.take().unwrap_or_default()
+    }
+}
+
+impl Drop for PreparedVolumes {
+    fn drop(&mut self) {
+        let Some(volumes) = self.0.take() else {
+            return;
+        };
+        if volumes.opened.is_empty() && volumes.scratch.is_none() {
+            return;
+        }
+        // Outside a runtime nothing is stalled by releasing them here.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn_blocking(move || drop(volumes));
+        }
+    }
+}
+
+/// Counts a finished compiled-component write when dropped: when the write
+/// completes, fails, or is given up on.
+struct PublicationDone(Arc<std::sync::atomic::AtomicU64>);
+
+impl Drop for PublicationDone {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -913,18 +995,23 @@ impl Engine {
         let span = tracing::Span::current();
         let volumes = std::mem::take(&mut workload.volumes);
         let has_volumes = !volumes.is_empty();
-        let prepared_volumes = if has_volumes {
+        // Held across the compiles below, and released on the blocking pool if
+        // one of them fails or this start is cancelled first.
+        let prepared_volumes = PreparedVolumes(Some(if has_volumes {
             let engine = self.clone();
             let span = span.clone();
             tokio::task::spawn_blocking(move || {
                 let _entered = span.enter();
+                // The blocking executor can queue this after the host's own
+                // check: open no directory for a start it would now refuse.
+                admission.check(&engine)?;
                 engine.prepare_volumes(volumes, Blocking::Allowed)
             })
             .await
             .context("volume preparation task failed")??
         } else {
             WorkloadVolumes::default()
-        };
+        }));
         let mut pinned = Vec::new();
         if let Some(service) = &mut workload.service {
             pinned.push(
@@ -945,10 +1032,7 @@ impl Engine {
         // finish here, as `initialize_workload_inline` does for live compiles.
         // This is the path of a digest the cache kept after its last workload
         // stopped, a scale from zero or a replaced last replica.
-        if !has_volumes
-            && workload.service.is_none()
-            && pinned.iter().all(|live| self.knows_gc_use(&live.compiled))
-        {
+        if !has_volumes && self.initializes_without_blocking(&workload, &pinned) {
             // Cache preparation may have waited since the host admitted the start.
             admission.check(self)?;
             // A panic fails this start, as it does on the blocking pool.
@@ -957,7 +1041,7 @@ impl Engine {
                     id,
                     workload,
                     Blocking::Forbidden,
-                    prepared_volumes,
+                    prepared_volumes.into_inner(),
                 )
             }))
             .unwrap_or_else(|panic| {
@@ -971,6 +1055,9 @@ impl Engine {
         tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
             let _pinned = pinned;
+            // On this thread, releasing the volumes of a refused start blocks
+            // nothing a runtime worker serves.
+            let prepared_volumes = prepared_volumes.into_inner();
             // The blocking executor can queue this after the host's own check.
             admission.check(&engine)?;
             engine.initialize_prepared_workload(id, workload, Blocking::Allowed, prepared_volumes)
@@ -1003,9 +1090,11 @@ impl Engine {
     }
 
     /// Reserve further paths from guest volume mounts, for storage a host
-    /// selects after this engine was built.
+    /// selects after this engine was built. Every clone of this engine
+    /// refuses them, including a handle an embedder kept when it gave the
+    /// host its engine.
     #[cfg(feature = "oci")]
-    pub(crate) fn reserve_host_paths(&mut self, paths: Vec<PathBuf>) {
+    pub(crate) fn reserve_host_paths(&self, paths: Vec<PathBuf>) {
         self.host_paths.reserve(paths);
     }
 
@@ -1022,7 +1111,8 @@ impl Engine {
         id: impl AsRef<str>,
         workload: Workload,
     ) -> InlineInit {
-        if !workload.volumes.is_empty() || workload.service.is_some() {
+        // Before pinning anything: volumes and a service block whatever is compiled.
+        if !self.initializes_without_blocking(&workload, &[]) {
             return InlineInit::WouldBlock {
                 workload,
                 pinned: Vec::new(),
@@ -1040,9 +1130,7 @@ impl Engine {
                 None => return InlineInit::WouldBlock { workload, pinned },
             }
         }
-        // Sizing a compile for the pooling allocator the first time reads its
-        // whole source, which belongs on the blocking pool.
-        if !pinned.iter().all(|live| self.knows_gc_use(&live.compiled)) {
+        if !self.initializes_without_blocking(&workload, &pinned) {
             return InlineInit::WouldBlock { workload, pinned };
         }
         // `pinned` keeps every compile live, so none can be evicted and
@@ -1050,6 +1138,23 @@ impl Engine {
         let initialized = self.initialize_workload_with(id, workload, Blocking::Forbidden);
         drop(pinned);
         InlineInit::Initialized(initialized)
+    }
+
+    /// Whether initializing `workload` from `pinned`, the compiles of its
+    /// components found so far, blocks nothing: it has no volumes to open and
+    /// no service to build, and no compile is still to be sized for the
+    /// pooling allocator, which reads its whole source the first time.
+    ///
+    /// The one test both the inline start and the awaited one apply before
+    /// initializing in [`Blocking::Forbidden`].
+    fn initializes_without_blocking(
+        &self,
+        workload: &Workload,
+        pinned: &[Arc<LiveCompile>],
+    ) -> bool {
+        workload.volumes.is_empty()
+            && workload.service.is_none()
+            && pinned.iter().all(|live| self.knows_gc_use(&live.compiled))
     }
 
     fn initialize_workload_with(
@@ -1358,27 +1463,56 @@ impl Engine {
                     engine: self.cache_engine_id,
                     digest: digest.clone(),
                 };
+                // Read before the lookup, so a write that finishes at any
+                // point after it began is seen by `compile_shared`.
+                let published = self.compile_publications();
                 if let Some(compiled) = self.cached_compile(&key).await? {
                     return Ok(self.record_live(&digest, compiled));
                 }
-                self.compile_shared(bytes, key, admission).await
+                self.compile_shared(bytes, key, admission, published).await
             })
-            .await?;
+            .await
+            // The flight shares one admission check: each start it refuses
+            // is a refused start.
+            .inspect_err(|error| admission.count_shared_refusal(self, error))?;
         Ok((live.compiled.clone(), live))
+    }
+
+    /// Compiled-component writes this engine has finished. A lookup that
+    /// missed can only have been overtaken by a write if this moved since.
+    fn compile_publications(&self) -> u64 {
+        self.compile_publications
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Treat unavailable retention as a miss, but reject another engine's code.
     async fn cached_compile(&self, key: &CacheKey) -> anyhow::Result<Option<CacheValue>> {
-        // The cache only saves a compile: a backend that cannot answer
-        // costs one, and never the start.
-        let cached = self.cache.get_compiled(key).await.unwrap_or_else(|error| {
-            warn!(
-                cache = self.cache.name(),
-                error = format!("{error:#}"),
-                "compilation cache lookup failed; compiling instead"
-            );
-            None
-        });
+        // The cache only saves a compile: a backend that cannot answer, or
+        // does not within the deadline, costs one, and never the start. The
+        // deadline matters most in `compile_shared`, whose task no caller can
+        // abandon: a lookup that never returned there would hold its digest's
+        // flight, and every later start of that digest, for good.
+        let lookup =
+            tokio::time::timeout(crate::cache::LOOKUP_TIMEOUT, self.cache.get_compiled(key));
+        let cached = match lookup.await {
+            Ok(Ok(cached)) => cached,
+            Ok(Err(error)) => {
+                warn!(
+                    cache = self.cache.name(),
+                    error = format!("{error:#}"),
+                    "compilation cache lookup failed; compiling instead"
+                );
+                None
+            }
+            Err(_) => {
+                warn!(
+                    cache = self.cache.name(),
+                    "compilation cache lookup did not finish within {:?}; compiling instead",
+                    crate::cache::LOOKUP_TIMEOUT
+                );
+                None
+            }
+        };
         if let Some(compiled) = &cached {
             // Not an outage: instantiating another engine's code is
             // unsound, and a backend that returns it is broken.
@@ -1402,6 +1536,7 @@ impl Engine {
         bytes: bytes::Bytes,
         key: CacheKey,
         admission: Admission,
+        published: u64,
     ) -> anyhow::Result<Arc<LiveCompile>> {
         use tracing::Instrument as _;
 
@@ -1414,8 +1549,13 @@ impl Engine {
                         return Ok(live);
                     }
                     // A cancelled start may have published after this caller's
-                    // earlier miss, then left the flight and released its live compile.
-                    if let Some(compiled) = engine.cached_compile(&key).await? {
+                    // earlier miss, then left the flight and released its live
+                    // compile. Only a write finished since that lookup began
+                    // can have done so: `published` was read before it, so
+                    // with none the miss stands and is not asked for twice.
+                    if engine.compile_publications() != published
+                        && let Some(compiled) = engine.cached_compile(&key).await?
+                    {
                         return Ok(engine.record_live(&key.digest, compiled));
                     }
                     let compiled = engine.compile_owned(bytes, admission).await?;
@@ -1429,6 +1569,10 @@ impl Engine {
                         let live = Arc::clone(&live);
                         async move {
                             let _live = live;
+                            // Declared after the live compile, so dropped
+                            // before it: a start that finds the live compile
+                            // gone also finds this write counted.
+                            let _done = PublicationDone(Arc::clone(&engine.compile_publications));
                             engine.cache.put_compiled(&key, compiled).await
                         }
                     };
@@ -1451,7 +1595,7 @@ impl Engine {
         let span = tracing::Span::current();
         tokio::task::spawn_blocking(move || {
             let _entered = span.enter();
-            admission.check(&engine)?;
+            admission.check_shared(&engine)?;
             #[cfg(test)]
             engine
                 .compiles
@@ -2719,6 +2863,7 @@ impl EngineBuilder {
             cache_engine_id,
             compile_flights: Arc::new(Coalescer::flights(Duration::MAX)),
             compiling: Arc::new(Coalescer::flights(Duration::MAX)),
+            compile_publications: Arc::default(),
             live_compiles: Arc::default(),
             #[cfg(test)]
             compiles: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -4146,6 +4291,110 @@ mod tests {
         };
         assert!(format!("{err:#}").contains("max-process-memory"), "{err:#}");
         assert_eq!(guard.refused_starts(), refused + 1);
+    }
+
+    /// Starts of one digest share a compile, and with it the admission check
+    /// made where the compile begins. Each start that check refuses is a
+    /// refused start, however many of them joined one check.
+    #[tokio::test]
+    async fn every_start_sharing_a_refused_compile_is_counted() {
+        const STARTS: u64 = 4;
+
+        let engine = Engine::builder()
+            .with_max_process_memory_bytes(1024 * 1024)
+            .build()
+            .expect("engine should build");
+        let guard = Arc::clone(engine.process_memory().expect("guard is on"));
+        assert!(guard.admit_start().is_err(), "a test process is past 1 MiB");
+        let refused = guard.refused_starts();
+
+        let mut starts = tokio::task::JoinSet::new();
+        for _ in 0..STARTS {
+            let engine = engine.clone();
+            starts.spawn(async move {
+                engine
+                    .initialize_admitted_workload(
+                        "host",
+                        component_workload(Some("sha256:refused-herd"), vec![]),
+                    )
+                    .await
+                    .map(drop)
+            });
+        }
+        while let Some(start) = starts.join_next().await {
+            let err = start
+                .expect("start task")
+                .expect_err("a host start past the limit should be refused");
+            assert!(format!("{err:#}").contains("max-process-memory"), "{err:#}");
+        }
+        assert_eq!(guard.refused_starts(), refused + STARTS);
+        assert_eq!(engine.compiles.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A backend that never answers a lookup costs a compile, not the start:
+    /// the lookup is given up at its deadline.
+    #[tokio::test(start_paused = true)]
+    async fn a_lookup_that_never_answers_is_treated_as_a_miss() -> anyhow::Result<()> {
+        struct NeverAnswers;
+        #[async_trait::async_trait]
+        impl Cache for NeverAnswers {
+            async fn get_compiled(&self, _: &CacheKey) -> anyhow::Result<Option<CacheValue>> {
+                std::future::pending().await
+            }
+        }
+
+        let engine = Engine::builder()
+            .with_pooling_allocator(false)
+            .without_max_process_memory()
+            .with_cache(Arc::new(NeverAnswers))
+            .build()?;
+        let workload = component_workload(Some("sha256:never-answered"), vec![]);
+        let started = tokio::time::Instant::now();
+        drop(engine.initialize_workload("stalled", workload).await?);
+        assert_eq!(engine.compiles.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(started.elapsed() >= crate::cache::LOOKUP_TIMEOUT);
+        Ok(())
+    }
+
+    /// A cold start asks the backend once. The second lookup, on the shared
+    /// compile task, is only for a write that finished after the first began.
+    #[tokio::test]
+    async fn a_cold_compile_looks_up_the_backend_once() -> anyhow::Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Default)]
+        struct CountsLookups {
+            cache: DefaultCache,
+            lookups: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl Cache for CountsLookups {
+            async fn get_compiled(&self, key: &CacheKey) -> anyhow::Result<Option<CacheValue>> {
+                self.lookups.fetch_add(1, Ordering::SeqCst);
+                self.cache.get_compiled(key).await
+            }
+            async fn put_compiled(&self, key: &CacheKey, value: CacheValue) -> anyhow::Result<()> {
+                self.cache.put_compiled(key, value).await
+            }
+        }
+
+        let cache = Arc::new(CountsLookups::default());
+        let engine = Engine::builder()
+            .with_pooling_allocator(false)
+            .without_max_process_memory()
+            .with_cache(cache.clone())
+            .build()?;
+        let workload = component_workload(Some("sha256:looked-up-once"), vec![]);
+        drop(engine.initialize_workload("cold", workload.clone()).await?);
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.lookups.load(Ordering::SeqCst), 1);
+
+        // The compile was published and its live copy released: the next
+        // start is answered by its one lookup.
+        drop(engine.initialize_workload("warm", workload).await?);
+        assert_eq!(engine.compiles.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.lookups.load(Ordering::SeqCst), 2);
+        Ok(())
     }
 
     /// A cache hit can arrive after pressure has changed since the host admitted
