@@ -1212,7 +1212,7 @@ where
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::engine::store::stream_pump::future_channel;
+    use crate::engine::store::stream_pump::{FutureReceiver, future_channel};
     use crate::sockets::{AddrDecision, DenyReason, Plane, WasiSocketsCtx};
     use std::time::Duration as Timeout;
     use tokio::sync::mpsc;
@@ -1281,7 +1281,7 @@ mod tests {
     fn completion<T: Lift + Send + Sync + 'static>(
         store: impl wasmtime::AsContextMut<Data = Data>,
         future: FutureReader<T>,
-    ) -> futures::channel::oneshot::Receiver<T> {
+    ) -> FutureReceiver<T> {
         let (sink, rx, _) = future_channel();
         future.pipe(store, sink).unwrap();
         rx

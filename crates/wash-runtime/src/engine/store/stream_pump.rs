@@ -37,12 +37,20 @@ struct Ending {
     finished: AtomicBool,
     /// The source's store went away before the source ended.
     cut: AtomicBool,
+    /// The destination dropped its end, so no reader waits on the rest.
+    reader_gone: AtomicBool,
 }
 
 /// Destination side: yields chunks pulled from the channel.
 pub struct ChannelProducer<T> {
     rx: futures::channel::mpsc::Receiver<Vec<T>>,
     ending: Arc<Ending>,
+}
+
+impl<T> Drop for ChannelProducer<T> {
+    fn drop(&mut self) {
+        self.ending.reader_gone.store(true, Ordering::SeqCst);
+    }
 }
 
 impl<T, D> StreamProducer<D> for ChannelProducer<T>
@@ -148,14 +156,6 @@ pub struct Done {
     ending: Arc<Ending>,
 }
 
-impl Done {
-    /// A handle that marks this pump's stream as cut off, for the owner of the
-    /// source's store to use before it drops the store.
-    pub fn cut_handle(&self) -> Cut {
-        Cut(Arc::clone(&self.ending))
-    }
-}
-
 impl Future for Done {
     type Output = Result<(), futures::channel::oneshot::Canceled>;
 
@@ -164,19 +164,59 @@ impl Future for Done {
     }
 }
 
-/// Marks a pump's stream as cut off, so its destination reports the stream's
-/// end as an error rather than as a finished stream.
-pub struct Cut(Arc<Ending>);
+/// One pump's ending, as its source's store sees it.
+struct Cut(Arc<Ending>);
 
 impl Cut {
-    /// Mark the stream cut unless its source already ended; returns whether it
-    /// was. Call it while nothing runs in the source's store.
-    pub fn mark(&self) -> bool {
+    /// The source has not ended and a reader still waits on it.
+    fn open(&self) -> bool {
+        !self.0.finished.load(Ordering::SeqCst) && !self.0.reader_gone.load(Ordering::SeqCst)
+    }
+
+    /// Mark the stream cut unless its source already ended; returns whether a
+    /// reader will see the cut.
+    fn mark(&self) -> bool {
         if self.0.finished.load(Ordering::SeqCst) {
             return false;
         }
         self.0.cut.store(true, Ordering::SeqCst);
-        true
+        !self.0.reader_gone.load(Ordering::SeqCst)
+    }
+}
+
+/// The endings of one call's relocated results, decided before the source's
+/// store drops. Dropped undecided, it cuts the open ones, so a task that
+/// unwinds still fails their readers.
+#[derive(Default)]
+pub struct Cuts(Vec<Cut>);
+
+impl Cuts {
+    pub fn watch(&mut self, done: &Done) {
+        self.0.push(Cut(Arc::clone(&done.ending)));
+    }
+
+    /// End the open results with an error at their readers; returns how many
+    /// readers will see it. Call it while nothing runs in the source's store.
+    pub fn cut(&mut self) -> usize {
+        std::mem::take(&mut self.0)
+            .iter()
+            .filter(|c| c.mark())
+            .count()
+    }
+
+    /// Let every result end as its source's store leaves it; returns how many
+    /// a reader still waits on.
+    pub fn release(&mut self) -> usize {
+        std::mem::take(&mut self.0)
+            .iter()
+            .filter(|c| c.open())
+            .count()
+    }
+}
+
+impl Drop for Cuts {
+    fn drop(&mut self) {
+        self.cut();
     }
 }
 
@@ -269,10 +309,31 @@ impl<T> Drop for FutureSink<T> {
     }
 }
 
+/// Destination side of a `future<T>` pump: the value, or `Canceled` if the
+/// source went before one.
+pub struct FutureReceiver<T> {
+    rx: futures::channel::oneshot::Receiver<T>,
+    ending: Arc<Ending>,
+}
+
+impl<T> Future for FutureReceiver<T> {
+    type Output = Result<T, futures::channel::oneshot::Canceled>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().rx.poll_unpin(cx)
+    }
+}
+
+impl<T> Drop for FutureReceiver<T> {
+    fn drop(&mut self) {
+        self.ending.reader_gone.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Create a [`FutureSink`] (source side) paired with the receiver the
 /// destination future awaits, plus a [`Done`] that fires once the value has been
 /// forwarded (or the sink is dropped).
-pub fn future_channel<T>() -> (FutureSink<T>, futures::channel::oneshot::Receiver<T>, Done) {
+pub fn future_channel<T>() -> (FutureSink<T>, FutureReceiver<T>, Done) {
     let (tx, rx) = futures::channel::oneshot::channel();
     let (done_tx, done_rx) = futures::channel::oneshot::channel();
     // A future's destination already fails when its source goes before a
@@ -284,7 +345,10 @@ pub fn future_channel<T>() -> (FutureSink<T>, futures::channel::oneshot::Receive
             done: Some(done_tx),
             ending: Arc::clone(&ending),
         },
-        rx,
+        FutureReceiver {
+            rx,
+            ending: Arc::clone(&ending),
+        },
         Done {
             drained: done_rx,
             ending,
@@ -297,17 +361,55 @@ pub fn future_channel<T>() -> (FutureSink<T>, futures::channel::oneshot::Receive
 mod tests {
     use super::*;
 
+    fn is_cut(done: &Done) -> bool {
+        done.ending.cut.load(Ordering::SeqCst)
+    }
+
     /// A cut applies only to a stream whose source has not ended, so a stream
     /// that finished before its store went away still reads as finished.
     #[test]
     fn a_cut_spares_a_stream_whose_source_already_ended() {
-        let (mut finished, _, finished_done) = channel::<u8>(1);
+        let (mut finished, _finished_reader, finished_done) = channel::<u8>(1);
         finished.finish();
-        assert!(!finished_done.cut_handle().mark());
-        let (_open, _, open_done) = channel::<u8>(1);
-        assert!(open_done.cut_handle().mark());
-        let (mut resolved, _, resolved_done) = future_channel::<u8>();
+        let (_open, _open_reader, open_done) = channel::<u8>(1);
+        let (mut resolved, _resolved_reader, resolved_done) = future_channel::<u8>();
         resolved.finish();
-        assert!(!resolved_done.cut_handle().mark());
+        let mut cuts = Cuts::default();
+        for done in [&finished_done, &open_done, &resolved_done] {
+            cuts.watch(done);
+        }
+        assert_eq!(cuts.cut(), 1);
+        assert!(!is_cut(&finished_done));
+        assert!(is_cut(&open_done));
+        assert!(!is_cut(&resolved_done));
+    }
+
+    /// A task that unwinds before it decides still fails the readers of its
+    /// open results.
+    #[test]
+    fn dropping_the_cuts_cuts_what_is_still_open() {
+        let (_source, _reader, done) = channel::<u8>(1);
+        let mut cuts = Cuts::default();
+        cuts.watch(&done);
+        drop(cuts);
+        assert!(is_cut(&done));
+    }
+
+    /// A release cuts nothing, also when dropped later, and counts only results
+    /// that a reader still waits on.
+    #[test]
+    fn a_release_cuts_nothing_and_counts_only_held_open_results() {
+        let (_held_source, _held_reader, held) = channel::<u8>(1);
+        let (_dropped_source, dropped_reader, dropped) = channel::<u8>(1);
+        drop(dropped_reader);
+        let (_future_source, future_reader, future) = future_channel::<u8>();
+        drop(future_reader);
+        let mut cuts = Cuts::default();
+        for done in [&held, &dropped, &future] {
+            cuts.watch(done);
+        }
+        assert_eq!(cuts.release(), 1);
+        drop(cuts);
+        assert!(!is_cut(&held) && !is_cut(&dropped) && !is_cut(&future));
     }
 }
