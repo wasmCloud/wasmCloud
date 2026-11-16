@@ -40,19 +40,13 @@
 //! per-guest name.
 
 use core::time::Duration;
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::sockets::DenyReason;
-
-/// How long a per-guest quota is kept after its last use.
-///
-/// Outliving the guest matters: connections opened by a replaced client keep
-/// their slots until they close, and those slots have to keep counting against
-/// the guest that opened them.
-const QUOTA_IDLE: Duration = Duration::from_secs(300);
 
 /// Default for [`QuotaRegistry::with_http_wait`]. Kept well below the
 /// request-timeout defaults (600s) so saturation surfaces as a prompt,
@@ -256,13 +250,42 @@ impl Default for QuotaLimits {
 /// how tearing a guest down reclaims capacity immediately rather than waiting
 /// out an idle timeout.
 #[derive(Debug, Clone)]
-pub struct GuestConnectionQuota {
+pub struct GuestConnectionQuota(Arc<QuotaState>);
+
+#[derive(Debug)]
+struct QuotaState {
     outbound_http: Arc<Semaphore>,
     outbound_sockets: Arc<Semaphore>,
     inbound_sockets: Arc<Semaphore>,
     /// Host-wide ceiling every surface rolls up into, when one is configured.
     global: Option<Arc<Semaphore>>,
-    stats: Arc<QuotaStats>,
+    stats: QuotaStats,
+    _registration: Option<QuotaRegistration>,
+}
+
+type GuestQuotas = Mutex<HashMap<Arc<str>, Weak<QuotaState>>>;
+
+#[derive(Debug)]
+struct QuotaRegistration {
+    registry: Weak<GuestQuotas>,
+    guest_id: Arc<str>,
+}
+
+impl Drop for QuotaRegistration {
+    fn drop(&mut self) {
+        if let Some(registry) = self.registry.upgrade() {
+            let mut guests = registry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // A racing lookup can already have replaced this generation.
+            if guests
+                .get(&self.guest_id)
+                .is_some_and(|quota| quota.strong_count() == 0)
+            {
+                guests.remove(&self.guest_id);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -283,17 +306,27 @@ struct QuotaStats {
 pub struct ConnectionSlot {
     _guest: OwnedSemaphorePermit,
     _global: Option<OwnedSemaphorePermit>,
+    _quota: GuestConnectionQuota,
 }
 
 impl GuestConnectionQuota {
     pub fn new(limits: QuotaLimits, global: Option<Arc<Semaphore>>) -> Self {
-        Self {
+        Self::with_registration(limits, global, None)
+    }
+
+    fn with_registration(
+        limits: QuotaLimits,
+        global: Option<Arc<Semaphore>>,
+        registration: Option<QuotaRegistration>,
+    ) -> Self {
+        Self(Arc::new(QuotaState {
             outbound_http: Arc::new(Semaphore::new(limits.outbound_http.max(1))),
             outbound_sockets: Arc::new(Semaphore::new(limits.outbound_sockets.max(1))),
             inbound_sockets: Arc::new(Semaphore::new(limits.inbound_sockets.max(1))),
             global,
-            stats: Arc::default(),
-        }
+            stats: QuotaStats::default(),
+            _registration: registration,
+        }))
     }
 
     /// Take a slot for a raw socket connection, or `None` if the guest is at
@@ -302,9 +335,9 @@ impl GuestConnectionQuota {
     /// Never waits — see the module docs.
     pub fn try_acquire_outbound_socket(&self) -> Option<ConnectionSlot> {
         self.try_acquire(
-            &self.outbound_sockets,
-            &self.stats.outbound_sockets_granted,
-            &self.stats.outbound_sockets_refused,
+            &self.0.outbound_sockets,
+            &self.0.stats.outbound_sockets_granted,
+            &self.0.stats.outbound_sockets_refused,
         )
     }
 
@@ -318,18 +351,18 @@ impl GuestConnectionQuota {
     /// there an idle connection returning to the pool can satisfy it.
     pub fn try_acquire_outbound_http(&self) -> Option<ConnectionSlot> {
         self.try_acquire(
-            &self.outbound_http,
-            &self.stats.outbound_http_granted,
-            &self.stats.outbound_http_refused,
+            &self.0.outbound_http,
+            &self.0.stats.outbound_http_granted,
+            &self.0.stats.outbound_http_refused,
         )
     }
 
     /// Take a slot for a published-port splice.
     pub fn try_acquire_inbound_socket(&self) -> Option<ConnectionSlot> {
         self.try_acquire(
-            &self.inbound_sockets,
-            &self.stats.inbound_sockets_granted,
-            &self.stats.inbound_sockets_refused,
+            &self.0.inbound_sockets,
+            &self.0.stats.inbound_sockets_granted,
+            &self.0.stats.inbound_sockets_refused,
         )
     }
 
@@ -345,7 +378,7 @@ impl GuestConnectionQuota {
             refused.fetch_add(1, Ordering::Relaxed);
             return None;
         };
-        let global = match &self.global {
+        let global = match &self.0.global {
             Some(global) => match Arc::clone(global).try_acquire_owned() {
                 Ok(permit) => Some(permit),
                 Err(_) => {
@@ -359,44 +392,61 @@ impl GuestConnectionQuota {
         Some(ConnectionSlot {
             _guest: guest,
             _global: global,
+            _quota: self.clone(),
         })
     }
 
-    /// The HTTP surface's permits, for the pooled client to draw on directly.
+    /// Wait for a connection slot for the pooled HTTP client.
     ///
-    /// Handed out as a raw semaphore rather than through `try_acquire` because
-    /// the pool needs to *wait* on it, racing the wait against an idle
-    /// connection freeing — behavior `try_acquire` deliberately does not have.
-    pub fn outbound_http_permits(&self) -> Arc<Semaphore> {
-        Arc::clone(&self.outbound_http)
+    /// The slot keeps its workload's quota registered until the connection
+    /// closes, including when the client is replaced or the workload stops.
+    pub async fn acquire_outbound_http(&self) -> Result<ConnectionSlot, tokio::sync::AcquireError> {
+        let guest = Arc::clone(&self.0.outbound_http).acquire_owned().await?;
+        let global = match &self.0.global {
+            Some(global) => Some(Arc::clone(global).acquire_owned().await?),
+            None => None,
+        };
+        Ok(ConnectionSlot {
+            _guest: guest,
+            _global: global,
+            _quota: self.clone(),
+        })
     }
 
     /// The host-wide ceiling, for the same reason.
     pub fn global_permits(&self) -> Option<Arc<Semaphore>> {
-        self.global.clone()
+        self.0.global.clone()
     }
 
     pub fn outbound_sockets_available(&self) -> usize {
-        self.outbound_sockets.available_permits()
+        self.0.outbound_sockets.available_permits()
     }
 
     pub fn inbound_sockets_available(&self) -> usize {
-        self.inbound_sockets.available_permits()
+        self.0.inbound_sockets.available_permits()
     }
 
     pub fn outbound_http_available(&self) -> usize {
-        self.outbound_http.available_permits()
+        self.0.outbound_http.available_permits()
     }
 
     /// Grants and refusals per surface, for reporting.
     pub fn counts(&self) -> QuotaCounts {
         QuotaCounts {
-            outbound_http_granted: self.stats.outbound_http_granted.load(Ordering::Relaxed),
-            outbound_http_refused: self.stats.outbound_http_refused.load(Ordering::Relaxed),
-            outbound_sockets_granted: self.stats.outbound_sockets_granted.load(Ordering::Relaxed),
-            outbound_sockets_refused: self.stats.outbound_sockets_refused.load(Ordering::Relaxed),
-            inbound_sockets_granted: self.stats.inbound_sockets_granted.load(Ordering::Relaxed),
-            inbound_sockets_refused: self.stats.inbound_sockets_refused.load(Ordering::Relaxed),
+            outbound_http_granted: self.0.stats.outbound_http_granted.load(Ordering::Relaxed),
+            outbound_http_refused: self.0.stats.outbound_http_refused.load(Ordering::Relaxed),
+            outbound_sockets_granted: self
+                .0
+                .stats
+                .outbound_sockets_granted
+                .load(Ordering::Relaxed),
+            outbound_sockets_refused: self
+                .0
+                .stats
+                .outbound_sockets_refused
+                .load(Ordering::Relaxed),
+            inbound_sockets_granted: self.0.stats.inbound_sockets_granted.load(Ordering::Relaxed),
+            inbound_sockets_refused: self.0.stats.inbound_sockets_refused.load(Ordering::Relaxed),
         }
     }
 }
@@ -422,7 +472,7 @@ pub struct QuotaRegistry {
     limits: QuotaLimits,
     global: Option<Arc<Semaphore>>,
     http_wait: Duration,
-    quotas: moka::sync::Cache<String, GuestConnectionQuota>,
+    quotas: Arc<GuestQuotas>,
 }
 
 /// The registry a policy built without one draws on.
@@ -447,9 +497,7 @@ impl QuotaRegistry {
             limits,
             global: host_wide.map(|total| Arc::new(Semaphore::new(total.max(1)))),
             http_wait: DEFAULT_HTTP_WAIT,
-            quotas: moka::sync::Cache::builder()
-                .time_to_idle(QUOTA_IDLE)
-                .build(),
+            quotas: Arc::default(),
         })
     }
 
@@ -482,9 +530,24 @@ impl QuotaRegistry {
     /// plugin id — never anything a guest can choose, or two guests could
     /// collapse into one allowance.
     pub fn for_guest(&self, guest_id: &str) -> GuestConnectionQuota {
-        self.quotas.get_with_by_ref(guest_id, || {
-            GuestConnectionQuota::new(self.limits, self.global.clone())
-        })
+        let mut guests = self
+            .quotas
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(quota) = guests.get(guest_id).and_then(Weak::upgrade) {
+            return GuestConnectionQuota(quota);
+        }
+        let guest_id: Arc<str> = Arc::from(guest_id);
+        let quota = GuestConnectionQuota::with_registration(
+            self.limits,
+            self.global.clone(),
+            Some(QuotaRegistration {
+                registry: Arc::downgrade(&self.quotas),
+                guest_id: Arc::clone(&guest_id),
+            }),
+        );
+        guests.insert(guest_id, Arc::downgrade(&quota.0));
+        quota
     }
 
     pub fn limits(&self) -> QuotaLimits {
@@ -1015,6 +1078,55 @@ mod tests {
                 .try_acquire_outbound_socket()
                 .is_none(),
             "the same guest must see the same allowance"
+        );
+    }
+
+    #[test]
+    fn guest_quota_is_removed_when_its_last_slot_closes() {
+        let registry = QuotaRegistry::new(QuotaLimits::default(), None);
+        let slot = registry
+            .for_guest("guest")
+            .try_acquire_outbound_socket()
+            .expect("connection slot");
+        assert_eq!(registry.quotas.lock().unwrap().len(), 1);
+        drop(slot);
+        assert!(registry.quotas.lock().unwrap().is_empty());
+        assert_eq!(
+            registry
+                .for_guest("guest")
+                .counts()
+                .outbound_sockets_granted,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn http_connection_slot_keeps_the_same_guest_quota_registered() {
+        let registry = QuotaRegistry::new(
+            QuotaLimits {
+                outbound_http: 1,
+                ..QuotaLimits::default()
+            },
+            None,
+        );
+        let slot = registry
+            .for_guest("guest")
+            .acquire_outbound_http()
+            .await
+            .unwrap();
+        assert!(
+            registry
+                .for_guest("guest")
+                .try_acquire_outbound_http()
+                .is_none()
+        );
+        drop(slot);
+        assert!(registry.quotas.lock().unwrap().is_empty());
+        assert!(
+            registry
+                .for_guest("guest")
+                .try_acquire_outbound_http()
+                .is_some()
         );
     }
 
