@@ -1,0 +1,12 @@
+package wasmcloud:nats-kv-admin-labeled-p3;
+
+// `kv-admin` imported under an `(implements ..)` label, with no plain
+// `wasmcloud:nats` binding. `kv-admin` returns `kv.bucket`, so the component
+// also imports plain `wasmcloud:nats/kv` for that resource: the host has to
+// link it even though nothing routes to an unnamed binding.
+world nats-kv-admin-labeled-p3 {
+    import tenant: wasmcloud:nats/kv-admin@0.1.4;
+    import wasi:clocks/monotonic-clock@0.3.0;
+
+    export wasmcloud:nats/core-handler@0.1.4;
+}

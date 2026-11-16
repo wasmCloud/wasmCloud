@@ -731,8 +731,9 @@ runtime:
       #
       # Keys are `wasmcloud:nats` config keys — `servers`, `subject-allow`,
       # `stream-allow`, `stream-delete-allow`, `bucket-allow`, `bucket-create-allow`,
-      # `bucket-delete-allow`, `bucket-max-bytes`, `creds`, `jwt`/`nkey-seed`,
-      # `username`/`password`, `token`, `tls-*`, `jetstream-domain`. The
+      # `bucket-delete-allow`, `bucket-max-bytes`, `bucket-replicas`, `creds`,
+      # `jwt`/`nkey-seed`, `username`/`password`, `token`, `tls-*`,
+      # `jetstream-domain`. The
       # entry's own `config` applies to every binding; each entry under
       # `bindings` layers over it. Leave `servers` out to take
       # `wasmcloudNatsUrl` above, which brings the data plane's TLS with it.
@@ -756,7 +757,11 @@ runtime:
       # Creating or deleting a KV bucket (`kv-admin`) needs the bucket in
       # `bucket-allow` and in `bucket-create-allow` or `bucket-delete-allow`.
       # `bucket-max-bytes` caps the size of a bucket a workload creates; unset
-      # leaves it to the JetStream account limits.
+      # leaves it to the JetStream account limits, and the host warns at bind.
+      # `bucket-replicas` (1-5, operator-only) sets how many copies such a
+      # bucket keeps; unset is one. Changing either later leaves existing
+      # buckets as they are, and a workload's repeat create still opens them
+      # (a bucket over a lowered `bucket-max-bytes` is reported as a conflict).
       #
       # `inbox-prefix` is refused on the entry's own `config`: it would give
       # every workload on the group the same inbox, and two workloads sharing

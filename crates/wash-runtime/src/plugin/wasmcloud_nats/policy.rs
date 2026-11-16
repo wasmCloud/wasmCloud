@@ -46,6 +46,7 @@ pub struct PolicyEngine {
     bucket_create_allow: Vec<NatsSubjectPattern>,
     bucket_delete_allow: Vec<NatsSubjectPattern>,
     bucket_max_bytes: Option<u64>,
+    bucket_replicas: Option<usize>,
     /// Lattice subjects to deny when the host is lattice-connected.
     lattice_prefixes: Vec<String>,
 }
@@ -274,6 +275,7 @@ impl PolicyEngine {
                 .map(|s| NatsSubjectPattern::parse(s))
                 .collect(),
             bucket_max_bytes: spec.bucket_max_bytes,
+            bucket_replicas: spec.bucket_replicas,
             lattice_prefixes,
         }
     }
@@ -500,6 +502,11 @@ impl PolicyEngine {
             (Some(ceiling), _) => Err(ceiling),
         }
     }
+
+    /// Replicas for a new bucket, or `None` for the server's default.
+    pub fn bucket_replicas(&self) -> Option<usize> {
+        self.bucket_replicas
+    }
 }
 
 #[cfg(test)]
@@ -622,6 +629,19 @@ mod tests {
         assert_eq!(capped.bucket_max_bytes(512), Ok(512));
         assert_eq!(capped.bucket_max_bytes(1024), Ok(1024));
         assert_eq!(capped.bucket_max_bytes(1025), Err(1024));
+    }
+
+    #[test]
+    fn bucket_replicas_come_from_the_spec() {
+        assert_eq!(engine(&[], &[], &[]).bucket_replicas(), None);
+        let replicated = PolicyEngine::new(
+            &PolicySpec {
+                bucket_replicas: Some(3),
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+        assert_eq!(replicated.bucket_replicas(), Some(3));
     }
 
     #[test]

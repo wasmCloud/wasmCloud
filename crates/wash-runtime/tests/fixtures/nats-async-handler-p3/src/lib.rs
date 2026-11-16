@@ -403,14 +403,29 @@ async fn kv_api_probe(spec: &str) -> Result<String, NatsError> {
     }
 }
 
+fn describe(c: &kv_admin::BucketConfig) -> String {
+    format!(
+        "history={},max-bytes={},marker={},storage={}",
+        c.history,
+        c.max_bytes,
+        c.limit_marker_ttl_ms
+            .map_or("none".to_string(), |ms| ms.to_string()),
+        match c.storage {
+            kv_admin::StorageType::File => "file",
+            kv_admin::StorageType::Memory => "memory",
+        }
+    )
+}
+
 /// `create:<bucket>:<max-bytes>:<marker-ttl-ms|->`, `config:<bucket>`, or
-/// `delete:<bucket>`. A create writes `k=v` and a 1s lease through the handle.
+/// `delete:<bucket>`. A create writes `k=v` and a 1s lease through the handle;
+/// a conflict answers `conflict:` and the bucket's existing configuration.
 async fn kv_admin_probe(spec: &str) -> Result<String, NatsError> {
     let parts: Vec<_> = spec.split(':').collect();
     let bucket = parts[1].to_string();
     match parts[0] {
         "create" => {
-            let handle = kv_admin::create_bucket(kv_admin::BucketConfig {
+            let created = kv_admin::create_bucket(kv_admin::BucketConfig {
                 bucket,
                 history: 3,
                 max_age_ms: 0,
@@ -419,8 +434,18 @@ async fn kv_admin_probe(spec: &str) -> Result<String, NatsError> {
                 storage: kv_admin::StorageType::Memory,
                 limit_marker_ttl_ms: parts[3].parse().ok(),
             })
-            .await?;
-            if handle.get("k".to_string()).await.is_err() {
+            .await;
+            let handle = match created {
+                Ok(handle) => handle,
+                Err(kv_admin::CreateBucketError::ConfigConflict(existing)) => {
+                    return Ok(format!("conflict:{}", describe(&existing)));
+                }
+                Err(kv_admin::CreateBucketError::Nats(e)) => return Err(e),
+            };
+            if matches!(
+                handle.get("k".to_string()).await,
+                Err(NatsError::KeyNotFound)
+            ) {
                 handle.put("k".to_string(), b"v".to_vec()).await?;
                 if parts[3] != "-" {
                     handle
@@ -430,20 +455,7 @@ async fn kv_admin_probe(spec: &str) -> Result<String, NatsError> {
             }
             Ok("created".to_string())
         }
-        "config" => {
-            let c = kv_admin::get_bucket_config(bucket).await?;
-            Ok(format!(
-                "history={},max-bytes={},marker={},storage={}",
-                c.history,
-                c.max_bytes,
-                c.limit_marker_ttl_ms
-                    .map_or("none".to_string(), |ms| ms.to_string()),
-                match c.storage {
-                    kv_admin::StorageType::File => "file",
-                    kv_admin::StorageType::Memory => "memory",
-                }
-            ))
-        }
+        "config" => Ok(describe(&kv_admin::get_bucket_config(bucket).await?)),
         "delete" => kv_admin::delete_bucket(bucket)
             .await
             .map(|()| "ok".to_string()),

@@ -113,8 +113,9 @@ interface types {
     ///   drop the `message-handle`s from earlier batches, since acking one
     ///   does not release it.
     ///
-    /// `kv-admin.create-bucket` also returns it when the requested
-    /// `max-bytes` is over the host's `bucket-max-bytes`.
+    /// `kv-admin.create-bucket` also returns it, as
+    /// `create-bucket-error.nats`, when the requested `max-bytes` is over the
+    /// host's `bucket-max-bytes`.
     ///
     /// Either way nothing was delivered, and retrying unchanged fails the
     /// same way.
@@ -551,7 +552,8 @@ interface kv {
 /// deny-by-default and host-owned.
 ///
 /// Replicas, placement, mirrors, and sources are not exposed: they are
-/// cluster decisions, so buckets get the server's defaults.
+/// cluster decisions. The host's `bucket-replicas` sets the replica count;
+/// the rest take the server's defaults.
 interface kv-admin {
   use types.{nats-error};
   use kv.{bucket};
@@ -583,12 +585,24 @@ interface kv-admin {
     limit-marker-ttl-ms: option<u64>,
   }
 
+  /// Why `create-bucket` failed.
+  variant create-bucket-error {
+    /// The bucket exists with a different configuration and was left
+    /// unchanged. Carries the configuration it has, to compare or adopt.
+    config-conflict(bucket-config),
+    /// Any other failure, as every other call reports it.
+    nats(nats-error),
+  }
+
   /// Create a bucket and open it. Requires NATS 2.10+.
   ///
-  /// Idempotent: an existing bucket with the same configuration is opened. One
-  /// with a different configuration is left unchanged and the call fails with
-  /// `jetstream`.
-  create-bucket: async func(config: bucket-config) -> result<bucket, nats-error>;
+  /// Idempotent: an existing bucket that matches every field set here is
+  /// opened. `max-bytes: 0` matches any size within the host's
+  /// `bucket-max-bytes` (any size when it has none), and the replica count is
+  /// never compared, so a startup create survives the host changing either.
+  /// Any other difference leaves the bucket unchanged and fails with
+  /// `config-conflict`.
+  create-bucket: async func(config: bucket-config) -> result<bucket, create-bucket-error>;
 
   /// Read a bucket's configuration. Needs only `bucket-allow`.
   get-bucket-config: async func(bucket: string) -> result<bucket-config, nats-error>;

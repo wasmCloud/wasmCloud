@@ -1004,6 +1004,7 @@ async fn a_bucket_writes_to_the_server_it_was_opened_on() -> anyhow::Result<()> 
 #[tokio::test]
 #[ignore = "requires Docker (NATS) or NATS_URL"]
 async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyhow::Result<()> {
+    use kv_admin::CreateBucketError as CreateErr;
     use labeled_kv::{HostBucket as BucketDrop, HostBucketWithStore as Bucket};
     use labeled_kv_admin::HostWithStore as Admin;
     let fx = fixture().await?;
@@ -1016,6 +1017,30 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
         ("bucket-max-bytes", "1048576".into()),
     ]))?;
     let admin = acquire(&fx.plugin, "workload", "admin", &admin_config).await?;
+    // `bucket-create-allow` without `bucket-allow` grants nothing.
+    let create_only = acquire(
+        &fx.plugin,
+        "workload",
+        "create-only",
+        &NatsConfig::from_map(&crate::wit::Config::from([
+            ("servers", fx.server.url.clone()),
+            ("bucket-create-allow", name.clone()),
+        ]))?,
+    )
+    .await?;
+    // The same grant after the operator raised, then lowered, the ceiling.
+    let ceiling = |id: &'static str, bytes: &'static str| {
+        let config = NatsConfig::from_map(&crate::wit::Config::from([
+            ("servers", fx.server.url.clone()),
+            ("bucket-allow", name.clone()),
+            ("bucket-create-allow", name.clone()),
+            ("bucket-max-bytes", bytes.into()),
+        ]));
+        let plugin = fx.plugin.clone();
+        async move { acquire(&plugin, "workload", id, &config?).await }
+    };
+    let raised = ceiling("raised", "2097152").await?;
+    let lowered = ceiling("lowered", "524288").await?;
     // `bucket-allow` alone: may read the config, may not create or delete.
     let reader = fx.conn.clone();
     let config = |max_bytes| kv_admin::BucketConfig {
@@ -1033,18 +1058,25 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
         store.run_concurrent(async |store_accessor| {
             let host_accessor = store_accessor.with_getter::<SharedCtx>(extract_active_ctx);
             let accessor = &host_accessor;
+            let create_err = |r: Result<_, CreateErr>| match r {
+                Err(CreateErr::Nats(e)) => Err(e),
+                Err(CreateErr::ConfigConflict(c)) => panic!("unexpected conflict: {c:?}"),
+                Ok(handle) => Ok(handle),
+            };
 
-            let denial = expect_denied(
-                <SharedCtx as Admin<_>>::create_bucket(accessor, reader.clone(), config(0)).await?,
-            );
-            assert!(matches!(denial.reason, types::DenialReason::NotGranted));
-            assert!(matches!(denial.target, types::DeniedResource::Bucket));
-            assert_eq!(denial.name, name);
+            for conn in [reader.clone(), create_only.clone()] {
+                let denial = expect_denied(create_err(
+                    <SharedCtx as Admin<_>>::create_bucket(accessor, conn, config(0)).await?,
+                ));
+                assert!(matches!(denial.reason, types::DenialReason::NotGranted));
+                assert!(matches!(denial.target, types::DeniedResource::Bucket));
+                assert_eq!(denial.name, name);
+            }
 
             assert!(matches!(
                 <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(2 << 20))
                     .await?,
-                Err(types::NatsError::LimitExceeded(_))
+                Err(CreateErr::Nats(types::NatsError::LimitExceeded(_)))
             ));
 
             let bucket = <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
@@ -1054,11 +1086,31 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
             let again = <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
                 .await?
                 .unwrap();
+            // A different one is refused with what the bucket really has.
             match <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(4096))
                 .await?
             {
-                Err(types::NatsError::Jetstream(m)) => {
-                    assert!(m.contains("different configuration"), "{m}")
+                Err(CreateErr::ConfigConflict(existing)) => {
+                    assert_eq!(existing.bucket, name);
+                    assert_eq!(existing.max_bytes, 1 << 20);
+                    assert_eq!(existing.history, 3);
+                    assert_eq!(existing.limit_marker_ttl_ms, Some(2_000));
+                }
+                other => panic!("expected a config conflict, got {other:?}"),
+            }
+
+            // `max-bytes: 0` left the size to the host: a raised ceiling still
+            // opens the 1 MiB bucket, a lowered one it no longer fits under
+            // does not.
+            let reopened =
+                <SharedCtx as Admin<_>>::create_bucket(accessor, raised.clone(), config(0))
+                    .await?
+                    .unwrap();
+            match <SharedCtx as Admin<_>>::create_bucket(accessor, lowered.clone(), config(0))
+                .await?
+            {
+                Err(CreateErr::ConfigConflict(existing)) => {
+                    assert_eq!(existing.max_bytes, 1 << 20)
                 }
                 other => panic!("expected a config conflict, got {other:?}"),
             }
@@ -1104,12 +1156,134 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
                 <SharedCtx as Admin<_>>::get_bucket_config(accessor, reader.clone(), name.clone())
                     .await?,
             );
-            for handle in [bucket, again] {
+            for handle in [bucket, again, reopened] {
                 sync_call!(store_accessor, |active| BucketDrop::drop(
                     &mut active,
                     admin.clone(),
                     handle
                 ))?;
+            }
+            Ok::<_, wasmtime::Error>(())
+        }),
+    )
+    .await?;
+    finished(ran)?;
+    fx.plugin.connections.shutdown().await;
+    Ok(())
+}
+
+/// No size ceiling, file storage, and every limit a guest can set, read back
+/// from the server; then the inputs only the server refuses.
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn kv_admin_applies_every_requested_limit() -> anyhow::Result<()> {
+    use kv_admin::CreateBucketError as CreateErr;
+    use labeled_kv::HostBucket as BucketDrop;
+    use labeled_kv_admin::HostWithStore as Admin;
+    let fx = fixture().await?;
+    let file = format!("{}-file", fx.scope.bucket);
+    let replicated = format!("{}-r3", fx.scope.bucket);
+    let open = |extra: &[(&'static str, String)]| {
+        let mut map = crate::wit::Config::from([
+            ("servers", fx.server.url.clone()),
+            ("bucket-allow", ">".to_string()),
+            ("bucket-create-allow", ">".to_string()),
+            ("bucket-delete-allow", ">".to_string()),
+        ]);
+        for (k, v) in extra {
+            map.insert(k.to_string(), v.clone());
+        }
+        NatsConfig::from_map(&map)
+    };
+    let unbounded = acquire(&fx.plugin, "workload", "unbounded", &open(&[])?).await?;
+    let three = acquire(
+        &fx.plugin,
+        "workload",
+        "three",
+        &open(&[("bucket-replicas", "3".into())])?,
+    )
+    .await?;
+    assert!(fx.conn.policy.bucket_replicas().is_none());
+    let request = |bucket: &str| kv_admin::BucketConfig {
+        bucket: bucket.to_string(),
+        history: 0,
+        max_age_ms: 90_000,
+        max_bytes: 0,
+        max_value_size: 1024,
+        storage: kv_admin::StorageType::File,
+        limit_marker_ttl_ms: None,
+    };
+    let js = async_nats::jetstream::new(fx.server.client().await?);
+    let mut store = new_store("workload", Some(&fx.plugin))?;
+    let ran = tokio::time::timeout(
+        Duration::from_secs(60),
+        store.run_concurrent(async |store_accessor| {
+            let host_accessor = store_accessor.with_getter::<SharedCtx>(extract_active_ctx);
+            let accessor = &host_accessor;
+
+            let handle =
+                <SharedCtx as Admin<_>>::create_bucket(accessor, unbounded.clone(), request(&file))
+                    .await?
+                    .unwrap();
+            let read = <SharedCtx as Admin<_>>::get_bucket_config(
+                accessor,
+                unbounded.clone(),
+                file.clone(),
+            )
+            .await?
+            .unwrap();
+            assert_eq!(read.history, 1, "history 0 means 1");
+            assert_eq!(read.max_age_ms, 90_000);
+            assert_eq!(read.max_bytes, 0, "no ceiling and 0 requested is unlimited");
+            assert_eq!(read.max_value_size, 1024);
+            assert!(matches!(read.storage, kv_admin::StorageType::File));
+            assert_eq!(read.limit_marker_ttl_ms, None);
+            sync_call!(store_accessor, |active| BucketDrop::drop(
+                &mut active,
+                unbounded.clone(),
+                handle
+            ))?;
+            <SharedCtx as Admin<_>>::delete_bucket(accessor, unbounded.clone(), file.clone())
+                .await?
+                .unwrap();
+
+            // Granted (`>` matches it) but not a name a bucket can have.
+            match <SharedCtx as Admin<_>>::create_bucket(
+                accessor,
+                unbounded.clone(),
+                request("not.valid"),
+            )
+            .await?
+            {
+                Err(CreateErr::Nats(types::NatsError::Jetstream(m))) => {
+                    assert!(m.contains("not.valid"), "{m}")
+                }
+                other => panic!("expected an invalid-name refusal, got {other:?}"),
+            }
+
+            // The host's replica count reaches the server: a single node
+            // refuses it, a cluster keeps three copies.
+            match <SharedCtx as Admin<_>>::create_bucket(
+                accessor,
+                three.clone(),
+                request(&replicated),
+            )
+            .await?
+            {
+                Err(CreateErr::Nats(types::NatsError::Jetstream(m))) => {
+                    assert!(m.to_lowercase().contains("replicas"), "{m}")
+                }
+                Ok(handle) => {
+                    let stream = js.get_key_value(&replicated).await?.stream;
+                    assert_eq!(stream.cached_info().config.num_replicas, 3);
+                    sync_call!(store_accessor, |active| BucketDrop::drop(
+                        &mut active,
+                        three.clone(),
+                        handle
+                    ))?;
+                    let _ = js.delete_key_value(&replicated).await;
+                }
+                other => panic!("expected the replica count to reach the server, got {other:?}"),
             }
             Ok::<_, wasmtime::Error>(())
         }),

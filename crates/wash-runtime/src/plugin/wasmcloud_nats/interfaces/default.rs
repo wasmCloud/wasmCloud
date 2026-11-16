@@ -203,8 +203,11 @@ impl<T: 'static + Send> kv_admin::HostWithStore<T> for SharedCtx {
     async fn create_bucket(
         accessor: &Accessor<T, Self>,
         config: kv_admin::BucketConfig,
-    ) -> wasmtime::Result<Result<Resource<BucketHandle>, types::NatsError>> {
-        let conn = conn_or_return!(accessor);
+    ) -> wasmtime::Result<Result<Resource<BucketHandle>, kv_admin::CreateBucketError>> {
+        let conn = match super::conn(accessor).await {
+            Ok(c) => c,
+            Err(e) => return Ok(Err(kv_admin::CreateBucketError::Nats(e))),
+        };
         <Self as labeled_kv_admin::HostWithStore<T>>::create_bucket(accessor, conn, config).await
     }
     async fn get_bucket_config(

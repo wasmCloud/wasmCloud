@@ -295,9 +295,21 @@ impl WasmcloudNats {
                 bucket_create_allow = ?super::keys::get(&merged, "bucket-create-allow"),
                 bucket_delete_allow = ?super::keys::get(&merged, "bucket-delete-allow"),
                 bucket_max_bytes = ?super::keys::get(&merged, "bucket-max-bytes"),
+                bucket_replicas = ?super::keys::get(&merged, "bucket-replicas"),
                 inbox_prefix = ?super::keys::get(&merged, "inbox-prefix"),
                 "wasmcloud:nats binding grant"
             );
+            if config.policy.creates_unbounded_buckets() {
+                tracing::warn!(
+                    workload_id,
+                    binding = describe_binding(binding),
+                    bucket_create_allow = ?config.policy.bucket_create_allow,
+                    "wasmcloud:nats: this binding may create KV buckets with no \
+                     `bucket-max-bytes`, so a bucket it asks to be unlimited is bounded only by \
+                     the JetStream account limits; a memory bucket can take the server's RAM. Set \
+                     `bucket-max-bytes` to cap what a workload creates."
+                );
+            }
         }
 
         Ok(())
@@ -875,11 +887,16 @@ impl HostPlugin for WasmcloudNats {
                     linker,
                     crate::engine::ctx::extract_active_ctx,
                 )?;
-                nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                nats_wit::kv_admin::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
                     linker,
                     crate::engine::ctx::extract_active_ctx,
                 )?;
-                nats_wit::kv_admin::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+            }
+            // `kv-admin` returns `kv.bucket`, so a labeled `kv-admin` import
+            // brings in plain `kv` for that resource. Its methods act on the
+            // handle; a plain `open` with no unnamed binding fails at the call.
+            if has_plain || has_labeled {
+                nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
                     linker,
                     crate::engine::ctx::extract_active_ctx,
                 )?;
@@ -1831,6 +1848,36 @@ mod tests {
             .expect_err("a workload may never widen a grant")
             .to_string();
         assert!(err.contains("`billing.>` is outside it"), "{err}");
+    }
+
+    /// Replication is the operator's: a manifest cannot pick it, even to match.
+    #[test]
+    fn bucket_replicas_belong_to_the_operator() {
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(Config::from_iter([
+                ("servers".to_string(), "nats://host:4222".to_string()),
+                ("bucket-replicas".to_string(), "3".to_string()),
+            ]));
+        let plugin = WasmcloudNats::new();
+        let schema = super::super::binding_schema();
+        let narrows = |key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload);
+
+        let resolved = declared
+            .resolve("", &Config::new(), &schema, &narrows)
+            .expect("the operator's own declaration resolves");
+        assert_eq!(resolved["bucket-replicas"], "3");
+
+        let err = declared
+            .resolve(
+                "",
+                &Config::from_iter([("bucket-replicas".to_string(), "1".to_string())]),
+                &schema,
+                &narrows,
+            )
+            .expect_err("a manifest may not set the replica count")
+            .to_string();
+        assert!(err.contains("`bucket-replicas`"), "{err}");
     }
 
     /// A grant the operator never declared cannot be narrowed into: an
