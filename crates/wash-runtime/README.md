@@ -211,11 +211,15 @@ Cache I/O runs asynchronously; hashing and compilation run on blocking workers.
 Cancelling a start drops its initial pending cache lookup. After a miss, a shared
 task rechecks the cache, compiles if needed, and publishes the result even if the
 start is cancelled. A retry reuses the published compile, and callers arriving
-while that task is running join it. No start waits on that publication: a
-write the backend does not finish at once continues on its own task, for at
-most thirty seconds. OCI pull deadlines include cache I/O, except
+while that task is running join it. A compiled-component lookup the backend
+does not answer within thirty seconds is treated as a miss. No start waits on
+that publication: a write the backend does not finish at once continues on its
+own task, for at most thirty seconds, and at most 64 such writes are unfinished
+at once across the process; past that, one that does not finish at once is
+dropped. OCI pull deadlines include cache I/O, except
 keeping a completed pull or a credential answer, which no pull waits on. A
-credential lookup in the backend shares the helper deadline. The push timeout
+credential lookup in the backend shares the helper deadline, of which it may
+use half before the helper is asked. The push timeout
 bounds the registry push alone.
 
 Connection pools, quota/accounting state, DNS authorization records, linked

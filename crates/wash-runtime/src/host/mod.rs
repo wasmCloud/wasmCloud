@@ -2030,8 +2030,7 @@ impl HostBuilder {
 
         // The engine keeps the compiled-component backend it was built with:
         // a handle taken from it before this host existed stays the host's.
-        #[cfg_attr(not(feature = "oci"), allow(unused_mut))]
-        let mut engine = match (self.engine, self.cache) {
+        let engine = match (self.engine, self.cache) {
             (Some(engine), Some(cache)) => {
                 anyhow::ensure!(
                     Arc::ptr_eq(&cache, &engine.cache()),
