@@ -578,6 +578,7 @@ impl HostLink {
 struct CtxHttpHooks {
     host: HostLink,
     workload_id: Arc<str>,
+    component_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
@@ -592,8 +593,11 @@ impl WasiHttpHooks for CtxHttpHooks {
         fut: crate::host::http::RequestIoFuture,
     ) -> crate::host::http::SendFuture {
         match self.host.handler() {
-            Ok(handler) => handler.outgoing_request(
-                &self.workload_id,
+            Ok(handler) => handler.outgoing_request_from(
+                crate::host::egress_credential::EgressCaller {
+                    workload_id: &self.workload_id,
+                    component_id: Some(&*self.component_id).filter(|id| !id.is_empty()),
+                },
                 request,
                 options,
                 fut,
@@ -741,6 +745,7 @@ impl CtxBuilder {
         let http_hooks = CtxHttpHooks {
             host: HostLink(self.http_handler),
             workload_id: self.workload_id.clone(),
+            component_id: self.component_id.clone(),
             allowed_hosts: self.allowed_hosts,
             warned_unserved: false,
         };

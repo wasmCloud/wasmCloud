@@ -29,6 +29,7 @@ use std::{
 
 use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
+use crate::host::egress_credential::{EgressCaller, EgressSecret, SecretUse, substitute};
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
 use crate::observability::rate_limit::RateLimitedWarn;
 use crate::{
@@ -460,6 +461,22 @@ pub trait Router: Send + Sync + 'static {
         options: Option<RequestOptions>,
         allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()>;
+
+    /// The secrets a caller may send by placeholder.
+    ///
+    /// Asked only after [`Self::allow_outgoing_request`] accepted the request.
+    /// The host does the substituting and refuses a placeholder sent anywhere
+    /// its secret is not for. An error refuses the request. A request that had
+    /// a placeholder substituted always egresses over the network, never to a
+    /// co-located workload. Default: none.
+    fn egress_secrets(&self, _caller: EgressCaller<'_>) -> anyhow::Result<Arc<[EgressSecret]>> {
+        Ok(Arc::from([]))
+    }
+
+    /// Called once for each placeholder substituted into a request, and once
+    /// for a request refused over a placeholder, before anything egresses.
+    /// Default: no-op.
+    fn on_secret_use(&self, _event: &SecretUse<'_>) {}
 
     /// Pick a workload ID based on the incoming request.
     ///
@@ -1665,6 +1682,20 @@ pub trait HostHandler: Send + Sync + 'static {
         fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture;
+
+    /// [`Self::outgoing_request`] with the calling component attested, so a
+    /// handler can scope egress credentials to it. Default: drops the
+    /// component.
+    fn outgoing_request_from(
+        &self,
+        caller: EgressCaller<'_>,
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
+        allowed_hosts: &[AllowedHost],
+    ) -> SendFuture {
+        self.outgoing_request(caller.workload_id, request, options, fut, allowed_hosts)
+    }
 }
 
 impl std::fmt::Debug for dyn HostHandler {
@@ -2281,6 +2312,38 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
     /// as a reason the host may be not-ready.
     pub fn connection_limit(&self) -> ConnectionLimit {
         self.connections.clone()
+    }
+
+    /// Egress `request` over the network, bypassing same-host routing.
+    fn send_over_network(
+        &self,
+        workload_id: &str,
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
+    ) -> SendFuture {
+        if !is_grpc_request(&request) {
+            return self
+                .outgoing_handler
+                .send_request(workload_id, request, options, fut);
+        }
+        // The gRPC path is selected by the guest via a
+        // `content-type: application/grpc` header, and needs HTTP/2 rather
+        // than the HTTP/1.1 the ordinary egress pool speaks. A pooling
+        // handler serves it from its own per-workload HTTP/2 pool, under
+        // the same quota; otherwise the runtime opens a connection per
+        // request.
+        match self.outgoing_handler.grpc_transport(workload_id) {
+            Some(client) => {
+                Box::new(async move { client.send_grpc_request(request, options).await })
+            }
+            None => Box::new(send_grpc_request(
+                request,
+                options,
+                self.grpc_tls(),
+                self.egress_gate.get().cloned(),
+            )),
+        }
     }
 
     /// The h2 (ALPN) variant of the outgoing handler's client TLS
@@ -3126,6 +3189,23 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture {
+        let caller = EgressCaller {
+            workload_id,
+            component_id: None,
+        };
+        self.outgoing_request_from(caller, request, options, fut, allowed_hosts)
+    }
+
+    fn outgoing_request_from(
+        &self,
+        caller: EgressCaller<'_>,
+        mut request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
+        allowed_hosts: &[AllowedHost],
+    ) -> SendFuture {
+        let workload_id = caller.workload_id;
+        let component_id = caller.component_id.unwrap_or_default();
         let span = outbound_client_span(request.method(), request.uri());
         let inner: SendFuture = if let Err(e) =
             self.router
@@ -3133,39 +3213,79 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         {
             warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
             deny_request(request)
-        } else if is_grpc_request(&request) {
-            // The gRPC path is selected by the guest via a
-            // `content-type: application/grpc` header, and needs HTTP/2 rather
-            // than the HTTP/1.1 the ordinary egress pool speaks. A pooling
-            // handler serves it from its own per-workload HTTP/2 pool, under
-            // the same quota; otherwise the runtime opens a connection per
-            // request.
-            match self.outgoing_handler.grpc_transport(workload_id) {
-                Some(client) => {
-                    Box::new(async move { client.send_grpc_request(request, options).await })
-                }
-                None => Box::new(send_grpc_request(
-                    request,
-                    options,
-                    self.grpc_tls(),
-                    self.egress_gate.get().cloned(),
-                )),
-            }
-        } else if let Some((target, destination)) =
-            self.local_destination(workload_id, request.uri())
-        {
-            // Same-host short-circuit: dispatch to a co-located workload's
-            // incoming path in-memory. Checked after the gRPC branch so gRPC
-            // always egresses over the network, and after `allowed_hosts` so
-            // the short-circuit never widens a workload's egress policy.
-            // `fut`, the guest's response-consumption outcome, is dropped here
-            // as wasmtime's default sender drops it.
-            debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
-            span.record("wasmcloud.http.route", "local");
-            self.send_local_request(workload_id, target, destination, request, options)
         } else {
-            self.outgoing_handler
-                .send_request(workload_id, request, options, fut)
+            let substituted = match self.router.egress_secrets(caller) {
+                Err(err) => {
+                    warn!(workload_id, component_id, err = %err, "outgoing request denied: no secret decision");
+                    None
+                }
+                Ok(secrets) => {
+                    let result = substitute(&mut request, &secrets);
+                    let authority = request.uri().authority().map_or("", |a| a.as_str());
+                    let event = |placeholder, outcome| SecretUse {
+                        caller,
+                        placeholder,
+                        method: request.method(),
+                        authority,
+                        path: request.uri().path(),
+                        outcome,
+                    };
+                    match &result {
+                        Ok(used) => {
+                            for placeholder in used {
+                                self.router.on_secret_use(&event(Some(placeholder), Ok(())));
+                            }
+                        }
+                        Err(refused) => {
+                            warn!(
+                                workload_id,
+                                component_id,
+                                authority,
+                                err = %refused.error,
+                                "outgoing request denied: secret not substituted"
+                            );
+                            self.router.on_secret_use(&event(
+                                refused.placeholder.as_deref(),
+                                Err(&refused.error),
+                            ));
+                        }
+                    }
+                    result.ok().map(|used| !used.is_empty())
+                }
+            };
+            match substituted {
+                None => deny_request(request),
+                // A co-located workload can claim any name as a local route,
+                // so a request carrying a secret must not be offered one.
+                Some(true) => self.send_over_network(workload_id, request, options, fut),
+                Some(false) => {
+                    let local = if is_grpc_request(&request) {
+                        None
+                    } else {
+                        self.local_destination(workload_id, request.uri())
+                    };
+                    match local {
+                        Some((target, destination)) => {
+                            // Same-host short-circuit: dispatch to a co-located workload's
+                            // incoming path in-memory. gRPC always egresses over the network,
+                            // and this runs after `allowed_hosts` so the short-circuit never
+                            // widens a workload's egress policy. `fut`, the guest's
+                            // response-consumption outcome, is dropped here as wasmtime's
+                            // default sender drops it.
+                            debug!(workload_id, target, uri = %request.uri(), "routing outgoing request to co-located workload");
+                            span.record("wasmcloud.http.route", "local");
+                            self.send_local_request(
+                                workload_id,
+                                target,
+                                destination,
+                                request,
+                                options,
+                            )
+                        }
+                        None => self.send_over_network(workload_id, request, options, fut),
+                    }
+                }
+            }
         };
         // Instrument the whole send so the span is current while the response
         // is awaited; `record_outbound_status` then lands on this span.
@@ -5445,6 +5565,377 @@ mod tests {
         let allow_any = [AllowedHost::Any];
         let _ = server.outgoing_request("test-workload", request, None, no_io(), &allow_any);
         assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    // --- Egress secret substitution tests ---
+
+    use crate::host::egress_credential::tests::{PLACEHOLDER, api_secret};
+    use crate::host::egress_credential::{CarriesSecret, CredentialError};
+    use hyper::header::HeaderValue;
+
+    /// An audited use: the placeholder, the path and the outcome.
+    type Audited = (Option<String>, String, Result<(), CredentialError>);
+
+    #[derive(Default)]
+    struct CredentialRouter {
+        secrets: Vec<EgressSecret>,
+        decision_fails: bool,
+        seen_component: Mutex<Option<Option<String>>>,
+        local_lookups: std::sync::atomic::AtomicUsize,
+        audited: Mutex<Vec<Audited>>,
+    }
+
+    impl CredentialRouter {
+        fn with(secret: EgressSecret) -> Self {
+            Self {
+                secrets: vec![secret],
+                ..Default::default()
+            }
+        }
+
+        fn local_lookups(&self) -> usize {
+            self.local_lookups.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Router for CredentialRouter {
+        async fn on_workload_resolved(
+            &self,
+            _resolved_handle: &ResolvedWorkload,
+            _component_id: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn on_workload_unbind(&self, _workload_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn allow_outgoing_request(
+            &self,
+            _workload_id: &str,
+            request: &hyper::Request<WasiBody>,
+            _options: Option<RequestOptions>,
+            allowed_hosts: &[AllowedHost],
+        ) -> anyhow::Result<()> {
+            check_allowed_hosts(request, allowed_hosts)
+        }
+
+        fn egress_secrets(&self, caller: EgressCaller<'_>) -> anyhow::Result<Arc<[EgressSecret]>> {
+            *self.seen_component.lock().unwrap() = Some(caller.component_id.map(str::to_string));
+            anyhow::ensure!(!self.decision_fails, "policy snapshot expired");
+            Ok(self.secrets.iter().cloned().collect())
+        }
+
+        fn on_secret_use(&self, event: &SecretUse<'_>) {
+            self.audited.lock().unwrap().push((
+                event.placeholder.map(str::to_string),
+                event.path.to_string(),
+                event.outcome.map_err(Clone::clone),
+            ));
+        }
+
+        fn route_incoming_request(
+            &self,
+            _req: &hyper::Request<hyper::body::Incoming>,
+        ) -> Result<String, RouteError> {
+            Err(RouteError::MissingHost)
+        }
+
+        fn route_local_egress(
+            &self,
+            _uri: &hyper::Uri,
+            _can_serve: &mut dyn FnMut(&str) -> bool,
+        ) -> Option<String> {
+            self.local_lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct HeaderSpy {
+        sent: Arc<Mutex<Vec<hyper::HeaderMap>>>,
+        marked: Arc<Mutex<Vec<bool>>>,
+    }
+
+    impl OutgoingHandler for HeaderSpy {
+        fn send_request(
+            &self,
+            _workload_id: &str,
+            request: hyper::Request<WasiBody>,
+            _options: Option<RequestOptions>,
+            _fut: RequestIoFuture,
+        ) -> SendFuture {
+            self.sent.lock().unwrap().push(request.headers().clone());
+            self.marked
+                .lock()
+                .unwrap()
+                .push(request.extensions().get::<CarriesSecret>().is_some());
+            Box::new(async {
+                Err(wasmtime_wasi_http::Error::InternalError(Some(
+                    "spy: no real request".to_string(),
+                )))
+            })
+        }
+    }
+
+    async fn credential_ingress(
+        router: CredentialRouter,
+    ) -> (Ingress<CredentialRouter, HeaderSpy>, HeaderSpy) {
+        let spy = HeaderSpy::default();
+        let server = Ingress::builder(router, "127.0.0.1:0".parse().unwrap())
+            .outgoing_handler(spy.clone())
+            .local_routing(true)
+            .build()
+            .await
+            .unwrap();
+        (server, spy)
+    }
+
+    fn with_placeholder(mut request: hyper::Request<WasiBody>) -> hyper::Request<WasiBody> {
+        request.headers_mut().insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::try_from(format!("Bearer {PLACEHOLDER}")).unwrap(),
+        );
+        request
+    }
+
+    async fn send_from_component(
+        server: &Ingress<CredentialRouter, HeaderSpy>,
+        request: hyper::Request<WasiBody>,
+        allowed_hosts: &[AllowedHost],
+    ) -> SendResult {
+        let caller = EgressCaller {
+            workload_id: "wl",
+            component_id: Some("billing"),
+        };
+        Box::into_pin(server.outgoing_request_from(caller, request, None, no_io(), allowed_hosts))
+            .await
+    }
+
+    #[tokio::test]
+    async fn the_guest_placeholder_leaves_as_the_secret() {
+        let (server, spy) =
+            credential_ingress(CredentialRouter::with(api_secret(Some(b"host-secret")))).await;
+
+        let request = with_placeholder(build_request("https://api.example.com/"));
+        let _ = send_from_component(&server, request, &[AllowedHost::Any]).await;
+
+        let sent = spy.sent.lock().unwrap();
+        assert_eq!(sent[0][hyper::header::AUTHORIZATION], "Bearer host-secret");
+        assert_eq!(
+            *spy.marked.lock().unwrap(),
+            [true],
+            "marked for verified TLS"
+        );
+        assert_eq!(
+            *server.router.seen_component.lock().unwrap(),
+            Some(Some("billing".to_string()))
+        );
+        assert_eq!(
+            *server.router.audited.lock().unwrap(),
+            [(Some(PLACEHOLDER.to_string()), "/".to_string(), Ok(()))]
+        );
+        assert_eq!(
+            server.router.local_lookups(),
+            0,
+            "never offered a local route"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_without_a_placeholder_is_still_offered_local_routes() {
+        let (server, spy) =
+            credential_ingress(CredentialRouter::with(api_secret(Some(b"host-secret")))).await;
+
+        let mut request = build_request("https://api.example.com/");
+        request.headers_mut().insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer guest"),
+        );
+        let _ = send_from_component(&server, request, &[AllowedHost::Any]).await;
+
+        assert_eq!(server.router.local_lookups(), 1);
+        let sent = spy.sent.lock().unwrap();
+        assert_eq!(sent[0][hyper::header::AUTHORIZATION], "Bearer guest");
+    }
+
+    #[tokio::test]
+    async fn substitution_failures_refuse_without_egress() {
+        let cases = [
+            (
+                "source unavailable",
+                CredentialRouter::with(api_secret(None)),
+                "https://api.example.com/",
+            ),
+            (
+                "destination the secret is not for",
+                CredentialRouter::with(api_secret(Some(b"s"))),
+                "https://paste.example.net/",
+            ),
+            (
+                "plaintext destination",
+                CredentialRouter::with(api_secret(Some(b"s"))),
+                "http://api.example.com/",
+            ),
+            (
+                "no decision",
+                CredentialRouter {
+                    decision_fails: true,
+                    ..Default::default()
+                },
+                "https://api.example.com/",
+            ),
+        ];
+        for (case, router, uri) in cases {
+            let (server, spy) = credential_ingress(router).await;
+            let request = with_placeholder(build_request(uri));
+            let result = send_from_component(&server, request, &[AllowedHost::Any]).await;
+            assert!(
+                matches!(result, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
+                "{case}"
+            );
+            assert!(spy.sent.lock().unwrap().is_empty(), "{case}");
+            assert_eq!(server.router.local_lookups(), 0, "{case}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refusals_are_audited_before_anything_egresses() {
+        let (server, spy) =
+            credential_ingress(CredentialRouter::with(api_secret(Some(b"s")))).await;
+
+        let request = with_placeholder(build_request("https://paste.example.net/dump"));
+        let _ = send_from_component(&server, request, &[AllowedHost::Any]).await;
+
+        assert!(spy.sent.lock().unwrap().is_empty());
+        assert_eq!(
+            *server.router.audited.lock().unwrap(),
+            [(
+                Some(PLACEHOLDER.to_string()),
+                "/dump".to_string(),
+                Err(CredentialError::Destination)
+            )]
+        );
+    }
+
+    /// `wasi:http` does not follow redirects; the guest does. So the hop to a
+    /// redirect's target comes back through the same check as the first.
+    #[tokio::test]
+    async fn a_redirect_to_another_host_does_not_carry_the_secret() {
+        let (server, spy) =
+            credential_ingress(CredentialRouter::with(api_secret(Some(b"host-secret")))).await;
+
+        let first = with_placeholder(build_request("https://api.example.com/login"));
+        let _ = send_from_component(&server, first, &[AllowedHost::Any]).await;
+        let followed = with_placeholder(build_request("https://paste.example.net/collect"));
+        let result = send_from_component(&server, followed, &[AllowedHost::Any]).await;
+
+        assert!(matches!(
+            result,
+            Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+        ));
+        assert_eq!(spy.sent.lock().unwrap().len(), 1, "only the first hop left");
+        let audited = server.router.audited.lock().unwrap();
+        assert_eq!(audited[1].2, Err(CredentialError::Destination));
+    }
+
+    /// The span is opened before substitution, so a secret placed in the query
+    /// never reaches `url.full`.
+    #[tokio::test]
+    async fn the_span_records_the_url_the_guest_sent() {
+        let secret = api_secret(Some(b"query-secret")).in_query(["key"]);
+        let (server, _spy) = credential_ingress(CredentialRouter::with(secret)).await;
+        let exporter = RecordingSpanExporter::default();
+        let spans = exporter.spans.clone();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_opentelemetry::layer().with_tracer(provider.tracer("egress-secret-span")),
+        );
+        let uri = format!("https://api.example.com/maps?key={PLACEHOLDER}");
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            let caller = EgressCaller {
+                workload_id: "wl",
+                component_id: Some("billing"),
+            };
+            drop(server.outgoing_request_from(
+                caller,
+                build_request(&uri),
+                None,
+                no_io(),
+                &[AllowedHost::Any],
+            ));
+        });
+
+        provider.force_flush().unwrap();
+        let spans = spans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let url = spans
+            .iter()
+            .flat_map(|span| span.attributes.iter())
+            .find(|kv| kv.key.as_str() == URL_FULL)
+            .map(|kv| kv.value.to_string());
+        assert_eq!(url.as_deref(), Some(uri.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_placeholder_with_no_secret_behind_it_is_refused() {
+        let (server, spy) = credential_ingress(CredentialRouter::default()).await;
+
+        let request = with_placeholder(build_request("https://api.example.com/"));
+        let result = send_from_component(&server, request, &[AllowedHost::Any]).await;
+
+        assert!(matches!(
+            result,
+            Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+        ));
+        assert!(spy.sent.lock().unwrap().is_empty());
+        assert_eq!(
+            *server.router.audited.lock().unwrap(),
+            [(None, "/".to_string(), Err(CredentialError::Unknown))]
+        );
+    }
+
+    #[tokio::test]
+    async fn allowed_hosts_is_decided_before_any_secret() {
+        let (server, spy) =
+            credential_ingress(CredentialRouter::with(api_secret(Some(b"host-secret")))).await;
+
+        let request = with_placeholder(build_request("https://api.example.com/"));
+        let result = send_from_component(&server, request, &[]).await;
+
+        assert!(matches!(
+            result,
+            Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+        ));
+        assert!(server.router.seen_component.lock().unwrap().is_none());
+        assert!(spy.sent.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn grpc_metadata_is_substituted_too() {
+        let (server, spy) = credential_ingress(CredentialRouter::with(api_secret(None))).await;
+        let request = hyper::Request::builder()
+            .uri("https://api.example.com/pkg.Svc/Call")
+            .header(hyper::header::CONTENT_TYPE, "application/grpc")
+            .body(WasiBody::default())
+            .unwrap();
+
+        let result =
+            send_from_component(&server, with_placeholder(request), &[AllowedHost::Any]).await;
+
+        assert!(matches!(
+            result,
+            Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+        ));
+        assert!(spy.sent.lock().unwrap().is_empty());
     }
 
     /// A router that cannot forget a workload.
