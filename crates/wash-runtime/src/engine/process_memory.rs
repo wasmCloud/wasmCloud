@@ -281,15 +281,25 @@ impl ProcessMemoryGuard {
     /// 0) adds that bookkeeping without any guest growth for the guard to
     /// refuse. Counted, and logged a few times a minute however many arrive.
     pub fn admit_start(&self) -> Result<(), String> {
+        match self.start_refusal() {
+            Some(message) => {
+                self.count_refused_start(&message);
+                Err(message)
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// The reason [`Self::admit_start`] would refuse a start now, on a fresh
+    /// reading, without counting or logging a refusal. For a check whose
+    /// answer several starts share: each start it refuses is then counted
+    /// with [`Self::count_refused_start`].
+    pub(crate) fn start_refusal(&self) -> Option<String> {
         self.refresh();
         if !self.is_over() {
-            return Ok(());
+            return None;
         }
-        let refused = self
-            .refused_starts
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        let message = if !self.is_readable() {
+        Some(if !self.is_readable() {
             "this host cannot read its memory footprint and accepts no new workloads until accounting recovers".to_string()
         } else {
             format!(
@@ -298,7 +308,16 @@ impl ProcessMemoryGuard {
                 render_bytes(self.footprint_bytes()),
                 render_bytes(self.limit),
             )
-        };
+        })
+    }
+
+    /// Count one start refused for `message`, the reason
+    /// [`Self::start_refusal`] gave, and log it a few times a minute.
+    pub(crate) fn count_refused_start(&self, message: &str) {
+        let refused = self
+            .refused_starts
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
         if let Some(suppressed) = START_REFUSAL_WARN.admit() {
             tracing::warn!(
                 refused_starts = refused,
@@ -306,7 +325,6 @@ impl ProcessMemoryGuard {
                 "refused a workload start: {message}. Check memory accounting and capacity before retrying"
             );
         }
-        Err(message)
     }
 
     /// Take a reading that may only move the state up (see [`Self::refresh`]).

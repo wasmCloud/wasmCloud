@@ -133,7 +133,8 @@ impl CredentialFlights {
 ///
 /// Reuse only saves a helper run. A backend that cannot serve or keep an
 /// answer costs that run and never fails the lookup. Its lookup shares the
-/// helper deadline, and its write does not delay the answer.
+/// helper deadline, of which it may use half, and its write does not delay
+/// the answer.
 async fn cached_credentials(
     flights: &CredentialFlights,
     cache: Arc<dyn OciCache>,
@@ -144,8 +145,13 @@ async fn cached_credentials(
     flights
         .requests
         .run((Identity(Arc::clone(&cache)), key.clone()), || async {
-            // The backend answers within the lookup deadline or is passed over.
-            match tokio::time::timeout(timeout, cache.oci_get_credentials(&key)).await {
+            // One deadline for the backend and the helper together, so a
+            // lookup never outlasts `timeout`. The backend may spend half of
+            // it before it is passed over: the helper keeps the rest, and a
+            // backend that never answers cannot fail the lookup by itself.
+            let deadline = tokio::time::Instant::now() + timeout;
+            let cache_timeout = timeout / 2;
+            match tokio::time::timeout(cache_timeout, cache.oci_get_credentials(&key)).await {
                 Ok(Ok(Some(auth))) => return Ok(auth),
                 Ok(Ok(None)) => {}
                 Ok(Err(error)) => warn!(
@@ -153,14 +159,14 @@ async fn cached_credentials(
                     "credential cache lookup failed; asking the docker credential helper"
                 ),
                 Err(_) => warn!(
-                    "credential cache lookup did not finish within {timeout:?}; asking the docker credential helper"
+                    "credential cache lookup did not finish within {cache_timeout:?}; asking the docker credential helper"
                 ),
             }
             let registry = key.registry.clone();
             let helper = flights
                 .helpers
                 .run(key.clone(), || run_helper(registry, lookup));
-            let auth = tokio::time::timeout(timeout, helper)
+            let auth = tokio::time::timeout_at(deadline, helper)
                 .await
                 .with_context(|| {
                     format!("docker credential lookup did not finish within {timeout:?}")
@@ -547,7 +553,8 @@ mod tests {
             flights(),
             Arc::new(Stalled),
             key("stalled-backend"),
-            Duration::from_millis(50),
+            // The backend is passed over halfway: the helper has the rest.
+            Duration::from_secs(2),
             || Ok(basic()),
         );
         let auth = tokio::time::timeout(Duration::from_secs(30), lookup)
