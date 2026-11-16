@@ -1,4 +1,4 @@
-package wasmcloud:nats@0.1.3;
+package wasmcloud:nats@0.1.4;
 
 /// Shared types and errors used across the wasmcloud:nats interfaces.
 ///
@@ -42,8 +42,9 @@ interface types {
   }
 
   /// What kind of name was refused, and so which grant the binding would need:
-  /// `subject-allow`, `stream-allow`, `stream-delete-allow`, or `bucket-allow`.
-  /// The host operator owns these grants.
+  /// `subject-allow`, `stream-allow`, `stream-delete-allow`, `bucket-allow`,
+  /// `bucket-create-allow`, or `bucket-delete-allow`. The host operator owns
+  /// these grants.
   ///
   /// Subscription patterns are not here: they are checked once at bind time,
   /// where a refusal fails the deployment rather than reaching a guest.
@@ -111,6 +112,9 @@ interface types {
     ///   hold its whole memory budget. `info` says nothing about this one:
     ///   drop the `message-handle`s from earlier batches, since acking one
     ///   does not release it.
+    ///
+    /// `kv-admin.create-bucket` also returns it when the requested
+    /// `max-bytes` is over the host's `bucket-max-bytes`.
     ///
     /// Either way nothing was delivered, and retrying unchanged fails the
     /// same way.
@@ -414,8 +418,7 @@ interface jetstream {
 
 /// JetStream key-value store.
 ///
-/// Bucket lifecycle (create/delete/list) is intentionally absent for the same
-/// reason as stream administration — provision buckets out-of-band.
+/// Reads and writes only. Bucket lifecycle is in `kv-admin`.
 interface kv {
   use types.{nats-error};
 
@@ -541,6 +544,60 @@ interface kv {
   open: async func(bucket: string) -> result<bucket, nats-error>;
 }
 
+/// JetStream KV bucket lifecycle: create, inspect, and delete buckets.
+///
+/// Every call needs the bucket in `bucket-allow`. Creating also needs
+/// `bucket-create-allow`, and deleting needs `bucket-delete-allow`. Both are
+/// deny-by-default and host-owned.
+///
+/// Replicas, placement, mirrors, and sources are not exposed: they are
+/// cluster decisions, so buckets get the server's defaults.
+interface kv-admin {
+  use types.{nats-error};
+  use kv.{bucket};
+
+  /// Where the bucket's backing stream keeps its data.
+  enum storage-type {
+    file,
+    memory,
+  }
+
+  /// A bucket's configuration, as requested or as read back.
+  record bucket-config {
+    /// Letters, digits, `-` and `_`.
+    bucket: string,
+    /// Revisions kept per key, 1 to 64. 0 means 1.
+    history: u8,
+    /// How long a value lives, in milliseconds. 0 keeps values forever.
+    max-age-ms: u64,
+    /// Total size limit in bytes. 0 on create takes the host's
+    /// `bucket-max-bytes`, or unlimited when the host sets none.
+    max-bytes: u64,
+    /// Largest single value in bytes. 0 is unlimited. At most 2^31 - 1.
+    max-value-size: u32,
+    storage: storage-type,
+    /// Enables per-key TTL (`bucket.create-with-ttl`) and sets how long the
+    /// server keeps the marker it writes when a key expires or ages out.
+    /// At least 1000ms, rounded up to whole seconds. Requires NATS 2.11+.
+    /// `none` disables both.
+    limit-marker-ttl-ms: option<u64>,
+  }
+
+  /// Create a bucket and open it. Requires NATS 2.10+.
+  ///
+  /// Idempotent: an existing bucket with the same configuration is opened. One
+  /// with a different configuration is left unchanged and the call fails with
+  /// `jetstream`.
+  create-bucket: async func(config: bucket-config) -> result<bucket, nats-error>;
+
+  /// Read a bucket's configuration. Needs only `bucket-allow`.
+  get-bucket-config: async func(bucket: string) -> result<bucket-config, nats-error>;
+
+  /// Delete a bucket and every key in it. Cannot be undone. `not-found` when
+  /// the bucket does not exist. Open `bucket` handles fail on their next call.
+  delete-bucket: async func(bucket: string) -> result<_, nats-error>;
+}
+
 /// Handler for JetStream deliveries.
 ///
 /// The component acknowledges via the handle. Which side acks is per-binding
@@ -571,7 +628,8 @@ interface kv-handler {
 }
 
 /// Every interface a workload can import. The grant — `subject-allow`,
-/// `stream-allow`, `stream-delete-allow`, `bucket-allow`, all deny-by-default —
+/// `stream-allow`, `stream-delete-allow`, `bucket-allow`,
+/// `bucket-create-allow`, `bucket-delete-allow`, all deny-by-default —
 /// bounds what a workload reaches, so this is one set rather
 /// than three. Imports a component never calls are dropped at build time by
 /// both toolchains, so the generous surface costs it nothing.
@@ -583,6 +641,7 @@ world imports {
   import core;
   import jetstream;
   import kv;
+  import kv-admin;
 }
 
 /// A workload that publishes, or does request/reply. No subscriptions.

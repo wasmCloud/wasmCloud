@@ -110,7 +110,7 @@ spec:
   hostInterfaces:
     - namespace: wasmcloud
       package: nats
-      version: "0.1.3"
+      version: "0.1.4"
       interfaces: [types, jetstream, kv, jetstream-handler]
       config:
         # STREAM:filter[:policy[:queue]] — an empty policy slot is the
@@ -120,8 +120,8 @@ spec:
         max-in-flight: "32"
 ```
 
-`subject-allow`, `stream-allow`, `stream-delete-allow`, and `bucket-allow`
-are the capability boundary.
+`subject-allow`, `stream-allow`, `stream-delete-allow`, `bucket-allow`,
+`bucket-create-allow`, and `bucket-delete-allow` are the capability boundary.
 They are separate on purpose: permission to publish to `orders.processed` does
 not carry permission to read or delete the `ORDERS` stream. A `wash host`
 accepts a manifest that narrows its declared grants and refuses requests
@@ -131,6 +131,10 @@ that widen them or name a binding it does not serve.
 delete stream messages. Purge patterns must be contained in `subject-allow`;
 deleting a sequence checks the stored message's subject. All grants default to
 deny and a workload may only narrow an operator's declared ceiling.
+
+`bucket-create-allow` and `bucket-delete-allow` gate the `kv-admin` interface's
+`create-bucket` and `delete-bucket`, on top of `bucket-allow`.
+`bucket-max-bytes` caps how large a bucket a workload may create.
 
 Credentials never appear in `config`. The host merges
 `config` → `configFrom` → `secretFrom` (later wins) before the plugin sees them,

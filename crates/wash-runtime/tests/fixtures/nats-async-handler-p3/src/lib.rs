@@ -1,4 +1,4 @@
-//! Real-guest fixture for the `wasmcloud:nats@0.1.3` surface.
+//! Real-guest fixture for the `wasmcloud:nats@0.1.4` surface.
 //!
 //! Every handler is an `async fn` that awaits imported NATS calls from inside
 //! the delivery — the shape a sync-signature package cannot express, since a
@@ -22,6 +22,7 @@ use wasi::clocks::monotonic_clock;
 use wasmcloud::nats::core;
 use wasmcloud::nats::jetstream::{self, MessageHandle};
 use wasmcloud::nats::kv;
+use wasmcloud::nats::kv_admin;
 use wasmcloud::nats::types::{DenialReason, DeniedResource, NatsError, NatsMessage};
 use wit_bindgen::StreamResult;
 
@@ -402,6 +403,54 @@ async fn kv_api_probe(spec: &str) -> Result<String, NatsError> {
     }
 }
 
+/// `create:<bucket>:<max-bytes>:<marker-ttl-ms|->`, `config:<bucket>`, or
+/// `delete:<bucket>`. A create writes `k=v` and a 1s lease through the handle.
+async fn kv_admin_probe(spec: &str) -> Result<String, NatsError> {
+    let parts: Vec<_> = spec.split(':').collect();
+    let bucket = parts[1].to_string();
+    match parts[0] {
+        "create" => {
+            let handle = kv_admin::create_bucket(kv_admin::BucketConfig {
+                bucket,
+                history: 3,
+                max_age_ms: 0,
+                max_bytes: parts[2].parse().unwrap(),
+                max_value_size: 0,
+                storage: kv_admin::StorageType::Memory,
+                limit_marker_ttl_ms: parts[3].parse().ok(),
+            })
+            .await?;
+            if handle.get("k".to_string()).await.is_err() {
+                handle.put("k".to_string(), b"v".to_vec()).await?;
+                if parts[3] != "-" {
+                    handle
+                        .create_with_ttl("lease".to_string(), b"l".to_vec(), 1_000)
+                        .await?;
+                }
+            }
+            Ok("created".to_string())
+        }
+        "config" => {
+            let c = kv_admin::get_bucket_config(bucket).await?;
+            Ok(format!(
+                "history={},max-bytes={},marker={},storage={}",
+                c.history,
+                c.max_bytes,
+                c.limit_marker_ttl_ms
+                    .map_or("none".to_string(), |ms| ms.to_string()),
+                match c.storage {
+                    kv_admin::StorageType::File => "file",
+                    kv_admin::StorageType::Memory => "memory",
+                }
+            ))
+        }
+        "delete" => kv_admin::delete_bucket(bucket)
+            .await
+            .map(|()| "ok".to_string()),
+        _ => panic!("unknown KV admin probe"),
+    }
+}
+
 impl CoreGuest for Component {
     /// Echoes onto `reply-to` when there is one — a request/reply round trip
     /// driven entirely from inside an async export.
@@ -410,6 +459,12 @@ impl CoreGuest for Component {
         let body = String::from_utf8_lossy(&msg.body).to_string();
         if let Some(spec) = body.strip_prefix("js-api:") {
             let outcome = js_api_probe(spec).await.unwrap_or_else(|e| label(&e));
+            return core::publish(message(&msg.reply_to.unwrap(), outcome))
+                .await
+                .map_err(|e| label(&e));
+        }
+        if let Some(spec) = body.strip_prefix("kv-admin:") {
+            let outcome = kv_admin_probe(spec).await.unwrap_or_else(|e| label(&e));
             return core::publish(message(&msg.reply_to.unwrap(), outcome))
                 .await
                 .map_err(|e| label(&e));

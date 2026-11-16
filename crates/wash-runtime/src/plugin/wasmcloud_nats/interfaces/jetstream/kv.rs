@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/kv@0.1.3` — the JetStream KV store, and the `bucket`
+//! `wasmcloud:nats/kv@0.1.4` — the JetStream KV store, and the `bucket`
 //! resource an `open` hands back.
 
 use core::future::Future as _;
@@ -36,7 +36,7 @@ const DEFAULT_SELECT_BATCH: usize = 1024;
 
 /// NATS truncates message TTLs to whole seconds. Round up before publishing so
 /// a lease cannot expire early just because its requested TTL was fractional.
-fn message_ttl_seconds(ttl_ms: u64) -> Option<u64> {
+pub(super) fn message_ttl_seconds(ttl_ms: u64) -> Option<u64> {
     let seconds = ttl_ms.div_ceil(1_000);
     // Check the rounded duration: rounding the largest millisecond duration
     // up would otherwise overflow the server's signed nanosecond duration.

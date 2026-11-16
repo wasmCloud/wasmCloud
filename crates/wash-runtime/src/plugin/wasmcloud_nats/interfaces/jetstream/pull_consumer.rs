@@ -1,4 +1,4 @@
-//! `wasmcloud:nats/jetstream@0.1.3#pull-consumer` — guest-driven batch pulls
+//! `wasmcloud:nats/jetstream@0.1.4#pull-consumer` — guest-driven batch pulls
 //! off an existing durable consumer.
 
 use std::sync::Arc;

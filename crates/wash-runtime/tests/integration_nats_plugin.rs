@@ -41,7 +41,7 @@ async fn expect_refused(host: &impl HostApi, request: WorkloadStartRequest) -> R
 
 /// A P3 guest exporting the JetStream and core handlers.
 const NATS_HANDLER_WASM: &[u8] = include_bytes!("wasm/nats_async_handler_p3.wasm");
-/// Imports `wasmcloud:nats/core@0.1.3` twice, under `hub` and `leaf`.
+/// Imports `wasmcloud:nats/core@0.1.4` twice, under `hub` and `leaf`.
 const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
 
 const STREAM: &str = "TESTS";
@@ -145,7 +145,7 @@ fn nats_interface(config: &[(&str, &str)]) -> WitInterface {
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 1, 3)),
+        version: Some(semver::Version::new(0, 1, 4)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -165,12 +165,13 @@ fn nats_async_interface(config: &[(&str, &str)]) -> WitInterface {
             "core".to_string(),
             "jetstream".to_string(),
             "kv".to_string(),
+            "kv-admin".to_string(),
             "jetstream-handler".to_string(),
             "core-handler".to_string(),
         ]
         .into_iter()
         .collect(),
-        version: Some(semver::Version::new(0, 1, 3)),
+        version: Some(semver::Version::new(0, 1, 4)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1074,7 +1075,7 @@ fn named_nats_interface(name: &str, interfaces: &[&str], config: &[(&str, &str)]
         namespace: "wasmcloud".to_string(),
         package: "nats".to_string(),
         interfaces: interfaces.iter().map(|i| (*i).to_string()).collect(),
-        version: Some(semver::Version::new(0, 1, 3)),
+        version: Some(semver::Version::new(0, 1, 4)),
         config: config
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -2341,6 +2342,113 @@ async fn destructive_stream_calls_require_a_host_owned_ceiling() -> Result<()> {
 
 #[tokio::test]
 #[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_bucket_lifecycle_from_a_guest() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host_with(
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(declared(&[
+                ("servers", &h.nats_url),
+                ("subject-allow", "test.>"),
+                ("bucket-allow", "guest-made,guest-readonly,guest-kept"),
+                ("bucket-create-allow", "guest-made,guest-kept"),
+                ("bucket-delete-allow", "guest-made"),
+                ("bucket-max-bytes", "1048576"),
+            ])),
+    )
+    .await?;
+    // A manifest may not widen the host's create grant.
+    let message = expect_refused(
+        &host,
+        workload_request(
+            "wl-kv-admin-widen",
+            nats_async_interface(&[
+                ("bucket-create-allow", "guest-made,guest-readonly"),
+                ("core-subscriptions", "test.api"),
+            ]),
+        ),
+    )
+    .await?;
+    assert!(message.contains("bucket-create-allow"), "{message}");
+
+    h.js.create_key_value(async_nats::jetstream::kv::Config {
+        bucket: "guest-readonly".into(),
+        ..Default::default()
+    })
+    .await?;
+    host.workload_start(workload_request(
+        "wl-kv-admin",
+        nats_async_interface(&[("core-subscriptions", "test.api")]),
+    ))
+    .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Outside `bucket-create-allow`, and over `bucket-max-bytes`.
+    assert_eq!(
+        api_probe(&h, "kv-admin:create:guest-readonly:0:-").await?,
+        "denied:not-granted:bucket:guest-readonly"
+    );
+    assert!(
+        api_probe(&h, "kv-admin:create:guest-made:2097152:-")
+            .await?
+            .starts_with("limit-exceeded:")
+    );
+
+    // Created with a marker TTL and written through the returned handle; the
+    // probe's 1s lease would fail on a bucket without message TTLs.
+    assert_eq!(
+        api_probe(&h, "kv-admin:create:guest-made:0:1500").await?,
+        "created"
+    );
+    let made = h.js.get_key_value("guest-made").await?;
+    assert_eq!(made.get("k").await?, Some(bytes::Bytes::from_static(b"v")));
+    let info = made.stream.cached_info().config.clone();
+    assert!(info.allow_message_ttl);
+    assert_eq!(info.subject_delete_marker_ttl, Some(Duration::from_secs(2)));
+    assert_eq!(info.max_bytes, 1_048_576);
+    assert_eq!(
+        api_probe(&h, "kv-admin:config:guest-made").await?,
+        "history=3,max-bytes=1048576,marker=2000,storage=memory"
+    );
+
+    // Idempotent on the same config; a different one is refused, untouched.
+    assert_eq!(
+        api_probe(&h, "kv-admin:create:guest-made:0:1500").await?,
+        "created"
+    );
+    assert!(
+        api_probe(&h, "kv-admin:create:guest-made:4096:1500")
+            .await?
+            .contains("different configuration")
+    );
+
+    // Create without delete: `guest-kept` stays.
+    assert_eq!(
+        api_probe(&h, "kv-admin:create:guest-kept:4096:-").await?,
+        "created"
+    );
+    assert_eq!(
+        api_probe(&h, "kv-admin:delete:guest-kept").await?,
+        "denied:not-granted:bucket:guest-kept"
+    );
+    assert!(h.js.get_key_value("guest-kept").await.is_ok());
+
+    assert_eq!(api_probe(&h, "kv-admin:delete:guest-made").await?, "ok");
+    assert!(h.js.get_key_value("guest-made").await.is_err());
+    assert!(
+        api_probe(&h, "kv-admin:delete:guest-made")
+            .await?
+            .starts_with("not-found:")
+    );
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-kv-admin".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
 async fn kv_ttl_and_conditional_delete() -> Result<()> {
     let h = start_nats().await?;
     let host = start_host().await?;
@@ -2485,6 +2593,48 @@ async fn filtered_purge_refuses_servers_with_unsafe_purge_replay() -> Result<()>
         workload_id: "wl-old-purge".into(),
     })
     .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_create_refuses_servers_without_support() -> Result<()> {
+    // 2.9 cannot create a bucket at all; 2.10 can, but without marker TTLs.
+    for (version, plain) in [("2.9.17-alpine", false), ("2.10.29-alpine", true)] {
+        let h = start_nats_version(version, false).await?;
+        let host = start_host().await?;
+        host.workload_start(workload_request(
+            "wl-old-kv-admin",
+            nats_async_interface(&[
+                ("servers", &h.nats_url),
+                ("subject-allow", "test.>"),
+                ("bucket-allow", "old-ttl,old-plain"),
+                ("bucket-create-allow", "old-ttl,old-plain"),
+                ("core-subscriptions", "test.api"),
+            ]),
+        ))
+        .await?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let marker = api_probe(&h, "kv-admin:create:old-ttl:0:1500").await?;
+        assert!(
+            marker.starts_with("unsupported-by-server:"),
+            "{version}: {marker}"
+        );
+        assert!(h.js.get_key_value("old-ttl").await.is_err(), "{version}");
+        let created = api_probe(&h, "kv-admin:create:old-plain:0:-").await?;
+        if plain {
+            assert_eq!(created, "created", "{version}");
+        } else {
+            assert!(
+                created.starts_with("unsupported-by-server:"),
+                "{version}: {created}"
+            );
+        }
+        host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+            workload_id: "wl-old-kv-admin".into(),
+        })
+        .await?;
+    }
     Ok(())
 }
 

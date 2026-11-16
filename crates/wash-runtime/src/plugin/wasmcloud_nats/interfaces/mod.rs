@@ -1,4 +1,4 @@
-//! # `wasmcloud:nats@0.1.3` host implementations
+//! # `wasmcloud:nats@0.1.4` host implementations
 //!
 //! Every function in the package is an `async func`, so this is the only
 //! implementation: a sync-signature function cannot be lifted with the async
@@ -22,8 +22,8 @@
 //! - [`helpers`], the connection lookup, policy checks and conversions every
 //!   interface shares.
 //! - [`jetstream`], with a submodule per resource ([`jetstream::message_handle`],
-//!   [`jetstream::pull_consumer`]) and one for the JetStream-backed
-//!   [`jetstream::kv`] interface.
+//!   [`jetstream::pull_consumer`]) and one each for the JetStream-backed
+//!   [`jetstream::kv`] and [`jetstream::kv_admin`] interfaces.
 //! - [`default`], the plain unlabeled route.
 //! - [`labeled`], the label-routed resource methods.
 //!
@@ -51,29 +51,30 @@ mod labeled;
 
 pub(super) mod bindings {
     crate::wasmtime::component::bindgen!({
-        world: "wasmcloud:nats/imports@0.1.3",
+        world: "wasmcloud:nats/imports@0.1.4",
         imports: { default: async | trappable | tracing },
         named_imports: {
-            "wasmcloud:nats/core@0.1.3": super::NatsId,
-            "wasmcloud:nats/jetstream@0.1.3": super::NatsId,
-            "wasmcloud:nats/kv@0.1.3": super::NatsId,
+            "wasmcloud:nats/core@0.1.4": super::NatsId,
+            "wasmcloud:nats/jetstream@0.1.4": super::NatsId,
+            "wasmcloud:nats/kv@0.1.4": super::NatsId,
+            "wasmcloud:nats/kv-admin@0.1.4": super::NatsId,
         },
         with: {
-            "wasmcloud:nats/jetstream@0.1.3.message-handle": super::super::jetstream::MessageHandle,
-            "wasmcloud:nats/jetstream@0.1.3.pull-consumer": super::super::jetstream::PullConsumerHandle,
-            "wasmcloud:nats/kv@0.1.3.bucket": super::super::jetstream::BucketHandle,
+            "wasmcloud:nats/jetstream@0.1.4.message-handle": super::super::jetstream::MessageHandle,
+            "wasmcloud:nats/jetstream@0.1.4.pull-consumer": super::super::jetstream::PullConsumerHandle,
+            "wasmcloud:nats/kv@0.1.4.bucket": super::super::jetstream::BucketHandle,
         },
     });
 }
 
-use bindings::wasmcloud::nats::{core, jetstream as js, kv, types};
+use bindings::wasmcloud::nats::{core, jetstream as js, kv, kv_admin, types};
 use helpers::*;
-// The label-routed twins of the three routable interfaces. Every method takes
+// The label-routed twins of the four routable interfaces. Every method takes
 // the NatsId its `(implements ..)` label resolved to, so a component can import
 // `wasmcloud:nats` twice — one label per cluster — and have each call leave on
 // that binding's connection, under that binding's grant.
 use bindings::named_imports::wasmcloud::nats::{
-    core as labeled_core, jetstream as labeled_js, kv as labeled_kv,
+    core as labeled_core, jetstream as labeled_js, kv as labeled_kv, kv_admin as labeled_kv_admin,
 };
 
 /// The routing id threaded through every host method of a labeled

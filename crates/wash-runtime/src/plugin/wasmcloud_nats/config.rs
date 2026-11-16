@@ -163,6 +163,10 @@ pub struct PolicySpec {
     pub stream_allow: Vec<String>,
     pub stream_delete_allow: Vec<String>,
     pub bucket_allow: Vec<String>,
+    pub bucket_create_allow: Vec<String>,
+    pub bucket_delete_allow: Vec<String>,
+    /// Largest bucket a workload may create, in bytes. `None` is unlimited.
+    pub bucket_max_bytes: Option<u64>,
 }
 
 /// Backpressure and concurrency bounds, all per-workload.
@@ -587,6 +591,19 @@ fn read<A>(
         None => None,
     };
 
+    let bucket_max_bytes = match r.get("bucket-max-bytes") {
+        Some(raw) => Some(
+            raw.expose()
+                .parse::<u64>()
+                .ok()
+                .filter(|n| *n > 0 && *n <= i64::MAX as u64)
+                .with_context(|| {
+                    format!("`bucket-max-bytes` must be a positive integer, got `{raw}`")
+                })?,
+        ),
+        None => None,
+    };
+
     let limits = Limits {
         max_in_flight: r.parse_usize("max-in-flight", DEFAULT_MAX_IN_FLIGHT)?,
         subscription_capacity: r
@@ -664,6 +681,9 @@ fn read<A>(
             stream_allow: r.list("stream-allow"),
             stream_delete_allow: r.list("stream-delete-allow"),
             bucket_allow: r.list("bucket-allow"),
+            bucket_create_allow: r.list("bucket-create-allow"),
+            bucket_delete_allow: r.list("bucket-delete-allow"),
+            bucket_max_bytes,
         },
         limits,
         ack_mode,
@@ -760,11 +780,14 @@ impl NatsConfig {
             &self.policy.stream_allow,
             &self.policy.stream_delete_allow,
             &self.policy.bucket_allow,
+            &self.policy.bucket_create_allow,
+            &self.policy.bucket_delete_allow,
         ] {
             let mut sorted = allow.clone();
             sorted.sort_unstable();
             sorted.hash(&mut hasher);
         }
+        self.policy.bucket_max_bytes.hash(&mut hasher);
         self.ack_mode.hash(&mut hasher);
         self.limits.max_in_flight.hash(&mut hasher);
         self.limits.subscription_capacity.hash(&mut hasher);
@@ -1210,6 +1233,47 @@ mod tests {
         .unwrap();
         assert_eq!(grant.policy.stream_delete_allow, ["ORDERS"]);
         assert_ne!(base.connection_key(), grant.connection_key());
+    }
+
+    #[test]
+    fn bucket_admin_grants_are_deny_by_default_and_part_of_connection_identity() {
+        let base = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
+        assert!(base.policy.bucket_create_allow.is_empty());
+        assert!(base.policy.bucket_delete_allow.is_empty());
+        assert_eq!(base.policy.bucket_max_bytes, None);
+        for (key, value) in [
+            ("bucket-create-allow", "cache"),
+            ("bucket-delete-allow", "cache"),
+            ("bucket-max-bytes", "1048576"),
+        ] {
+            let grant =
+                NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222"), (key, value)]))
+                    .unwrap();
+            assert_ne!(base.connection_key(), grant.connection_key(), "{key}");
+        }
+        let grant = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("bucket-create-allow", "cache,sessions"),
+            ("bucket-max-bytes", "1048576"),
+        ]))
+        .unwrap();
+        assert_eq!(grant.policy.bucket_create_allow, ["cache", "sessions"]);
+        assert_eq!(grant.policy.bucket_max_bytes, Some(1_048_576));
+    }
+
+    #[test]
+    fn bucket_max_bytes_must_be_a_positive_integer() {
+        for bad in ["0", "-1", "lots", "9223372036854775808"] {
+            let err = NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("bucket-max-bytes", bad),
+            ]))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("bucket-max-bytes"),
+                "{bad}: {err:#}"
+            );
+        }
     }
 
     #[test]
