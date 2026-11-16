@@ -730,7 +730,8 @@ runtime:
       # a binding of its own; it defaults to `deny`.
       #
       # Keys are `wasmcloud:nats` config keys — `servers`, `subject-allow`,
-      # `stream-allow`, `stream-delete-allow`, `bucket-allow`, `creds`, `jwt`/`nkey-seed`,
+      # `stream-allow`, `stream-delete-allow`, `bucket-allow`, `bucket-create-allow`,
+      # `bucket-delete-allow`, `bucket-max-bytes`, `creds`, `jwt`/`nkey-seed`,
       # `username`/`password`, `token`, `tls-*`, `jetstream-domain`. The
       # entry's own `config` applies to every binding; each entry under
       # `bindings` layers over it. Leave `servers` out to take
@@ -752,6 +753,10 @@ runtime:
       # Purge and delete also require `stream-delete-allow` for the stream.
       # Purge filters must fit inside `subject-allow`; deleting a sequence
       # checks its stored subject. All grants are host-owned ceilings.
+      # Creating or deleting a KV bucket (`kv-admin`) needs the bucket in
+      # `bucket-allow` and in `bucket-create-allow` or `bucket-delete-allow`.
+      # `bucket-max-bytes` caps the size of a bucket a workload creates; unset
+      # leaves it to the JetStream account limits.
       #
       # `inbox-prefix` is refused on the entry's own `config`: it would give
       # every workload on the group the same inbox, and two workloads sharing

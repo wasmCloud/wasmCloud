@@ -10,7 +10,10 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::engine::ctx::SharedCtx;
 
-use super::{conn_or_return, core, js, kv, labeled_core, labeled_js, labeled_kv, types};
+use super::{
+    conn_or_return, core, js, kv, kv_admin, labeled_core, labeled_js, labeled_kv, labeled_kv_admin,
+    types,
+};
 use crate::plugin::wasmcloud_nats::jetstream::{BucketHandle, PullConsumerHandle};
 
 impl<T: 'static + Send> core::HostWithStore<T> for SharedCtx {
@@ -193,5 +196,30 @@ impl<T: 'static + Send> kv::HostWithStore<T> for SharedCtx {
     ) -> wasmtime::Result<Result<Resource<BucketHandle>, types::NatsError>> {
         let conn = conn_or_return!(accessor);
         <Self as labeled_kv::HostWithStore<T>>::open(accessor, conn, bucket).await
+    }
+}
+
+impl<T: 'static + Send> kv_admin::HostWithStore<T> for SharedCtx {
+    async fn create_bucket(
+        accessor: &Accessor<T, Self>,
+        config: kv_admin::BucketConfig,
+    ) -> wasmtime::Result<Result<Resource<BucketHandle>, types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_kv_admin::HostWithStore<T>>::create_bucket(accessor, conn, config).await
+    }
+    async fn get_bucket_config(
+        accessor: &Accessor<T, Self>,
+        bucket: String,
+    ) -> wasmtime::Result<Result<kv_admin::BucketConfig, types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_kv_admin::HostWithStore<T>>::get_bucket_config(accessor, conn, bucket)
+            .await
+    }
+    async fn delete_bucket(
+        accessor: &Accessor<T, Self>,
+        bucket: String,
+    ) -> wasmtime::Result<Result<(), types::NatsError>> {
+        let conn = conn_or_return!(accessor);
+        <Self as labeled_kv_admin::HostWithStore<T>>::delete_bucket(accessor, conn, bucket).await
     }
 }

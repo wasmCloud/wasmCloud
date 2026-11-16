@@ -292,6 +292,9 @@ impl WasmcloudNats {
                 stream_allow = ?super::keys::get(&merged, "stream-allow"),
                 stream_delete_allow = ?super::keys::get(&merged, "stream-delete-allow"),
                 bucket_allow = ?super::keys::get(&merged, "bucket-allow"),
+                bucket_create_allow = ?super::keys::get(&merged, "bucket-create-allow"),
+                bucket_delete_allow = ?super::keys::get(&merged, "bucket-delete-allow"),
+                bucket_max_bytes = ?super::keys::get(&merged, "bucket-max-bytes"),
                 inbox_prefix = ?super::keys::get(&merged, "inbox-prefix"),
                 "wasmcloud:nats binding grant"
             );
@@ -728,9 +731,20 @@ impl HostPlugin for WasmcloudNats {
                     .all(|v| ceiling.iter().any(|c| c.contains(&v)))
             }
             // Plain names: subset, not pattern containment.
-            "stream-allow" | "stream-delete-allow" | "bucket-allow" => {
+            "stream-allow"
+            | "stream-delete-allow"
+            | "bucket-allow"
+            | "bucket-create-allow"
+            | "bucket-delete-allow" => {
                 let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
                 split(value).all(|v| ceiling.contains(v))
+            }
+            // A size: a smaller positive number narrows.
+            "bucket-max-bytes" => {
+                match (ceiling.trim().parse::<u64>(), value.trim().parse::<u64>()) {
+                    (Ok(ceiling), Ok(value)) => value > 0 && value <= ceiling,
+                    _ => false,
+                }
             }
             // An empty workload list trivially narrows — deny-all is the
             // narrowest thing there is — and falls out of `all()` above with no
@@ -744,7 +758,7 @@ impl HostPlugin for WasmcloudNats {
     }
 
     fn world(&self) -> WitWorld {
-        const IMPORTS: &str = "wasmcloud:nats/types,core,jetstream,kv";
+        const IMPORTS: &str = "wasmcloud:nats/types,core,jetstream,kv,kv-admin";
         const EXPORTS: &str = "wasmcloud:nats/jetstream-handler,core-handler,kv-handler";
         WitWorld {
             imports: HashSet::from([WitInterface::from(
@@ -865,6 +879,10 @@ impl HostPlugin for WasmcloudNats {
                     linker,
                     crate::engine::ctx::extract_active_ctx,
                 )?;
+                nats_wit::kv_admin::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                    linker,
+                    crate::engine::ctx::extract_active_ctx,
+                )?;
             }
             if has_labeled {
                 use interfaces::bindings::named_imports::wasmcloud::nats as labeled_nats_wit;
@@ -889,6 +907,12 @@ impl HostPlugin for WasmcloudNats {
                     crate::engine::ctx::extract_active_ctx,
                 )?;
                 labeled_nats_wit::kv::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
+                    linker,
+                    &component,
+                    route,
+                    crate::engine::ctx::extract_active_ctx,
+                )?;
+                labeled_nats_wit::kv_admin::add_to_linker::<_, crate::engine::ctx::SharedCtx>(
                     linker,
                     &component,
                     route,
@@ -1256,6 +1280,23 @@ mod tests {
     }
 
     #[test]
+    fn bucket_admin_ceilings_only_allow_narrowing() {
+        let plugin = WasmcloudNats::new();
+        for key in ["bucket-create-allow", "bucket-delete-allow"] {
+            assert!(plugin.narrows(key, "cache,sessions", "cache"), "{key}");
+            assert!(plugin.narrows(key, "cache", ""), "{key}");
+            assert!(!plugin.narrows(key, "cache", "cache,other"), "{key}");
+            assert!(!plugin.narrows(key, "", "cache"), "{key}");
+            assert!(!plugin.narrows(key, "cache", ">"), "{key}");
+        }
+        assert!(plugin.narrows("bucket-max-bytes", "1048576", "1024"));
+        assert!(plugin.narrows("bucket-max-bytes", "1048576", "1048576"));
+        assert!(!plugin.narrows("bucket-max-bytes", "1048576", "1048577"));
+        assert!(!plugin.narrows("bucket-max-bytes", "1048576", "0"));
+        assert!(!plugin.narrows("bucket-max-bytes", "1048576", "lots"));
+    }
+
+    #[test]
     fn egress_check_uses_nats_endpoint_normalization() {
         let plugin = WasmcloudNats::new();
         plugin
@@ -1462,8 +1503,8 @@ mod tests {
             v.sort();
             v
         };
-        assert_eq!(versions(&world.imports), vec!["0.1.3"]);
-        assert_eq!(versions(&world.exports), vec!["0.1.3"]);
+        assert_eq!(versions(&world.imports), vec!["0.1.4"]);
+        assert_eq!(versions(&world.exports), vec!["0.1.4"]);
         for iface in world.exports.iter() {
             assert!(
                 iface.interfaces.contains("kv-handler"),
@@ -1522,7 +1563,7 @@ mod tests {
     fn split_entries_fold_into_one_binding() {
         let entries = [
             entry(
-                "wasmcloud:nats/types,core,jetstream@0.1.3",
+                "wasmcloud:nats/types,core,jetstream@0.1.4",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1531,7 +1572,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/jetstream-handler@0.1.3",
+                "wasmcloud:nats/jetstream-handler@0.1.4",
                 None,
                 &[("jetstream-subscriptions", "ORDERS:orders.eu.>")],
             ),
@@ -1556,12 +1597,12 @@ mod tests {
     fn entries_may_repeat_a_key_they_agree_on() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.1.3",
+                "wasmcloud:nats/core@0.1.4",
                 None,
                 &[("servers", "nats://localhost:4222")],
             ),
             entry(
-                "wasmcloud:nats/core-handler@0.1.3",
+                "wasmcloud:nats/core-handler@0.1.4",
                 None,
                 &[
                     ("servers", "nats://localhost:4222"),
@@ -1580,12 +1621,12 @@ mod tests {
     #[test]
     fn a_label_naming_the_plugin_is_the_unnamed_binding() {
         let plain = entry(
-            "wasmcloud:nats/core@0.1.3",
+            "wasmcloud:nats/core@0.1.4",
             None,
             &[("servers", "nats://localhost:4222")],
         );
         let labeled = entry(
-            "wasmcloud:nats/core-handler@0.1.3",
+            "wasmcloud:nats/core-handler@0.1.4",
             Some(super::super::PLUGIN_NATS_ID),
             &[("core-subscriptions", "orders.new")],
         );
@@ -1603,7 +1644,7 @@ mod tests {
     #[test]
     fn conflicting_entries_are_refused_by_key_name() {
         let a = entry(
-            "wasmcloud:nats/core@0.1.3",
+            "wasmcloud:nats/core@0.1.4",
             None,
             &[
                 ("servers", "nats://localhost:4222"),
@@ -1611,7 +1652,7 @@ mod tests {
             ],
         );
         let b = entry(
-            "wasmcloud:nats/core-handler@0.1.3",
+            "wasmcloud:nats/core-handler@0.1.4",
             None,
             &[("subject_allow", "orders.>")],
         );
@@ -1631,7 +1672,7 @@ mod tests {
     #[test]
     fn a_binding_without_servers_is_still_refused() {
         let entries = [entry(
-            "wasmcloud:nats/jetstream-handler@0.1.3",
+            "wasmcloud:nats/jetstream-handler@0.1.4",
             None,
             &[("jetstream-subscriptions", "ORDERS:orders.>")],
         )];
@@ -1644,7 +1685,7 @@ mod tests {
     fn named_bindings_fold_separately() {
         let entries = [
             entry(
-                "wasmcloud:nats/core@0.1.3",
+                "wasmcloud:nats/core@0.1.4",
                 Some("hub"),
                 &[
                     ("servers", "nats://hub:4222"),
@@ -1652,7 +1693,7 @@ mod tests {
                 ],
             ),
             entry(
-                "wasmcloud:nats/core@0.1.3",
+                "wasmcloud:nats/core@0.1.4",
                 Some("leaf"),
                 &[
                     ("servers", "nats://leaf:4222"),

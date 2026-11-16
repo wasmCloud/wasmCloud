@@ -128,6 +128,9 @@ pub const KEYS: &[Key] = &[
     ceiling("stream-allow"),
     ceiling("stream-delete-allow"),
     ceiling("bucket-allow"),
+    ceiling("bucket-create-allow"),
+    ceiling("bucket-delete-allow"),
+    ceiling("bucket-max-bytes"),
     // The workload's own behaviour within that grant.
     workload("ack-mode"),
     workload("request-timeout-ms"),

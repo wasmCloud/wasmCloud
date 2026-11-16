@@ -1000,3 +1000,122 @@ async fn a_bucket_writes_to_the_server_it_was_opened_on() -> anyhow::Result<()> 
     plugin.connections.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyhow::Result<()> {
+    use labeled_kv::{HostBucket as BucketDrop, HostBucketWithStore as Bucket};
+    use labeled_kv_admin::HostWithStore as Admin;
+    let fx = fixture().await?;
+    let name = fx.scope.bucket.clone();
+    let admin_config = NatsConfig::from_map(&crate::wit::Config::from([
+        ("servers", fx.server.url.clone()),
+        ("bucket-allow", name.clone()),
+        ("bucket-create-allow", name.clone()),
+        ("bucket-delete-allow", name.clone()),
+        ("bucket-max-bytes", "1048576".into()),
+    ]))?;
+    let admin = acquire(&fx.plugin, "workload", "admin", &admin_config).await?;
+    // `bucket-allow` alone: may read the config, may not create or delete.
+    let reader = fx.conn.clone();
+    let config = |max_bytes| kv_admin::BucketConfig {
+        bucket: name.clone(),
+        history: 3,
+        max_age_ms: 0,
+        max_bytes,
+        max_value_size: 0,
+        storage: kv_admin::StorageType::Memory,
+        limit_marker_ttl_ms: Some(1_500),
+    };
+    let mut store = new_store("workload", Some(&fx.plugin))?;
+    let ran = tokio::time::timeout(
+        Duration::from_secs(60),
+        store.run_concurrent(async |store_accessor| {
+            let host_accessor = store_accessor.with_getter::<SharedCtx>(extract_active_ctx);
+            let accessor = &host_accessor;
+
+            let denial = expect_denied(
+                <SharedCtx as Admin<_>>::create_bucket(accessor, reader.clone(), config(0)).await?,
+            );
+            assert!(matches!(denial.reason, types::DenialReason::NotGranted));
+            assert!(matches!(denial.target, types::DeniedResource::Bucket));
+            assert_eq!(denial.name, name);
+
+            assert!(matches!(
+                <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(2 << 20))
+                    .await?,
+                Err(types::NatsError::LimitExceeded(_))
+            ));
+
+            let bucket = <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
+                .await?
+                .unwrap();
+            // Same config again opens the existing bucket.
+            let again = <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
+                .await?
+                .unwrap();
+            match <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(4096))
+                .await?
+            {
+                Err(types::NatsError::Jetstream(m)) => {
+                    assert!(m.contains("different configuration"), "{m}")
+                }
+                other => panic!("expected a config conflict, got {other:?}"),
+            }
+
+            let read =
+                <SharedCtx as Admin<_>>::get_bucket_config(accessor, reader.clone(), name.clone())
+                    .await?
+                    .unwrap();
+            assert_eq!(read.bucket, name);
+            assert_eq!(read.history, 3);
+            assert_eq!(read.max_age_ms, 0);
+            // 0 took the host's `bucket-max-bytes`.
+            assert_eq!(read.max_bytes, 1 << 20);
+            assert_eq!(read.max_value_size, 0);
+            assert!(matches!(read.storage, kv_admin::StorageType::Memory));
+            // Rounded up to whole seconds.
+            assert_eq!(read.limit_marker_ttl_ms, Some(2_000));
+
+            // The marker TTL is what lets per-key TTL work on the new bucket.
+            <SharedCtx as Bucket<_>>::create_with_ttl(
+                accessor,
+                admin.clone(),
+                borrow(&bucket),
+                "lease".into(),
+                b"held".to_vec(),
+                1_000,
+            )
+            .await?
+            .unwrap();
+
+            expect_denied(
+                <SharedCtx as Admin<_>>::delete_bucket(accessor, reader.clone(), name.clone())
+                    .await?,
+            );
+            <SharedCtx as Admin<_>>::delete_bucket(accessor, admin.clone(), name.clone())
+                .await?
+                .unwrap();
+            expect_not_found(
+                <SharedCtx as Admin<_>>::delete_bucket(accessor, admin.clone(), name.clone())
+                    .await?,
+            );
+            expect_not_found(
+                <SharedCtx as Admin<_>>::get_bucket_config(accessor, reader.clone(), name.clone())
+                    .await?,
+            );
+            for handle in [bucket, again] {
+                sync_call!(store_accessor, |active| BucketDrop::drop(
+                    &mut active,
+                    admin.clone(),
+                    handle
+                ))?;
+            }
+            Ok::<_, wasmtime::Error>(())
+        }),
+    )
+    .await?;
+    finished(ran)?;
+    fx.plugin.connections.shutdown().await;
+    Ok(())
+}

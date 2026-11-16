@@ -1,8 +1,8 @@
-//! `wasmcloud:nats/jetstream@0.1.3` — the stream-level operations.
+//! `wasmcloud:nats/jetstream@0.1.4` — the stream-level operations.
 //!
-//! The interface's two resources and the KV interface built on the same
+//! The interface's two resources and the KV interfaces built on the same
 //! JetStream context live beside this one: [`message_handle`],
-//! [`pull_consumer`] and [`kv`].
+//! [`pull_consumer`], [`kv`] and [`kv_admin`].
 
 use std::time::Duration;
 
@@ -24,6 +24,7 @@ use crate::plugin::wasmcloud_nats::jetstream::PullConsumerHandle;
 use crate::plugin::wasmcloud_nats::policy::Denied;
 
 pub(super) mod kv;
+pub(super) mod kv_admin;
 pub(super) mod message_handle;
 pub(super) mod pull_consumer;
 

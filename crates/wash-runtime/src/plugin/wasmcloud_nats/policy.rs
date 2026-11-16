@@ -43,6 +43,9 @@ pub struct PolicyEngine {
     stream_allow: Vec<NatsSubjectPattern>,
     stream_delete_allow: Vec<NatsSubjectPattern>,
     bucket_allow: Vec<NatsSubjectPattern>,
+    bucket_create_allow: Vec<NatsSubjectPattern>,
+    bucket_delete_allow: Vec<NatsSubjectPattern>,
+    bucket_max_bytes: Option<u64>,
     /// Lattice subjects to deny when the host is lattice-connected.
     lattice_prefixes: Vec<String>,
 }
@@ -260,6 +263,17 @@ impl PolicyEngine {
                 .iter()
                 .map(|s| NatsSubjectPattern::parse(s))
                 .collect(),
+            bucket_create_allow: spec
+                .bucket_create_allow
+                .iter()
+                .map(|s| NatsSubjectPattern::parse(s))
+                .collect(),
+            bucket_delete_allow: spec
+                .bucket_delete_allow
+                .iter()
+                .map(|s| NatsSubjectPattern::parse(s))
+                .collect(),
+            bucket_max_bytes: spec.bucket_max_bytes,
             lattice_prefixes,
         }
     }
@@ -455,6 +469,37 @@ impl PolicyEngine {
             Err(Denied::NotGranted)
         }
     }
+
+    /// Creating a bucket needs `bucket-allow` and `bucket-create-allow`.
+    pub fn check_bucket_create(&self, bucket: &str) -> Result<(), Denied> {
+        self.check_bucket(bucket)?;
+        if self.bucket_create_allow.iter().any(|p| p.matches(bucket)) {
+            Ok(())
+        } else {
+            Err(Denied::NotGranted)
+        }
+    }
+
+    /// Deleting a bucket needs `bucket-allow` and `bucket-delete-allow`.
+    pub fn check_bucket_delete(&self, bucket: &str) -> Result<(), Denied> {
+        self.check_bucket(bucket)?;
+        if self.bucket_delete_allow.iter().any(|p| p.matches(bucket)) {
+            Ok(())
+        } else {
+            Err(Denied::NotGranted)
+        }
+    }
+
+    /// The size a new bucket gets: `requested`, or the host's ceiling when the
+    /// guest asked for 0 (unlimited). `Err` carries the ceiling it exceeded.
+    pub fn bucket_max_bytes(&self, requested: u64) -> Result<u64, u64> {
+        match (self.bucket_max_bytes, requested) {
+            (None, requested) => Ok(requested),
+            (Some(ceiling), 0) => Ok(ceiling),
+            (Some(ceiling), requested) if requested <= ceiling => Ok(requested),
+            (Some(ceiling), _) => Err(ceiling),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -467,8 +512,8 @@ mod tests {
             &PolicySpec {
                 subject_allow: subjects.iter().map(|s| s.to_string()).collect(),
                 stream_allow: streams.iter().map(|s| s.to_string()).collect(),
-                stream_delete_allow: vec![],
                 bucket_allow: buckets.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
             },
             Vec::new(),
         )
@@ -520,6 +565,63 @@ mod tests {
         ] {
             assert!(p.check_subscription(pattern).is_err(), "{pattern}");
         }
+    }
+
+    #[test]
+    fn bucket_lifecycle_requires_bucket_allow_and_its_own_grant() {
+        for (reads, admin, allowed) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, true),
+        ] {
+            let p = PolicyEngine::new(
+                &PolicySpec {
+                    bucket_allow: if reads { vec!["cache".into()] } else { vec![] },
+                    bucket_create_allow: if admin { vec!["cache".into()] } else { vec![] },
+                    bucket_delete_allow: if admin { vec!["cache".into()] } else { vec![] },
+                    ..Default::default()
+                },
+                Vec::new(),
+            );
+            assert_eq!(p.check_bucket_create("cache").is_ok(), allowed);
+            assert_eq!(p.check_bucket_delete("cache").is_ok(), allowed);
+            assert_eq!(p.check_bucket_create("other"), Err(Denied::NotGranted));
+        }
+
+        // The two grants are independent: create does not imply delete.
+        let create_only = PolicyEngine::new(
+            &PolicySpec {
+                bucket_allow: vec![">".into()],
+                bucket_create_allow: vec![">".into()],
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+        assert!(create_only.check_bucket_create("cache").is_ok());
+        assert_eq!(
+            create_only.check_bucket_delete("cache"),
+            Err(Denied::NotGranted)
+        );
+    }
+
+    #[test]
+    fn bucket_max_bytes_caps_and_defaults_new_buckets() {
+        let unlimited = engine(&[], &[], &["cache"]);
+        assert_eq!(unlimited.bucket_max_bytes(0), Ok(0));
+        assert_eq!(unlimited.bucket_max_bytes(u64::MAX), Ok(u64::MAX));
+
+        let capped = PolicyEngine::new(
+            &PolicySpec {
+                bucket_max_bytes: Some(1024),
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+        assert_eq!(capped.bucket_max_bytes(0), Ok(1024));
+        assert_eq!(capped.bucket_max_bytes(512), Ok(512));
+        assert_eq!(capped.bucket_max_bytes(1024), Ok(1024));
+        assert_eq!(capped.bucket_max_bytes(1025), Err(1024));
     }
 
     #[test]
