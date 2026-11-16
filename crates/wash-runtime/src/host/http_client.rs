@@ -50,7 +50,6 @@ use hyper_util::client::legacy::connect::{
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::net::TcpStream;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
@@ -695,22 +694,18 @@ impl PooledClient {
         Self::bounded(
             tls,
             None,
-            quota.outbound_http_permits(),
-            unbounded_permits(),
+            quota,
             crate::host::quota::QuotaRegistry::new(Default::default(), None).http_wait(),
             MIN_IDLE_PER_AUTHORITY,
         )
     }
 
-    /// Create a client whose new connections each hold one permit from
-    /// `workload_permits` (the HTTP surface of the quota belonging to the
-    /// workload named by `workload`, if any) and one from `global_permits`
-    /// (shared host-wide) for the connection's lifetime.
+    /// Charge both the workload's HTTP quota and the host-wide quota for
+    /// each new connection's lifetime.
     fn bounded(
         tls: Arc<rustls::ClientConfig>,
         workload: Option<Arc<str>>,
-        workload_permits: Arc<Semaphore>,
-        global_permits: Arc<Semaphore>,
+        quota: crate::host::quota::GuestConnectionQuota,
         permit_wait: Duration,
         idle_per_authority: usize,
     ) -> Self {
@@ -721,8 +716,7 @@ impl PooledClient {
         let connector = |alpn: Alpn| BoundedConnector {
             inner: https_connector(&tls_config, alpn),
             workload: workload.clone(),
-            workload_permits: workload_permits.clone(),
-            global_permits: global_permits.clone(),
+            quota: quota.clone(),
             permit_wait,
             last_permit_warning: last_permit_warning.clone(),
         };
@@ -1033,13 +1027,8 @@ impl WorkloadClients {
     /// derived from guest-controllable data. Two callers presenting the same
     /// ID share keep-alive connections (see [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
-        // Looked up on every call, not just on a client-cache miss, so the
-        // quota's idle window is refreshed alongside the client's and a
-        // workload's allowance cannot expire out from under a client that is
-        // still serving it. The quota's window is the longer of the two, so it
-        // outlives the client either way.
-        let quota = self.quotas.for_guest(workload_id);
         self.clients.get_with_by_ref(workload_id, || {
+            let quota = self.quotas.for_guest(workload_id);
             let calls = self
                 .call_concurrency
                 .read()
@@ -1050,11 +1039,7 @@ impl WorkloadClients {
             PooledClient::bounded(
                 self.tls.config_for(workload_id),
                 Some(Arc::from(workload_id)),
-                quota.outbound_http_permits(),
-                // An unset host-wide ceiling is spelled as an effectively
-                // unbounded semaphore rather than an `Option`, so the connector
-                // has one acquire path instead of two.
-                quota.global_permits().unwrap_or_else(unbounded_permits),
+                quota,
                 self.quotas.http_wait(),
                 idle_per_authority(calls, self.quotas.limits().outbound_http),
             )
@@ -1070,9 +1055,7 @@ impl WorkloadClients {
     /// [`Self::client`] call for the same ID builds a fresh client with a
     /// fresh connection pool.
     ///
-    /// The workload's quota deliberately survives, so that the
-    /// draining connections stay charged to it; it ages out on its own idle
-    /// window ([`WORKLOAD_CLIENT_IDLE`]) once nothing refers to the workload.
+    /// Draining connections keep the workload's quota alive until they close.
     pub fn invalidate(&self, workload_id: &str) {
         self.clients.invalidate(workload_id);
         self.call_concurrency
@@ -1146,8 +1129,7 @@ struct BoundedConnector {
     /// The workload this connector belongs to, named in the exhaustion
     /// warning. `None` for a standalone [`PooledClient::new`] client.
     workload: Option<Arc<str>>,
-    workload_permits: Arc<Semaphore>,
-    global_permits: Arc<Semaphore>,
+    quota: crate::host::quota::GuestConnectionQuota,
     permit_wait: Duration,
     /// When this workload last logged permit exhaustion; see
     /// [`warn_permits_exhausted`].
@@ -1172,47 +1154,24 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         let mut inner = self.inner.clone();
         std::mem::swap(&mut self.inner, &mut inner);
         let workload = self.workload.clone();
-        let workload_permits = self.workload_permits.clone();
-        let global_permits = self.global_permits.clone();
+        let quota = self.quota.clone();
         let permit_wait = self.permit_wait;
         let last_permit_warning = self.last_permit_warning.clone();
         Box::pin(async move {
-            // Acquire order (workload, then global) is fixed everywhere, and
-            // waiters hold no resource another waiter needs, so waiting on
-            // both cannot deadlock. `acquire_owned` only errors when the
-            // semaphore is closed, which never happens.
-            let acquire =
-                {
-                    let workload_permits = workload_permits.clone();
-                    let global_permits = global_permits.clone();
-                    async move {
-                        let workload = workload_permits.acquire_owned().await.map_err(|_| {
-                            std::io::Error::other("outbound connection limiter closed")
-                        })?;
-                        let global = global_permits.acquire_owned().await.map_err(|_| {
-                            std::io::Error::other("outbound connection limiter closed")
-                        })?;
-                        Ok::<_, std::io::Error>((workload, global))
-                    }
-                };
-            let permits = tokio::time::timeout(permit_wait, acquire)
+            let slot = tokio::time::timeout(permit_wait, quota.acquire_outbound_http())
                 .await
                 .map_err(|_| {
-                    warn_permits_exhausted(
-                        &last_permit_warning,
-                        workload.as_deref(),
-                        &workload_permits,
-                        &global_permits,
-                    );
+                    warn_permits_exhausted(&last_permit_warning, workload.as_deref(), &quota);
                     std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         "outbound connection limit reached (per-workload or host-wide)",
                     )
-                })??;
+                })?
+                .map_err(|_| std::io::Error::other("outbound connection limiter closed"))?;
             let stream = tower_service::Service::call(&mut inner, uri).await?;
             Ok(PermittedStream {
                 inner: stream,
-                _permits: permits,
+                _slot: slot,
             })
         })
     }
@@ -1233,8 +1192,7 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
 fn warn_permits_exhausted(
     last_warning: &std::sync::Mutex<Option<std::time::Instant>>,
     workload: Option<&str>,
-    workload_permits: &Semaphore,
-    global_permits: &Semaphore,
+    quota: &crate::host::quota::GuestConnectionQuota,
 ) {
     let mut last = last_warning.lock().unwrap_or_else(|e| e.into_inner());
     if last.is_none_or(|at| at.elapsed() >= PERMIT_WARN_INTERVAL) {
@@ -1242,8 +1200,8 @@ fn warn_permits_exhausted(
         drop(last);
         warn!(
             workload_id = workload.unwrap_or("<none>"),
-            workload_permits_available = workload_permits.available_permits(),
-            global_permits_available = global_permits.available_permits(),
+            workload_permits_available = quota.outbound_http_available(),
+            global_permits_available = ?quota.global_permits().map(|permits| permits.available_permits()),
             "outbound connect timed out waiting for a connection permit; \
              a connection quota is exhausted (logged at most once per \
              {PERMIT_WARN_INTERVAL:?} per workload)"
@@ -1251,17 +1209,11 @@ fn warn_permits_exhausted(
     }
 }
 
-/// An effectively unbounded semaphore, for a host that configured no
-/// host-wide ceiling.
-fn unbounded_permits() -> Arc<Semaphore> {
-    Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
-}
-
 /// A connection stream carrying its quota slots; dropping
 /// the stream (connection close) releases them.
 struct PermittedStream {
     inner: hyper_rustls::MaybeHttpsStream<TokioIo<TcpStream>>,
-    _permits: (OwnedSemaphorePermit, OwnedSemaphorePermit),
+    _slot: crate::host::quota::ConnectionSlot,
 }
 
 impl hyper::rt::Read for PermittedStream {
