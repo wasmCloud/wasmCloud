@@ -47,6 +47,7 @@ pub struct PolicyEngine {
     bucket_delete_allow: Vec<NatsSubjectPattern>,
     bucket_max_bytes: Option<u64>,
     bucket_replicas: Option<usize>,
+    bucket_max_count: u32,
     /// Lattice subjects to deny when the host is lattice-connected.
     lattice_prefixes: Vec<String>,
 }
@@ -276,6 +277,9 @@ impl PolicyEngine {
                 .collect(),
             bucket_max_bytes: spec.bucket_max_bytes,
             bucket_replicas: spec.bucket_replicas,
+            bucket_max_count: spec
+                .bucket_max_count
+                .unwrap_or(super::config::DEFAULT_BUCKET_MAX_COUNT),
             lattice_prefixes,
         }
     }
@@ -507,6 +511,12 @@ impl PolicyEngine {
     pub fn bucket_replicas(&self) -> Option<usize> {
         self.bucket_replicas
     }
+
+    /// How many buckets within the create grant may exist before a create of
+    /// a new one is refused.
+    pub fn bucket_max_count(&self) -> u32 {
+        self.bucket_max_count
+    }
 }
 
 #[cfg(test)]
@@ -642,6 +652,19 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(replicated.bucket_replicas(), Some(3));
+    }
+
+    #[test]
+    fn bucket_max_count_defaults_to_one() {
+        assert_eq!(engine(&[], &[], &[]).bucket_max_count(), 1);
+        let five = PolicyEngine::new(
+            &PolicySpec {
+                bucket_max_count: Some(5),
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+        assert_eq!(five.bucket_max_count(), 5);
     }
 
     #[test]

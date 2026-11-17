@@ -115,7 +115,8 @@ interface types {
     ///
     /// `kv-admin.create-bucket` also returns it, as
     /// `create-bucket-error.nats`, when the requested `max-bytes` is over the
-    /// host's `bucket-max-bytes`.
+    /// host's `bucket-max-bytes`, or when a new bucket would be more than the
+    /// host's `bucket-max-count`.
     ///
     /// Either way nothing was delivered, and retrying unchanged fails the
     /// same way.
@@ -551,6 +552,11 @@ interface kv {
 /// `bucket-create-allow`, and deleting needs `bucket-delete-allow`. Both are
 /// deny-by-default and host-owned.
 ///
+/// The host also limits creation: `bucket-max-bytes` caps each bucket's size,
+/// and `bucket-max-count` (1 unless the host sets it) caps how many buckets
+/// the create grant may hold, counted on the server whoever made them.
+/// Deleting one frees its place.
+///
 /// Replicas, placement, mirrors, and sources are not exposed: they are
 /// cluster decisions. The host's `bucket-replicas` sets the replica count;
 /// the rest take the server's defaults.
@@ -597,11 +603,12 @@ interface kv-admin {
   /// Create a bucket and open it. Requires NATS 2.10+.
   ///
   /// Idempotent: an existing bucket that matches every field set here is
-  /// opened. `max-bytes: 0` matches any size within the host's
-  /// `bucket-max-bytes` (any size when it has none), and the replica count is
-  /// never compared, so a startup create survives the host changing either.
-  /// Any other difference leaves the bucket unchanged and fails with
-  /// `config-conflict`.
+  /// opened, and does not count toward `bucket-max-count`. `max-bytes: 0`
+  /// matches any size within the host's `bucket-max-bytes` (any size when it
+  /// has none), and the replica count is never compared, so a startup create
+  /// survives the host changing either. Any other difference, or an existing
+  /// bucket over a lowered `bucket-max-bytes`, leaves the bucket unchanged and
+  /// fails with `config-conflict`.
   create-bucket: async func(config: bucket-config) -> result<bucket, create-bucket-error>;
 
   /// Read a bucket's configuration. Needs only `bucket-allow`.
