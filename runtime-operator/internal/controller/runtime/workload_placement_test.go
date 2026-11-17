@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -235,6 +236,8 @@ func TestStableNamePrecedence(t *testing.T) {
 // differently is refused before it reaches a host.
 func TestPlacementRecordsStableNameOnce(t *testing.T) {
 	r, workload, bus := placementFixture(t)
+	recorder := events.NewFakeRecorder(4)
+	r.Recorder = recorder
 	workload.Annotations = map[string]string{appNameAnnotation: "billing"}
 	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 		t.Fatal(err)
@@ -255,6 +258,13 @@ func TestPlacementRecordsStableNameOnce(t *testing.T) {
 	err := r.reconcilePlacement(t.Context(), workload)
 	if err == nil || !strings.Contains(err.Error(), `first placed as "billing"`) {
 		t.Fatalf("re-placing under a new name returned %v", err)
+	}
+	if got := condition.ErrorConditionFor(runtimev1alpha1.WorkloadConditionPlacement, err); got.Reason != reasonStableNameChanged {
+		t.Fatalf("placement condition reason = %q", got.Reason)
+	}
+	if recorded := drainEvents(recorder); len(recorded) != 1 || !strings.Contains(recorded[0], reasonStableNameChanged) ||
+		!strings.Contains(recorded[0], "recreate the Workload") {
+		t.Fatalf("events = %q", recorded)
 	}
 	if workload.Status.StableName != "billing" || workload.Status.WorkloadID != "" {
 		t.Fatalf("refused re-placement recorded %+v", workload.Status)

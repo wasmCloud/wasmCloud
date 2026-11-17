@@ -41,6 +41,33 @@ func IsStatusUnknown(err error) bool {
 	return errors.Is(err, errStatusUnknown)
 }
 
+// reasonedError fails a condition with its own reason.
+// +kubebuilder:object:generate=false
+type reasonedError struct {
+	reason ConditionReason
+	err    error
+}
+
+func (e *reasonedError) Error() string { return e.err.Error() }
+
+func (e *reasonedError) Unwrap() error { return e.err }
+
+// ErrWithReason fails a condition with reason rather than "Reconcile", so a
+// failure that needs its own remedy can be told from the rest.
+func ErrWithReason(reason ConditionReason, err error) error {
+	return &reasonedError{reason: reason, err: err}
+}
+
+// ErrorConditionFor is the condition condType takes for err: its
+// ErrWithReason reason, else "Reconcile".
+func ErrorConditionFor(condType ConditionType, err error) Condition {
+	var reasoned *reasonedError
+	if errors.As(err, &reasoned) {
+		return ErrorCondition(condType, reasoned.reason, err)
+	}
+	return ErrorCondition(condType, "Reconcile", err)
+}
+
 // ErrNoop is an error that indicates no changes should be made to the status.
 // Used to indicate the reconciler is not ready to change the condition status yet.
 func ErrNoop() error {
@@ -403,7 +430,7 @@ func (r *ConditionedReconciler[T]) reconcileConditions(ctx context.Context, obj 
 				conditions.SetConditions(stamp(ReadyCondition(condEntry.condition)))
 				break
 			} else {
-				conditions.SetConditions(stamp(ErrorCondition(condEntry.condition, "Reconcile", condErr)))
+				conditions.SetConditions(stamp(ErrorConditionFor(condEntry.condition, condErr)))
 				batch = false
 			}
 		} else {

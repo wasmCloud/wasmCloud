@@ -913,28 +913,30 @@ pub trait ClientTlsConfigResolver: Send + Sync + 'static {
     /// [`DefaultOutgoingHandler`]: crate::host::http::DefaultOutgoingHandler
     fn host_config(&self) -> Arc<rustls::ClientConfig>;
 
-    /// The configuration `workload_id`'s HTTPS connections to `host:port` use,
-    /// when it differs from [`Self::config_for`].
+    /// The configuration `workload_id`'s HTTPS connections to `host:port` use
+    /// when it differs from [`Self::config_for`], with when a connection made
+    /// with it must close. `None` uses [`Self::config_for`].
     ///
-    /// Consulted on every new connection, so it must be as cheap as
-    /// [`Self::config_for`]. Connections are pooled per destination, so every
+    /// Asked once per new connection, so it must be as cheap as
+    /// [`Self::config_for`], and the configuration and its end always describe
+    /// the same credential. Connections are pooled per destination, so every
     /// connection a workload holds to one destination was made with the same
     /// answer for as long as the answer stays the same.
+    ///
+    /// A resolver that wraps another must forward this, `closes` included, or
+    /// the identity the inner one presents is either lost or kept open past
+    /// its expiry and revocation.
+    fn destination_tls(&self, workload_id: &str, host: &str, port: u16) -> Option<DestinationTls>;
+
+    /// The configuration part of [`Self::destination_tls`].
     fn config_for_destination(
         &self,
-        _workload_id: &str,
-        _host: &str,
-        _port: u16,
+        workload_id: &str,
+        host: &str,
+        port: u16,
     ) -> Option<Arc<rustls::ClientConfig>> {
-        None
-    }
-
-    /// [`Self::config_for_destination`], with when a connection made with it
-    /// stops being valid. Asked once per new connection, so the
-    /// configuration and its end always describe the same credential.
-    fn destination_tls(&self, workload_id: &str, host: &str, port: u16) -> Option<DestinationTls> {
-        self.config_for_destination(workload_id, host, port)
-            .map(DestinationTls::new)
+        self.destination_tls(workload_id, host, port)
+            .map(|tls| tls.config)
     }
 }
 
@@ -967,6 +969,10 @@ impl ClientTlsConfigResolver for Arc<rustls::ClientConfig> {
 
     fn host_config(&self) -> Arc<rustls::ClientConfig> {
         Arc::clone(self)
+    }
+
+    fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+        None
     }
 }
 
@@ -1379,7 +1385,7 @@ struct ConnectPolicy {
     /// still applies.
     host_loopback: HostLoopbackGrants,
     /// Asked on every HTTPS connect for a configuration of its own for the
-    /// destination; see [`ClientTlsConfigResolver::config_for_destination`].
+    /// destination; see [`ClientTlsConfigResolver::destination_tls`].
     destination_tls: Option<Arc<dyn ClientTlsConfigResolver>>,
 }
 
@@ -2190,6 +2196,10 @@ pub(crate) mod tests {
 
         fn host_config(&self) -> Arc<rustls::ClientConfig> {
             Arc::clone(&self.host)
+        }
+
+        fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+            None
         }
     }
 
@@ -3502,14 +3512,14 @@ pub(crate) mod tests {
             fn host_config(&self) -> Arc<rustls::ClientConfig> {
                 Arc::clone(&self.plain)
             }
-            fn config_for_destination(
+            fn destination_tls(
                 &self,
                 workload_id: &str,
                 host: &str,
                 port: u16,
-            ) -> Option<Arc<rustls::ClientConfig>> {
+            ) -> Option<DestinationTls> {
                 (workload_id == "w1" && host == "127.0.0.1" && port == self.port)
-                    .then(|| Arc::clone(&self.with_identity))
+                    .then(|| DestinationTls::new(Arc::clone(&self.with_identity)))
             }
         }
         let clients = WorkloadClients::with_tls_config_resolver(
@@ -3603,6 +3613,9 @@ pub(crate) mod tests {
             fn host_config(&self) -> Arc<rustls::ClientConfig> {
                 Arc::clone(&self.host)
             }
+            fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+                None
+            }
         }
 
         let (port, ca_pem) = private_ca_tls_server().await;
@@ -3659,6 +3672,9 @@ pub(crate) mod tests {
             }
             fn host_config(&self) -> Arc<rustls::ClientConfig> {
                 Arc::clone(&self.host)
+            }
+            fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+                None
             }
         }
 

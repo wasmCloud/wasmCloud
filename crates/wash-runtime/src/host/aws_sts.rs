@@ -185,45 +185,46 @@ fn secret_text(body: bytes::Bytes) -> Zeroizing<String> {
 /// Credentials are exchanged again half way through their life. They are
 /// leased only until they expire, so a failing exchange leaves `into` empty
 /// once the last credentials run out rather than serving stale ones. Once
-/// `identity` is revoked, within [`RETRY`], `into` is revoked and the task
-/// ends.
+/// `identity` is revoked, even mid-exchange, `into` is closed for good and
+/// the task ends, so give each refresh its own `into`.
 pub fn spawn_web_identity_refresh(
     sts: StsWebIdentity,
     identity: Arc<dyn EgressCredentialSource>,
     into: Arc<LeasedAwsCredentials>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        loop {
-            if identity.is_revoked() {
-                into.revoke();
-                return;
-            }
+        let revoked = identity.revocation().unwrap_or_default();
+        while !revoked.is_cancelled() {
             let wait = match identity.current() {
                 Err(_) => RETRY,
-                Ok(token) => match sts.assume(&token).await {
-                    Ok(credentials) => {
-                        let left = credentials
-                            .expires_at
-                            .and_then(|at| at.duration_since(SystemTime::now()).ok())
-                            .unwrap_or_default();
-                        into.renew(credentials, left);
-                        (left / 2).max(RETRY)
+                Ok(token) => {
+                    let assumed = tokio::select! {
+                        () = revoked.cancelled() => break,
+                        assumed = sts.assume(&token) => assumed,
+                    };
+                    match assumed {
+                        Ok(_) if revoked.is_cancelled() => break,
+                        Ok(credentials) => {
+                            let left = credentials
+                                .expires_at
+                                .and_then(|at| at.duration_since(SystemTime::now()).ok())
+                                .unwrap_or_default();
+                            into.renew(credentials, left);
+                            (left / 2).max(RETRY)
+                        }
+                        Err(err) => {
+                            warn!(role_arn = sts.role_arn, %err, "failed to exchange a web identity for AWS credentials");
+                            RETRY
+                        }
                     }
-                    Err(err) => {
-                        warn!(role_arn = sts.role_arn, %err, "failed to exchange a web identity for AWS credentials");
-                        RETRY
-                    }
-                },
-            };
-            let until = tokio::time::Instant::now() + wait;
-            while !identity.is_revoked() {
-                let now = tokio::time::Instant::now();
-                if now >= until {
-                    break;
                 }
-                tokio::time::sleep((until - now).min(RETRY)).await;
+            };
+            tokio::select! {
+                () = revoked.cancelled() => break,
+                () = tokio::time::sleep(wait) => {}
             }
         }
+        into.close();
     })
 }
 
@@ -346,6 +347,15 @@ mod tests {
 
     /// Answer every request with `status` and `xml`, recording each body.
     async fn sts(status: u16, xml: String) -> (StsWebIdentity, Arc<std::sync::Mutex<Vec<String>>>) {
+        sts_after(Duration::ZERO, status, xml).await
+    }
+
+    /// [`sts`], answering each request `delay` after recording its body.
+    async fn sts_after(
+        delay: Duration,
+        status: u16,
+        xml: String,
+    ) -> (StsWebIdentity, Arc<std::sync::Mutex<Vec<String>>>) {
         use hyper::service::service_fn;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -364,6 +374,7 @@ mod tests {
                         seen.lock()
                             .unwrap()
                             .push(String::from_utf8_lossy(&body).into_owned());
+                        tokio::time::sleep(delay).await;
                         let mut response = http::Response::new(Full::new(bytes::Bytes::from(xml)));
                         *response.status_mut() = http::StatusCode::from_u16(status).unwrap();
                         Ok::<_, std::convert::Infallible>(response)
@@ -479,29 +490,30 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
+    #[derive(Default)]
+    struct RevocableToken(tokio_util::sync::CancellationToken);
+
+    impl EgressCredentialSource for RevocableToken {
+        fn current(
+            &self,
+        ) -> Result<Zeroizing<Vec<u8>>, crate::host::egress_credential::CredentialError> {
+            Ok(Zeroizing::new(b"h.p.s".to_vec()))
+        }
+
+        fn revocation(&self) -> Option<tokio_util::sync::CancellationToken> {
+            Some(self.0.child_token())
+        }
+    }
+
     #[tokio::test]
     async fn a_revoked_identity_ends_the_refresh_and_its_credentials() {
-        #[derive(Default)]
-        struct Token(std::sync::atomic::AtomicBool);
-        impl EgressCredentialSource for Token {
-            fn current(
-                &self,
-            ) -> Result<Zeroizing<Vec<u8>>, crate::host::egress_credential::CredentialError>
-            {
-                Ok(Zeroizing::new(b"h.p.s".to_vec()))
-            }
-
-            fn is_revoked(&self) -> bool {
-                self.0.load(std::sync::atomic::Ordering::SeqCst)
-            }
-        }
         use crate::host::egress_sigv4::AwsCredentialSource as _;
         let (sts, _seen) = sts(
             200,
             credentials_xml(chrono::Utc::now() + chrono::Duration::seconds(600)),
         )
         .await;
-        let token = Arc::new(Token::default());
+        let token = Arc::new(RevocableToken::default());
         let leased = Arc::new(LeasedAwsCredentials::default());
         let task = spawn_web_identity_refresh(sts, token.clone(), Arc::clone(&leased));
         for _ in 0..200 {
@@ -512,11 +524,51 @@ mod tests {
         }
         assert!(leased.current().is_ok());
 
-        token.0.store(true, std::sync::atomic::Ordering::SeqCst);
-        tokio::time::timeout(RETRY + Duration::from_secs(1), task)
+        token.0.cancel();
+        tokio::time::timeout(Duration::from_millis(500), task)
             .await
-            .expect("the refresh ends")
+            .expect("the refresh ends at once")
             .unwrap();
         assert!(leased.current().is_err());
+    }
+
+    /// A revoke during an exchange ends it there: what STS answers later is
+    /// never served, and the credentials stay closed.
+    #[tokio::test]
+    async fn a_revoke_mid_exchange_serves_nothing() {
+        use crate::host::egress_sigv4::AwsCredentialSource as _;
+        let (sts, seen) = sts_after(
+            Duration::from_secs(2),
+            200,
+            credentials_xml(chrono::Utc::now() + chrono::Duration::seconds(600)),
+        )
+        .await;
+        let token = Arc::new(RevocableToken::default());
+        let leased = Arc::new(LeasedAwsCredentials::default());
+        let task = spawn_web_identity_refresh(sts, token.clone(), Arc::clone(&leased));
+        for _ in 0..200 {
+            if !seen.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(seen.lock().unwrap().len(), 1, "the exchange is in flight");
+
+        token.0.cancel();
+        tokio::time::timeout(Duration::from_millis(500), task)
+            .await
+            .expect("the refresh ends without waiting for STS")
+            .unwrap();
+        assert!(leased.current().is_err());
+        leased.renew(
+            AwsCredentials {
+                access_key_id: "ASIALATE".into(),
+                secret_access_key: Zeroizing::new("sk".into()),
+                session_token: None,
+                expires_at: None,
+            },
+            Duration::from_secs(60),
+        );
+        assert!(leased.current().is_err(), "closed for good");
     }
 }

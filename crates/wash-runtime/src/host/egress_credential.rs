@@ -150,10 +150,18 @@ impl std::error::Error for CredentialError {}
 pub trait EgressCredentialSource: Send + Sync + 'static {
     fn current(&self) -> Result<Zeroizing<Vec<u8>>, CredentialError>;
 
-    /// Whether this source is gone for good, so anything derived from it
-    /// should be dropped too. Default: never.
+    /// A token cancelled once this source is gone for good, so anything
+    /// derived from it should be dropped too. `None`, the default, is never.
+    ///
+    /// A source that wraps another must forward this, or what is derived
+    /// from the inner one outlives its revocation.
+    fn revocation(&self) -> Option<tokio_util::sync::CancellationToken> {
+        None
+    }
+
+    /// Whether [`Self::revocation`] has been cancelled.
     fn is_revoked(&self) -> bool {
-        false
+        self.revocation().is_some_and(|token| token.is_cancelled())
     }
 }
 
@@ -593,6 +601,8 @@ pub(crate) struct Substituted {
     values: Vec<Zeroizing<Vec<u8>>>,
     /// Values a re-signed request carried, which a response body may echo.
     signed: Vec<(Zeroizing<Vec<u8>>, Vec<u8>)>,
+    /// Set when the response body is not the server's echo of the request.
+    keep_body: bool,
 }
 
 impl std::fmt::Debug for Substituted {
@@ -634,6 +644,16 @@ impl Substituted {
     /// What [`Self::note_signed`] recorded, and what each is replaced with.
     pub(crate) fn signed(&self) -> &[(Zeroizing<Vec<u8>>, Vec<u8>)] {
         &self.signed
+    }
+
+    /// Leave the response body as the server sent it.
+    pub(crate) fn keep_body(&mut self) {
+        self.keep_body = true;
+    }
+
+    /// Whether the response body is scrubbed of [`Self::signed`].
+    pub(crate) fn scrubs_body(&self) -> bool {
+        !self.signed.is_empty() && !self.keep_body
     }
 
     fn note(&mut self, secret: &EgressSecret, sent: &[u8], placeholder: &[u8]) {

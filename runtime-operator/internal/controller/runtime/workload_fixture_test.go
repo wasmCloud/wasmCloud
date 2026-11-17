@@ -147,7 +147,7 @@ func statusReply(t *testing.T, workloadID string, state runtimev2.WorkloadState,
 // recordPlacement records the error reconcilePlacement returned as the
 // Workload's Placement condition, as the condition pipeline does.
 func recordPlacement(workload *runtimev1alpha1.Workload, err error) {
-	placement := condition.ErrorCondition(runtimev1alpha1.WorkloadConditionPlacement, "Reconcile", err)
+	placement := condition.ErrorConditionFor(runtimev1alpha1.WorkloadConditionPlacement, err)
 	if condition.IsStatusUnknown(err) {
 		placement = condition.UnknownCondition(runtimev1alpha1.WorkloadConditionPlacement, "Reconcile", err.Error())
 	}

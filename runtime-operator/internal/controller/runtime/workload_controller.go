@@ -58,6 +58,9 @@ const (
 	workloadReplicaSetLegacyAnnotation = "runtime.wasmcloud.dev/workload-replicaset"
 	// appNameAnnotation is the last name the host groups replicas by.
 	appNameAnnotation = "app.kubernetes.io/name"
+	// reasonStableNameChanged refuses a placement that would change the name
+	// recorded in status.stableName.
+	reasonStableNameChanged = "StableNameChanged"
 )
 
 // WorkloadReconciler reconciles a Workload object
@@ -654,7 +657,14 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	}
 	name := stableName(spec.Annotations, spec.Name)
 	if placed := workload.Status.StableName; placed != "" && placed != name {
-		return fmt.Errorf("the host would name this workload %q, but it was first placed as %q", name, placed)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning, reasonStableNameChanged, "Place",
+				"The host would name this workload %q, but it was first placed as %q; recreate the Workload to run it under the new name",
+				name, placed)
+		}
+		return condition.ErrWithReason(reasonStableNameChanged, fmt.Errorf(
+			"the host would name this workload %q, but it was first placed as %q; recreate the Workload to run it under the new name",
+			name, placed))
 	}
 	req := &runtimev2.WorkloadStartRequest{WorkloadId: string(workload.GetUID()), Workload: spec}
 

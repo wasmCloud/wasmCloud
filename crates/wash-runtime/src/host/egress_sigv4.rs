@@ -32,7 +32,11 @@ const SECURITY_TOKEN: HeaderName = HeaderName::from_static("x-amz-security-token
 const DECODED_LENGTH: HeaderName = HeaderName::from_static("x-amz-decoded-content-length");
 
 /// Services that send `x-amz-content-sha256` and sign the path as sent.
-pub const S3_SERVICES: [&str; 4] = ["s3", "s3express", "s3-object-lambda", "s3-outposts"];
+pub const S3_SERVICES: [&str; 4] = ["s3", "s3express", OBJECT_LAMBDA, "s3-outposts"];
+
+/// The S3 service whose responses come from the user's own Lambda, not from
+/// S3 echoing the request, so their bodies are left alone.
+const OBJECT_LAMBDA: &str = "s3-object-lambda";
 
 /// Credentials the host signs with.
 pub struct AwsCredentials {
@@ -65,24 +69,46 @@ pub trait AwsCredentialSource: Send + Sync + 'static {
 /// revoked.
 #[derive(Default)]
 pub struct LeasedAwsCredentials {
-    held: Mutex<Option<(Arc<AwsCredentials>, Instant)>>,
+    held: Mutex<AwsLease>,
+}
+
+#[derive(Default)]
+struct AwsLease {
+    credentials: Option<(Arc<AwsCredentials>, Instant)>,
+    closed: bool,
 }
 
 impl LeasedAwsCredentials {
+    /// A no-op once closed.
     pub fn renew(&self, credentials: AwsCredentials, valid_for: std::time::Duration) {
         let until = Instant::now() + valid_for;
-        *self.held.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::new(credentials), until));
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        if !held.closed {
+            held.credentials = Some((Arc::new(credentials), until));
+        }
     }
 
     pub fn revoke(&self) {
-        self.held.lock().unwrap_or_else(|e| e.into_inner()).take();
+        self.held
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .credentials
+            .take();
+    }
+
+    /// Revoke for good: a later [`Self::renew`], such as one from a refresh
+    /// that was mid-flight, serves nothing.
+    pub fn close(&self) {
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        held.credentials.take();
+        held.closed = true;
     }
 }
 
 impl AwsCredentialSource for LeasedAwsCredentials {
     fn current(&self) -> Result<Arc<AwsCredentials>, CredentialError> {
         let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
-        match &*held {
+        match &held.credentials {
             Some((credentials, until))
                 if Instant::now() < *until
                     && credentials
@@ -92,7 +118,7 @@ impl AwsCredentialSource for LeasedAwsCredentials {
                 Ok(Arc::clone(credentials))
             }
             _ => {
-                held.take();
+                held.credentials.take();
                 Err(CredentialError::Unavailable)
             }
         }
@@ -272,6 +298,9 @@ pub(crate) fn substitute_and_sign<B>(
         for sent in &signed.sent {
             done.note_signed(&signed.placeholder, sent);
         }
+        if signed.service == OBJECT_LAMBDA {
+            done.keep_body();
+        }
     }
     Ok(done)
 }
@@ -280,6 +309,7 @@ pub(crate) fn substitute_and_sign<B>(
 /// host's values it carries (the access key ID and any session token).
 pub(crate) struct Resigned {
     pub placeholder: Arc<str>,
+    pub service: String,
     sent: Vec<Zeroizing<Vec<u8>>>,
 }
 
@@ -287,6 +317,7 @@ impl std::fmt::Debug for Resigned {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Resigned")
             .field("placeholder", &self.placeholder)
+            .field("service", &self.service)
             .finish_non_exhaustive()
     }
 }
@@ -446,6 +477,7 @@ pub(crate) fn resign<B>(
     );
     Ok(Some(Resigned {
         placeholder: Arc::clone(&secret.placeholder),
+        service,
         sent,
     }))
 }

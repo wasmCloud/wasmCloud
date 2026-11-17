@@ -786,7 +786,13 @@ spec:
               stableName:
                 description: |-
                   StableName is the name the host gives this Workload's replicas, as
-                  computed from what it was sent when first placed. It never changes.
+                  computed from what it was sent when first placed. It comes from names
+                  in the Workload's own namespace, chosen by whoever created it or its
+                  owners, so it is unique only within that namespace. It is fixed once
+                  placed: a later placement that would change it is refused with reason
+                  StableNameChanged, and the remedy is to recreate the Workload. Workloads
+                  placed before this field existed do not have it until they are
+                  recreated.
                 type: string
               workloadId:
                 type: string

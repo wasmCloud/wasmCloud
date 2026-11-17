@@ -2,6 +2,7 @@ package condition
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -200,5 +201,18 @@ func TestConditionWithMessage(t *testing.T) {
 				t.Errorf("a.Equal(b): -want, +got:\n%s", diff)
 			}
 		})
+	}
+}
+
+// A condition error keeps its own reason through wrapping; any other error
+// fails the condition as Reconcile.
+func TestErrorConditionForKeepsItsReason(t *testing.T) {
+	reasoned := fmt.Errorf("placing: %w", ErrWithReason("StableNameChanged", errors.New("renamed")))
+	if got := ErrorConditionFor("Placement", reasoned); got.Reason != "StableNameChanged" ||
+		got.Status != ConditionFalse || got.Message != "placing: renamed" {
+		t.Fatalf("reasoned condition = %+v", got)
+	}
+	if got := ErrorConditionFor("Placement", errors.New("other")); got.Reason != "Reconcile" {
+		t.Fatalf("plain condition reason = %q", got.Reason)
 	}
 }

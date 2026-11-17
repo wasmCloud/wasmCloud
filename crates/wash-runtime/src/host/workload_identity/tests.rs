@@ -550,6 +550,33 @@ async fn an_expired_x509_svid_is_never_presented() {
     assert!(send().await.is_err(), "neither reused nor reissued");
 }
 
+/// A connection's close is fixed when it is made, at its SVID's expiry,
+/// however long the pool waits before first polling it.
+#[tokio::test]
+async fn a_connections_close_is_fixed_when_it_is_made() {
+    let issuer = FakeIssuer::new(Duration::from_secs(3));
+    let credentials = store(Arc::clone(&issuer));
+    credentials
+        .bind(
+            "w1",
+            grant(vec![MtlsDestination::new("127.0.0.1", 8443).unwrap()], &[]),
+        )
+        .unwrap();
+    credentials.admit("w1", &app()).unwrap();
+    eventually(|| credentials.spiffe_id("w1").is_some()).await;
+
+    let resolver = credentials.tls_resolver(Arc::new(issuer.host_tls()));
+    let closes = resolver
+        .destination_tls("w1", "127.0.0.1", 8443)
+        .unwrap()
+        .closes
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    tokio::time::timeout(Duration::from_millis(1800), closes)
+        .await
+        .expect("closes at the SVID's expiry, not a lifetime after the first poll");
+}
+
 /// A revoke closes the connections that presented the SVID, idle or not.
 #[tokio::test]
 async fn revoking_an_identity_closes_its_pooled_connections() {

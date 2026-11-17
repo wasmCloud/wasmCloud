@@ -6,9 +6,10 @@
 //! key and sends the issuer only a certificate signing request.
 //!
 //! Lifecycle, per workload id:
-//! 1. [`WorkloadCredentials::bind`] records what the control plane granted.
-//! 2. The host calls [`WorkloadCredentials::admit`] with the digests of the
-//!    components it loaded. A digest outside the approved set refuses the
+//! 1. A start binds what the control plane granted under its reservation,
+//!    through [`crate::host::Host::workload_start_with_identity`] or the
+//!    washlet.
+//! 2. The host admits it with the digests of the components it loaded. A digest outside the approved set refuses the
 //!    start; otherwise renewal begins, one task per credential.
 //! 3. [`WorkloadCredentials::renew_lease`] replaces the scheduling lease the
 //!    issuer is shown. Once it expires the host asks for nothing more.
@@ -210,7 +211,7 @@ pub trait IdentityIssuer: Send + Sync + 'static {
 #[derive(Default)]
 struct JwtSvidSource {
     current: ArcSwapOption<(Zeroizing<Vec<u8>>, SystemTime)>,
-    revoked: std::sync::atomic::AtomicBool,
+    revoked: tokio_util::sync::CancellationToken,
 }
 
 impl EgressCredentialSource for JwtSvidSource {
@@ -221,8 +222,8 @@ impl EgressCredentialSource for JwtSvidSource {
         }
     }
 
-    fn is_revoked(&self) -> bool {
-        self.revoked.load(std::sync::atomic::Ordering::Acquire)
+    fn revocation(&self) -> Option<tokio_util::sync::CancellationToken> {
+        Some(self.revoked.child_token())
     }
 }
 
@@ -306,8 +307,7 @@ impl Entry {
             self.spiffe_id.store(None);
             for jwt in self.jwts.values() {
                 jwt.current.store(None);
-                jwt.revoked
-                    .store(true, std::sync::atomic::Ordering::Release);
+                jwt.revoked.cancel();
             }
         }
         self.revoked.cancel();
@@ -411,12 +411,15 @@ impl WorkloadCredentials {
         self.entries().get(workload_id).cloned()
     }
 
-    /// Record what `workload_id` was granted. Call before its start.
+    /// Record what `workload_id` was granted, under its start's reservation.
+    /// Only the host binds, through [`crate::host::Host::workload_start_with_identity`]
+    /// or the washlet, so nothing can replace a grant between a start's bind
+    /// and its admit.
     ///
     /// Refused once the workload has been admitted: a running workload's grant
     /// changes only through [`Self::renew_lease`] or a new start. Refused too
     /// without a scheduling lease or approved digests.
-    pub fn bind(&self, workload_id: &str, grant: IdentityGrant) -> anyhow::Result<()> {
+    pub(crate) fn bind(&self, workload_id: &str, grant: IdentityGrant) -> anyhow::Result<()> {
         anyhow::ensure!(!workload_id.is_empty(), "workload id is required");
         anyhow::ensure!(
             !grant.scheduling_lease.token.is_empty(),
@@ -507,7 +510,11 @@ impl WorkloadCredentials {
     ///
     /// `loaded` names each component with the digest of the bytes that will
     /// run. One outside the approved set refuses the start.
-    pub fn admit(&self, workload_id: &str, loaded: &[(String, String)]) -> anyhow::Result<bool> {
+    pub(crate) fn admit(
+        &self,
+        workload_id: &str,
+        loaded: &[(String, String)],
+    ) -> anyhow::Result<bool> {
         // Held throughout, so a bind cannot replace the entry being admitted.
         let entries = self.entries();
         let Some(entry) = entries.get(workload_id).cloned() else {
@@ -589,7 +596,7 @@ impl WorkloadCredentials {
     }
 
     /// [`Self::release`] `workload_id` if it was bound but never admitted.
-    pub fn release_unadmitted(&self, workload_id: &str) {
+    pub(crate) fn release_unadmitted(&self, workload_id: &str) {
         let mut entries = self.entries();
         if entries
             .get(workload_id)
@@ -670,16 +677,6 @@ impl ClientTlsConfigResolver for IdentityTls {
         self.inner.host_config()
     }
 
-    fn config_for_destination(
-        &self,
-        workload_id: &str,
-        host: &str,
-        port: u16,
-    ) -> Option<Arc<rustls::ClientConfig>> {
-        self.destination_tls(workload_id, host, port)
-            .map(|tls| tls.config)
-    }
-
     fn destination_tls(&self, workload_id: &str, host: &str, port: u16) -> Option<DestinationTls> {
         let Some(entry) = self.credentials.entry(workload_id) else {
             return self.inner.destination_tls(workload_id, host, port);
@@ -701,12 +698,13 @@ impl ClientTlsConfigResolver for IdentityTls {
             .not_after
             .duration_since(SystemTime::now())
             .unwrap_or_default();
+        let deadline = tokio::time::Instant::now() + left;
         let revoked = entry.revoked.clone().cancelled_owned();
         Some(DestinationTls {
             config: Arc::clone(&presenting.config),
             closes: Some(Box::pin(async move {
                 tokio::select! {
-                    () = tokio::time::sleep(left) => {}
+                    () = tokio::time::sleep_until(deadline) => {}
                     () = revoked => {}
                 }
             })),
