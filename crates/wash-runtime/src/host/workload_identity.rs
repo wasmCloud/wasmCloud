@@ -502,6 +502,14 @@ impl WorkloadCredentials {
                 continue;
             }
             let held = entry.grant.lock().unwrap_or_else(|e| e.into_inner());
+            // Replicas of one identity may share a name: they present one
+            // SPIFFE ID.
+            let same_identity = grant.identity_ref.is_some()
+                && held.identity_ref == grant.identity_ref
+                && held.namespace == grant.namespace;
+            if same_identity {
+                continue;
+            }
             if let Some(host) = grant
                 .ingress_hosts
                 .iter()
@@ -696,27 +704,28 @@ impl WorkloadCredentials {
         Some(source)
     }
 
-    /// The workload whose X.509-SVID the ingress presents for `server_name`,
-    /// and that SVID. `None` while it has none to present.
+    /// The SPIFFE ID the ingress presents for `server_name`, and an
+    /// X.509-SVID for it. `None` while no workload listing the name has one
+    /// to present.
     pub fn ingress_svid(
         &self,
         server_name: &str,
     ) -> Option<(String, Arc<rustls::sign::CertifiedKey>)> {
         let name = canonical_host(server_name)?;
-        let (workload_id, entry) = self
-            .entries()
-            .iter()
-            .find(|(_, entry)| {
-                entry
-                    .grant
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .ingress_hosts
-                    .contains(&name)
-            })
-            .map(|(id, entry)| (id.clone(), Arc::clone(entry)))?;
-        entry.presentable()?;
-        Some((workload_id, entry.svid.certified()?))
+        self.entries().values().find_map(|entry| {
+            if !entry
+                .grant
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .ingress_hosts
+                .contains(&name)
+            {
+                return None;
+            }
+            entry.presentable()?;
+            let id = entry.spiffe_id.load_full()?;
+            Some((id.to_string(), entry.svid.certified()?))
+        })
     }
 
     /// Wrap `inner` so each workload's X.509-SVID is presented to the
@@ -792,7 +801,14 @@ impl ClientTlsConfigResolver for IdentityTls {
                     .dangerous()
                     .set_certificate_verifier(bundles.server_verifier(server.clone()));
                 left = left.min(SPIFFE_CONNECTION_REUSE);
-                (Arc::new(config), bundles.dropped(server.trust_domain()))
+                // No bundle when resolved, so nothing verified then; one
+                // installed before the handshake is not watched, so close.
+                let dropped = bundles.dropped(server.trust_domain()).unwrap_or_else(|| {
+                    let closed = tokio_util::sync::CancellationToken::new();
+                    closed.cancel();
+                    closed.cancelled_owned()
+                });
+                (Arc::new(config), Some(dropped))
             }
         };
         let deadline = tokio::time::Instant::now() + left;

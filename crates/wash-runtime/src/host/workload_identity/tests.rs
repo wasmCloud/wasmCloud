@@ -1071,12 +1071,27 @@ mod federation {
         );
         credentials.admit("w1", &app()).unwrap();
         eventually(|| credentials.ingress_svid("SVC.test").is_some()).await;
-        assert_eq!(credentials.ingress_svid("svc.test").unwrap().0, "w1");
+        let w1 = credentials.spiffe_id("w1").unwrap();
+        assert_eq!(credentials.ingress_svid("svc.test").unwrap().0, w1);
         assert!(credentials.ingress_svid("other.test").is_none());
         credentials.revoke("w1");
         assert!(credentials.ingress_svid("svc.test").is_none());
-        credentials.release("w1");
+        // The revoked entry stays until released, and never shadows the next.
         credentials.bind("w2", serving(&["svc.test"])).unwrap();
+        credentials.admit("w2", &app()).unwrap();
+        eventually(|| credentials.ingress_svid("svc.test").is_some()).await;
+        for _ in 0..16 {
+            assert!(credentials.ingress_svid("svc.test").is_some());
+        }
+
+        let replica = |id: &str| IdentityGrant {
+            identity_ref: Some(id.into()),
+            ..serving(&["api.test"])
+        };
+        credentials.bind("r1", replica("api")).unwrap();
+        credentials.bind("r2", replica("api")).unwrap();
+        let err = credentials.bind("r3", replica("other")).unwrap_err();
+        assert!(err.to_string().contains("already presents"), "{err}");
     }
 
     /// The ingress side of a federated call: the workload's SVID is served by
@@ -1177,12 +1192,12 @@ mod federation {
             .await
             .expect("the client verified the workload's SVID");
         let (ok, connection) = connections.recv().await.unwrap();
-        let connection = connection.filter(|_| ok).unwrap();
+        let x509 = connection.filter(|_| ok).unwrap();
         let mut headers = hyper::HeaderMap::new();
         headers.insert(PEER_ID_HEADER, "spiffe://forged.test/a".parse().unwrap());
         crate::host::ingress_identity::strip(&mut headers);
-        assert_eq!(admit(&connection, "w2", &mut headers), Err(421));
-        admit(&connection, "w1", &mut headers).unwrap();
+        assert_eq!(admit(&x509, "w2", &mut headers), Err(421));
+        admit(&x509, "w1", &mut headers).unwrap();
         assert_eq!(headers[PEER_ID_HEADER], CALLER);
         assert_eq!(headers[PEER_SVID_HEADER], "x509");
 
@@ -1245,6 +1260,12 @@ mod federation {
         assert!(
             !headers.contains_key(PEER_ID_HEADER),
             "a dropped bundle verifies nothing"
+        );
+        let mut headers = hyper::HeaderMap::new();
+        admit(&x509, "w1", &mut headers).unwrap();
+        assert!(
+            !headers.contains_key(PEER_ID_HEADER),
+            "a connection verified before the bundle was dropped carries no peer after"
         );
     }
 }
