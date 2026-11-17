@@ -7,8 +7,14 @@
 // non-prerelease, non-draft release and rewrites the pin in place.
 //
 // The pins live in that .env file rather than a workflow because the bump
-// workflow pushes with the default GITHUB_TOKEN, which GitHub forbids from
-// updating files under .github/workflows/.
+// PR is pushed with an octo-sts token (.github/chainguard/tools-bump.sts.yaml)
+// that is granted contents and pull_requests write but not `workflows`, and
+// GitHub refuses changes under .github/workflows/ without that permission.
+//
+// Every version is validated as bare numeric semver before it is written.
+// tool-versions.env is `source`d by coverage.yml and appended to $GITHUB_ENV
+// by other workflows, and bump PRs trigger CI automatically, so an upstream
+// tag carrying shell syntax must never reach the file.
 //
 // Tracked tools:
 //   WASM_TOOLS_VERSION ← bytecodealliance/wasm-tools
@@ -32,6 +38,8 @@
 // a silent no-op would let a tool quietly rot at an old version.
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const TOOLS = [
   {
@@ -56,6 +64,26 @@ const TOOLS = [
   },
 ];
 
+// Bare numeric versions only: MAJOR.MINOR or MAJOR.MINOR.PATCH. protoc
+// uses the two-part form (e.g. 36.2); the other tools use three parts.
+const VERSION_RE = /^\d+\.\d+(\.\d+)?$/;
+
+// Strips one leading `v` from an upstream release tag and returns the bare
+// version, or throws if what remains is not a plain numeric version.
+export function parseReleaseTag(repo, tag) {
+  if (typeof tag !== 'string') {
+    throw new Error(`release tag for ${repo} is not a string`);
+  }
+  const version = tag.replace(/^v/, '');
+  if (!VERSION_RE.test(version)) {
+    throw new Error(
+      `refusing release tag ${JSON.stringify(tag)} for ${repo}: ` +
+        'expected MAJOR.MINOR or MAJOR.MINOR.PATCH with an optional leading v',
+    );
+  }
+  return version;
+}
+
 // `releases/latest` returns the most recent non-prerelease, non-draft
 // release. Strip the leading `v` to match wit.yml's bare-semver format.
 async function latestVersion(repo, token) {
@@ -74,7 +102,7 @@ async function latestVersion(repo, token) {
   if (!tag) {
     throw new Error(`no tag_name in latest release for ${repo}`);
   }
-  return tag.replace(/^v/, '');
+  return parseReleaseTag(repo, tag);
 }
 
 // Matches a `NAME=<value>` pin line in the versions .env file. The value
@@ -130,4 +158,6 @@ async function main() {
   appendFileSync(githubOutput, `body<<TOOLS_BUMP_EOF\n${body}\nTOOLS_BUMP_EOF\n`);
 }
 
-await main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}
