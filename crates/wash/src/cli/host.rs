@@ -2317,7 +2317,9 @@ host:
     /// project directory.
     #[tokio::test]
     async fn plugin_volume_paths_cover_every_plugin_volume() -> anyhow::Result<()> {
-        let config = config_from(
+        // Absolute on every platform, which `/var/cache` is not on Windows.
+        let absolute = std::env::temp_dir().join("plugin-volume-cache");
+        let config = config_from(&format!(
             r#"
 host:
   plugins:
@@ -2329,7 +2331,7 @@ host:
             path: models
         - name: cache
           hostPath:
-            path: /var/cache/models
+            path: '{}'
       volumeMounts:
         - name: models
           mountPath: /models
@@ -2338,9 +2340,10 @@ host:
       volumes:
         - name: index
           hostPath:
-            path: /var/lib/index
+            path: index
 "#,
-        );
+            absolute.display()
+        ));
         let ctx = crate::cli::CliContextBuilder::default()
             .keep_working_dir()
             .build()
@@ -2349,8 +2352,8 @@ host:
             HostCommand::plugin_volume_paths(&config, &ctx),
             [
                 ctx.project_dir().join("models"),
-                "/var/cache/models".into(),
-                "/var/lib/index".into(),
+                absolute,
+                ctx.project_dir().join("index"),
             ]
         );
         Ok(())
