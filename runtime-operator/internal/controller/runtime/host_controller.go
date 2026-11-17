@@ -256,20 +256,47 @@ func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *r
 	})
 }
 
+// keepNewerLastSeen rebases a conflicted Host status patch: the heartbeat
+// subscriber owns LastSeen too, and a later heartbeat must not be rolled back.
+func keepNewerLastSeen(fresh, desired *runtimev1alpha1.Host) {
+	if fresh.Status.LastSeen.After(desired.Status.LastSeen.Time) {
+		desired.Status.LastSeen = fresh.Status.LastSeen
+	}
+}
+
 // deleteUnresponsiveHost is the reconcile post-hook: a Host whose Ready
 // condition has resolved to a definite not-ready (neither True nor Unknown)
 // is deleted, and its finalizer cleans up assigned workloads. While Ready is
 // still Unknown the host is left in place so a recovering host is not deleted
 // out from under in-flight heartbeats.
+//
+// The delete is guarded by the observed resource version, so a write since the
+// read (often this pass's own status patch, not yet in the cache) conflicts.
+// That is expected: the Host is reread uncached and the decision made again,
+// rather than failing the pass into backoff.
 func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runtimev1alpha1.Host) error {
-	if host.Status.AllTrue(condition.TypeReady) {
-		return nil
-	}
-	if host.Status.AnyUnknown(condition.TypeReady) {
-		return nil
-	}
-	// Delete unresponsive host; the finalizer will clean up assigned workloads.
-	return deleteObservedObject(ctx, r.Client, host)
+	snapshot := host
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if snapshot == nil {
+			snapshot = &runtimev1alpha1.Host{}
+			if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(host), snapshot); err != nil {
+				return client.IgnoreNotFound(err)
+			}
+			// A replacement, or a Host whose deletion is already under way.
+			if snapshot.UID != host.UID || !snapshot.DeletionTimestamp.IsZero() {
+				return nil
+			}
+		}
+		if snapshot.Status.AllTrue(condition.TypeReady) || snapshot.Status.AnyUnknown(condition.TypeReady) {
+			return nil
+		}
+		// Delete unresponsive host; the finalizer will clean up assigned workloads.
+		err := deleteObservedObject(ctx, r.Client, snapshot)
+		if apierrors.IsConflict(err) {
+			snapshot = nil
+		}
+		return err
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -288,7 +315,10 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		hostReconcileInterval)
 	// Cleanup can finish while a heartbeat probe is in flight. Its status must
 	// not overwrite a same-name replacement or a newer heartbeat's LastSeen.
-	reconciler.OptimisticStatusWrites()
+	// Heartbeats patch LastSeen often, so a conflict is expected: reapply the
+	// pass to the same Host rather than dropping its Ready transition and
+	// post-hooks, keeping whichever LastSeen is newer.
+	reconciler.RetryStatusConflicts(r.apiReader, keepNewerLastSeen)
 
 	reconciler.SetFinalizer(hostFinalizerName, r.finalize)
 	cleanup := reconciler.SeparateFinalizer()
