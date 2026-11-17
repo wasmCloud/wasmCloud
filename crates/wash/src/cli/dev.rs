@@ -674,6 +674,12 @@ async fn create_workload(
             project_dir,
             Some(project_dir),
         )?;
+        secrets::ensure_inherited(
+            &dev_config.secrets,
+            &resolved_workload.environment,
+            &workload.environment,
+            name,
+        )?;
         sidecars.push(SidecarComponent {
             name: name.clone(),
             bytes: loaded.bytes,

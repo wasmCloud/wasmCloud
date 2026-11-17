@@ -291,31 +291,45 @@ pub use wash_runtime::config_source::{
 };
 
 /// A secret `wash dev` substitutes into the component's outgoing requests.
+///
+/// Every component and service in the session may send every secret: `wash
+/// dev` has one caller, so it scopes a secret by destination and route only.
+/// Requests carrying one go over the host's own TLS configuration, which here
+/// is the developer's `http_client_trust_roots` and `http_client_ca_paths`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DevSecret {
     /// The component's environment variable that receives the placeholder.
     pub env: String,
-    /// A variable in the `wash dev` process's environment holding the value.
-    /// Exactly one of `from_env` and `from_file`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A variable in the `wash dev` process's environment holding the value,
+    /// read once when the session starts. Exactly one of `fromEnv` and
+    /// `fromFile`.
+    #[serde(default, alias = "from_env", skip_serializing_if = "Option::is_none")]
     pub from_env: Option<String>,
-    /// A file holding the value, read on every request so it can rotate.
-    /// Relative to the project directory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A file holding the value, relative to the project directory. Read when
+    /// the session starts and again every second in the background, so it can
+    /// rotate in place. At most 64 KiB; trailing whitespace is dropped.
+    #[serde(default, alias = "from_file", skip_serializing_if = "Option::is_none")]
     pub from_file: Option<PathBuf>,
     /// Exact https hosts the secret may be sent to, e.g. `https://api.github.com`.
     pub destinations: Vec<String>,
-    /// Headers it may be sent in. Defaults to `authorization`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub headers: Vec<String>,
-    /// Query parameters whose value may be the placeholder.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub query: Vec<String>,
+    /// The header whose whole value is the placeholder. Without `header` or
+    /// `query`, the placeholder is a bearer token in `authorization`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// The query parameter whose whole value is the placeholder. Exclusive
+    /// with `header`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
     /// Routes it may be sent on, as `/path` or `METHOD /path`. Empty allows any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<String>,
     /// Prepended to the placeholder for SDKs that check a key's shape.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "placeholder_prefix",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub placeholder_prefix: Option<String>,
 }
 
