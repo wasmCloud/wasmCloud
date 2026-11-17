@@ -603,10 +603,26 @@ pub struct PluginVolumeConfig {
     /// A directory on the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_path: Option<PluginHostPathConfig>,
+    /// Not supported on a plugin yet. Parsed only so that it is refused as
+    /// such, rather than as an unknown field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_dir: Option<PluginEmptyDirConfig>,
 }
+
+/// An `emptyDir` volume on a plugin, which is refused. Any fields it has are
+/// ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginEmptyDirConfig {}
 
 impl PluginVolumeConfig {
     fn to_volume(&self, what: &str) -> Result<wash_runtime::types::Volume> {
+        if self.empty_dir.is_some() {
+            bail!(
+                "{what} volume '{}' is an emptyDir, which host component plugins do not \
+                 support yet",
+                self.name
+            );
+        }
         let Some(host_path) = &self.host_path else {
             bail!(
                 "{what} volume '{}' has no `hostPath`, the only volume kind host plugins support",
@@ -825,6 +841,27 @@ impl HostPluginConfig {
         // Catch a bad port declaration here, where the error can name the
         // config entry, rather than at plugin start.
         wash_runtime::host::declared_port::validate_plugin_ports(&self.ports, &what)?;
+        let volumes = self
+            .volumes
+            .iter()
+            .map(|v| v.to_volume(&what))
+            .collect::<Result<Vec<_>>>()?;
+        let volume_mounts: Vec<_> = self
+            .volume_mounts
+            .iter()
+            .map(|m| wash_runtime::types::VolumeMount {
+                name: m.name.clone(),
+                mount_path: m.mount_path.clone(),
+                read_only: m.read_only,
+            })
+            .collect();
+        // The same rules the loader applies, so a bad volume declaration fails
+        // here, naming the config entry, rather than at plugin start.
+        wash_runtime::plugin::component_plugin_spec::validate_plugin_volumes(
+            &volumes,
+            &volume_mounts,
+            &what,
+        )?;
         Ok(wash_runtime::plugin::ComponentPluginSpec {
             id: self.id.clone(),
             source: self.source.to_source(&what)?,
@@ -835,20 +872,8 @@ impl HostPluginConfig {
             allowed_ip_name_lookups: self.allowed_ip_name_lookups.clone().into(),
             allowed_host_loopback_ports: self.allowed_host_loopback_ports.clone().into(),
             ports: self.ports.clone().into(),
-            volumes: self
-                .volumes
-                .iter()
-                .map(|v| v.to_volume(&what))
-                .collect::<Result<_>>()?,
-            volume_mounts: self
-                .volume_mounts
-                .iter()
-                .map(|m| wash_runtime::types::VolumeMount {
-                    name: m.name.clone(),
-                    mount_path: m.mount_path.clone(),
-                    read_only: m.read_only,
-                })
-                .collect(),
+            volumes: volumes.into(),
+            volume_mounts: volume_mounts.into(),
         })
     }
 
@@ -3029,11 +3054,6 @@ host:
                 "volumes: [{name: models, hostPath: {path: ./models, type: Directory}}]",
                 "type",
             ),
-            (
-                "a volume kind that is not supported",
-                "volumes: [{name: scratch, emptyDir: {}}]",
-                "emptyDir",
-            ),
         ];
         for (what, entry, key) in cases {
             let yaml = format!(
@@ -3046,6 +3066,78 @@ host:
             assert!(
                 err.contains(&format!("unknown field `{key}`")),
                 "{what}: {err}"
+            );
+        }
+    }
+
+    /// An `emptyDir` volume parses, so it is refused as unsupported rather
+    /// than as a key the entry does not know.
+    #[test]
+    fn a_plugin_empty_dir_volume_is_refused_as_unsupported() {
+        let yaml = r#"
+host:
+  plugins:
+    - id: model-server
+      file: ./build/model_server.wasm
+      volumes:
+        - name: scratch
+          emptyDir: {sizeLimit: 1Gi}
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let err = config.host().plugins[0]
+            .to_spec_unresolved()
+            .expect_err("an emptyDir volume must be refused")
+            .to_string();
+        assert!(
+            err.contains("volume 'scratch' is an emptyDir") && err.contains("do not support yet"),
+            "got: {err}"
+        );
+    }
+
+    /// A volume declaration the loader would refuse is refused when the config
+    /// is read, naming the config entry, before any directory is opened.
+    #[test]
+    fn a_bad_plugin_volume_declaration_is_refused_when_read() {
+        let cases = [
+            (
+                "volumes: [{name: models, hostPath: {path: ./models}}]\n      \
+                 volumeMounts: [{name: models, mountPath: models}]",
+                "must be absolute",
+            ),
+            (
+                "volumes: [{name: models, hostPath: {path: ./models}}]\n      \
+                 volumeMounts: [{name: models, mountPath: /a/../models}]",
+                "must not contain",
+            ),
+            (
+                "volumes: [{name: models, hostPath: {path: ./models}}]\n      \
+                 volumeMounts: [{name: weights, mountPath: /models}]",
+                "does not declare",
+            ),
+            (
+                "volumes: [{name: models, hostPath: {path: ./a}}, \
+                 {name: models, hostPath: {path: ./b}}]",
+                "two volumes are named 'models'",
+            ),
+            (
+                "volumes: [{name: models, hostPath: {path: ./models}}]\n      \
+                 volumeMounts: [{name: models, mountPath: /m}, {name: models, mountPath: /m/}]",
+                "two volumeMounts mount at",
+            ),
+        ];
+        for (entry, expected) in cases {
+            let yaml = format!(
+                "host:\n  plugins:\n    - id: model-server\n      file: ./m.wasm\n      {entry}\n"
+            );
+            let config: Config = serde_saphyr::from_str(&yaml).unwrap();
+            let err = config.host().plugins[0]
+                .to_spec_unresolved()
+                .expect_err("the declaration must be refused")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}, got: {err}");
+            assert!(
+                err.contains("host.plugins 'model-server'"),
+                "error should name the entry: {err}"
             );
         }
     }
