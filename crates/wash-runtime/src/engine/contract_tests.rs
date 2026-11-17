@@ -268,29 +268,31 @@ fn a_component_mounts_known_volumes_and_skips_unknown_ones() {
     assert_eq!(component.volume_mounts[0].1.mount_path, "/data");
 }
 
+/// Through the start of a workload, where a bad mount path must fail.
 #[test]
-fn a_component_with_a_relative_mount_path_is_refused() {
+fn a_workload_with_a_relative_mount_path_is_refused_at_start() {
     let dir = tempfile::tempdir().unwrap();
-    let volumes = opened_volumes(dir.path());
+    let engine = Engine::builder()
+        .with_pooling_allocator(false)
+        .with_scratch_root(dir.path())
+        .without_max_process_memory()
+        .build()
+        .unwrap();
     let bytes = wat::parse_str("(component)").unwrap();
-    let Err(err) = engine().initialize_workload_component(
-        "workload",
-        "contract",
-        "tests",
-        crate::types::Component {
-            local_resources: LocalResources {
-                volume_mounts: vec![VolumeMount {
-                    name: "data".into(),
-                    mount_path: "data".into(),
-                    read_only: false,
-                }],
-                ..Default::default()
-            },
-            ..component("component", &bytes)
+    let mut input = workload();
+    input.volumes.push(empty_dir("scratch"));
+    input.components.push(crate::types::Component {
+        local_resources: LocalResources {
+            volume_mounts: vec![VolumeMount {
+                name: "scratch".into(),
+                mount_path: "data".into(),
+                read_only: false,
+            }],
+            ..Default::default()
         },
-        &volumes,
-        Arc::default(),
-    ) else {
+        ..component("relative", &bytes)
+    });
+    let Err(err) = engine.initialize_workload("relative-mount", input) else {
         panic!("a relative mount path should be refused");
     };
     assert!(format!("{err:#}").contains("must be absolute"), "{err:#}");
