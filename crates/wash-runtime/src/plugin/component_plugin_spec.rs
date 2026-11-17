@@ -138,7 +138,7 @@ impl FromStr for ComponentPluginSpec {
                 // does go rather than reporting it as an unknown field.
                 "port" | "ports" => bail!(
                     "host plugin ports cannot be declared on --host-plugin; put them under \
-                     `host.hostPlugins[].ports` in the `wash host` config file"
+                     `host.plugins[].ports` in the `wash host` config file"
                 ),
                 // Same reason as ports: a volume is a record, and the comma is
                 // already taken.
@@ -213,7 +213,7 @@ mod tests {
             .parse::<ComponentPluginSpec>()
             .unwrap_err()
             .to_string();
-        assert!(err.contains("host.hostPlugins[].ports"), "got: {err}");
+        assert!(err.contains("host.plugins[].ports"), "got: {err}");
     }
 
     #[test]

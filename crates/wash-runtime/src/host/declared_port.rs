@@ -11,7 +11,7 @@
 //!
 //! Two declaration surfaces share this type:
 //!
-//! - **`host.hostPlugins[].ports`** in the `wash host` config file, for a host
+//! - **`host.plugins[].ports`** in the `wash host` config file, for a host
 //!   component plugin. There is no `--host-plugin` flag spelling: that syntax
 //!   is a comma-separated `key=value` list and cannot carry a nested list, so
 //!   its `FromStr` rejects a `port=` field and points at the config file.

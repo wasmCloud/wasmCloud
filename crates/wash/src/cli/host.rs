@@ -1412,7 +1412,7 @@ impl CliCommand for HostCommand {
         // config merged with the project-local one, if any. `wash host` has
         // no CLI-flags-as-config-overrides of its own (unlike `wash dev`'s
         // literal `Config` override for `wit.skip_fetch`) — this only reads
-        // the `host:` section (currently `hostPlugins[]`), which has no CLI
+        // the `host:` section (currently `plugins[]`), which has no CLI
         // equivalent to conflict with.
         let project_dir = ctx.project_dir();
         let config =
