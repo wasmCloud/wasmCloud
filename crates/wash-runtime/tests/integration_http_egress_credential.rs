@@ -14,7 +14,9 @@ use wash_runtime::{
     host::{
         HostApi, HostBuilder,
         allowed_hosts::AllowedHost,
-        egress_credential::{CredentialError, EgressCaller, EgressCredentialSource, EgressSecret},
+        egress_credential::{
+            CredentialError, EgressCaller, EgressCredentialSource, EgressSecret, SecretForm,
+        },
         http::{
             DynamicRouter, Ingress, IngressRoute, OutgoingHandler, RequestIoFuture, RouteError,
             Router, SendFuture,
@@ -37,6 +39,10 @@ struct RecordingOutgoing {
 }
 
 impl OutgoingHandler for RecordingOutgoing {
+    fn accepts_secrets(&self) -> bool {
+        true
+    }
+
     fn send_request(
         &self,
         _workload_id: &str,
@@ -73,7 +79,7 @@ struct Fixed;
 
 impl EgressCredentialSource for Fixed {
     fn current(&self) -> Result<Zeroizing<Vec<u8>>, CredentialError> {
-        Ok(Zeroizing::new(b"host-secret".to_vec()))
+        Ok(Zeroizing::new(b"host-secret-0123456789".to_vec()))
     }
 }
 
@@ -127,7 +133,11 @@ impl Router for CredentialingRouter {
             .lock()
             .unwrap()
             .push(caller.component_id.map(str::to_string));
-        let secret = EgressSecret::new(PLACEHOLDER, Arc::new(Fixed))?
+        anyhow::ensure!(
+            (caller.namespace, caller.name) == ("test", "http-egress-credential"),
+            "egress names its workload: {caller:?}"
+        );
+        let secret = EgressSecret::new(PLACEHOLDER, Arc::new(Fixed), SecretForm::Bearer)?
             .for_destinations(["https://api.example.com".parse()?])?;
         Ok(Arc::from([secret]))
     }
@@ -196,15 +206,23 @@ fn workload() -> WorkloadStartRequest {
 }
 
 async fn get(addr: std::net::SocketAddr, path: &str) -> Result<(u16, String)> {
-    let response = timeout(
-        Duration::from_secs(10),
-        reqwest::Client::new()
-            .get(format!("http://{addr}{path}"))
-            .header("HOST", "test")
-            .send(),
-    )
-    .await
-    .context("request timed out")??;
+    get_with(addr, path, &[]).await
+}
+
+async fn get_with(
+    addr: std::net::SocketAddr,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> Result<(u16, String)> {
+    let mut request = reqwest::Client::new()
+        .get(format!("http://{addr}{path}"))
+        .header("HOST", "test");
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let response = timeout(Duration::from_secs(10), request.send())
+        .await
+        .context("request timed out")??;
     Ok((response.status().as_u16(), response.text().await?))
 }
 
@@ -238,13 +256,17 @@ async fn a_guest_placeholder_leaves_as_the_host_secret() -> Result<()> {
     assert_eq!(status, 200, "{body}");
     let (status, body) = get(addr, "/token-elsewhere").await?;
     assert_eq!(status, 403, "{body}");
+    let (status, body) = get_with(addr, "/token", &[("x-forward-me", PLACEHOLDER)]).await?;
+    assert_eq!(status, 400, "an inbound placeholder is refused: {body}");
+    let (status, body) = get(addr, &format!("/token?k={PLACEHOLDER}")).await?;
+    assert_eq!(status, 400, "an inbound placeholder is refused: {body}");
 
     let sent = outgoing.sent.lock().unwrap().clone();
     assert_eq!(
         sent,
         [(
             "https://api.example.com/v1".to_string(),
-            vec!["Bearer host-secret".to_string()]
+            vec!["Bearer host-secret-0123456789".to_string()]
         )]
     );
     let callers = callers.lock().unwrap().clone();

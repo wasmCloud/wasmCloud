@@ -969,6 +969,12 @@ pub struct WorkloadClients {
     host_loopback: HostLoopbackGrants,
 }
 
+/// Where a workload's secret-carrying client is cached. A workload id never
+/// holds a NUL, so this cannot collide with one.
+fn secret_key(workload_id: &str) -> String {
+    format!("\0secret\0{workload_id}")
+}
+
 /// Owns maintenance before it is queued, including if the runtime cancels it
 /// before the blocking closure starts. Cancellation still drains the pending
 /// invalidations, so their clients do not wait for another cache access.
@@ -1112,7 +1118,40 @@ impl WorkloadClients {
     /// derived from guest-controllable data. Two callers presenting the same
     /// ID share keep-alive connections (see [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
-        self.clients.get_with_by_ref(workload_id, || {
+        self.cached(workload_id, workload_id, || {
+            self.tls.config_for(workload_id)
+        })
+    }
+
+    /// The client for `workload_id`'s requests that carry a secret.
+    ///
+    /// Uses the host's own TLS configuration
+    /// ([`ClientTlsConfigResolver::host_config`]) rather than any the workload
+    /// was given, so a workload-specific trust root can never receive a
+    /// secret. Its connections therefore present the host's client identity,
+    /// if any, never the workload's. Shares the workload's quota, and is the
+    /// workload's own client when the two configurations are the same. Decided
+    /// once per workload and cached, like [`Self::client`].
+    pub fn client_carrying_secret(&self, workload_id: &str) -> PooledClient {
+        if let Some(client) = self.clients.get(&secret_key(workload_id)) {
+            return client;
+        }
+        let host = self.tls.host_config();
+        if Arc::ptr_eq(&host, &self.tls.config_for(workload_id)) {
+            let client = self.client(workload_id);
+            self.clients.insert(secret_key(workload_id), client.clone());
+            return client;
+        }
+        self.cached(&secret_key(workload_id), workload_id, || host)
+    }
+
+    fn cached(
+        &self,
+        key: &str,
+        workload_id: &str,
+        tls: impl FnOnce() -> Arc<rustls::ClientConfig>,
+    ) -> PooledClient {
+        self.clients.get_with_by_ref(key, || {
             let quota = self.quotas.for_guest(workload_id);
             let calls = self
                 .call_concurrency
@@ -1122,7 +1161,7 @@ impl WorkloadClients {
                 .copied()
                 .unwrap_or(1);
             PooledClient::bounded(
-                self.tls.config_for(workload_id),
+                tls(),
                 ClientBounds {
                     workload: Some(Arc::from(workload_id)),
                     quota,
@@ -1150,6 +1189,7 @@ impl WorkloadClients {
     /// Draining connections keep the workload's quota alive until they close.
     pub fn invalidate(&self, workload_id: &str) {
         self.clients.invalidate(workload_id);
+        self.clients.invalidate(&secret_key(workload_id));
         self.call_concurrency
             .write()
             .unwrap_or_else(|e| e.into_inner())
@@ -1762,7 +1802,7 @@ fn classify_client_error(err: &hyper_util::client::legacy::Error) -> HttpError {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -3052,7 +3092,7 @@ mod tests {
     /// Spawn an HTTP/1.1-over-TLS server whose certificate chains to a private
     /// CA, answering every request with `200 ok`. Returns the bound port and
     /// the CA certificate PEM.
-    async fn private_ca_tls_server() -> (u16, String) {
+    pub(crate) async fn private_ca_tls_server() -> (u16, String) {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         crate::init_crypto();
@@ -3269,6 +3309,67 @@ mod tests {
             .await
             .expect("request with the private CA trusted should succeed");
         assert_eq!(response.status(), 200);
+    }
+
+    /// A workload trusting a private CA reaches its server, but a request
+    /// carrying a secret goes over the host's own roots and cannot.
+    #[tokio::test]
+    async fn a_secret_never_rides_a_workload_trust_root() {
+        struct PerWorkload {
+            workload: Arc<rustls::ClientConfig>,
+            host: Arc<rustls::ClientConfig>,
+        }
+        impl ClientTlsConfigResolver for PerWorkload {
+            fn config_for(&self, _workload_id: &str) -> Arc<rustls::ClientConfig> {
+                Arc::clone(&self.workload)
+            }
+            fn host_config(&self) -> Arc<rustls::ClientConfig> {
+                Arc::clone(&self.host)
+            }
+        }
+
+        let (port, ca_pem) = private_ca_tls_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem).unwrap();
+        let workload = ClientTlsOptions {
+            roots: TrustRoots::ExtraOnly,
+            extra_ca_paths: vec![ca_path],
+            ..Default::default()
+        }
+        .build()
+        .unwrap();
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::new(PerWorkload {
+                workload,
+                host: default_client_tls_config(),
+            }),
+            test_quotas(4, 16),
+        );
+        let uri = format!("https://127.0.0.1:{port}/");
+
+        let (response, _io) = clients
+            .client("wl")
+            .send_request(request(&uri), test_options())
+            .await
+            .expect("the workload's own trust root serves its own requests");
+        assert_eq!(response.status(), 200);
+        let err = clients
+            .client_carrying_secret("wl")
+            .send_request(request(&uri), test_options())
+            .await
+            .err()
+            .expect("a secret must not trust the workload's CA");
+        assert!(matches!(err, HttpError::TlsProtocolError), "{err:?}");
+
+        let shared = WorkloadClients::new(default_client_tls_config());
+        assert!(
+            Arc::ptr_eq(
+                &shared.client_carrying_secret("wl").tls_config(),
+                &shared.client("wl").tls_config()
+            ),
+            "one configuration for both means one client"
+        );
     }
 
     fn egress_gate(
