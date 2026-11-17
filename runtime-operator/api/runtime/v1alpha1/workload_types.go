@@ -45,7 +45,10 @@ type VolumeMount struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
 	// MountPath is the path within the component where the volume should be mounted.
+	// It must be absolute, and no segment may be `.` or `..`; the host refuses
+	// any other path when the workload starts.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^/(([^/]*[^/.][^/]*|[.][.][.]+)?/?)*$`
 	MountPath string `json:"mountPath"`
 	// ReadOnly indicates whether the volume should be mounted as read-only.
 	// +kubebuilder:validation:Optional
