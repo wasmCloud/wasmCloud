@@ -2,7 +2,7 @@ module go.wasmcloud.dev/runtime-operator/v2
 
 go 1.27.0
 
-toolchain go1.27.2
+toolchain go1.27.4
 
 tool (
 	github.com/air-verse/air
