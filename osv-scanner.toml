@@ -34,3 +34,13 @@ id = "RUSTSEC-2024-0436"
 # fork (wasi-gfx/wgpu) -> metal 0.27 -> paste. It cannot be bumped until that
 # fork updates.
 reason = "Unmaintained-crate advisory, no fix; transitive (test fixture only) via pinned wasi-gfx/wgpu fork -> metal -> paste. Blocked on upstream wgpu fork update."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0440"
+# `astral-tokio-tar` is unmaintained (Astral ended maintenance on 2026-11-03),
+# with no fixed version. It appears only as a dev-dependency of crates/wash via
+# testcontainers, which builds Docker image contexts in integration tests. It is
+# not in any shipped artifact. testcontainers 0.28.0, the latest release, still
+# requires astral-tokio-tar ^0.6.1, so it cannot be removed until testcontainers
+# moves to a maintained tar crate.
+reason = "Unmaintained-crate advisory, no fix; dev-dependency only (wash tests) via testcontainers. Blocked on upstream testcontainers replacing astral-tokio-tar."
