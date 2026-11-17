@@ -59,6 +59,10 @@ Wed–Thu as a buffer for any same-week follow-up patch.
      (OCI image tags are bare semver, no `v` prefix — that is the convention `docker pull`
      users expect). Same manifest digest, no rebuild — the bytes that passed canary CI are
      the bytes users pull.
+     Promotion reads the digest records uploaded by successful canary runs on
+     that SHA and checks existing release tags against those records on retries.
+     The records are retained for 90 days. Missing records or a mismatched tag
+     fail promotion, including during manual recovery.
    - **Re-attests** each promoted manifest digest (Sigstore-signed via Fulcio).
    - **Downloads** the canary-binaries artifacts from the wash.yml run that built them, attests
      them, and (after pushing the tag) creates the GitHub Release with those exact binaries.

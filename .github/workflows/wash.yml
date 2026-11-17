@@ -933,7 +933,7 @@ jobs:
           for d in "${digests[@]}"; do
             args+=("ghcr.io/wasmcloud/wash@sha256:$d")
           done
-          docker buildx imagetools create "${args[@]}"
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/wash-image.json" "${args[@]}"
       - name: Inspect image
         run: |
           docker buildx imagetools inspect "ghcr.io/wasmcloud/wash:${STEPS_META_OUTPUTS_VERSION}"
@@ -966,8 +966,38 @@ jobs:
           for d in "${digests[@]}"; do
             args+=("ghcr.io/wasmcloud/wash@sha256:$d")
           done
-          docker buildx imagetools create "${args[@]}"
+          docker buildx imagetools create --metadata-file "$RUNNER_TEMP/wash-all-features-image.json" "${args[@]}"
           docker buildx imagetools inspect "ghcr.io/wasmcloud/wash:sha-${GITHUB_SHA}-all-features"
+
+      - name: Record wash canary digest
+        env:
+          IMAGE_NAME: wash
+          IMAGE_METADATA: ${{ runner.temp }}/wash-image.json
+          IMAGE_RECORD: ${{ runner.temp }}/image.json
+        run: node .github/scripts/release-images.mjs record
+
+      - name: Upload wash canary digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-image-wash
+          path: ${{ runner.temp }}/image.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record wash-all-features canary digest
+        env:
+          IMAGE_NAME: wash-all-features
+          IMAGE_METADATA: ${{ runner.temp }}/wash-all-features-image.json
+          IMAGE_RECORD: ${{ runner.temp }}/image.json
+        run: node .github/scripts/release-images.mjs record
+
+      - name: Upload wash-all-features canary digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-image-wash-all-features
+          path: ${{ runner.temp }}/image.json
+          if-no-files-found: error
+          retention-days: 90
 
   # Canary matrix binary build. Runs on every push to main so each commit
   # exercises the full per-target matrix (including the s390x/musl cross
