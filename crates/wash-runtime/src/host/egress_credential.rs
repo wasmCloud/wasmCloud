@@ -245,7 +245,7 @@ impl SecretDestination {
         self.port
     }
 
-    fn matches(&self, uri: &hyper::Uri) -> bool {
+    pub(crate) fn matches(&self, uri: &hyper::Uri) -> bool {
         uri.host()
             .is_some_and(|h| h.eq_ignore_ascii_case(&self.host))
             && uri.port_u16().unwrap_or(443) == self.port
