@@ -838,7 +838,8 @@ pub struct HostCommand {
     #[arg(long = "allow-host-loopback", default_value_t = false)]
     pub allow_host_loopback: bool,
 
-    /// How the raw-socket egress policy is applied.
+    /// How the egress policy is applied, to raw sockets and to the addresses
+    /// a guest's `wasi:http` requests resolve to.
     ///
     /// `enforce` (the default) refuses a connection the policy does not permit:
     /// a workload reaches only what its `allowedHosts` declares. An entry

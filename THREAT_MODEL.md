@@ -80,7 +80,7 @@ A breach of one is a vulnerability unless mentioned in [Known limitations](#know
 2. **Grants.** A component reaches only the hosts, addresses, files, config, secrets and interfaces its spec grants.
 3. **Isolation.** A workload cannot read or modify another workload's memory, files, connections or state unless they are explicitly shared, and reaches another workload's services only through interfaces linked between them.
 4. **Host.** A workload cannot reach the host's own credentials, configuration, kernel filesystems or listeners. It reaches the machine's loopback only when the operator and its spec both allow it, and never a port the host owns that way.
-5. **Egress.** Raw socket egress reaches only the addresses that the spec and the host's address policy permit, which by default excludes loopback, link-local (including cloud metadata) and multicast.
+5. **Egress.** Raw socket and `wasi:http` egress reach only the addresses that the spec and the host's address policy permit, which by default excludes loopback, link-local (including cloud metadata) and multicast.
 6. **Resources.** One workload cannot exhaust the host's memory, connections or file descriptors beyond the limits the operator set.
 7. **Untrusted input.** No request, response, message or registry artifact from a peer can crash the host or corrupt its memory.
 8. **Reuse.** Component calls get fresh stores by default. A store stays warm only when the component and every component linked into it opt in. Reused memory, scratch volumes and cached artifacts must not expose data beyond a workload's grants.
@@ -93,7 +93,7 @@ Private address ranges (RFC 1918, ULA, CGNAT) are reachable unless the operator 
 
 | Setting | Goal | Effect |
 | --- | --- | --- |
-| `--socket-egress=count` | 5 | Raw socket egress is counted, not enforced. |
+| `--socket-egress=count` | 5 | Raw socket and HTTP address restrictions are counted, not enforced. |
 | `--guest-memory-mode=count` | 6 | Total guest memory is counted, not enforced. |
 | `--guest-memory-mode=growth` | 6 | Up to 2 MiB of each memory's first allocation (an instance's initial memory) is not charged to the budget. `--max-process-memory` refuses new instances and growth once the host is over its limit, but cannot stop admitted instances writing the initial memory they hold. The host is overcommitted by however much of it they come to touch, up to `--max-initial-guest-memory`: four times `--max-guest-memory` unless set, so by default about three times a container limit the budget was derived from. |
 | `--memory-reservation` below 4 GiB, `--memory-guard-size` below 32 MiB | 6 | Reduces hardware defense in depth. The default 4 GiB reservation covers a 32-bit dynamic index, and the 32 MiB guard covers many constant offsets; larger offsets still need bounds checks at the defaults. Smaller layouts rely more on software bounds checks for isolation, whose bugs could expose a sibling's memory. More explicit checks can slow guest memory access. |
@@ -140,8 +140,6 @@ For example:
 - **The `hostPath` allowlist is host-wide.** Every workload on a host may mount any directory the operator allowed. It is a guardrail, not a multi-tenant storage policy; where tenants author workloads, refuse their raw `hostPath` volumes before they reach a host.
 - **Scratch volumes are not size-limited.** Each `emptyDir` is removed when its workload stops, but nothing caps its size. Put `--scratch-root` on a volume with a size limit.
 - **A socket grant by name trusts that name's DNS.** An `allowedHosts` name entry permits the addresses the workload's own lookup returned, so whoever controls the name decides where it points, within the address policy.
-- **`wasi:http` egress is checked by name, not by address (goal 2).** `allowedHosts` limits the names a request may use, but nothing checks the address a name resolves to. A wildcard entry therefore reaches any address a DNS name points at, including loopback and cloud metadata.
-- **The host's listeners are reachable at the machine's own address.** A workload whose `allowedHosts` and the private-range policy permit the host's own address can reach the host's ingress, or another workload's published port, there (goal 4).
 - **One isolation layer.** Workloads on one host are separated by wasmtime alone. For mutually hostile tenants, give each its own host group or node.
 - **CPU is not shared fairly.** The host reclaims calls that their callers have abandoned, but it does not cap a workload's share of CPU. Pod CPU limits bound the host as a whole.
 - **Instance slots are host-wide.** The pooling allocator's instance limit is shared by every workload on a host, not partitioned between them.
