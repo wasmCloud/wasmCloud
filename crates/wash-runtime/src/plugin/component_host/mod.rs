@@ -381,13 +381,8 @@ impl ComponentHostPlugin {
         crate::host::declared_port::validate_plugin_ports(&ports, &format!("host plugin '{id}'"))?;
         let ResolvedPluginVolumes {
             mounts: volumes,
-            opened: opened_volumes,
+            registration: volume_registration,
         } = resolve_plugin_volumes(id, &volumes, &volume_mounts, engine.host_paths()).await?;
-        // Closed to workloads as soon as they are open, so none can take one
-        // while the rest of the plugin loads. If loading fails below, dropping
-        // the registration opens them again.
-        let volume_registration =
-            Arc::new(engine.host_paths().register_plugin_volumes(opened_volumes));
         let socket_policy = socket_policy.unwrap_or_default();
         let egress_policy = crate::plugin::PluginEgressPolicy::new(
             Arc::clone(&allowed_hosts),
@@ -533,7 +528,7 @@ impl ComponentHostPlugin {
                     network: crate::host::ports::NetworkHandle::new(),
                     socket_policy,
                     volumes,
-                    _volume_registration: volume_registration,
+                    _volume_registration: Arc::new(volume_registration),
                 },
             },
             egress_policy,
@@ -2289,9 +2284,8 @@ fn build_plugin_store(
 struct ResolvedPluginVolumes {
     /// What each incarnation of the plugin mounts.
     mounts: Arc<[ResolvedVolumeMount]>,
-    /// The canonical directory of each volume opened, for the host to keep
-    /// workloads out of.
-    opened: Vec<std::path::PathBuf>,
+    /// Keeps workloads out while the plugin loads or uses the mounts.
+    registration: crate::engine::volumes::PluginVolumeRegistration,
 }
 
 /// Resolve a plugin's declared volumes once, at load: a declaration that cannot
@@ -2314,7 +2308,7 @@ async fn resolve_plugin_volumes(
     for volume in volumes {
         let local_path = crate::plugin::component_plugin_spec::plugin_host_path(volume, &owner)?;
         if mounted.contains(volume.name.as_str()) {
-            to_open.push((volume.name.clone(), local_path.to_owned()));
+            to_open.push((volume.name.clone(), std::path::PathBuf::from(local_path)));
         } else {
             warn!(
                 plugin = id,
@@ -2326,19 +2320,9 @@ async fn resolve_plugin_volumes(
 
     let policy = host_paths.clone();
     let open_owner = owner.clone();
-    let opened = tokio::task::spawn_blocking(move || {
-        let mut opened = HashMap::with_capacity(to_open.len());
-        for (name, local_path) in to_open {
-            let dir = policy
-                .open_host_config_volume(std::path::Path::new(&local_path))
-                .with_context(|| {
-                    format!("{open_owner}: volume '{name}' hostPath {local_path} cannot be mounted")
-                })?;
-            opened.insert(name, dir);
-        }
-        anyhow::Ok(opened)
-    })
-    .await??;
+    let (opened, registration) =
+        tokio::task::spawn_blocking(move || policy.open_plugin_volumes(to_open, &open_owner))
+            .await??;
 
     let mounts = volume_mounts
         .iter()
@@ -2353,7 +2337,7 @@ async fn resolve_plugin_volumes(
         .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(ResolvedPluginVolumes {
         mounts: mounts.into(),
-        opened: opened.into_values().map(|dir| dir.path).collect(),
+        registration,
     })
 }
 
@@ -2496,7 +2480,10 @@ mod tests {
 
     /// A registration that keeps no directory closed, for stores built by hand.
     fn no_volume_registration() -> Arc<crate::engine::volumes::PluginVolumeRegistration> {
-        Arc::new(HostPathPolicy::default().register_plugin_volumes(Vec::new()))
+        let (_, registration) = HostPathPolicy::default()
+            .open_plugin_volumes(Vec::new(), "test plugin")
+            .unwrap();
+        Arc::new(registration)
     }
 
     #[tokio::test]
@@ -3646,11 +3633,6 @@ mod tests {
         )
         .await
         .unwrap();
-        workloads
-            .open(data.path())
-            .expect("resolving alone closes nothing, so a plugin that fails later leaves no trace");
-        let registration = policy.register_plugin_volumes(resolved.opened);
-
         for refused in [data.path(), inside.as_path(), &std::env::temp_dir()] {
             let err = workloads
                 .open(refused)
@@ -3665,7 +3647,7 @@ mod tests {
             .open(unrelated.path())
             .expect("a directory apart from the plugin's is still permitted");
 
-        drop(registration);
+        drop(resolved);
         workloads
             .open(data.path())
             .expect("an unloaded plugin's directories are released");
@@ -3675,9 +3657,14 @@ mod tests {
     async fn a_directory_two_plugins_mount_stays_closed_until_both_unload() {
         let data = tempfile::tempdir().unwrap();
         let policy = HostPathPolicy::new([], [data.path().to_path_buf()], None, None);
-        let canonical = data.path().canonicalize().unwrap();
-        let first = policy.register_plugin_volumes(vec![canonical.clone()]);
-        let second = policy.register_plugin_volumes(vec![canonical]);
+        let volumes = [host_path("data", data.path())];
+        let mounts = [mount("data", "/data", true)];
+        let first = resolve_plugin_volumes("first", &volumes, &mounts, &policy)
+            .await
+            .unwrap();
+        let second = resolve_plugin_volumes("second", &volumes, &mounts, &policy)
+            .await
+            .unwrap();
 
         drop(first);
         assert!(
@@ -3712,12 +3699,30 @@ mod tests {
         .await
         .expect("an unmounted volume is not opened, so a missing one is no error");
         assert_eq!(resolved.mounts.len(), 1);
-        assert_eq!(resolved.opened, [used.canonicalize().unwrap()]);
-        let _registration = policy.register_plugin_volumes(resolved.opened);
         policy
             .open(&unused)
             .expect("an unmounted volume is not closed to workloads");
         assert!(policy.open(&used).is_err());
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_are_released_when_the_component_fails_to_load() -> anyhow::Result<()> {
+        let data = tempfile::tempdir()?;
+        let engine = Engine::builder()
+            .with_allowed_host_paths([data.path().to_path_buf()])
+            .build()?;
+
+        let result = ComponentHostPlugin::builder()
+            .id("invalid")
+            .wasm(b"invalid WebAssembly")
+            .engine(engine.clone())
+            .volumes([host_path("data", data.path())].into())
+            .volume_mounts([mount("data", "/data", true)].into())
+            .build()
+            .await;
+        assert!(result.is_err(), "invalid WebAssembly must fail to load");
+        engine.host_paths().open(data.path())?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -3798,22 +3803,22 @@ mod tests {
     async fn plugin_store_gets_its_volumes_each_time_it_is_built() {
         let dir = tempfile::tempdir().unwrap();
         let engine = Engine::builder().build().expect("failed to build engine");
+        let resolved = resolve_plugin_volumes(
+            "vol",
+            &[host_path("models", dir.path())],
+            &[mount("models", "/models", true)],
+            &HostPathPolicy::default(),
+        )
+        .await
+        .unwrap();
         let mut store_context = PluginStoreContext {
             allowed_hosts: Arc::from([]),
             allowed_ip_name_lookups: Arc::from([]),
             host_ref: None,
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: Arc::new(crate::sockets::policy::SocketPolicy::default()),
-            volumes: resolve_plugin_volumes(
-                "vol",
-                &[host_path("models", dir.path())],
-                &[mount("models", "/models", true)],
-                &HostPathPolicy::default(),
-            )
-            .await
-            .unwrap()
-            .mounts,
-            _volume_registration: no_volume_registration(),
+            volumes: resolved.mounts,
+            _volume_registration: Arc::new(resolved.registration),
         };
         let store = build_plugin_store(&engine, "vol", &HashMap::new(), &store_context);
         assert_eq!(store.data().active_ctx.volume_mounts.len(), 1);
