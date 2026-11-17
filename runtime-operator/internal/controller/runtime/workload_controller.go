@@ -18,10 +18,13 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
@@ -434,11 +437,16 @@ func schedulableHostIndexValue(rawObj client.Object) []string {
 	return []string{}
 }
 
+// unplacedWorkloadIndexValue indexes Workloads not yet placed. That includes
+// ones whose host is already chosen but not started on: a pinned Workload in
+// shared mode records its pinned host before that Host exists.
 func unplacedWorkloadIndexValue(rawObj client.Object) []string {
-	if workload, ok := rawObj.(*runtimev1alpha1.Workload); ok && workload.Status.HostID == "" && workload.DeletionTimestamp.IsZero() {
-		return []string{string(condition.ConditionTrue)}
+	workload, ok := rawObj.(*runtimev1alpha1.Workload)
+	if !ok || !workload.DeletionTimestamp.IsZero() ||
+		workload.Status.GetCondition(runtimev1alpha1.WorkloadConditionPlacement).Status == condition.ConditionTrue {
+		return nil
 	}
-	return nil
+	return []string{string(condition.ConditionTrue)}
 }
 
 // workloadsForHost enqueues the unplaced Workloads that host can take. Once its
@@ -457,13 +465,21 @@ func (r *WorkloadReconciler) workloadsForHost(ctx context.Context, obj client.Ob
 	var requests []reconcile.Request
 	for i := range workloads.Items {
 		workload := &workloads.Items[i]
+		switch {
 		// A pinned Workload waits for its one host, whatever its selector says.
-		if workload.Spec.HostID != "" {
+		case workload.Spec.HostID != "":
 			if workload.Spec.HostID != host.HostID {
 				continue
 			}
-		} else if !labels.SelectorFromSet(workload.Spec.HostSelector).Matches(labels.Set(host.Labels)) {
-			continue
+		// A host is already chosen; only that host arriving helps.
+		case workload.Status.HostID != "":
+			if workload.Status.HostID != host.HostID {
+				continue
+			}
+		default:
+			if !labels.SelectorFromSet(workload.Spec.HostSelector).Matches(labels.Set(host.Labels)) {
+				continue
+			}
 		}
 		filter, err := hostEnvironmentFilter(r.AllowSharedHosts, workload.Namespace, &workload.Spec)
 		if err != nil || (filter != "" && filter != host.Environment) {
@@ -474,6 +490,38 @@ func (r *WorkloadReconciler) workloadsForHost(ctx context.Context, obj client.Ob
 		})
 	}
 	return requests
+}
+
+// hostArrivalSpread is how far apart the Workloads woken by one Host becoming
+// schedulable are placed. Hosts of a scaled group turn Ready seconds apart;
+// placing every waiting Workload the instant the first does would put them all
+// on that one Host, and nothing rebalances them later.
+const hostArrivalSpread = 3 * time.Second
+
+// ignoreDeletes drops Host delete events: a Host that is going cannot take a
+// Workload, though its final cached state may still read as schedulable.
+var ignoreDeletes = predicate.Funcs{DeleteFunc: func(event.DeleteEvent) bool { return false }}
+
+// enqueueSpread enqueues what mapFn returns, each after a random delay within
+// spread, so the placements the event triggers see the Hosts that arrive just
+// after it.
+func enqueueSpread(mapFn handler.MapFunc, spread time.Duration) handler.EventHandler {
+	add := func(ctx context.Context, obj client.Object, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+		for _, request := range mapFn(ctx, obj) {
+			q.AddAfter(request, rand.N(spread))
+		}
+	}
+	return handler.Funcs{
+		CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			add(ctx, e.Object, q)
+		},
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			add(ctx, e.ObjectNew, q)
+		},
+		GenericFunc: func(ctx context.Context, e event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			add(ctx, e.Object, q)
+		},
+	}
 }
 
 // lookupHostByID finds a Host CRD by HostID. Hosts always live in the
@@ -1055,8 +1103,8 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Workload{}).
 		Watches(&runtimev1alpha1.Host{},
-			handler.EnqueueRequestsFromMapFunc(r.workloadsForHost),
-			builder.WithPredicates(hostPlacementChanged)).
+			enqueueSpread(r.workloadsForHost, hostArrivalSpread),
+			builder.WithPredicates(hostPlacementChanged, ignoreDeletes)).
 		Named("workload-replica").
 		Complete(r)
 }

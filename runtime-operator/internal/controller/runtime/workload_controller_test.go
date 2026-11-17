@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -15,9 +16,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -755,7 +759,19 @@ func TestWorkloadsForHostEnqueuesThoseItCanTake(t *testing.T) {
 	}
 	placed := pending("placed", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching})
 	placed.Status.HostID = otherID
+	placed.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionPlacement))
+	// Placed on this very Host already: nothing to wake.
+	placedHere := pending("placed-here", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching})
+	placedHere.Status.HostID = arrivingID
+	placedHere.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionPlacement))
+	// Shared mode records a pinned host before that Host exists.
+	pinnedRecorded := pending("pinned-recorded", tenant, runtimev1alpha1.WorkloadSpec{HostID: arrivingID})
+	pinnedRecorded.Status.HostID = arrivingID
+	// A host was chosen but the start has not succeeded; another Host cannot help.
+	chosenElsewhere := pending("chosen-elsewhere", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching})
+	chosenElsewhere.Status.HostID = otherID
 	objects := []client.Object{
+		placedHere, pinnedRecorded, chosenElsewhere,
 		pending("selected", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching}),
 		pending("no-selector", tenant, runtimev1alpha1.WorkloadSpec{}),
 		pending("own-environment", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching, Environment: tenant}),
@@ -789,13 +805,13 @@ func TestWorkloadsForHostEnqueuesThoseItCanTake(t *testing.T) {
 		{
 			name: "isolated, a Host in the Workload's namespace",
 			host: ready(nil),
-			want: []string{"no-selector", "own-environment", "pinned", "selected"},
+			want: []string{"no-selector", "own-environment", "pinned", "pinned-recorded", "selected"},
 		},
 		{
 			name:         "shared, a Host in any Environment",
 			allowSharing: true,
 			host:         ready(func(h *runtimev1alpha1.Host) { h.Environment = "elsewhere" }),
-			want:         []string{"no-selector", "other-namespace", "pinned", "selected"},
+			want:         []string{"no-selector", "other-namespace", "pinned", "pinned-recorded", "selected"},
 		},
 		{
 			name: "a Host not Ready yet",
@@ -845,4 +861,46 @@ func TestWorkloadsForHostIgnoresFailedList(t *testing.T) {
 	if requests := r.workloadsForHost(context.Background(), host); requests != nil {
 		t.Fatalf("enqueued %v after a failed list", requests)
 	}
+}
+
+// Every Workload a Host event wakes is enqueued, but spread out, so placements
+// see the Hosts that turn Ready just after this one. Deletes wake nothing.
+func TestHostEventsSpreadWakeupsAndIgnoreDeletes(t *testing.T) {
+	requests := make([]reconcile.Request, 50)
+	for i := range requests {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "tenant", Name: fmt.Sprintf("w%d", i)}}
+	}
+	const spread = time.Second
+	h := enqueueSpread(func(context.Context, client.Object) []reconcile.Request { return requests }, spread)
+	q := &delayRecordingQueue{TypedRateLimitingInterface: workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())}
+	defer q.ShutDown()
+	h.Update(context.Background(), event.UpdateEvent{ObjectOld: &runtimev1alpha1.Host{}, ObjectNew: &runtimev1alpha1.Host{}}, q)
+	if len(q.delays) != len(requests) {
+		t.Fatalf("enqueued %d of %d", len(q.delays), len(requests))
+	}
+	distinct := map[time.Duration]bool{}
+	for _, d := range q.delays {
+		if d < 0 || d >= spread {
+			t.Fatalf("delay %v outside [0, %v)", d, spread)
+		}
+		distinct[d] = true
+	}
+	if len(distinct) < 2 {
+		t.Fatal("wake-ups were not spread")
+	}
+	if ignoreDeletes.Delete(event.DeleteEvent{Object: &runtimev1alpha1.Host{}}) {
+		t.Fatal("a deleted Host woke Workloads")
+	}
+	if !ignoreDeletes.Update(event.UpdateEvent{ObjectOld: &runtimev1alpha1.Host{}, ObjectNew: &runtimev1alpha1.Host{}}) {
+		t.Fatal("ignoreDeletes filtered an update")
+	}
+}
+
+type delayRecordingQueue struct {
+	workqueue.TypedRateLimitingInterface[reconcile.Request]
+	delays []time.Duration
+}
+
+func (q *delayRecordingQueue) AddAfter(item reconcile.Request, d time.Duration) {
+	q.delays = append(q.delays, d)
 }
