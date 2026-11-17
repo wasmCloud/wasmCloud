@@ -31,6 +31,7 @@ use zeroize::Zeroizing;
 use crate::host::client_identity::RotatingClientIdentity;
 use crate::host::egress_credential::{CredentialError, EgressCredentialSource};
 use crate::host::http_client::{ClientTlsConfigResolver, DestinationTls};
+use crate::host::trust_bundle::{SpiffePeer, TrustBundles};
 
 /// First wait after a failed issuance. Doubles, with jitter, up to
 /// [`MAX_BACKOFF`]. Also how often an expired lease is checked again.
@@ -44,6 +45,11 @@ const ISSUE_TIMEOUT: Duration = Duration::from_secs(30);
 /// half of [`MAX_LIFETIME`], whatever lifetime the issuer claims.
 const MIN_RENEWAL: Duration = Duration::from_secs(1);
 const MAX_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Longest a connection to a SPIFFE-verified server is reused, so a peer
+/// bundle that stops being refreshed is not trusted past this through an
+/// open connection.
+pub const SPIFFE_CONNECTION_REUSE: Duration = Duration::from_secs(5 * 60);
 
 /// Proof from the control plane that this host may run a workload, presented
 /// to the issuer with every request. Opaque to the host apart from its expiry.
@@ -78,11 +84,13 @@ impl std::fmt::Debug for SchedulingLease {
 }
 
 /// An HTTPS destination the workload's X.509-SVID is presented to. Its server
-/// certificate is verified against the host's roots, by host name.
+/// certificate is verified against the host's roots, by host name, unless the
+/// destination names a SPIFFE server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MtlsDestination {
     host: String,
     port: u16,
+    server: Option<SpiffePeer>,
 }
 
 impl MtlsDestination {
@@ -92,7 +100,22 @@ impl MtlsDestination {
         let host = canonical_host(host).filter(|_| port != 0).ok_or_else(|| {
             anyhow::anyhow!("an mTLS destination is an exact host and a port, not {host:?}:{port}")
         })?;
-        Ok(Self { host, port })
+        Ok(Self {
+            host,
+            port,
+            server: None,
+        })
+    }
+
+    /// Verify the server as `server` by its X.509-SVID, against the host's
+    /// trust bundles, in place of the host's roots and the host name.
+    pub fn with_server(mut self, server: SpiffePeer) -> Self {
+        self.server = Some(server);
+        self
+    }
+
+    pub fn server(&self) -> Option<&SpiffePeer> {
+        self.server.as_ref()
     }
 
     fn matches(&self, host: &str, port: u16) -> bool {
@@ -130,6 +153,10 @@ pub struct IdentityGrant {
     pub mtls_destinations: Vec<MtlsDestination>,
     /// Audiences a JWT-SVID is kept for, one SVID per audience.
     pub jwt_audiences: Vec<String>,
+    /// Exact host names the host's HTTPS ingress presents the X.509-SVID
+    /// for, picked by SNI. Requests on such a connection must route to this
+    /// workload. Empty presents it on none.
+    pub ingress_hosts: Vec<String>,
 }
 
 /// What the host tells the issuer about the workload it asks for.
@@ -367,8 +394,10 @@ impl RequestParts {
 
 struct Inner {
     issuer: Arc<dyn IdentityIssuer>,
-    /// Server verification for every mTLS destination.
+    /// Server verification for every mTLS destination without a SPIFFE
+    /// server.
     host_tls: Arc<rustls::ClientConfig>,
+    bundles: TrustBundles,
     entries: Mutex<HashMap<String, Arc<Entry>>>,
     retry: Duration,
 }
@@ -389,6 +418,7 @@ impl WorkloadCredentials {
             inner: Arc::new(Inner {
                 issuer,
                 host_tls,
+                bundles: TrustBundles::new(),
                 entries: Mutex::default(),
                 retry: RETRY,
             }),
@@ -401,6 +431,13 @@ impl WorkloadCredentials {
             inner.retry = retry;
         }
         self
+    }
+
+    /// The trust bundles SPIFFE peers are verified against, the host's own
+    /// trust domain's and each federated one's. Empty until the control plane
+    /// installs them, so until then no SPIFFE peer verifies.
+    pub fn trust_bundles(&self) -> &TrustBundles {
+        &self.inner.bundles
     }
 
     fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Entry>>> {
@@ -443,12 +480,35 @@ impl WorkloadCredentials {
             grant.jwt_audiences.iter().all(|a| !a.is_empty()),
             "a JWT-SVID audience cannot be empty"
         );
+        let mut grant = grant;
+        grant.ingress_hosts = grant
+            .ingress_hosts
+            .iter()
+            .map(|host| {
+                canonical_host(host)
+                    .filter(|h| !h.starts_with('['))
+                    .ok_or_else(|| anyhow::anyhow!("ingress host {host:?} is not an exact name"))
+            })
+            .collect::<anyhow::Result<_>>()?;
         let mut entries = self.entries();
         if let Some(entry) = entries.get(workload_id) {
             anyhow::ensure!(
                 !entry.admitted() && !entry.released(),
                 "workload {workload_id} already runs with an identity, or is stopping"
             );
+        }
+        for (other, entry) in entries.iter() {
+            if other == workload_id || entry.released() {
+                continue;
+            }
+            let held = entry.grant.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(host) = grant
+                .ingress_hosts
+                .iter()
+                .find(|host| held.ingress_hosts.contains(host))
+            {
+                anyhow::bail!("ingress host {host} already presents workload {other}'s identity");
+            }
         }
         let svid = RotatingClientIdentity::empty();
         let jwts = grant
@@ -541,7 +601,7 @@ impl WorkloadCredentials {
                      workload's identity"
                 );
             }
-            !grant.mtls_destinations.is_empty()
+            !grant.mtls_destinations.is_empty() || !grant.ingress_hosts.is_empty()
         };
         *entry
             .loaded_digests
@@ -636,6 +696,29 @@ impl WorkloadCredentials {
         Some(source)
     }
 
+    /// The workload whose X.509-SVID the ingress presents for `server_name`,
+    /// and that SVID. `None` while it has none to present.
+    pub fn ingress_svid(
+        &self,
+        server_name: &str,
+    ) -> Option<(String, Arc<rustls::sign::CertifiedKey>)> {
+        let name = canonical_host(server_name)?;
+        let (workload_id, entry) = self
+            .entries()
+            .iter()
+            .find(|(_, entry)| {
+                entry
+                    .grant
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .ingress_hosts
+                    .contains(&name)
+            })
+            .map(|(id, entry)| (id.clone(), Arc::clone(entry)))?;
+        entry.presentable()?;
+        Some((workload_id, entry.svid.certified()?))
+    }
+
     /// Wrap `inner` so each workload's X.509-SVID is presented to the
     /// destinations its grant names, and to no others.
     ///
@@ -687,25 +770,45 @@ impl ClientTlsConfigResolver for IdentityTls {
             .unwrap_or_else(|e| e.into_inner())
             .mtls_destinations
             .iter()
-            .any(|destination| destination.matches(host, port));
-        if !granted {
+            .find(|destination| destination.matches(host, port))
+            .cloned();
+        let Some(destination) = granted else {
             return self.inner.destination_tls(workload_id, host, port);
-        }
+        };
         let Some(presenting) = entry.presentable() else {
             return Some(DestinationTls::new(Arc::clone(&self.not_issued)));
         };
-        let left = presenting
+        let mut left = presenting
             .not_after
             .duration_since(SystemTime::now())
             .unwrap_or_default();
-        let deadline = tokio::time::Instant::now() + left;
         let revoked = entry.revoked.clone().cancelled_owned();
+        let (config, dropped) = match destination.server() {
+            None => (Arc::clone(&presenting.config), None),
+            Some(server) => {
+                let bundles = &self.credentials.inner.bundles;
+                let mut config = (*presenting.config).clone();
+                config
+                    .dangerous()
+                    .set_certificate_verifier(bundles.server_verifier(server.clone()));
+                left = left.min(SPIFFE_CONNECTION_REUSE);
+                (Arc::new(config), bundles.dropped(server.trust_domain()))
+            }
+        };
+        let deadline = tokio::time::Instant::now() + left;
         Some(DestinationTls {
-            config: Arc::clone(&presenting.config),
+            config,
             closes: Some(Box::pin(async move {
+                let dropped = async move {
+                    match dropped {
+                        Some(dropped) => dropped.await,
+                        None => std::future::pending().await,
+                    }
+                };
                 tokio::select! {
                     () = tokio::time::sleep_until(deadline) => {}
                     () = revoked => {}
+                    () = dropped => {}
                 }
             })),
         })

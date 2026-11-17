@@ -158,6 +158,7 @@ fn grant(destinations: Vec<MtlsDestination>, audiences: &[&str]) -> IdentityGran
         ),
         mtls_destinations: destinations,
         jwt_audiences: audiences.iter().map(|a| a.to_string()).collect(),
+        ingress_hosts: Vec::new(),
     }
 }
 
@@ -825,6 +826,425 @@ async fn a_granted_mtls_destination_is_network_only() {
         assert!(
             !handler.network_only("w1", &other.parse().unwrap()),
             "{other}"
+        );
+    }
+}
+
+mod federation {
+    use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair as _};
+    use rcgen::ExtendedKeyUsagePurpose;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    use super::*;
+    use crate::host::trust_bundle::{SpiffePeer, TrustBundle, TrustDomain};
+
+    const PEER_SERVER: &str = "spiffe://peer.test/wi/server";
+    const CALLER: &str = "spiffe://acme.test/wi/caller";
+
+    fn ca() -> (Issuer<'static, KeyPair>, CertificateDer<'static>) {
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let der = params.self_signed(&key).unwrap().der().clone();
+        (Issuer::new(params, key), der)
+    }
+
+    fn svid(
+        ca: &Issuer<'static, KeyPair>,
+        id: &str,
+        usage: ExtendedKeyUsagePurpose,
+    ) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.subject_alt_names = vec![SanType::URI(id.try_into().unwrap())];
+        params.extended_key_usages = vec![usage];
+        let cert = params.signed_by(&key, ca).unwrap();
+        (
+            vec![cert.der().clone()],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+        )
+    }
+
+    fn bundle(domain: &str, ca: &CertificateDer<'_>, jwt: Option<&EcdsaKeyPair>) -> TrustBundle {
+        let enc = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let mut keys = vec![serde_json::json!({
+            "kty": "EC", "use": "x509-svid",
+            "x5c": [base64::engine::general_purpose::STANDARD.encode(ca)],
+        })];
+        if let Some(key) = jwt {
+            let point = key.public_key().as_ref();
+            keys.push(serde_json::json!({
+                "kty": "EC", "use": "jwt-svid", "kid": "k1", "crv": "P-256",
+                "x": enc.encode(&point[1..33]), "y": enc.encode(&point[33..]),
+            }));
+        }
+        let json = serde_json::json!({ "keys": keys }).to_string();
+        TrustBundle::from_spiffe_json(TrustDomain::new(domain).unwrap(), json.as_bytes()).unwrap()
+    }
+
+    fn later() -> SystemTime {
+        SystemTime::now() + Duration::from_secs(60)
+    }
+
+    /// A peer-domain TLS server that requires a client certificate from the
+    /// local domain and answers each request with the client's SPIFFE ID.
+    async fn peer_server(
+        local_ca: &CertificateDer<'static>,
+        peer_ca: &Issuer<'static, KeyPair>,
+        id: &str,
+    ) -> u16 {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(local_ca.clone()).unwrap();
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+            .build()
+            .unwrap();
+        let (chain, key) = svid(peer_ca, id, ExtendedKeyUsagePurpose::ServerAuth);
+        let config = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(chain, key)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(tcp).await else {
+                        return;
+                    };
+                    let mut byte = [0u8; 1];
+                    let _ = tls.read(&mut byte).await;
+                    let _ = tls.write_all(b"ok").await;
+                });
+            }
+        });
+        port
+    }
+
+    async fn connect(config: Arc<rustls::ClientConfig>, port: u16) -> bool {
+        let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let Ok(mut tls) = tokio_rustls::TlsConnector::from(config)
+            .connect("127.0.0.1".try_into().unwrap(), stream)
+            .await
+        else {
+            return false;
+        };
+        tls.write_all(b"x").await.unwrap();
+        let mut reply = [0u8; 2];
+        tls.read_exact(&mut reply).await.is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_spiffe_server_is_verified_against_its_federated_bundle() {
+        let issuer = FakeIssuer::new(Duration::from_secs(3600));
+        let credentials = store(Arc::clone(&issuer));
+        let (peer_ca, peer_ca_der) = ca();
+        let port = peer_server(&issuer.ca_der, &peer_ca, PEER_SERVER).await;
+        let to = |peer: &str| {
+            MtlsDestination::new("127.0.0.1", port)
+                .unwrap()
+                .with_server(SpiffePeer::parse(peer).unwrap())
+        };
+        credentials
+            .bind("domain", grant(vec![to("spiffe://peer.test")], &[]))
+            .unwrap();
+        credentials
+            .bind("exact", grant(vec![to("spiffe://peer.test/wi/other")], &[]))
+            .unwrap();
+        for workload in ["domain", "exact"] {
+            credentials.admit(workload, &app()).unwrap();
+        }
+        eventually(|| {
+            credentials.spiffe_id("domain").is_some() && credentials.spiffe_id("exact").is_some()
+        })
+        .await;
+        let resolver = credentials.tls_resolver(Arc::new(issuer.host_tls()));
+        let config = |workload: &str| {
+            resolver
+                .config_for_destination(workload, "127.0.0.1", port)
+                .unwrap()
+        };
+
+        assert!(
+            !connect(config("domain"), port).await,
+            "no peer bundle, no connection"
+        );
+        credentials
+            .trust_bundles()
+            .replace([bundle("peer.test", &peer_ca_der, None)], later())
+            .unwrap();
+        assert!(connect(config("domain"), port).await);
+        assert!(
+            !connect(config("exact"), port).await,
+            "the server is not the ID the destination names"
+        );
+
+        let (other_ca, other_der) = ca();
+        drop(other_ca);
+        credentials
+            .trust_bundles()
+            .replace([bundle("peer.test", &other_der, None)], later())
+            .unwrap();
+        assert!(
+            !connect(config("domain"), port).await,
+            "verified against the peer's bundle, not the host's roots"
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_a_federation_closes_its_connections() {
+        let issuer = FakeIssuer::new(Duration::from_secs(3600));
+        let credentials = store(Arc::clone(&issuer));
+        let (_, peer_ca_der) = ca();
+        credentials
+            .trust_bundles()
+            .replace([bundle("peer.test", &peer_ca_der, None)], later())
+            .unwrap();
+        let destination = MtlsDestination::new("peer.example", 8443)
+            .unwrap()
+            .with_server(SpiffePeer::parse("spiffe://peer.test").unwrap());
+        credentials
+            .bind("w1", grant(vec![destination], &[]))
+            .unwrap();
+        credentials.admit("w1", &app()).unwrap();
+        eventually(|| credentials.spiffe_id("w1").is_some()).await;
+        let resolver = credentials.tls_resolver(Arc::new(issuer.host_tls()));
+        let closes = || {
+            resolver
+                .destination_tls("w1", "peer.example", 8443)
+                .unwrap()
+                .closes
+                .unwrap()
+        };
+
+        let first = closes();
+        credentials
+            .trust_bundles()
+            .replace([bundle("peer.test", &peer_ca_der, None)], later())
+            .unwrap();
+        let mut first = std::pin::pin!(first);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            futures::poll!(first.as_mut()).is_pending(),
+            "a refresh keeps the connection"
+        );
+        credentials.trust_bundles().replace([], later()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), first)
+            .await
+            .expect("removing the federation closes the connection");
+
+        credentials
+            .trust_bundles()
+            .replace([bundle("peer.test", &peer_ca_der, None)], later())
+            .unwrap();
+        let capped = closes();
+        tokio::time::pause();
+        let mut capped = std::pin::pin!(capped);
+        tokio::time::advance(SPIFFE_CONNECTION_REUSE - Duration::from_secs(1)).await;
+        assert!(futures::poll!(capped.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(
+            futures::poll!(capped.as_mut()).is_ready(),
+            "reused for at most five minutes"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ingress_host_presents_one_workloads_svid() {
+        let issuer = FakeIssuer::new(Duration::from_secs(3600));
+        let credentials = store(Arc::clone(&issuer));
+        let serving = |hosts: &[&str]| IdentityGrant {
+            ingress_hosts: hosts.iter().map(|h| h.to_string()).collect(),
+            ..grant(vec![], &[])
+        };
+        assert!(credentials.bind("w0", serving(&["[::1]"])).is_err());
+        credentials.bind("w1", serving(&["Svc.Test."])).unwrap();
+        let err = credentials.bind("w2", serving(&["svc.test"])).unwrap_err();
+        assert!(err.to_string().contains("already presents"), "{err}");
+        assert!(
+            credentials.ingress_svid("svc.test").is_none(),
+            "nothing to present before issuance"
+        );
+        credentials.admit("w1", &app()).unwrap();
+        eventually(|| credentials.ingress_svid("SVC.test").is_some()).await;
+        assert_eq!(credentials.ingress_svid("svc.test").unwrap().0, "w1");
+        assert!(credentials.ingress_svid("other.test").is_none());
+        credentials.revoke("w1");
+        assert!(credentials.ingress_svid("svc.test").is_none());
+        credentials.release("w1");
+        credentials.bind("w2", serving(&["svc.test"])).unwrap();
+    }
+
+    /// The ingress side of a federated call: the workload's SVID is served by
+    /// SNI, a client SVID is verified, and a request routed elsewhere is
+    /// refused.
+    #[tokio::test]
+    async fn ingress_serves_the_workloads_svid_and_verifies_the_caller() {
+        use crate::host::ingress_identity::{PEER_ID_HEADER, PEER_SVID_HEADER, accept, admit};
+        let issuer = FakeIssuer::new(Duration::from_secs(3600));
+        let credentials = store(Arc::clone(&issuer));
+        credentials
+            .bind(
+                "w1",
+                IdentityGrant {
+                    ingress_hosts: vec!["svc.test".into()],
+                    ..grant(vec![], &[])
+                },
+            )
+            .unwrap();
+        credentials.admit("w1", &app()).unwrap();
+        eventually(|| credentials.ingress_svid("svc.test").is_some()).await;
+        let jwt_key = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_FIXED_SIGNING).unwrap();
+        credentials
+            .trust_bundles()
+            .replace(
+                [bundle("acme.test", &issuer.ca_der, Some(&jwt_key))],
+                later(),
+            )
+            .unwrap();
+
+        let default = {
+            let key = KeyPair::generate().unwrap();
+            let cert = CertificateParams::new(vec!["default.test".into()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap();
+            rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![cert.der().clone()],
+                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+                )
+                .unwrap()
+        };
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(default));
+        let slot: crate::host::ingress_identity::IdentitySlot = Arc::default();
+        let _ = slot.set(credentials.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted, mut connections) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let (acceptor, slot, accepted) = (acceptor.clone(), slot.clone(), accepted.clone());
+                tokio::spawn(async move {
+                    let outcome = accept(&acceptor, &slot, tcp).await;
+                    let ok = outcome.is_ok();
+                    let (tls, connection) = match outcome {
+                        Ok((tls, connection)) => (Some(tls), connection),
+                        Err(_) => (None, None),
+                    };
+                    let _ = accepted.send((ok, connection));
+                    if let Some(mut tls) = tls {
+                        let mut byte = [0u8; 1];
+                        let _ = tls.read(&mut byte).await;
+                    }
+                });
+            }
+        });
+
+        let client = |cert: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>| {
+            let builder = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(
+                    credentials
+                        .trust_bundles()
+                        .server_verifier(SpiffePeer::parse(SPIFFE_ID).unwrap()),
+                );
+            Arc::new(match cert {
+                Some((chain, key)) => builder.with_client_auth_cert(chain, key).unwrap(),
+                None => builder.with_no_client_auth(),
+            })
+        };
+        let dial = |config: Arc<rustls::ClientConfig>, name: &'static str| async move {
+            let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let mut tls = tokio_rustls::TlsConnector::from(config)
+                .connect(name.try_into().unwrap(), stream)
+                .await
+                .ok()?;
+            tls.write_all(b"x").await.ok()?;
+            Some(tls)
+        };
+
+        let caller = svid(&issuer.ca, CALLER, ExtendedKeyUsagePurpose::ClientAuth);
+        let _held = dial(client(Some(caller)), "svc.test")
+            .await
+            .expect("the client verified the workload's SVID");
+        let (ok, connection) = connections.recv().await.unwrap();
+        let connection = connection.filter(|_| ok).unwrap();
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(PEER_ID_HEADER, "spiffe://forged.test/a".parse().unwrap());
+        crate::host::ingress_identity::strip(&mut headers);
+        assert_eq!(admit(&connection, "w2", &mut headers), Err(421));
+        admit(&connection, "w1", &mut headers).unwrap();
+        assert_eq!(headers[PEER_ID_HEADER], CALLER);
+        assert_eq!(headers[PEER_SVID_HEADER], "x509");
+
+        let (stranger_ca, _) = ca();
+        let stranger = svid(&stranger_ca, CALLER, ExtendedKeyUsagePurpose::ClientAuth);
+        assert!(
+            dial(client(Some(stranger)), "svc.test").await.is_none() || {
+                let (ok, _) = connections.recv().await.unwrap();
+                !ok
+            }
+        );
+
+        let _anonymous = dial(client(None), "svc.test")
+            .await
+            .expect("a client may present no certificate");
+        let (_, connection) = loop {
+            let next = connections.recv().await.unwrap();
+            if next.0 {
+                break next;
+            }
+        };
+        let connection = connection.unwrap();
+        let token = {
+            let enc = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            let exp = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                + 60;
+            let signing = format!(
+                "{}.{}",
+                enc.encode(r#"{"alg":"ES256","kid":"k1"}"#),
+                enc.encode(
+                    serde_json::json!({ "sub": CALLER, "aud": SPIFFE_ID, "exp": exp }).to_string()
+                )
+            );
+            let signature = jwt_key
+                .sign(&aws_lc_rs::rand::SystemRandom::new(), signing.as_bytes())
+                .unwrap();
+            format!("{signing}.{}", enc.encode(signature.as_ref()))
+        };
+        let mut headers = hyper::HeaderMap::new();
+        admit(&connection, "w1", &mut headers).unwrap();
+        assert!(!headers.contains_key(PEER_ID_HEADER), "no proof, no peer");
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        admit(&connection, "w1", &mut headers).unwrap();
+        assert_eq!(headers[PEER_ID_HEADER], CALLER);
+        assert_eq!(headers[PEER_SVID_HEADER], "jwt");
+
+        credentials.trust_bundles().clear();
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            hyper::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        admit(&connection, "w1", &mut headers).unwrap();
+        assert!(
+            !headers.contains_key(PEER_ID_HEADER),
+            "a dropped bundle verifies nothing"
         );
     }
 }
