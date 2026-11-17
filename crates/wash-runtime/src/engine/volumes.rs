@@ -29,15 +29,18 @@ pub(crate) struct ResolvedVolumeMount {
 
 impl ResolvedVolumeMount {
     pub(crate) fn from_opened(volume: &OpenedVolume, mount: &VolumeMount) -> anyhow::Result<Self> {
-        Self::new(volume, mount.mount_path.clone(), mount.read_only)
+        Self::new(volume, &mount.mount_path, mount.read_only)
     }
 
-    /// Mount an opened directory at `mount_path` in the guest.
+    /// Mount an opened directory at `mount_path` in the guest. The path is
+    /// refused unless [`normalize_mount_path`] accepts it.
     pub(crate) fn new(
         volume: &OpenedVolume,
-        mount_path: String,
+        mount_path: &str,
         read_only: bool,
     ) -> anyhow::Result<Self> {
+        let mount_path = normalize_mount_path(mount_path)
+            .map_err(|why| anyhow::anyhow!("volumeMount mountPath {mount_path:?} {why}"))?;
         let (perms, mode) = if read_only {
             (FsPerms::ReadOnly, OpenMode::READ)
         } else {
@@ -61,6 +64,24 @@ impl ResolvedVolumeMount {
     pub(crate) fn mount_path(&self) -> &str {
         &self.mount_path
     }
+}
+
+/// A guest mount path without empty segments or a trailing `/`, so `/models`
+/// and `/models/` name one mount.
+pub(crate) fn normalize_mount_path(path: &str) -> Result<String, &'static str> {
+    let rest = path.strip_prefix('/').ok_or("must be absolute")?;
+    let mut normalized = String::new();
+    for part in rest.split('/').filter(|part| !part.is_empty()) {
+        if part == "." || part == ".." {
+            return Err("must not contain `.` or `..`");
+        }
+        normalized.push('/');
+        normalized.push_str(part);
+    }
+    if normalized.is_empty() {
+        normalized.push('/');
+    }
+    Ok(normalized)
 }
 
 /// Expose retained handles alongside any preopens supplied by an embedder.
@@ -917,6 +938,34 @@ mod allowlist_tests {
             );
         }
         assert_eq!(meters.host_path_denied(), 3);
+    }
+
+    /// Every mount is held to one rule, a workload's as a plugin's: the path
+    /// is absolute, has no `.` or `..`, and has one spelling.
+    #[test]
+    fn a_mount_path_must_be_absolute_and_plain() {
+        let root = tempfile::tempdir().unwrap();
+        let volume = ReservedHostPaths::default().open(root.path()).unwrap();
+        let mount = |mount_path: &str| VolumeMount {
+            name: "data".into(),
+            mount_path: mount_path.into(),
+            read_only: false,
+        };
+        for (path, why) in [
+            ("data", "must be absolute"),
+            ("", "must be absolute"),
+            ("/a/../data", "must not contain"),
+            ("/./data", "must not contain"),
+        ] {
+            let Err(err) = ResolvedVolumeMount::from_opened(&volume, &mount(path)) else {
+                panic!("mount path {path:?} should be refused");
+            };
+            assert!(err.to_string().contains(why), "{path:?}: {err}");
+        }
+        for path in ["/data", "/data/", "//data"] {
+            let resolved = ResolvedVolumeMount::from_opened(&volume, &mount(path)).unwrap();
+            assert_eq!(resolved.mount_path, "/data", "{path:?}");
+        }
     }
 
     /// The gate decides which paths, never which permissions.

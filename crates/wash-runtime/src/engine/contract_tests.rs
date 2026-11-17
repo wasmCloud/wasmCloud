@@ -268,6 +268,34 @@ fn a_component_mounts_known_volumes_and_skips_unknown_ones() {
     assert_eq!(component.volume_mounts[0].1.mount_path, "/data");
 }
 
+#[test]
+fn a_component_with_a_relative_mount_path_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let volumes = opened_volumes(dir.path());
+    let bytes = wat::parse_str("(component)").unwrap();
+    let Err(err) = engine().initialize_workload_component(
+        "workload",
+        "contract",
+        "tests",
+        crate::types::Component {
+            local_resources: LocalResources {
+                volume_mounts: vec![VolumeMount {
+                    name: "data".into(),
+                    mount_path: "data".into(),
+                    read_only: false,
+                }],
+                ..Default::default()
+            },
+            ..component("component", &bytes)
+        },
+        &volumes,
+        Arc::default(),
+    ) else {
+        panic!("a relative mount path should be refused");
+    };
+    assert!(format!("{err:#}").contains("must be absolute"), "{err:#}");
+}
+
 fn initialize_service(bytes: &[u8]) -> anyhow::Result<WorkloadService> {
     engine().initialize_service(
         "workload",

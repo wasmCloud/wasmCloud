@@ -181,6 +181,7 @@ pub enum VolumeType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeMount {
     pub name: String,
+    /// Absolute path the guest sees the volume at, without `.` or `..`.
     pub mount_path: String,
     pub read_only: bool,
 }
