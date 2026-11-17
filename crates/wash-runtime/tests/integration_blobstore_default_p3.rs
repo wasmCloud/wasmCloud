@@ -85,6 +85,7 @@ async fn p3_guest_plain_blobstore_uses_default_backend() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "blobstore-default-p3".to_string(),
             annotations: HashMap::new(),

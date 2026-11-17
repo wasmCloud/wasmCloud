@@ -61,6 +61,7 @@ async fn test_p3_http_handler_serves_request() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-http-handler".to_string(),
             annotations: HashMap::new(),
@@ -115,6 +116,7 @@ async fn test_p3_http_blobstore() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-http-blobstore".to_string(),
             annotations: HashMap::new(),
@@ -172,6 +174,7 @@ async fn test_p3_http_concurrent_requests() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-http-concurrent".to_string(),
             annotations: HashMap::new(),
@@ -240,6 +243,7 @@ async fn test_p3_service_runs() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-service".to_string(),
             annotations: HashMap::new(),
@@ -303,6 +307,7 @@ async fn test_p3_caller_p2_middleware_p2_callee() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-p2-p2-link".to_string(),
             annotations: HashMap::new(),
@@ -383,6 +388,7 @@ async fn test_p2_caller_p2_middleware_p3_callee() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p2-p2-p3-link".to_string(),
             annotations: HashMap::new(),
@@ -459,6 +465,7 @@ async fn test_p3_caller_p2_middleware_p3_callee() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-p2-p3-link".to_string(),
             annotations: HashMap::new(),
@@ -537,6 +544,7 @@ async fn test_all_p3_workload() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "all-p3".to_string(),
             annotations: HashMap::new(),
@@ -596,6 +604,7 @@ async fn test_p2_regression_with_p3_enabled() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p2-regression".to_string(),
             annotations: HashMap::new(),

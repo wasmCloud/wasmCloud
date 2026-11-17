@@ -618,12 +618,9 @@ impl Ctx {
         self.http_hooks.host.handler()
     }
 
-    /// The namespace and name this store's egress is attributed to.
-    pub(crate) fn egress_names(&self) -> (Arc<str>, Arc<str>) {
-        (
-            Arc::clone(&self.http_hooks.workload_namespace),
-            Arc::clone(&self.http_hooks.workload_name),
-        )
+    /// The namespace this store's egress is attributed to.
+    pub(crate) fn egress_namespace(&self) -> Arc<str> {
+        Arc::clone(&self.http_hooks.workload_namespace)
     }
 }
 
@@ -711,7 +708,7 @@ struct CtxHttpHooks {
     workload_id: Arc<str>,
     component_id: Arc<str>,
     workload_namespace: Arc<str>,
-    workload_name: Arc<str>,
+    workload_owner: Option<crate::types::WorkloadOwner>,
     /// Refreshed each time the store hands out its HTTP view: whether
     /// `component_id` is certainly the caller (see
     /// [`SharedCtx::caller_is_attested`]).
@@ -734,7 +731,7 @@ impl WasiHttpHooks for CtxHttpHooks {
                 crate::host::egress_credential::EgressCaller {
                     workload_id: &self.workload_id,
                     namespace: &self.workload_namespace,
-                    name: &self.workload_name,
+                    owner: self.workload_owner.as_ref(),
                     component_id: Some(&*self.component_id)
                         .filter(|id| self.caller_attested && !id.is_empty()),
                 },
@@ -773,7 +770,7 @@ pub struct CtxBuilder {
     workload_id: Arc<str>,
     component_id: Arc<str>,
     workload_namespace: Arc<str>,
-    workload_name: Arc<str>,
+    workload_owner: Option<crate::types::WorkloadOwner>,
     ctx: Option<WasiCtx>,
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
@@ -795,7 +792,7 @@ impl CtxBuilder {
             component_id: component_id.into(),
             workload_id: workload_id.into(),
             workload_namespace: Arc::from(""),
-            workload_name: Arc::from(""),
+            workload_owner: None,
             ctx: None,
             sockets: None,
             http_handler: None,
@@ -871,10 +868,15 @@ impl CtxBuilder {
         self
     }
 
-    /// The namespace and name of the workload, reported with its egress.
-    pub fn with_workload_names(mut self, namespace: Arc<str>, name: Arc<str>) -> Self {
+    /// The workload's namespace and owner, which its egress is attributed to
+    /// and its grants are matched by.
+    pub fn with_workload_owner(
+        mut self,
+        namespace: Arc<str>,
+        owner: Option<crate::types::WorkloadOwner>,
+    ) -> Self {
         self.workload_namespace = namespace;
-        self.workload_name = name;
+        self.workload_owner = owner;
         self
     }
 
@@ -898,7 +900,7 @@ impl CtxBuilder {
             workload_id: self.workload_id.clone(),
             component_id: self.component_id.clone(),
             workload_namespace: self.workload_namespace,
-            workload_name: self.workload_name,
+            workload_owner: self.workload_owner,
             caller_attested: true,
             allowed_hosts: self.allowed_hosts,
             warned_unserved: false,

@@ -84,6 +84,7 @@ async fn run_with(
         .workload_start(WorkloadStartRequest {
             workload_id: uuid::Uuid::new_v4().to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "test".to_string(),
                 name: "multi-config".to_string(),
                 annotations: HashMap::new(),

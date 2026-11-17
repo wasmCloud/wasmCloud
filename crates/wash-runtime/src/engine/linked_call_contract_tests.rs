@@ -300,7 +300,7 @@ fn template(engine: &crate::engine::Engine, id: &str) -> ComponentCtxTemplate {
         component_id: id.into(),
         workload_id: "contract-workload".into(),
         workload_namespace: "default".into(),
-        workload_name: "contract".into(),
+        workload_owner: None,
         local_resources: crate::types::LocalResources::default(),
         volume_mounts: vec![],
         plugins: Some(Arc::default()),

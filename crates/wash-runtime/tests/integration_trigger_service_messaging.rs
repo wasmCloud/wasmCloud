@@ -65,6 +65,7 @@ fn service_request(
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: name.to_string(),
             annotations: HashMap::new(),
@@ -316,6 +317,7 @@ fn msg_counter_e2e_request(
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host.to_string(),
             annotations: HashMap::new(),

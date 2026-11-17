@@ -131,6 +131,7 @@ async fn start_msg_sleeper(
     host.workload_start(WorkloadStartRequest {
         workload_id: workload_id.clone(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),

@@ -67,7 +67,9 @@ pub const AUDIT_ID_HEADER: &str = "wasmcloud-audit-id";
 pub struct BrokerCaller {
     pub workload_id: Arc<str>,
     pub namespace: Arc<str>,
-    pub workload_name: Arc<str>,
+    /// The controller the workload belongs to, which grants name it by with
+    /// `namespace`. A workload the host was told no owner for binds nothing.
+    pub owner: crate::types::WorkloadOwner,
     pub component_id: Arc<str>,
     /// The component's name in the manifest, or `None` for the workload's
     /// service.
@@ -343,10 +345,18 @@ impl HostPlugin for WasmcloudBroker {
         refuse_bypasses(&world)?;
         crate::engine::ctx::link_denied_egress(item.linker()?)?;
 
+        let Some(owner) = item.workload_owner().cloned() else {
+            anyhow::bail!(
+                "workload {}/{} imports wasmcloud:broker, but its control plane named no owner \
+                 for it, so no broker grant can name it",
+                item.workload_namespace(),
+                item.workload_name(),
+            );
+        };
         let caller = Arc::new(BrokerCaller {
             workload_id: item.workload_id().into(),
             namespace: item.workload_namespace().into(),
-            workload_name: item.workload_name().into(),
+            owner,
             component_id: item.id().into(),
             component_name: match &*item {
                 WorkloadItem::Component(component) => Some(component.name().into()),
@@ -359,7 +369,7 @@ impl HostPlugin for WasmcloudBroker {
             wasmtime::format_err!(
                 "no broker credential is bound to `{label}` for workload {}/{}",
                 caller.namespace,
-                caller.workload_name
+                caller.owner
             )
         };
 

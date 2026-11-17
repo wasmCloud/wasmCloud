@@ -1071,6 +1071,13 @@ mod tests {
             })
         ));
         assert!(matches!(
+            parse(r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "billing", "kind": "WorkloadDeployment", "name": "api", "uid": "u"}]}"#).unwrap(),
+            SecretEntry::Plugin(PluginSecretSource {
+                workloads: crate::plugin::WorkloadGrant::Only(selectors),
+                ..
+            }) if selectors.iter().all(|s| !s.is_by_name())
+        ));
+        assert!(matches!(
             parse(r#"{"inline": {"x": "y"}}"#).unwrap(),
             SecretEntry::Static(_)
         ));
@@ -1094,6 +1101,10 @@ mod tests {
             (
                 r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "a", "nmae": "b"}]}"#,
                 "unknown field `nmae`",
+            ),
+            (
+                r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": [{"namespace": "a", "kind": "WorkloadDeployment"}]}"#,
+                "needs the owner's `name`",
             ),
             (
                 r#"{"plugin": "vault", "keys": {"url": "k"}, "workloads": "all", "rotate": "1h"}"#,

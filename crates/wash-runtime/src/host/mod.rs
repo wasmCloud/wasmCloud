@@ -2671,6 +2671,7 @@ mod tests {
         WorkloadStartRequest {
             workload_id: workload_id.to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "wasmcloud".to_string(),
                 name: "empty".to_string(),
                 annotations: Default::default(),
@@ -2820,6 +2821,7 @@ mod tests {
             .workload_start(WorkloadStartRequest {
                 workload_id: "test".to_string(),
                 workload: Workload {
+                    owner: None,
                     namespace: "wasmcloud".to_string(),
                     name: "test".to_string(),
                     annotations: Default::default(),
@@ -2859,6 +2861,7 @@ mod tests {
             .workload_start(WorkloadStartRequest {
                 workload_id: "test-bad-service".to_string(),
                 workload: Workload {
+                    owner: None,
                     namespace: "wasmcloud".to_string(),
                     name: "bad-service-test".to_string(),
                     annotations: Default::default(),
@@ -2997,6 +3000,7 @@ mod tests {
         WorkloadStartRequest {
             workload_id: workload_id.to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "wasmcloud".to_string(),
                 name: "binds-then-fails".to_string(),
                 annotations: Default::default(),
@@ -3019,6 +3023,7 @@ mod tests {
         WorkloadStartRequest {
             workload_id: workload_id.to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "wasmcloud".to_string(),
                 name: workload_id.to_string(),
                 annotations: Default::default(),

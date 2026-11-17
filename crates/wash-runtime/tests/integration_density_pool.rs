@@ -40,6 +40,7 @@ async fn density_fixture_retains_warm_instances_and_releases_cold_ones() -> Resu
                 .workload_start(WorkloadStartRequest {
                     workload_id: format!("density-{index}"),
                     workload: Workload {
+                        owner: None,
                         namespace: "test".into(),
                         name: hostname.clone(),
                         annotations: HashMap::new(),

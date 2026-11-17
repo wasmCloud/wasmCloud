@@ -141,6 +141,7 @@ fn messaging_handler_workload(
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: workload_name.unwrap_or_else(|| "unnamed".into()),
             annotations: HashMap::new(),

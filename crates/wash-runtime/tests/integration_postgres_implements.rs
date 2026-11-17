@@ -172,6 +172,7 @@ async fn implements_imports_route_to_per_credential_connections() -> Result<()> 
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "postgres-implements".to_string(),
             annotations: HashMap::new(),

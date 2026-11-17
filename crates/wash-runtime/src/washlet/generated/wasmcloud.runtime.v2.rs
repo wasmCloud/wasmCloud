@@ -415,6 +415,25 @@ pub struct Workload {
     /// The identity the workload runs as. Unset runs it with none.
     #[prost(message, optional, tag = "7")]
     pub identity: ::core::option::Option<WorkloadIdentity>,
+    /// The object that controls the workload's replicas, as the control plane
+    /// verified it. Grants name a workload by its namespace and this owner, never
+    /// by name alone. Unset leaves the workload matching no such grant.
+    #[prost(message, optional, tag = "8")]
+    pub owner: ::core::option::Option<WorkloadOwner>,
+}
+/// The controller a workload belongs to, in the workload's namespace: for
+/// example kind WorkloadDeployment, its name, and its UID. A workload with no
+/// controller is its own owner. Kinds keep names apart, so a Workload and a
+/// WorkloadDeployment of the same name are different owners, and the UID keeps
+/// an object recreated under the same name apart from the one it replaced.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WorkloadOwner {
+    #[prost(string, tag = "1")]
+    pub kind: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub uid: ::prost::alloc::string::String,
 }
 /// What the control plane grants a workload's identity. The host generates
 /// every key itself and asks its issuer for SVIDs, presenting the scheduling

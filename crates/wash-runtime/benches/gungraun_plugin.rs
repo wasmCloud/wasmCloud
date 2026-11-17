@@ -228,6 +228,7 @@ impl Call {
         WorkloadStartRequest {
             workload_id: uuid::Uuid::new_v4().to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "bench".to_string(),
                 name: self.host_header().to_string(),
                 annotations: HashMap::new(),

@@ -166,6 +166,7 @@ async fn start_sleeper(host: &impl HostApi, name: &str, as_service: bool) -> Res
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: name.to_string(),
             annotations: HashMap::new(),
@@ -188,6 +189,7 @@ async fn start_linked(host: &impl HostApi, name: &str, callee_pool: i32) -> Resu
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: name.to_string(),
             annotations: HashMap::new(),
@@ -561,6 +563,7 @@ async fn an_abandoned_message_delivery_traps_and_restarts_the_service() -> Resul
     host.workload_start(WorkloadStartRequest {
         workload_id: workload_id.clone(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "msg-spin".to_string(),
             annotations: HashMap::new(),
@@ -642,6 +645,7 @@ async fn a_chatty_messaging_handler_survives_being_abandoned() -> Result<()> {
     host.workload_start(WorkloadStartRequest {
         workload_id: workload_id.clone(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "msg-chatter".to_string(),
             annotations: HashMap::new(),

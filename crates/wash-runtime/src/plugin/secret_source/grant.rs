@@ -26,13 +26,7 @@ impl std::fmt::Display for WorkloadGrant {
         match self {
             Self::All => f.write_str("every workload"),
             Self::Only(selectors) => {
-                let names: Vec<String> = selectors
-                    .iter()
-                    .map(|s| match &s.name {
-                        Some(name) => format!("`{}/{name}`", s.namespace),
-                        None => format!("namespace `{}`", s.namespace),
-                    })
-                    .collect();
+                let names: Vec<String> = selectors.iter().map(ToString::to_string).collect();
                 f.write_str(&names.join(", "))
             }
         }

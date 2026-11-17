@@ -72,6 +72,7 @@ fn setup_warm(flavor: Flavor) -> Warm {
         let req = WorkloadStartRequest {
             workload_id: uuid::Uuid::new_v4().to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "bench".to_string(),
                 name: format!("bench-{}", flavor.name()),
                 annotations: HashMap::new(),

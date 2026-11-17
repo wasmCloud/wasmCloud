@@ -117,6 +117,7 @@ pub async fn start_postgres_workload(
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "postgres-stream-p3".to_string(),
             annotations: HashMap::new(),

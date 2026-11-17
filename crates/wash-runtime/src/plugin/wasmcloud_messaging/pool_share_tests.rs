@@ -310,6 +310,7 @@ async fn linked_components_reserve_the_complete_store_and_leave_headroom() -> an
     let unresolved = engine.initialize_workload(
         "linked",
         crate::types::Workload {
+            owner: None,
             name: "linked".into(),
             namespace: "test".into(),
             annotations: Default::default(),
@@ -406,6 +407,7 @@ async fn gc_stores_reserve_heap_backing_memory_and_independent_heap_slots() -> a
         let unresolved = engine.initialize_workload(
             "gc",
             crate::types::Workload {
+                owner: None,
                 name: "gc".into(),
                 namespace: "test".into(),
                 annotations: Default::default(),

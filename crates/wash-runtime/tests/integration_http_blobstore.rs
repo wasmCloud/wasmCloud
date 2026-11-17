@@ -62,6 +62,7 @@ async fn test_http_blobstore_integration() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "test-workload".to_string(),
             annotations: HashMap::new(),
