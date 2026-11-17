@@ -1,6 +1,6 @@
 ---
 name: wasmcloud-components
-description: Find task-specific guidance for designing WIT interfaces, building or debugging Wasm components with wash, using Jco, or maintaining wasmCloud Helm charts.
+description: Pointers to the right published skill for WIT interface design, building and debugging WASI 0.3 components with wash, Jco, and Helm charts. Use when changing files under wit/, examples/, templates/, or charts/, writing .wit files, or building, composing, or running .wasm components.
 ---
 
 # Component and deployment guidance
