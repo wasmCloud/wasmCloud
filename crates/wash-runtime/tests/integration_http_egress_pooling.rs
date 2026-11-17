@@ -138,7 +138,14 @@ impl Drop for LiveConnection {
 /// Start a host whose ingress uses the *default* outgoing handler — the
 /// pooled transport under test.
 async fn start_host() -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = Engine::builder().build()?;
+    // The upstream is on this machine's loopback, which the default range
+    // policy refuses for `wasi:http` as it does for sockets.
+    let engine = Engine::builder()
+        .with_socket_policy(Arc::new(wash_runtime::sockets::policy::SocketPolicy {
+            egress_addrs: wash_runtime::host::egress_policy::EgressAddressPolicy::permissive(),
+            ..Default::default()
+        }))
+        .build()?;
     let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse()?).await?;
     let bound_addr = ingress.addr();
     let host = HostBuilder::new()
