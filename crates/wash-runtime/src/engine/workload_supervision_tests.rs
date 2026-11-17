@@ -259,8 +259,10 @@ struct Registrations {
 #[derive(Default)]
 struct RecordingHost {
     registrations: Arc<Mutex<Registrations>>,
-    fail_http: Option<usize>,
-    fail_messaging: Option<usize>,
+    /// The HTTP registrations to refuse, counted from 1.
+    fail_http: std::ops::Range<usize>,
+    /// The messaging registrations to refuse, counted from 1.
+    fail_messaging: std::ops::Range<usize>,
 }
 
 #[async_trait::async_trait]
@@ -289,7 +291,7 @@ impl HostHandler for RecordingHost {
     ) -> anyhow::Result<()> {
         assert_eq!(workload, "supervision");
         let mut registrations = self.registrations.lock().unwrap();
-        let fail = self.fail_http == Some(registrations.http.len() + 1);
+        let fail = self.fail_http.contains(&(registrations.http.len() + 1));
         registrations.order.push("http");
         registrations.routes.push(routes.to_vec());
         registrations.http.push((!fail).then_some(sender));
@@ -304,7 +306,9 @@ impl HostHandler for RecordingHost {
     ) -> anyhow::Result<()> {
         assert_eq!(workload, "supervision");
         let mut registrations = self.registrations.lock().unwrap();
-        let fail = self.fail_messaging == Some(registrations.messaging.len() + 1);
+        let fail = self
+            .fail_messaging
+            .contains(&(registrations.messaging.len() + 1));
         registrations.order.push("messaging");
         registrations.messaging.push((!fail).then_some(sender));
         anyhow::ensure!(!fail, "messaging registration refused");
@@ -562,7 +566,8 @@ async fn trigger_restarts_replace_all_registered_channels() -> anyhow::Result<()
 
 #[tokio::test]
 async fn initial_registration_failures_do_not_spawn_a_supervisor() -> anyhow::Result<()> {
-    for (fail_http, fail_messaging) in [(Some(1), None), (None, Some(1))] {
+    for (fail_http, fail_messaging) in [(1..2, 0..0), (0..0, 1..2)] {
+        let http_refused = !fail_http.is_empty();
         for dispatch in [false, true] {
             let ingress = Ingresses {
                 http: true,
@@ -570,8 +575,8 @@ async fn initial_registration_failures_do_not_spawn_a_supervisor() -> anyhow::Re
                 dispatch,
             };
             let host = Arc::new(RecordingHost {
-                fail_http,
-                fail_messaging,
+                fail_http: fail_http.clone(),
+                fail_messaging: fail_messaging.clone(),
                 ..Default::default()
             });
             let (mut resolved, mut probe) =
@@ -581,7 +586,7 @@ async fn initial_registration_failures_do_not_spawn_a_supervisor() -> anyhow::Re
                 .transpose()?;
             let err = resolved.execute_service().await.unwrap_err();
             assert!(
-                format!("{err:#}").contains(if fail_http.is_some() {
+                format!("{err:#}").contains(if http_refused {
                     "failed to register service HTTP handler"
                 } else {
                     "failed to register trigger service messaging handler"
@@ -596,7 +601,7 @@ async fn initial_registration_failures_do_not_spawn_a_supervisor() -> anyhow::Re
             let registrations = host.registrations.lock().unwrap();
             assert_eq!(
                 registrations.order,
-                if fail_http.is_some() {
+                if http_refused {
                     vec!["http"]
                 } else {
                     vec!["http", "messaging"]
@@ -661,75 +666,6 @@ async fn losing_the_host_stops_ingress_restarts_but_dispatch_only_can_restart() 
 }
 
 #[tokio::test]
-async fn restart_registration_failures_keep_other_ingresses_and_retry_next_restart()
--> anyhow::Result<()> {
-    for (fail_http, fail_messaging) in [(Some(2), None), (None, Some(2))] {
-        let host = Arc::new(RecordingHost {
-            fail_http,
-            fail_messaging,
-            ..Default::default()
-        });
-        let ingress = Ingresses {
-            http: true,
-            messaging: true,
-            dispatch: true,
-        };
-        let (mut resolved, mut probe) =
-            workload(Outcome::Trap, 2, ingress, &host_ref(&host)).await?;
-        let id = resolved.service.as_ref().unwrap().id().to_string();
-        let target = resolved.dispatch_target(&id, "supervision-test").await?;
-        let handle = resolved
-            .execute_service()
-            .await?
-            .context("service task missing")?;
-        let mut stores = HashSet::new();
-        for attempt in 0..3 {
-            let run = probe.next().await?;
-            assert!(stores.insert(run.store.clone()));
-            {
-                let registrations = host.registrations.lock().unwrap();
-                assert_eq!(registrations.http.len(), attempt + 1);
-                assert_eq!(registrations.messaging.len(), attempt + 1);
-                assert_eq!(
-                    registrations.http[attempt].is_none(),
-                    fail_http == Some(attempt + 1)
-                );
-                assert_eq!(
-                    registrations.messaging[attempt].is_none(),
-                    fail_messaging == Some(attempt + 1)
-                );
-                assert!(
-                    registrations.http[attempt]
-                        .as_ref()
-                        .is_none_or(|s| !s.is_closed())
-                );
-                assert!(
-                    registrations.messaging[attempt]
-                        .as_ref()
-                        .is_none_or(|s| !s.is_closed())
-                );
-            }
-            tokio::time::timeout(
-                TIMEOUT,
-                target.dispatch(Inspect {
-                    store: run.store,
-                    read_guest: false,
-                }),
-            )
-            .await??;
-            probe.resume();
-        }
-        drop(target);
-        join(&mut resolved, handle).await??;
-        assert!(matches!(
-            probe.runs.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
-        ));
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn claimed_services_keep_serving_after_cli_success_or_nonfatal_error() -> anyhow::Result<()> {
     for outcome in [Outcome::Success, Outcome::Error] {
         for (http, messaging) in [(false, false), (true, false), (false, true), (true, true)] {
@@ -786,48 +722,261 @@ async fn claimed_services_keep_serving_after_cli_success_or_nonfatal_error() -> 
     Ok(())
 }
 
-#[tokio::test]
-async fn known_gap_sole_registration_failure_exits_with_budget_remaining() -> anyhow::Result<()> {
-    // Known gap: re-registration failure closes the last ingress.
-    // The driver reports success and bypasses the remaining restart budget.
-    for http in [false, true] {
-        let host = Arc::new(RecordingHost {
-            fail_http: http.then_some(2),
-            fail_messaging: (!http).then_some(2),
+/// Each configuration with an ingress the host registers, paired with each such
+/// ingress a test can have the host refuse: `true` for HTTP, `false` for
+/// messaging.
+fn refusable() -> impl Iterator<Item = (Ingresses, bool)> {
+    CONFIGURATIONS.into_iter().flat_map(|ingress| {
+        [(ingress.http, true), (ingress.messaging, false)]
+            .into_iter()
+            .filter(|(served, _)| *served)
+            .map(move |(_, http)| (ingress, http))
+    })
+}
+
+/// A host that refuses the `refused` registrations of HTTP, if `http`, or else
+/// of messaging.
+fn refusing(http: bool, refused: std::ops::Range<usize>) -> RecordingHost {
+    if http {
+        RecordingHost {
+            fail_http: refused,
             ..Default::default()
-        });
-        let ingress = Ingresses {
-            http,
-            messaging: !http,
-            dispatch: false,
-        };
+        }
+    } else {
+        RecordingHost {
+            fail_messaging: refused,
+            ..Default::default()
+        }
+    }
+}
+
+/// The last sender is open and a channel of its own; every one before it is
+/// closed or was refused.
+fn only_last_open<T>(senders: &[Option<mpsc::Sender<T>>]) {
+    if let Some((last, previous)) = senders.split_last() {
+        let last = last.as_ref().unwrap();
+        assert!(!last.is_closed());
+        for previous in previous.iter().flatten() {
+            assert!(previous.is_closed());
+            assert!(!last.same_channel(previous));
+        }
+    }
+}
+
+async fn until(mut done: impl FnMut() -> bool) -> anyhow::Result<()> {
+    tokio::time::timeout(TIMEOUT, async {
+        while !done() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn refused_reregistration_is_retried_with_fresh_channels() -> anyhow::Result<()> {
+    for (ingress, refuse_http) in refusable() {
+        // The restart after the first run is refused once, then registers.
+        let host = Arc::new(refusing(refuse_http, 2..3));
         let (mut resolved, mut probe) =
             workload(Outcome::Trap, 3, ingress, &host_ref(&host)).await?;
+        let target = if ingress.dispatch {
+            let id = resolved.service.as_ref().unwrap().id().to_string();
+            Some(resolved.dispatch_target(&id, "supervision-test").await?)
+        } else {
+            None
+        };
         let handle = resolved
             .execute_service()
             .await?
             .context("service task missing")?;
-        probe.next().await?;
-        probe.resume();
+        let mut stores = HashSet::new();
+        // A budget of 3: the first trap, the refused attempt, the second trap.
+        // The third run traps with none left.
+        for run_index in 0..3 {
+            let run = probe.next().await?;
+            assert!(stores.insert(run.store.clone()));
+            {
+                let registrations = host.registrations.lock().unwrap();
+                // One attempt per run, and the refused one from the second run on.
+                let attempts = run_index + 1 + usize::from(run_index > 0);
+                // HTTP registers first, so a refused HTTP registration ends its
+                // attempt before messaging is tried.
+                let messaging_attempts = if refuse_http { run_index + 1 } else { attempts };
+                assert_eq!(
+                    registrations.http.len(),
+                    usize::from(ingress.http) * attempts,
+                    "{ingress:?}, HTTP refused: {refuse_http}"
+                );
+                assert_eq!(
+                    registrations.messaging.len(),
+                    usize::from(ingress.messaging) * messaging_attempts,
+                    "{ingress:?}, HTTP refused: {refuse_http}"
+                );
+                if run_index > 0 {
+                    assert!(if refuse_http {
+                        registrations.http[1].is_none()
+                    } else {
+                        registrations.messaging[1].is_none()
+                    });
+                }
+                // Including whatever the refused attempt did register.
+                only_last_open(&registrations.http);
+                only_last_open(&registrations.messaging);
+            }
+            if let Some(target) = &target {
+                tokio::time::timeout(
+                    TIMEOUT,
+                    target.dispatch(Inspect {
+                        store: run.store,
+                        read_guest: false,
+                    }),
+                )
+                .await??;
+            }
+            probe.resume();
+        }
+        drop(target);
         join(&mut resolved, handle).await??;
+        assert!(matches!(
+            probe.runs.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
+        ));
         assert_eq!(probe.active.load(Ordering::SeqCst), 0);
-        let registrations = host.registrations.lock().unwrap();
-        assert_eq!(registrations.http.len(), if http { 2 } else { 0 });
-        assert_eq!(registrations.messaging.len(), if http { 0 } else { 2 });
-        assert!(
-            registrations
-                .http
-                .iter()
-                .flatten()
-                .all(mpsc::Sender::is_closed)
-        );
-        assert!(
-            registrations
-                .messaging
-                .iter()
-                .flatten()
-                .all(mpsc::Sender::is_closed)
-        );
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn persistent_reregistration_refusal_spends_the_exact_budget() -> anyhow::Result<()> {
+    for (ingress, refuse_http) in refusable() {
+        for budget in [1, 3] {
+            // Every restart is refused.
+            let host = Arc::new(refusing(refuse_http, 2..usize::MAX));
+            let (mut resolved, mut probe) =
+                workload(Outcome::Trap, budget, ingress, &host_ref(&host)).await?;
+            let _claim = ingress
+                .dispatch
+                .then(|| resolved.claim_service_dispatch())
+                .transpose()?;
+            let handle = resolved
+                .execute_service()
+                .await?
+                .context("service task missing")?;
+            probe.next().await?;
+            probe.resume();
+            join(&mut resolved, handle).await??;
+            // The first start, then one attempt for each restart in the
+            // budget. The trap spends the first; every refusal but the last,
+            // which finds none left, spends another.
+            let attempts = 1 + usize::try_from(budget)?;
+            assert!(matches!(
+                probe.runs.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
+            ));
+            assert_eq!(probe.active.load(Ordering::SeqCst), 0);
+            let registrations = host.registrations.lock().unwrap();
+            assert_eq!(
+                registrations.http.len(),
+                usize::from(ingress.http) * attempts,
+                "{ingress:?}, HTTP refused: {refuse_http}, budget {budget}"
+            );
+            assert_eq!(
+                registrations.messaging.len(),
+                usize::from(ingress.messaging) * if refuse_http { 1 } else { attempts },
+                "{ingress:?}, HTTP refused: {refuse_http}, budget {budget}"
+            );
+            assert!(
+                registrations
+                    .http
+                    .iter()
+                    .flatten()
+                    .all(mpsc::Sender::is_closed)
+            );
+            assert!(
+                registrations
+                    .messaging
+                    .iter()
+                    .flatten()
+                    .all(mpsc::Sender::is_closed)
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn teardown_or_host_loss_stops_reregistration_retries() -> anyhow::Result<()> {
+    for (ingress, refuse_http) in refusable() {
+        for teardown in [true, false] {
+            let host = Arc::new(refusing(refuse_http, 2..usize::MAX));
+            let registrations = Arc::clone(&host.registrations);
+            // Spending this budget takes far longer than `TIMEOUT`, so a join
+            // inside it shows that the retries stopped.
+            let budget = 10;
+            let (mut resolved, mut probe) =
+                workload(Outcome::Trap, budget, ingress, &host_ref(&host)).await?;
+            let _claim = ingress
+                .dispatch
+                .then(|| resolved.claim_service_dispatch())
+                .transpose()?;
+            let handle = resolved
+                .execute_service()
+                .await?
+                .context("service task missing")?;
+            probe.next().await?;
+            probe.resume();
+            until(|| {
+                let registrations = registrations.lock().unwrap();
+                if refuse_http {
+                    registrations.http.len() >= 2
+                } else {
+                    registrations.messaging.len() >= 2
+                }
+            })
+            .await?;
+            if teardown {
+                resolved.begin_teardown();
+                assert!(
+                    join(&mut resolved, handle)
+                        .await?
+                        .unwrap_err()
+                        .is_cancelled()
+                );
+            } else {
+                drop(host);
+                join(&mut resolved, handle).await??;
+            }
+            assert!(matches!(
+                probe.runs.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected)
+            ));
+            let registrations = registrations.lock().unwrap();
+            assert!(registrations.http.len() < 1 + usize::try_from(budget)?);
+            assert!(registrations.messaging.len() < 1 + usize::try_from(budget)?);
+            assert!(
+                registrations
+                    .http
+                    .iter()
+                    .flatten()
+                    .all(mpsc::Sender::is_closed)
+            );
+            assert!(
+                registrations
+                    .messaging
+                    .iter()
+                    .flatten()
+                    .all(mpsc::Sender::is_closed)
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn reregistration_backoff_grows_by_a_step_up_to_its_cap() {
+    assert_eq!(reregistration_backoff(1), REREGISTRATION_BACKOFF_STEP);
+    assert_eq!(reregistration_backoff(3), REREGISTRATION_BACKOFF_STEP * 3);
+    assert_eq!(reregistration_backoff(1_000), REREGISTRATION_BACKOFF_MAX);
+    assert_eq!(reregistration_backoff(u32::MAX), REREGISTRATION_BACKOFF_MAX);
 }
