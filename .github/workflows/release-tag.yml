@@ -81,12 +81,14 @@ jobs:
     # The gate checks the ref and the release-train conclusion.
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     permissions:
       contents: write
       packages: write
       # The canary wait and binary download read workflow runs and artifacts.
       actions: read
+      # Read the blocking CodeQL alerts before promoting the release.
+      security-events: read
       # For release attestations, keyless tag signing and the octo-sts
       # release-tag token.
       id-token: write
@@ -220,6 +222,16 @@ jobs:
             fi
           done
           echo "all canary builds green on ${MERGE_SHA} — safe to promote"
+
+      - name: Require security scans for the release commit
+        timeout-minutes: 35
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MERGE_SHA: ${{ steps.ver.outputs.sha }}
+        run: |
+          echo "STAGE=security-scans" >> "${GITHUB_ENV}"
+          node .github/scripts/release-security.mjs
 
       - name: Login to ghcr.io
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0

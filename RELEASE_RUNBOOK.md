@@ -54,6 +54,10 @@ Wed–Thu as a buffer for any same-week follow-up patch.
    - Waits for the canary workflows (`wash`, `runtime-operator`, `runtime-gateway`, `charts`) on
      the merge commit to all conclude `success` — the artifact pipeline has built and tested
      this exact commit.
+   - Requires `audit` and all three CodeQL jobs to succeed on the pinned release
+     commit, and refuses open high/critical or error-level CodeQL alerts on `main`.
+     This gate also applies to manual recovery dispatches. Missing scans wait up to
+     30 minutes and fail promotion if they remain unavailable.
    - **Promotes** each canary container image: retags
      `ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}:sha-<merge-sha>` as `X.Y.Z`
      (OCI image tags are bare semver, no `v` prefix — that is the convention `docker pull`
