@@ -785,26 +785,18 @@ spec:
                 type: string
               owner:
                 description: |-
-                  Owner is what grants name this Workload by, with its namespace: the
-                  WorkloadDeployment, WorkloadDaemonSet or WorkloadReplicaSet that
-                  controls it, or the Workload itself when nothing does. The operator
-                  verifies it each time it places the Workload, and records it before it
-                  asks a host to start the Workload for it.
-                  Its kind and name are fixed once placed: a placement for another owner
-                  is refused with reason OwnerChanged, and the remedy is to recreate the
-                  Workload. A new UID under the same kind and name, an owner recreated
-                  and adopting it, is taken. Workloads placed before this field existed
-                  do not have it, and hold no owner grant, until they are placed again.
+                  Owner is what grants name this Workload by, verified and recorded
+                  before each start. A new UID is taken; a new kind or name is refused
+                  with OwnerChanged. It is as trustworthy as write access to
+                  workloads/status.
                 properties:
                   kind:
                     type: string
                   name:
                     type: string
                   uid:
-                    description: |-
-                      UID is a type that holds unique ID values, including UUIDs.  Because we
-                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
-                      intent and helps make sure that UIDs and names do not get conflated.
+                    description: UID tells the owner from one recreated under its
+                      name.
                     type: string
                 required:
                 - kind

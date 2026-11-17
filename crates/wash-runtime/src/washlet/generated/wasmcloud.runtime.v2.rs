@@ -419,7 +419,7 @@ pub struct Workload {
     /// verified it. Egress credential, broker and kind-qualified secret grants
     /// match a workload by its namespace and this owner. Unset leaves the
     /// workload matching none of them; a secret grant by name alone still
-    /// matches the workload's name.
+    /// matches the workload's grouping name.
     #[prost(message, optional, tag = "8")]
     pub owner: ::core::option::Option<WorkloadOwner>,
 }

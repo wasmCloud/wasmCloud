@@ -88,7 +88,7 @@ const PLACEHOLDER: &str = "wash_ph_9fKq2Lm7Xv4Rt8Zb3Nd6Wc1Y";
 /// Gives every component its `api.example.com` token by placeholder.
 struct CredentialingRouter {
     inner: DynamicRouter,
-    callers: Arc<Mutex<Vec<Option<String>>>>,
+    callers: Arc<Mutex<Vec<Caller>>>,
 }
 
 #[async_trait::async_trait]
@@ -129,10 +129,10 @@ impl Router for CredentialingRouter {
     }
 
     fn egress_secrets(&self, caller: EgressCaller<'_>) -> anyhow::Result<Arc<[EgressSecret]>> {
-        self.callers
-            .lock()
-            .unwrap()
-            .push(caller.component_id.map(str::to_string));
+        self.callers.lock().unwrap().push((
+            caller.component_id.map(str::to_string),
+            caller.owner.cloned(),
+        ));
         anyhow::ensure!(
             caller.namespace == "test" && caller.owner == Some(&deployment_owner()),
             "egress names its workload: {caller:?}"
@@ -236,19 +236,19 @@ async fn get_with(
     Ok((response.status().as_u16(), response.text().await?))
 }
 
-/// A real guest sends the placeholder from its environment with an ordinary
-/// HTTP client, and the request leaves with the host's secret in its place.
-/// The same placeholder sent to a host the secret is not for is refused.
+/// A caller the router saw: its component and the owner it was named by.
+type Caller = (Option<String>, Option<WorkloadOwner>);
+
 struct Started {
     addr: std::net::SocketAddr,
     outgoing: RecordingOutgoing,
-    callers: Arc<Mutex<Vec<Option<String>>>>,
+    callers: Arc<Mutex<Vec<Caller>>>,
     _host: Arc<wash_runtime::host::Host>,
 }
 
 async fn start(request: WorkloadStartRequest) -> Result<Started> {
     let outgoing = RecordingOutgoing::default();
-    let callers = Arc::<Mutex<Vec<Option<String>>>>::default();
+    let callers = Arc::<Mutex<Vec<Caller>>>::default();
     let router = CredentialingRouter {
         inner: DynamicRouter::default(),
         callers: Arc::clone(&callers),
@@ -275,6 +275,9 @@ async fn start(request: WorkloadStartRequest) -> Result<Started> {
     })
 }
 
+/// A real guest sends the placeholder from its environment with an ordinary
+/// HTTP client, and the request leaves with the host's secret in its place.
+/// The same placeholder sent to a host the secret is not for is refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_guest_placeholder_leaves_as_the_host_secret() -> Result<()> {
     let Started {
@@ -306,7 +309,7 @@ async fn a_guest_placeholder_leaves_as_the_host_secret() -> Result<()> {
     assert!(
         callers
             .iter()
-            .all(|c| c.as_deref().is_some_and(|id| !id.is_empty())),
+            .all(|(id, _)| id.as_deref().is_some_and(|id| !id.is_empty())),
         "{callers:?}"
     );
     Ok(())
@@ -335,6 +338,10 @@ async fn a_claimed_name_is_not_an_owner() -> Result<()> {
     let (status, body) = get(started.addr, "/token").await?;
     assert_ne!(status, 200, "{body}");
     assert!(started.outgoing.sent.lock().unwrap().is_empty());
-    assert_eq!(started.callers.lock().unwrap().len(), 1);
+    let callers = started.callers.lock().unwrap().clone();
+    assert!(
+        matches!(callers.as_slice(), [(_, None)]),
+        "the router was named an owner: {callers:?}"
+    );
     Ok(())
 }

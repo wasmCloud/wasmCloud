@@ -471,16 +471,10 @@ type WorkloadStatus struct {
 	Environment string `json:"environment,omitempty"`
 	// +kubebuilder:validation:Optional
 	WorkloadID string `json:"workloadId,omitempty"`
-	// Owner is what grants name this Workload by, with its namespace: the
-	// WorkloadDeployment, WorkloadDaemonSet or WorkloadReplicaSet that
-	// controls it, or the Workload itself when nothing does. The operator
-	// verifies it each time it places the Workload, and records it before it
-	// asks a host to start the Workload for it.
-	// Its kind and name are fixed once placed: a placement for another owner
-	// is refused with reason OwnerChanged, and the remedy is to recreate the
-	// Workload. A new UID under the same kind and name, an owner recreated
-	// and adopting it, is taken. Workloads placed before this field existed
-	// do not have it, and hold no owner grant, until they are placed again.
+	// Owner is what grants name this Workload by, verified and recorded
+	// before each start. A new UID is taken; a new kind or name is refused
+	// with OwnerChanged. It is as trustworthy as write access to
+	// workloads/status.
 	// +kubebuilder:validation:Optional
 	Owner *WorkloadOwner `json:"owner,omitempty"`
 }
@@ -494,6 +488,7 @@ type WorkloadOwner struct {
 	Kind string `json:"kind"`
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
+	// UID tells the owner from one recreated under its name.
 	// +kubebuilder:validation:Required
 	UID types.UID `json:"uid"`
 }

@@ -683,8 +683,8 @@ func TestDeploymentRecordsItsSetByUIDAndDigest(t *testing.T) {
 	}
 }
 
-// A status that names its set only, as an older operator wrote it, is
-// completed only from a set holding the deployment's own template.
+// A status that names its set only is completed only from a set holding the
+// deployment's own template.
 func TestSyncCompletesASetRecordedByNameOnly(t *testing.T) {
 	scheme := newScaleTestScheme(t)
 	for _, tc := range []struct {
@@ -719,6 +719,47 @@ func TestSyncCompletesASetRecordedByNameOnly(t *testing.T) {
 			}
 			if !tc.filled && (got.UID != "" || got.TemplateDigest != "") {
 				t.Fatalf("an edited set was recorded: %+v", got)
+			}
+		})
+	}
+}
+
+// A current set that is no longer the one recorded refuses every replica, so
+// Sync says so instead of staying healthy.
+func TestSyncReportsASetThatIsNoLongerTheOneRecorded(t *testing.T) {
+	scheme := newScaleTestScheme(t)
+	for _, tc := range []struct {
+		name string
+		edit func(*runtimev1alpha1.WorkloadReplicaSet)
+		want string
+	}{
+		{name: "recorded"},
+		{name: "made again", edit: func(rs *runtimev1alpha1.WorkloadReplicaSet) { rs.UID = "another-set-uid" },
+			want: "is not the set this deployment recorded"},
+		{name: "edited labels", edit: func(rs *runtimev1alpha1.WorkloadReplicaSet) {
+			rs.Spec.Template.Labels = map[string]string{"edited": "by-hand"}
+		}, want: "template hash mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wd := readyDeployment("")
+			wd.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact))
+			rs := baseReplicaSet(testReplicaSetName)
+			rs.UID = "recorded-set-uid"
+			wd.Status.CurrentReplicaSet.UID = rs.UID
+			wd.Status.CurrentReplicaSet.TemplateDigest = rs.Spec.Template.Digest()
+			if tc.edit != nil {
+				tc.edit(rs)
+			}
+			r := &WorkloadDeploymentReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).Build(), Scheme: scheme}
+			err := r.reconcileSync(t.Context(), wd)
+			if tc.edit == nil {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("sync returned %v", err)
 			}
 		})
 	}
