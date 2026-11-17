@@ -236,10 +236,10 @@ jobs:
         env:
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
           IMAGE_TAG: ${{ steps.ver.outputs.image_tag }}
-        # Build-once-promote: each image was pushed by its canary workflow as
-        # `sha-<full-sha>` and validated by the corresponding canary tests.
-        # This step only reads the registry, so the SBOM checks below run
-        # against the exact digests before anything is published.
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Resolve authenticated digest artifacts from successful canary runs
+        # on the release SHA, then check any existing release tags against them.
         run: |
           echo "STAGE=resolve-images" >> "${GITHUB_ENV}"
           node .github/scripts/release-images.mjs resolve
