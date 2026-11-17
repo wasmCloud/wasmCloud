@@ -21,6 +21,11 @@ import (
 	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
 )
 
+const (
+	testStableBilling    = "billing"
+	testLegacyReplicaSet = "rs-old"
+)
+
 // The start request carries the workload's own namespace's ConfigMaps,
 // Secrets and registry credentials, with Secrets overriding ConfigMaps and
 // both overriding inline config, and leaves the Workload's spec alone.
@@ -218,9 +223,9 @@ func TestStableNamePrecedence(t *testing.T) {
 		want        string
 	}{
 		{"none", nil, "scraper"},
-		{"app name", map[string]string{appNameAnnotation: " billing "}, "billing"},
-		{"legacy replicaset", map[string]string{appNameAnnotation: "billing", workloadReplicaSetLegacyAnnotation: "rs-old"}, "rs-old"},
-		{"replicaset", map[string]string{workloadReplicaSetLegacyAnnotation: "rs-old", workloadReplicaSetNameAnnotation: "rs"}, "rs"},
+		{"app name", map[string]string{appNameAnnotation: " billing "}, testStableBilling},
+		{"legacy replicaset", map[string]string{appNameAnnotation: testStableBilling, workloadReplicaSetLegacyAnnotation: testLegacyReplicaSet}, testLegacyReplicaSet},
+		{"replicaset", map[string]string{workloadReplicaSetLegacyAnnotation: testLegacyReplicaSet, workloadReplicaSetNameAnnotation: "rs"}, "rs"},
 		{"daemonset", map[string]string{workloadReplicaSetNameAnnotation: "rs", workloadDaemonSetNameAnnotation: "ds"}, "ds"},
 		{"deployment", map[string]string{workloadDaemonSetNameAnnotation: "ds", workloadDeploymentNameAnnotation: "deploy"}, "deploy"},
 		{"blank deployment", map[string]string{workloadDeploymentNameAnnotation: " ", workloadReplicaSetNameAnnotation: "rs"}, "rs"},
@@ -238,11 +243,11 @@ func TestPlacementRecordsStableNameOnce(t *testing.T) {
 	r, workload, bus := placementFixture(t)
 	recorder := events.NewFakeRecorder(4)
 	r.Recorder = recorder
-	workload.Annotations = map[string]string{appNameAnnotation: "billing"}
+	workload.Annotations = map[string]string{appNameAnnotation: testStableBilling}
 	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 		t.Fatal(err)
 	}
-	if workload.Status.StableName != "billing" {
+	if workload.Status.StableName != testStableBilling {
 		t.Fatalf("recorded stable name = %q", workload.Status.StableName)
 	}
 
@@ -250,7 +255,7 @@ func TestPlacementRecordsStableNameOnce(t *testing.T) {
 	if err := r.reconcilePlacement(t.Context(), workload); err != nil {
 		t.Fatal(err)
 	}
-	if workload.Status.StableName != "billing" {
+	if workload.Status.StableName != testStableBilling {
 		t.Fatalf("a placed workload's stable name changed to %q", workload.Status.StableName)
 	}
 
@@ -266,14 +271,14 @@ func TestPlacementRecordsStableNameOnce(t *testing.T) {
 		!strings.Contains(recorded[0], "recreate the Workload") {
 		t.Fatalf("events = %q", recorded)
 	}
-	if workload.Status.StableName != "billing" || workload.Status.WorkloadID != "" {
+	if workload.Status.StableName != testStableBilling || workload.Status.WorkloadID != "" {
 		t.Fatalf("refused re-placement recorded %+v", workload.Status)
 	}
 	if len(bus.requests) != 1 {
 		t.Fatalf("sent %d requests; the refused start reached the host", len(bus.requests))
 	}
 
-	workload.Annotations[appNameAnnotation] = "billing"
+	workload.Annotations[appNameAnnotation] = testStableBilling
 	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 		t.Fatal(err)
 	}

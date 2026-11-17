@@ -138,7 +138,7 @@ func TestPlacementCarriesIdentityRef(t *testing.T) {
 			workload := &runtimev1alpha1.Workload{
 				ObjectMeta: metav1.ObjectMeta{Name: "identity", Namespace: metav1.NamespaceDefault},
 				Spec: runtimev1alpha1.WorkloadSpec{
-					Components:  []runtimev1alpha1.WorkloadComponent{{Name: "app", Image: "example.com/app:1"}},
+					Components:  []runtimev1alpha1.WorkloadComponent{{Name: "web", Image: "example.com/web:1"}},
 					IdentityRef: tt.ref,
 				},
 				Status: runtimev1alpha1.WorkloadStatus{HostID: testHeartbeatHostID},
