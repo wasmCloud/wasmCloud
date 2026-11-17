@@ -199,19 +199,9 @@ func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Hos
 	// in the cluster when a host is finalized. The list is cluster-wide
 	// because Workloads live in tenant namespaces while Hosts live in the
 	// operator's namespace.
-	//
-	// UnsafeDisableDeepCopy makes the items share the informer cache's memory
-	// instead of being deep copied, which a host with many Workloads would pay
-	// for on every pass. The items are only read here, and the informer
-	// replaces a cached object on update rather than changing it in place, so
-	// the reads do not race with the cache. Nothing writes through them:
-	// deleteAssignedWorkload deletes through a fresh object that carries only
-	// the listed identity (see workloadDeleteTarget). Anything added below that
-	// writes to a listed Workload must DeepCopy it first.
 	workloadList := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, workloadList,
 		client.MatchingFields{workloadByHostIDIndex: host.HostID},
-		client.UnsafeDisableDeepCopy,
 	); err != nil {
 		return err
 	}
@@ -256,25 +246,12 @@ func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *r
 		if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
 			return nil
 		}
-		err := deleteObservedChild(ctx, r.Client, workloadDeleteTarget(snapshot))
+		err := deleteObservedChild(ctx, r.Client, snapshot)
 		if apierrors.IsConflict(err) {
 			snapshot = nil
 		}
 		return err
 	})
-}
-
-// workloadDeleteTarget returns a new Workload carrying only what a guarded
-// delete needs. finalize lists from the cache without copying, so the client
-// and any wrapper around it must never be handed the listed object itself: a
-// write there would land in the informer cache that every controller reads.
-func workloadDeleteTarget(workload *runtimev1alpha1.Workload) *runtimev1alpha1.Workload {
-	return &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{
-		Name:            workload.Name,
-		Namespace:       workload.Namespace,
-		UID:             workload.UID,
-		ResourceVersion: workload.ResourceVersion,
-	}}
 }
 
 // deleteUnresponsiveHost is the reconcile post-hook: a Host whose Ready
