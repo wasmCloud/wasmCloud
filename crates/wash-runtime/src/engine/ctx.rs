@@ -532,6 +532,19 @@ impl Ctx {
     pub(crate) fn host_link(&self) -> HostLink {
         self.http_hooks.host.clone()
     }
+
+    /// The handler this store's egress goes through, or why there is none.
+    pub(crate) fn egress_handler(&self) -> Result<Arc<dyn crate::host::http::HostHandler>, String> {
+        self.http_hooks.host.handler()
+    }
+
+    /// The namespace and name this store's egress is attributed to.
+    pub(crate) fn egress_names(&self) -> (Arc<str>, Arc<str>) {
+        (
+            Arc::clone(&self.http_hooks.workload_namespace),
+            Arc::clone(&self.http_hooks.workload_name),
+        )
+    }
 }
 
 impl std::fmt::Debug for Ctx {

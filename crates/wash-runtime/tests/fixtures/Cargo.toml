@@ -41,6 +41,7 @@ members = [
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
     "command-p3",
     "http-handler-p3",
+    "broker-client-p3",
     "http-local-caller-p3",
     "http-memory-grow",
     "http-ip-name-lookup-p3",

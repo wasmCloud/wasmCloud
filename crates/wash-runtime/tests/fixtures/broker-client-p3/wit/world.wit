@@ -1,0 +1,12 @@
+package wasmcloud:broker-client-p3@0.1.0;
+
+/// Reaches out only through broker imports, one per credential, and reports
+/// each outcome as its own response.
+world broker-client-p3 {
+    import wasi:http/types@0.3.0;
+    import github: wasmcloud:broker/client@0.1.0;
+    import release: wasmcloud:broker/signer@0.1.0;
+    import webhook: wasmcloud:broker/verifier@0.1.0;
+
+    export wasi:http/handler@0.3.0;
+}

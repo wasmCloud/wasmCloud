@@ -320,7 +320,7 @@ impl SecretRoute {
         })
     }
 
-    fn allows(&self, method: &Method, path: &str) -> bool {
+    pub(crate) fn allows(&self, method: &Method, path: &str) -> bool {
         self.method.as_ref().is_none_or(|m| m == method) && is_under(path, &self.path_prefix)
     }
 }
@@ -991,7 +991,7 @@ fn join(pieces: &[Zeroizing<String>]) -> Zeroizing<String> {
 
 /// Whether `path` has a form a server might resolve differently than a prefix
 /// match reads it.
-fn is_ambiguous(path: &str) -> bool {
+pub(crate) fn is_ambiguous(path: &str) -> bool {
     path.contains('%')
         || path.contains(';')
         || path.contains('\\')

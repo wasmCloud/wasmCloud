@@ -67,6 +67,7 @@ pub(crate) const P3_FIXTURES: &[&str] = &[
     "blobstore-default-p3",
     "keyvalue-implements-p3",
     "keyvalue-default-p3",
+    "broker-client-p3",
     "postgres-stream-p3",
     "svc-counter",
     "svc-http-proxy",

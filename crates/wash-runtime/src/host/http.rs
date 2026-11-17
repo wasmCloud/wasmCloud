@@ -466,6 +466,18 @@ pub trait Router: Send + Sync + 'static {
         allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()>;
 
+    /// Asked before a [`BrokeredRequest`] leaves, in place of
+    /// [`Self::allow_outgoing_request`]: the broker already checked the
+    /// request against its binding and wrote the credential in. An error
+    /// refuses it. Default: allow.
+    fn allow_brokered_request(
+        &self,
+        _caller: EgressCaller<'_>,
+        _request: &hyper::Request<WasiBody>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// The secrets a caller may send by placeholder.
     ///
     /// Asked only after [`Self::allow_outgoing_request`] accepted the request.
@@ -1205,6 +1217,12 @@ pub type RequestIoFuture =
 pub type SendResult =
     Result<(hyper::Response<WasiBody>, RequestIoFuture), wasmtime_wasi_http::Error>;
 
+/// Set by the broker on a request it has already authorized and written its
+/// credential into. Only the host can set an extension, so a guest's own
+/// request never carries it.
+#[derive(Clone, Copy, Debug)]
+pub struct BrokeredRequest;
+
 /// Future returned by [`OutgoingHandler::send_request`].
 pub type SendFuture = Box<dyn std::future::Future<Output = SendResult> + Send>;
 
@@ -1811,6 +1829,13 @@ pub trait HostHandler: Send + Sync + 'static {
         fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture;
+
+    /// Whether a request marked [`BrokeredRequest`] is sent as it stands,
+    /// without the allowlist, substitution or local routing. A handler that
+    /// wraps another forwards this. Default: no, and the broker refuses.
+    fn sends_brokered_requests(&self) -> bool {
+        false
+    }
 
     /// [`Self::outgoing_request`] with the caller attested, so a handler can
     /// scope egress credentials to it.
@@ -3035,6 +3060,10 @@ async fn dispatch_local(
 
 #[async_trait::async_trait]
 impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
+    fn sends_brokered_requests(&self) -> bool {
+        true
+    }
+
     async fn inject_meters(&self, meters: &crate::observability::Meters) {
         *self.meters.write().await = meters.clone();
     }
@@ -3366,7 +3395,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         let workload_id = caller.workload_id;
         let component_id = caller.component_id.unwrap_or_default();
         let span = outbound_client_span(request.method(), request.uri());
-        let inner: SendFuture = if let Err(e) =
+        let inner: SendFuture = if request.extensions().get::<BrokeredRequest>().is_some() {
+            match self.router.allow_brokered_request(caller, &request) {
+                Ok(()) => self.send_over_network(workload_id, request, options, fut),
+                Err(e) => {
+                    warn!(workload_id, component_id, err = %e, "brokered request refused by the router");
+                    deny_request(request)
+                }
+            }
+        } else if let Err(e) =
             self.router
                 .allow_outgoing_request(workload_id, &request, options, allowed_hosts)
         {
