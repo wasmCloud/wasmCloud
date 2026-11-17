@@ -1130,15 +1130,18 @@ impl WorkloadClients {
     /// was given, so a workload-specific trust root can never receive a
     /// secret. Its connections therefore present the host's client identity,
     /// if any, never the workload's. Shares the workload's quota, and is the
-    /// workload's own client when the two configurations are the same. Decided
-    /// once per workload and cached, like [`Self::client`].
+    /// workload's own client when that client was built from the host's
+    /// configuration. Decided once per workload and cached, like
+    /// [`Self::client`].
     pub fn client_carrying_secret(&self, workload_id: &str) -> PooledClient {
         if let Some(client) = self.clients.get(&secret_key(workload_id)) {
             return client;
         }
         let host = self.tls.host_config();
-        if Arc::ptr_eq(&host, &self.tls.config_for(workload_id)) {
-            let client = self.client(workload_id);
+        let client = self.client(workload_id);
+        // The cached client may predate the resolver's current answer, so
+        // compare what it was actually built with.
+        if Arc::ptr_eq(&host, &client.tls) {
             self.clients.insert(secret_key(workload_id), client.clone());
             return client;
         }
@@ -3309,6 +3312,69 @@ pub(crate) mod tests {
             .await
             .expect("request with the private CA trusted should succeed");
         assert_eq!(response.status(), 200);
+    }
+
+    /// A workload client built before the resolver began answering with the
+    /// host's configuration still trusts the workload's CA, so a secret gets a
+    /// client of its own.
+    #[tokio::test]
+    async fn a_secret_never_rides_a_client_built_from_an_older_config() {
+        struct Switching {
+            workload: Arc<rustls::ClientConfig>,
+            host: Arc<rustls::ClientConfig>,
+            switched: std::sync::atomic::AtomicBool,
+        }
+        impl ClientTlsConfigResolver for Switching {
+            fn config_for(&self, _workload_id: &str) -> Arc<rustls::ClientConfig> {
+                if self.switched.load(std::sync::atomic::Ordering::SeqCst) {
+                    Arc::clone(&self.host)
+                } else {
+                    Arc::clone(&self.workload)
+                }
+            }
+            fn host_config(&self) -> Arc<rustls::ClientConfig> {
+                Arc::clone(&self.host)
+            }
+        }
+
+        let (port, ca_pem) = private_ca_tls_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem).unwrap();
+        let workload = ClientTlsOptions {
+            roots: TrustRoots::ExtraOnly,
+            extra_ca_paths: vec![ca_path],
+            ..Default::default()
+        }
+        .build()
+        .unwrap();
+        let resolver = Arc::new(Switching {
+            workload,
+            host: default_client_tls_config(),
+            switched: false.into(),
+        });
+        let clients =
+            WorkloadClients::with_tls_config_resolver(resolver.clone(), test_quotas(4, 16));
+        let uri = format!("https://127.0.0.1:{port}/");
+
+        let (response, _io) = clients
+            .client("wl")
+            .send_request(request(&uri), test_options())
+            .await
+            .expect("the workload's own trust root serves its own requests");
+        assert_eq!(response.status(), 200);
+        resolver
+            .switched
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let secret = clients.client_carrying_secret("wl");
+        assert!(Arc::ptr_eq(&secret.tls, &resolver.host));
+        let err = secret
+            .send_request(request(&uri), test_options())
+            .await
+            .err()
+            .expect("a secret must not trust the workload's CA");
+        assert!(matches!(err, HttpError::TlsProtocolError), "{err:?}");
     }
 
     /// A workload trusting a private CA reaches its server, but a request

@@ -422,9 +422,25 @@ impl EgressSecret {
         Ok(self)
     }
 
-    /// Methods and paths the secret may be sent on. None means any.
-    pub fn for_routes(mut self, routes: impl IntoIterator<Item = SecretRoute>) -> Self {
-        self.routes = routes.into_iter().collect();
+    /// Methods and paths the secret may be sent on. An empty list is refused,
+    /// since it reads as "none"; use [`Self::any_route`] to allow every route.
+    pub fn for_routes(
+        mut self,
+        routes: impl IntoIterator<Item = SecretRoute>,
+    ) -> anyhow::Result<Self> {
+        let routes: Arc<[SecretRoute]> = routes.into_iter().collect();
+        anyhow::ensure!(
+            !routes.is_empty(),
+            "a secret needs a route, or `any_route` to allow every one"
+        );
+        self.routes = routes;
+        Ok(self)
+    }
+
+    /// Send the secret on any method and path of its destinations, which is
+    /// also the default.
+    pub fn any_route(mut self) -> Self {
+        self.routes = Arc::from([]);
         self
     }
 
@@ -599,9 +615,11 @@ impl Substituted {
 
     /// Swap every secret in `headers` back for its placeholder.
     ///
-    /// A value that still holds a secret in some other spelling (any
-    /// percent-encoding) after the swap, or that no longer parses as a header,
-    /// is dropped.
+    /// A value that still holds a secret in some other spelling after the
+    /// swap (see [`try_each_spelling`]), or that no longer parses as a header,
+    /// is dropped. Other encodings, such as JSON's `\/` or base64 of anything
+    /// but the Basic credential the host sent, are not recognised, and bodies
+    /// are never scanned.
     pub(crate) fn revert(&self, headers: &mut HeaderMap) {
         if self.sent.is_empty() {
             return;
@@ -616,8 +634,7 @@ impl Substituted {
                     changed = true;
                 }
             }
-            let decoded = percent_decode(&text);
-            if self.values.iter().any(|v| contains(&decoded, v)) {
+            if any_spelling(&text, |t| self.values.iter().any(|v| contains(t, v))) {
                 dropped.push(name.clone());
             } else if changed {
                 match HeaderValue::from_bytes(&text) {
@@ -637,9 +654,9 @@ pub(crate) fn substitute<B>(
     request: &mut hyper::Request<B>,
     secrets: &[EgressSecret],
 ) -> Result<Substituted, Refused> {
-    let in_uri = marker_in_uri(request.uri());
+    let in_uri = placeholder_in_uri(request.uri());
     let mut done = Substituted::default();
-    if !in_uri && !marker_in_headers(request.headers()) {
+    if !in_uri && !placeholder_in_headers(request.headers()) {
         return Ok(done);
     }
 
@@ -667,52 +684,37 @@ pub(crate) fn substitute<B>(
     Ok(done)
 }
 
-/// Whether `request` holds the marker anywhere the host looks for a
-/// placeholder, in any spelling it decodes. Cheap enough to run on every
-/// request, so the router is asked for secrets only when this holds.
-pub(crate) fn may_carry_placeholder<B>(request: &hyper::Request<B>) -> bool {
-    marker_in_uri(request.uri()) || marker_in_headers(request.headers())
-}
-
-/// Whether an inbound request carries anything shaped like a placeholder.
+/// Whether `request` holds anything shaped like a placeholder in its URI or
+/// headers, in any spelling the host decodes. Outbound, the router is asked
+/// for secrets only when this holds.
 ///
-/// A placeholder is worthless outside its workload, but a workload that copies
-/// caller input into its own outgoing requests would turn one sent in from
-/// outside into an authenticated call, so ingress refuses them.
+/// Inbound, ingress refuses such a request. A placeholder is worthless outside
+/// its workload, but a workload that copies caller input into its own outgoing
+/// requests would turn one sent in from outside into an authenticated call.
+/// That check is best-effort: a body, or an encoding the host does not decode,
+/// still carries one in.
 pub(crate) fn carries_placeholder<B>(request: &hyper::Request<B>) -> bool {
-    let uri = request.uri();
+    placeholder_in_uri(request.uri()) || placeholder_in_headers(request.headers())
+}
+
+fn placeholder_in_uri(uri: &hyper::Uri) -> bool {
     [
         uri.authority().map_or("", |a| a.as_str()),
         uri.path_and_query().map_or("", |p| p.as_str()),
     ]
     .iter()
-    .any(|part| has_placeholder(&percent_decode(part.as_bytes())))
-        || request.headers().iter().any(|(name, value)| {
-            has_placeholder(&percent_decode(value.as_bytes()))
-                || basic_credentials(name, value).is_some_and(|b| has_placeholder(&b))
-        })
+    .any(|part| any_spelling(part.as_bytes(), has_placeholder))
 }
 
-fn marker_in_uri(uri: &hyper::Uri) -> bool {
-    [
-        uri.authority().map_or("", |a| a.as_str()),
-        uri.path_and_query().map_or("", |p| p.as_str()),
-    ]
-    .iter()
-    .any(|part| {
-        contains(
-            &percent_decode(part.as_bytes()),
-            PLACEHOLDER_MARKER.as_bytes(),
-        )
-    })
+fn placeholder_in_headers(headers: &HeaderMap) -> bool {
+    headers
+        .iter()
+        .any(|(name, value)| placeholder_in_header(name, value))
 }
 
-fn marker_in_headers(headers: &HeaderMap) -> bool {
-    let marker = PLACEHOLDER_MARKER.as_bytes();
-    headers.iter().any(|(name, value)| {
-        contains(&percent_decode(value.as_bytes()), marker)
-            || basic_credentials(name, value).is_some_and(|b| contains(&b, marker))
-    })
+fn placeholder_in_header(name: &HeaderName, value: &HeaderValue) -> bool {
+    any_spelling(value.as_bytes(), has_placeholder)
+        || basic_credentials(name, value).is_some_and(|b| any_spelling(&b, has_placeholder))
 }
 
 /// The URI with the query value substituted, or `None` if there was nothing
@@ -726,7 +728,6 @@ fn substitute_uri<B>(
     let authority = uri.authority().map_or("", |a| a.as_str());
     for part in [authority, uri.path()] {
         refuse_any_placeholder(part.as_bytes(), secrets)?;
-        refuse_any_placeholder(&percent_decode(part.as_bytes()), secrets)?;
     }
     let Some(query) = uri.query() else {
         return Ok(None);
@@ -734,10 +735,7 @@ fn substitute_uri<B>(
     let mut changed = false;
     let mut pieces = Vec::new();
     for piece in query.split('&') {
-        if !contains(
-            &percent_decode(piece.as_bytes()),
-            PLACEHOLDER_MARKER.as_bytes(),
-        ) {
+        if !any_spelling(piece.as_bytes(), has_placeholder) {
             pieces.push(Zeroizing::new(piece.to_string()));
             continue;
         }
@@ -838,18 +836,12 @@ fn substitute_headers<B>(
     let mut rewrites = Vec::new();
     let mut carried: Vec<&HeaderName> = Vec::new();
     for (index, (name, value)) in request.headers().iter().enumerate() {
-        let basic = basic_credentials(name, value);
-        let raw = value.as_bytes();
-        let marker = PLACEHOLDER_MARKER.as_bytes();
-        if !contains(&percent_decode(raw), marker)
-            && !basic.as_deref().is_some_and(|b| contains(b, marker))
-        {
+        if !placeholder_in_header(name, value) {
             continue;
         }
         let Some((secret, placed)) = placed_in(name, value, secrets) else {
-            refuse_any_placeholder(raw, secrets)?;
-            refuse_any_placeholder(&percent_decode(raw), secrets)?;
-            if let Some(decoded) = &basic {
+            refuse_any_placeholder(value.as_bytes(), secrets)?;
+            if let Some(decoded) = &basic_credentials(name, value) {
                 refuse_any_placeholder(decoded, secrets)?;
             }
             continue;
@@ -901,16 +893,18 @@ fn bearer_token(value: &[u8]) -> Option<&[u8]> {
     scheme.eq_ignore_ascii_case(b"bearer ").then_some(token)
 }
 
-/// Refuse if `text` holds any placeholder: misplaced if the caller holds it,
-/// unknown if not.
+/// Refuse if `text` holds any placeholder in any spelling: misplaced if the
+/// caller holds it, unknown if not.
 fn refuse_any_placeholder(text: &[u8], secrets: &[EgressSecret]) -> Result<(), Refused> {
-    if let Some(secret) = secrets.iter().find(|s| s.found_in(text)) {
-        return Err(secret.refuse(CredentialError::Misplaced));
-    }
-    if has_placeholder(text) {
-        return Err(CredentialError::Unknown.into());
-    }
-    Ok(())
+    try_each_spelling(text, |text| {
+        if let Some(secret) = secrets.iter().find(|s| s.found_in(text)) {
+            return Err(secret.refuse(CredentialError::Misplaced));
+        }
+        if has_placeholder(text) {
+            return Err(CredentialError::Unknown.into());
+        }
+        Ok(())
+    })
 }
 
 /// Whether `text` holds the marker followed by enough random characters to be
@@ -971,10 +965,51 @@ const LENIENT_BASE64: base64::engine::GeneralPurpose = base64::engine::GeneralPu
         .with_decode_allow_trailing_bits(true),
 );
 
-/// `text` with `%XX` escapes decoded and `+` read as a space, for finding a
-/// placeholder or secret in any spelling. Never used to rewrite a request.
-fn percent_decode(text: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+/// How many times a value is percent-decoded when looking for a placeholder or
+/// a secret, so one escaped two or three times over is still found.
+const DECODE_ROUNDS: usize = 3;
+
+/// Run `f` on `text` and on each reading a server might decode it to:
+/// percent-decoded up to [`DECODE_ROUNDS`] times, with `+` read as a space and
+/// as itself. Stops at the first error. Never used to rewrite a request.
+fn try_each_spelling<E>(text: &[u8], mut f: impl FnMut(&[u8]) -> Result<(), E>) -> Result<(), E> {
+    f(text)?;
     if !text.iter().any(|b| *b == b'%' || *b == b'+') {
+        return Ok(());
+    }
+    let mut seen = vec![Zeroizing::new(text.to_vec())];
+    let mut round = 0..seen.len();
+    for _ in 0..DECODE_ROUNDS {
+        let end = seen.len();
+        for i in round {
+            for plus_as_space in [true, false] {
+                let Some(current) = seen.get(i) else {
+                    continue;
+                };
+                let decoded = Zeroizing::new(percent_decode(current, plus_as_space).into_owned());
+                if seen.iter().any(|s| **s == *decoded) {
+                    continue;
+                }
+                f(&decoded)?;
+                seen.push(decoded);
+            }
+        }
+        round = end..seen.len();
+    }
+    Ok(())
+}
+
+fn any_spelling(text: &[u8], mut found: impl FnMut(&[u8]) -> bool) -> bool {
+    try_each_spelling(text, |t| if found(t) { Err(()) } else { Ok(()) }).is_err()
+}
+
+/// `text` with `%XX` escapes decoded, and `+` read as a space if
+/// `plus_as_space`.
+fn percent_decode(text: &[u8], plus_as_space: bool) -> std::borrow::Cow<'_, [u8]> {
+    if !text
+        .iter()
+        .any(|b| *b == b'%' || (plus_as_space && *b == b'+'))
+    {
         return std::borrow::Cow::Borrowed(text);
     }
     let hex = |b: u8| {
@@ -993,7 +1028,7 @@ fn percent_decode(text: &[u8]) -> std::borrow::Cow<'_, [u8]> {
                 out.push(decoded);
                 i += 3;
             }
-            (b'+', None) => {
+            (b'+', None) if plus_as_space => {
                 out.push(b' ');
                 i += 1;
             }
@@ -1485,10 +1520,12 @@ pub(crate) mod tests {
 
     #[test]
     fn routes_bound_where_the_secret_may_be_sent() {
-        let secret = api_secret(Some(b"s-0123456789abcdef")).for_routes([
-            SecretRoute::new(Some(Method::GET), "/v1/repos").unwrap(),
-            SecretRoute::new(None, "/v1/search/").unwrap(),
-        ]);
+        let secret = api_secret(Some(b"s-0123456789abcdef"))
+            .for_routes([
+                SecretRoute::new(Some(Method::GET), "/v1/repos").unwrap(),
+                SecretRoute::new(None, "/v1/search/").unwrap(),
+            ])
+            .unwrap();
         let cases = [
             (Method::GET, "/v1/repos", Ok(1)),
             (Method::GET, "/v1/repos/x/issues", Ok(1)),
@@ -1531,6 +1568,15 @@ pub(crate) mod tests {
         }
         assert!(SecretRoute::new(None, "v1").is_err());
         assert!(SecretRoute::new(None, "/v1/../x").is_err());
+        assert!(api_secret(None).for_routes([]).is_err());
+
+        let anywhere = secret.any_route();
+        let mut req = request_with(
+            Method::DELETE,
+            "https://api.example.com/v1/repos/x",
+            &[bearer()],
+        );
+        assert_eq!(run(&mut req, &[anywhere]), Ok(1));
     }
 
     #[test]
@@ -1728,10 +1774,17 @@ pub(crate) mod tests {
                 vec![("authorization", format!("Basic {unpadded}"))],
             ),
         ];
+        let twice: String = encoded.bytes().map(|b| format!("%{b:02X}")).collect();
+        let cases = cases.into_iter().chain([
+            (format!("https://api.example.com/?k={twice}"), vec![]),
+            (
+                "https://api.example.com/".to_string(),
+                vec![("x-note", twice.replace("%25", "%2525"))],
+            ),
+        ]);
         for (uri, headers) in cases {
             let mut req = request(&uri, &headers);
-            assert!(carries_placeholder(&req), "inbound {uri} {headers:?}");
-            assert!(may_carry_placeholder(&req), "outbound {uri} {headers:?}");
+            assert!(carries_placeholder(&req), "{uri} {headers:?}");
             assert_eq!(
                 run(&mut req, &[api_secret(Some(b"s-0123456789abcdef"))]),
                 Err(CredentialError::Misplaced),
@@ -1755,6 +1808,71 @@ pub(crate) mod tests {
         assert!(headers.get(header::LOCATION).is_none());
         assert_eq!(headers["x-plus"], "s-0123456789+abcdef", "not the secret");
         assert_eq!(headers["x-other"], "untouched");
+    }
+
+    #[test]
+    fn a_bare_marker_is_not_a_placeholder() {
+        let mut req = request(
+            "https://api.example.com/?k=wash_ph_short",
+            &[("x-k", "a wash_ph_ note".into())],
+        );
+        assert!(!carries_placeholder(&req));
+        assert_eq!(
+            run(&mut req, &[api_secret(Some(b"s-0123456789abcdef"))]),
+            Ok(0)
+        );
+    }
+
+    #[test]
+    fn a_secret_echoed_in_any_reading_is_dropped() {
+        const VALUE: &str = "ab+cd/ef=gh-0123456789";
+        let escape = |s: &str| -> String { s.bytes().map(|b| format!("%{b:02X}")).collect() };
+        let mut req = request("https://api.example.com/", &[bearer()]);
+        let done = substitute(&mut req, &[api_secret(Some(VALUE.as_bytes()))]).unwrap();
+        let echoes = [
+            "ab+cd%2Fef%3Dgh-0123456789".to_string(),
+            "ab%2Bcd%2Fef%3Dgh-0123456789".to_string(),
+            escape(VALUE),
+            escape(&escape(VALUE)),
+            escape(&escape(&escape(VALUE))),
+        ];
+        let mut headers = HeaderMap::new();
+        for (i, echo) in echoes.iter().enumerate() {
+            headers.insert(
+                HeaderName::try_from(format!("x-echo-{i}")).unwrap(),
+                HeaderValue::try_from(echo.as_str()).unwrap(),
+            );
+        }
+        headers.insert("x-raw", HeaderValue::from_static(VALUE));
+        headers.insert(
+            "x-space",
+            HeaderValue::from_static("ab cd/ef=gh-0123456789"),
+        );
+        done.revert(&mut headers);
+        for (i, echo) in echoes.iter().enumerate() {
+            assert!(headers.get(format!("x-echo-{i}")).is_none(), "{echo}");
+        }
+        assert_eq!(headers["x-raw"], PLACEHOLDER);
+        assert_eq!(
+            headers["x-space"], "ab cd/ef=gh-0123456789",
+            "not the secret"
+        );
+
+        let mut req = request(&format!("https://api.example.com/?key={PLACEHOLDER}"), &[]);
+        let secret = secret_in(SecretForm::Query("key".into()), Some(VALUE.as_bytes()));
+        let done = substitute(&mut req, &[secret]).unwrap();
+        let sent = req.uri().query().unwrap().to_string();
+        assert_eq!(sent, format!("key={}", "ab%2Bcd%2Fef%3Dgh-0123456789"));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::LOCATION,
+            HeaderValue::try_from(format!("https://api.example.com/next?{sent}")).unwrap(),
+        );
+        done.revert(&mut headers);
+        assert_eq!(
+            headers[header::LOCATION],
+            format!("https://api.example.com/next?key={PLACEHOLDER}")
+        );
     }
 
     #[test]

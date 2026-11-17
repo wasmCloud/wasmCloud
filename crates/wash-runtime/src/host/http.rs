@@ -31,7 +31,7 @@ use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::egress_credential::{
     CarriesSecret, CredentialError, EgressCaller, EgressSecret, Refused, SecretUse, Substituted,
-    carries_placeholder, may_carry_placeholder, substitute,
+    carries_placeholder, substitute,
 };
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
 use crate::observability::rate_limit::RateLimitedWarn;
@@ -1744,7 +1744,7 @@ pub trait HostHandler: Send + Sync + 'static {
         fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture {
-        if may_carry_placeholder(&request) {
+        if carries_placeholder(&request) {
             return deny_request(request);
         }
         self.outgoing_request(caller.workload_id, request, options, fut, allowed_hosts)
@@ -3248,6 +3248,14 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture {
+        // Without an attested caller there is no one to decide secrets for.
+        if carries_placeholder(&request) {
+            warn!(
+                workload_id,
+                "outgoing request denied: placeholder sent without a caller"
+            );
+            return deny_request(request);
+        }
         let caller = EgressCaller {
             workload_id,
             namespace: "",
@@ -3275,7 +3283,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
             warn!(workload_id = %workload_id, err = %e, "outgoing request denied by allowed_hosts policy");
             deny_request(request)
         } else {
-            let substituted = if !may_carry_placeholder(&request) {
+            let substituted = if !carries_placeholder(&request) {
                 Some(Substituted::default())
             } else {
                 let decided = if self.outgoing_handler.accepts_secrets() {
@@ -5104,8 +5112,9 @@ mod tests {
 
     /// Spawn an HTTP/2-over-TLS server (h2 ALPN) whose certificate chains to a
     /// private CA (an IP SAN, so tests dial 127.0.0.1 directly), answering
-    /// every request with `200 ok`. Returns the bound port and the CA PEM.
-    async fn private_ca_h2_server() -> (u16, String) {
+    /// every request with `200 ok`. Returns the bound port, the CA PEM, and
+    /// each request's `authorization` header.
+    async fn private_ca_h2_server() -> (u16, String, Arc<Mutex<Vec<Option<HeaderValue>>>>) {
         crate::init_crypto();
         let certified_key =
             rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
@@ -5123,6 +5132,8 @@ mod tests {
         let acceptor = TlsAcceptor::from(Arc::new(server_config));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
+        let seen: Arc<Mutex<Vec<Option<HeaderValue>>>> = Arc::default();
+        let recorded = Arc::clone(&seen);
         tokio::spawn(async move {
             loop {
                 let (stream, _) = match listener.accept().await {
@@ -5130,16 +5141,22 @@ mod tests {
                     Err(_) => return,
                 };
                 let acceptor = acceptor.clone();
+                let seen = Arc::clone(&recorded);
                 tokio::spawn(async move {
                     // Failed handshakes (the untrusted-CA case) just drop.
                     let Ok(tls) = acceptor.accept(stream).await else {
                         return;
                     };
                     let service = hyper::service::service_fn(
-                        |_req: hyper::Request<hyper::body::Incoming>| async {
-                            Ok::<_, std::convert::Infallible>(hyper::Response::new(
-                                http_body_util::Full::new(bytes::Bytes::from_static(b"ok")),
-                            ))
+                        move |req: hyper::Request<hyper::body::Incoming>| {
+                            seen.lock()
+                                .unwrap()
+                                .push(req.headers().get(hyper::header::AUTHORIZATION).cloned());
+                            async {
+                                Ok::<_, std::convert::Infallible>(hyper::Response::new(
+                                    http_body_util::Full::new(bytes::Bytes::from_static(b"ok")),
+                                ))
+                            }
                         },
                     );
                     let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
@@ -5148,7 +5165,7 @@ mod tests {
                 });
             }
         });
-        (port, ca_pem)
+        (port, ca_pem, seen)
     }
 
     fn grpc_options() -> Option<RequestOptions> {
@@ -5168,7 +5185,7 @@ mod tests {
     async fn grpc_path_picks_up_configured_roots() {
         use core::task::{Context as TaskContext, Waker};
 
-        let (port, ca_pem) = private_ca_h2_server().await;
+        let (port, ca_pem, _) = private_ca_h2_server().await;
         let dir = tempfile::tempdir().unwrap();
         let ca_path = dir.path().join("ca.pem");
         std::fs::write(&ca_path, ca_pem).unwrap();
@@ -6090,6 +6107,12 @@ mod tests {
             &[AllowedHost::Any],
         )
         .await;
+        let mut marker_only = build_request("https://api.example.com/?k=wash_ph_short");
+        marker_only.headers_mut().insert(
+            hyper::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wash_ph_"),
+        );
+        let _ = send_from_component(&server, marker_only, &[AllowedHost::Any]).await;
         assert!(server.router.seen_component.lock().unwrap().is_none());
         assert!(server.router.audited.lock().unwrap().is_empty());
 
@@ -6384,21 +6407,136 @@ mod tests {
 
     #[tokio::test]
     async fn grpc_metadata_is_substituted_too() {
-        let (server, spy) = credential_ingress(CredentialRouter::with(api_secret(None))).await;
-        let request = hyper::Request::builder()
-            .uri("https://api.example.com/pkg.Svc/Call")
-            .header(hyper::header::CONTENT_TYPE, "application/grpc")
-            .body(WasiBody::default())
-            .unwrap();
+        use crate::host::http_client::PooledClient;
 
-        let result =
-            send_from_component(&server, with_placeholder(request), &[AllowedHost::Any]).await;
+        /// Serves gRPC from pooled clients trusting `tls`, recording which
+        /// transport each request asked for.
+        #[derive(Clone)]
+        struct GrpcSpy {
+            tls: Arc<rustls::ClientConfig>,
+            asked: Arc<Mutex<Vec<&'static str>>>,
+        }
+        impl OutgoingHandler for GrpcSpy {
+            fn accepts_secrets(&self) -> bool {
+                true
+            }
+            fn send_request(
+                &self,
+                _workload_id: &str,
+                _request: hyper::Request<WasiBody>,
+                _options: Option<RequestOptions>,
+                _fut: RequestIoFuture,
+            ) -> SendFuture {
+                Box::new(async { Err(wasmtime_wasi_http::Error::HttpRequestDenied) })
+            }
+            fn grpc_transport(&self, _workload_id: &str) -> Option<PooledClient> {
+                self.asked.lock().unwrap().push("workload");
+                Some(PooledClient::new(Arc::clone(&self.tls)))
+            }
+            fn grpc_transport_carrying_secret(&self, _workload_id: &str) -> Option<PooledClient> {
+                self.asked.lock().unwrap().push("secret");
+                Some(PooledClient::new(Arc::clone(&self.tls)))
+            }
+        }
+
+        let (port, ca_pem, seen) = private_ca_h2_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem).unwrap();
+        let spy = GrpcSpy {
+            tls: crate::host::http_client::ClientTlsOptions {
+                roots: crate::host::http_client::TrustRoots::ExtraOnly,
+                extra_ca_paths: vec![ca_path],
+                ..Default::default()
+            }
+            .build()
+            .unwrap(),
+            asked: Arc::default(),
+        };
+        let secret = EgressSecret::new(
+            PLACEHOLDER,
+            Arc::new(crate::host::egress_credential::tests::Fixed(Some(
+                b"grpc-secret-0123456789",
+            ))),
+            SecretForm::Bearer,
+        )
+        .unwrap()
+        .for_destinations([format!("127.0.0.1:{port}").parse().unwrap()])
+        .unwrap();
+        let server = Ingress::builder(
+            CredentialRouter::with(secret),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .outgoing_handler(spy.clone())
+        .build()
+        .await
+        .unwrap();
+        let grpc = |authorization: bool| {
+            let request = hyper::Request::builder()
+                .method(hyper::Method::POST)
+                .uri(format!("https://127.0.0.1:{port}/pkg.Svc/Call"))
+                .header(hyper::header::CONTENT_TYPE, "application/grpc")
+                .body(WasiBody::default())
+                .unwrap();
+            if authorization {
+                with_placeholder(request)
+            } else {
+                request
+            }
+        };
+
+        for authorization in [true, false] {
+            let (response, _) =
+                send_from_component(&server, grpc(authorization), &[AllowedHost::Any])
+                    .await
+                    .expect("the spy's client trusts the server");
+            assert_eq!(response.status(), 200);
+            let _ = response.into_body().collect().await;
+        }
+
+        assert_eq!(*spy.asked.lock().unwrap(), ["secret", "workload"]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                Some(HeaderValue::from_static("Bearer grpc-secret-0123456789")),
+                None
+            ]
+        );
+        assert_eq!(
+            *server.router.audited.lock().unwrap(),
+            [(
+                Some(PLACEHOLDER.to_string()),
+                "/pkg.Svc/Call".to_string(),
+                Ok(())
+            )]
+        );
+    }
+
+    /// The legacy entry point has no caller to decide secrets for, so a
+    /// placeholder never leaves through it, substituted or not.
+    #[tokio::test]
+    async fn the_unattested_path_never_sends_a_placeholder() {
+        let (server, spy) = credential_ingress(CredentialRouter::with(api_secret(Some(
+            b"host-secret-0123456789",
+        ))))
+        .await;
+
+        let request = with_placeholder(build_request("https://api.example.com/"));
+        let result = Box::into_pin(server.outgoing_request(
+            "wl",
+            request,
+            None,
+            no_io(),
+            &[AllowedHost::Any],
+        ))
+        .await;
 
         assert!(matches!(
             result,
             Err(wasmtime_wasi_http::Error::HttpRequestDenied)
         ));
         assert!(spy.sent.lock().unwrap().is_empty());
+        assert!(server.router.seen_component.lock().unwrap().is_none());
     }
 
     /// A router that cannot forget a workload.
