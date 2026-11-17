@@ -572,7 +572,8 @@ pub struct HostPluginConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<wash_runtime::host::declared_port::DeclaredPort>,
     /// Named volumes this plugin's `volumeMounts` use, written as a Workload's
-    /// `volumes` are. Only `hostPath` volumes are supported.
+    /// `volumes` are. Only `hostPath` volumes are supported. On `wash host`, no
+    /// workload volume may expose one of these directories.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<PluginVolumeConfig>,
     /// Where the plugin sees each volume, e.g. model weights it serves from.

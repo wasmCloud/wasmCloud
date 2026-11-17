@@ -1355,6 +1355,7 @@ pub struct EngineBuilder {
     memory_layout: Option<host_memory::MemoryLayout>,
     socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     reserved_host_paths: Vec<PathBuf>,
+    plugin_volume_host_paths: Vec<PathBuf>,
     allowed_host_paths: Vec<PathBuf>,
     scratch_root: Option<PathBuf>,
     host_memory: Option<host_memory::HostMemoryBudgets>,
@@ -1405,6 +1406,18 @@ impl EngineBuilder {
     #[must_use]
     pub fn with_reserved_host_paths(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
         self.reserved_host_paths.extend(paths);
+        self
+    }
+
+    /// Directories host plugins mount as volumes. No workload volume may
+    /// equal, contain, or lie inside one, even where
+    /// [`Self::with_allowed_host_paths`] permits it. A plugin still mounts them.
+    #[must_use]
+    pub fn with_plugin_volume_host_paths(
+        mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
+        self.plugin_volume_host_paths.extend(paths);
         self
     }
 
@@ -2173,7 +2186,8 @@ impl EngineBuilder {
                 // The socket policy's counters, so an operator reads every
                 // policy figure in one place.
                 socket_policy.meters.clone(),
-            ),
+            )
+            .with_plugin_volumes(self.plugin_volume_host_paths),
             socket_policy,
             scratch,
             host_memory,
@@ -2614,6 +2628,30 @@ mod tests {
                 local_path: path.to_string_lossy().into_owned(),
             }),
         }
+    }
+
+    #[test]
+    fn an_engine_refuses_a_workload_volume_on_a_plugin_volume() {
+        let root = tempfile::tempdir().unwrap();
+        let models = root.path().join("models");
+        let other = root.path().join("other");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let engine = Engine::builder()
+            .with_allowed_host_paths([root.path().to_path_buf()])
+            .with_plugin_volume_host_paths([models.clone()])
+            .build()
+            .unwrap();
+
+        let Err(err) =
+            engine.initialize_workload("w", volume_only_workload(vec![host_path(&models)]))
+        else {
+            panic!("a workload volume on a plugin's directory should be refused");
+        };
+        assert!(format!("{err:#}").contains("host plugin"), "{err:#}");
+        engine
+            .initialize_workload("w", volume_only_workload(vec![host_path(&other)]))
+            .unwrap();
     }
 
     #[test]

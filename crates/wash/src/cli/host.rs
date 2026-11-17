@@ -747,8 +747,8 @@ pub struct HostCommand {
     /// one. With none, no `hostPath` volume is permitted.
     ///
     /// Even inside one, a volume is refused if it exposes a reserved host
-    /// path, a kernel filesystem such as `/proc`, `/sys` or `/dev`, or the
-    /// `emptyDir` scratch root.
+    /// path, a directory a host plugin mounts as a volume, a kernel filesystem
+    /// such as `/proc`, `/sys` or `/dev`, or the `emptyDir` scratch root.
     ///
     /// This is a host-wide guardrail, not a multi-tenant storage policy: every
     /// workload on the host may mount any directory listed here. Accepts a
@@ -1129,6 +1129,28 @@ impl HostCommand {
         Ok(builder)
     }
 
+    /// Every directory a component plugin mounts as a volume, which no workload
+    /// volume may expose. A plugin still mounts them, so they are kept apart
+    /// from the reserved paths.
+    fn plugin_volume_paths(config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
+        let project_dir = ctx.project_dir();
+        config
+            .host()
+            .all_plugins()
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|plugin| &plugin.volumes)
+            .filter_map(|volume| volume.host_path.as_ref())
+            .map(|host_path| {
+                if host_path.path.is_relative() {
+                    project_dir.join(&host_path.path)
+                } else {
+                    host_path.path.clone()
+                }
+            })
+            .collect()
+    }
+
     /// Every path this host reads credentials or configuration from, which no
     /// workload volume may expose.
     fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
@@ -1458,6 +1480,7 @@ impl CliCommand for HostCommand {
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel())
             .with_reserved_host_paths(self.reserved_paths(&config, ctx))
+            .with_plugin_volume_host_paths(Self::plugin_volume_paths(&config, ctx))
             .with_allowed_host_paths(self.allowed_host_paths.iter().cloned());
         if let Some(root) = &self.scratch_root {
             engine_builder = engine_builder.with_scratch_root(root);
@@ -2287,6 +2310,49 @@ host:
         ] {
             assert!(paths.contains(&std::path::PathBuf::from(path)), "{path}");
         }
+        Ok(())
+    }
+
+    /// Each volume of each plugin is listed, a relative one against the
+    /// project directory.
+    #[tokio::test]
+    async fn plugin_volume_paths_cover_every_plugin_volume() -> anyhow::Result<()> {
+        let config = config_from(
+            r#"
+host:
+  plugins:
+    - id: model-server
+      file: ./build/model_server.wasm
+      volumes:
+        - name: models
+          hostPath:
+            path: models
+        - name: cache
+          hostPath:
+            path: /var/cache/models
+      volumeMounts:
+        - name: models
+          mountPath: /models
+    - id: indexer
+      file: ./build/indexer.wasm
+      volumes:
+        - name: index
+          hostPath:
+            path: /var/lib/index
+"#,
+        );
+        let ctx = crate::cli::CliContextBuilder::default()
+            .keep_working_dir()
+            .build()
+            .await?;
+        assert_eq!(
+            HostCommand::plugin_volume_paths(&config, &ctx),
+            [
+                ctx.project_dir().join("models"),
+                "/var/cache/models".into(),
+                "/var/lib/index".into(),
+            ]
+        );
         Ok(())
     }
 
