@@ -596,7 +596,7 @@ pub struct PluginBindingConfig {
 /// A named volume on a `host.plugins` entry. Config-file spelling of
 /// [`wash_runtime::types::Volume`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginVolumeConfig {
     /// The name a `volumeMounts` entry uses.
     pub name: String,
@@ -626,6 +626,7 @@ impl PluginVolumeConfig {
 
 /// The host directory of a plugin's `hostPath` volume.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PluginHostPathConfig {
     /// Relative paths resolve against the directory `wash` runs in, like a
     /// plugin's `file`.
@@ -635,7 +636,7 @@ pub struct PluginHostPathConfig {
 /// Where a `host.plugins` entry's plugin sees one of its volumes. Config-file
 /// spelling of [`wash_runtime::types::VolumeMount`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginVolumeMountConfig {
     /// The `volumes` entry to mount.
     pub name: String,
@@ -3008,6 +3009,47 @@ host:
         );
     }
 
+    /// A key the entry does not know is refused rather than dropped: a
+    /// misspelled `readOnly` would otherwise leave the mount read-write.
+    #[test]
+    fn a_plugin_volume_entry_refuses_unknown_keys() {
+        let cases = [
+            (
+                "a misspelled readOnly on a mount",
+                "volumeMounts: [{name: models, mountPath: /models, readonly: true}]",
+                "readonly",
+            ),
+            (
+                "readOnly on the volume instead of the mount",
+                "volumes: [{name: models, hostPath: {path: ./models}, readOnly: true}]",
+                "readOnly",
+            ),
+            (
+                "a key hostPath does not have",
+                "volumes: [{name: models, hostPath: {path: ./models, type: Directory}}]",
+                "type",
+            ),
+            (
+                "a volume kind that is not supported",
+                "volumes: [{name: scratch, emptyDir: {}}]",
+                "emptyDir",
+            ),
+        ];
+        for (what, entry, key) in cases {
+            let yaml = format!(
+                "host:\n  plugins:\n    - id: model-server\n      file: ./m.wasm\n      {entry}\n"
+            );
+            let err = match serde_saphyr::from_str::<Config>(&yaml) {
+                Ok(_) => panic!("{what} must be refused"),
+                Err(err) => err.to_string(),
+            };
+            assert!(
+                err.contains(&format!("unknown field `{key}`")),
+                "{what}: {err}"
+            );
+        }
+    }
+
     /// Only `hostPath` volumes are supported, so a volume without one is
     /// refused rather than dropped.
     #[test]
@@ -3019,7 +3061,6 @@ host:
       file: ./build/model_server.wasm
       volumes:
         - name: scratch
-          emptyDir: {}
 "#;
         let config: Config = serde_saphyr::from_str(yaml).unwrap();
         let err = config.host().plugins[0]
