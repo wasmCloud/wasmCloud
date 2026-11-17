@@ -192,23 +192,22 @@ pub(crate) async fn resolve_component_volume_mounts_in_map(
 /// path such as an OCI cache may not exist until after the host starts. It is
 /// matched both as written and as it resolves now, and a path that does not
 /// exist resolves through its nearest existing ancestor.
+/// `path` as is, or taken against the working directory if it is relative.
+fn absolute_from_cwd(path: PathBuf) -> PathBuf {
+    if path.is_relative() {
+        std::env::current_dir().unwrap_or_default().join(path)
+    } else {
+        path
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ReservedHostPaths(Arc<[PathBuf]>);
 
 impl ReservedHostPaths {
     /// Reserve `paths`; a relative one is taken against the working directory.
     pub fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let mut reserved: Vec<PathBuf> = paths
-            .into_iter()
-            .map(|path| {
-                if path.is_relative() {
-                    cwd.join(path)
-                } else {
-                    path
-                }
-            })
-            .collect();
+        let mut reserved: Vec<PathBuf> = paths.into_iter().map(absolute_from_cwd).collect();
         reserved.sort();
         reserved.dedup();
         Self(reserved.into())
@@ -374,7 +373,7 @@ impl HostPathPolicy {
         self.plugin_volumes
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .extend(ReservedHostPaths::new(paths).0.iter().cloned());
+            .extend(paths.into_iter().map(absolute_from_cwd));
         self
     }
 
