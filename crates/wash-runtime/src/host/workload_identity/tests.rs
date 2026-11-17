@@ -1062,6 +1062,18 @@ mod federation {
             ..grant(vec![], &[])
         };
         assert!(credentials.bind("w0", serving(&["[::1]"])).is_err());
+        assert!(credentials.bind("w0", serving(&["10.0.0.1"])).is_err());
+        let twice = IdentityGrant {
+            mtls_destinations: vec![
+                MtlsDestination::new("svc.test", 443).unwrap(),
+                MtlsDestination::new("SVC.test", 443)
+                    .unwrap()
+                    .with_server(SpiffePeer::parse("spiffe://peer.test").unwrap()),
+            ],
+            ..grant(vec![], &[])
+        };
+        let err = credentials.bind("w0", twice).unwrap_err();
+        assert!(err.to_string().contains("listed twice"), "{err}");
         credentials.bind("w1", serving(&["Svc.Test."])).unwrap();
         let err = credentials.bind("w2", serving(&["svc.test"])).unwrap_err();
         assert!(err.to_string().contains("already presents"), "{err}");
@@ -1092,6 +1104,16 @@ mod federation {
         credentials.bind("r2", replica("api")).unwrap();
         let err = credentials.bind("r3", replica("other")).unwrap_err();
         assert!(err.to_string().contains("already presents"), "{err}");
+        credentials.admit("r1", &app()).unwrap();
+        eventually(|| credentials.spiffe_id("r1").is_some()).await;
+        let served = credentials.spiffe_id("r1").unwrap();
+        assert!(credentials.serves_as("r1", &served));
+        assert!(
+            credentials.serves_as("r2", &served),
+            "a replica not yet issued answers for its identity"
+        );
+        assert!(!credentials.serves_as("w2", "spiffe://acme.test/other"));
+        assert!(!credentials.serves_as("unknown", &served));
     }
 
     /// The ingress side of a federated call: the workload's SVID is served by

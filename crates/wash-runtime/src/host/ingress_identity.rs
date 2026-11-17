@@ -14,11 +14,15 @@
 //! authenticate the caller and authorize nothing: what a peer may do is the
 //! workload's decision.
 //!
-//! A client certificate is verified again on every request, against the
-//! bundles as they are then, so a connection outliving its peer's bundle or
-//! certificate stops carrying the peer.
+//! A client certificate is verified again for requests after its bundle
+//! changes and at least every [`REVERIFY_EVERY`], so a connection outliving
+//! its peer's bundle or certificate stops carrying the peer. A bearer
+//! JWT-SVID is accepted for a workload that holds an X.509-SVID, since its
+//! audience is that SVID's ID. Only request headers carry the peer; a guest
+//! reading trailers must not trust them.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use hyper::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use rustls::ServerConfig;
@@ -29,7 +33,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 use tracing::debug;
 
-use crate::host::trust_bundle::{SpiffeId, SvidUsage};
+use crate::host::trust_bundle::{SpiffeId, SvidUsage, TrustBundle};
 use crate::host::workload_identity::WorkloadCredentials;
 
 /// The verified caller's SPIFFE ID.
@@ -38,6 +42,10 @@ pub const PEER_ID_HEADER: &str = "wasmcloud-peer-spiffe-id";
 /// bearer JWT-SVID, which anyone holding the token can replay to this
 /// audience until it expires.
 pub const PEER_SVID_HEADER: &str = "wasmcloud-peer-svid";
+
+/// How long a client X.509-SVID's verification is reused while its bundle
+/// is unchanged.
+pub const REVERIFY_EVERY: Duration = Duration::from_secs(60);
 
 /// Set once the host is built with workload credentials.
 pub(crate) type IdentitySlot = Arc<OnceLock<WorkloadCredentials>>;
@@ -50,6 +58,13 @@ pub(crate) struct IngressConnection {
     /// The client's X.509-SVID chain, taken only from a handshake the
     /// bundles verified.
     peer: Option<Vec<CertificateDer<'static>>>,
+    verified: Mutex<Option<Verified>>,
+}
+
+struct Verified {
+    id: SpiffeId,
+    bundle: Arc<TrustBundle>,
+    at: Instant,
 }
 
 #[derive(Debug)]
@@ -109,6 +124,7 @@ pub(crate) async fn accept(
         credentials: credentials.clone(),
         served_as,
         peer,
+        verified: Mutex::default(),
     };
     Ok((tls, Some(Arc::new(connection))))
 }
@@ -128,7 +144,7 @@ pub(crate) fn admit(
     headers: &mut HeaderMap,
 ) -> Result<(), u16> {
     if let Some(served) = connection.served_as.as_deref()
-        && connection.credentials.spiffe_id(workload_id).as_deref() != Some(served)
+        && !connection.credentials.serves_as(workload_id, served)
     {
         return Err(421);
     }
@@ -146,12 +162,31 @@ pub(crate) fn admit(
 
 fn x509_peer(connection: &IngressConnection, workload_id: &str) -> Option<SpiffeId> {
     let chain = connection.peer.as_ref()?;
-    match connection.credentials.trust_bundles().verify_x509_svid(
-        chain,
-        SvidUsage::Client,
-        UnixTime::now(),
-    ) {
-        Ok(id) => Some(id),
+    let bundles = connection.credentials.trust_bundles();
+    let mut verified = connection
+        .verified
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(v) = verified.as_ref()
+        && v.at.elapsed() < REVERIFY_EVERY
+        && bundles
+            .get(v.id.trust_domain())
+            .is_some_and(|now| Arc::ptr_eq(&now, &v.bundle))
+    {
+        return Some(v.id.clone());
+    }
+    *verified = None;
+    match bundles.verify_x509_svid(chain, SvidUsage::Client, UnixTime::now()) {
+        Ok(id) => {
+            if let Some(bundle) = bundles.get(id.trust_domain()) {
+                *verified = Some(Verified {
+                    id: id.clone(),
+                    bundle,
+                    at: Instant::now(),
+                });
+            }
+            Some(id)
+        }
         Err(err) => {
             debug!(workload_id, %err, "a client X.509-SVID no longer verifies");
             None
