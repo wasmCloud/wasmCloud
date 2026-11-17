@@ -1152,7 +1152,11 @@ impl HostCommand {
 
     /// Every path this host reads credentials or configuration from, which no
     /// workload volume may expose.
-    fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
+    fn reserved_paths(
+        &self,
+        config: &crate::config::Config,
+        ctx: &CliContext,
+    ) -> anyhow::Result<Vec<PathBuf>> {
         let project_dir = ctx.project_dir();
         let mut paths: Vec<PathBuf> = [
             &self.scheduler_nats_creds,
@@ -1192,8 +1196,7 @@ impl HostCommand {
         paths.extend(
             config
                 .host()
-                .all_plugins()
-                .unwrap_or_default()
+                .all_plugins()?
                 .into_iter()
                 .filter_map(|plugin| plugin.source.file.as_ref())
                 .map(|file| {
@@ -1207,7 +1210,8 @@ impl HostCommand {
         // A credential file a `wasmcloud:nats` or `wasi:blobstore` binding
         // names, so a workload cannot mount the Secret the binding
         // authenticates with.
-        if let Ok(bindings) = self.plugin_bindings(config, project_dir) {
+        {
+            let bindings = self.plugin_bindings(config, project_dir)?;
             for id in [
                 wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
                 wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
@@ -1233,7 +1237,7 @@ impl HostCommand {
                     _ => None,
                 }),
         );
-        paths
+        Ok(paths)
     }
 
     /// Build outbound TLS and start identity refresh when configured.
@@ -1478,7 +1482,7 @@ impl CliCommand for HostCommand {
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel())
-            .with_reserved_host_paths(self.reserved_paths(&config, ctx))
+            .with_reserved_host_paths(self.reserved_paths(&config, ctx)?)
             .with_allowed_host_paths(self.allowed_host_paths.iter().cloned());
         if let Some(root) = &self.scratch_root {
             engine_builder = engine_builder.with_scratch_root(root);
@@ -2314,14 +2318,14 @@ mod nats_tests {
             .keep_working_dir()
             .build()
             .await?;
-        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
+        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx)?;
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.creds")));
         assert!(paths.contains(&std::path::PathBuf::from("data.password")));
         let host = parse(&[
             "--scheduler-nats-nkey=scheduler.nk",
             "--data-nats-token-file=data.token",
         ]);
-        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
+        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx)?;
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.nk")));
         assert!(paths.contains(&std::path::PathBuf::from("data.token")));
         Ok(())
@@ -2349,7 +2353,7 @@ host:
             .keep_working_dir()
             .build()
             .await?;
-        let paths = parse(&[]).reserved_paths(&config, &ctx);
+        let paths = parse(&[]).reserved_paths(&config, &ctx)?;
         for path in [
             "/secrets/base.creds",
             "/secrets/orders.token",
