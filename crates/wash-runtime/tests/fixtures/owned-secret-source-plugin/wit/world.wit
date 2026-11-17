@@ -3,6 +3,6 @@ package acme:ownedsecretsource@0.1.0;
 /// Host component plugin exporting both secret-source shapes, so a test sees
 /// which one the host calls.
 world owned-secret-source-plugin {
-    include wasmcloud:host/owned-secret-source-provider@0.1.7;
-    include wasmcloud:host/secret-source-provider@0.1.7;
+    include wasmcloud:host/owned-secret-source-provider@0.1.8;
+    include wasmcloud:host/secret-source-provider@0.1.8;
 }

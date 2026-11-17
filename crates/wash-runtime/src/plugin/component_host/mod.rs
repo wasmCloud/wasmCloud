@@ -121,7 +121,7 @@ use lifecycle::{
 };
 use secret_source::{
     ComponentSecretSource, HOST_OWNED_SECRET_SOURCE_EXPORT, HOST_SECRET_SOURCE_EXPORT,
-    check_secret_source_export,
+    check_secret_source_export, prefer_owned,
 };
 pub(crate) use secret_source::{SecretSourceExport, SecretSourceResolve, secret_source_resolve};
 use workload_call::{WorkloadCalls, add_workload_calls_to_linker, install_host_workload};
@@ -1280,27 +1280,21 @@ fn introspect_capability_exports(
             if export.wit.interfaces.contains(HOST_LIFECYCLE_EXPORT) {
                 let takes_secrets = imports_binding_secrets(component);
                 lifecycle = Some(lifecycle_funcs(id, export, takes_secrets)?);
-            } else if export
-                .wit
-                .interfaces
-                .contains(HOST_OWNED_SECRET_SOURCE_EXPORT)
+            } else if let Some(owned) = [
+                (HOST_OWNED_SECRET_SOURCE_EXPORT, true),
+                (HOST_SECRET_SOURCE_EXPORT, false),
+            ]
+            .into_iter()
+            .find_map(|(name, owned)| export.wit.interfaces.contains(name).then_some(owned))
             {
-                check_secret_source_export(id, &export, true)?;
-                secret_source = Some(SecretSourceExport {
-                    name: export.name,
-                    owned: true,
-                });
-            } else if export.wit.interfaces.contains(HOST_SECRET_SOURCE_EXPORT) {
-                check_secret_source_export(id, &export, false)?;
-                if !secret_source
-                    .as_ref()
-                    .is_some_and(|source: &SecretSourceExport| source.owned)
-                {
-                    secret_source = Some(SecretSourceExport {
+                check_secret_source_export(id, &export, owned)?;
+                secret_source = Some(prefer_owned(
+                    secret_source,
+                    SecretSourceExport {
                         name: export.name,
-                        owned: false,
-                    });
-                }
+                        owned,
+                    },
+                ));
             } else {
                 anyhow::bail!(
                     "host component plugin '{id}' exports reserved host interface {}",

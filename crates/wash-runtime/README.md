@@ -16,9 +16,10 @@
 ## Component plugin secret migration
 
 Host plugins that consume plugin-backed binding secrets must rebuild against
-`wasmcloud:host@0.1.6`, export `workload-lifecycle`, and import `binding-secrets`.
-During `on-workload-bind`, call `binding-secrets.get` for the binding, read the
-returned handles through `wasmcloud:secrets/reveal@2.1.0`, and drop them when done.
+`wasmcloud:host@0.1.6` or later, export `workload-lifecycle`, and import
+`binding-secrets`. During `on-workload-bind`, call `binding-secrets.get` for the
+binding, read the returned handles through `wasmcloud:secrets/reveal@2.1.0`, and
+drop them when done.
 Secret keys are omitted from `interface-binding.config`; plain text remains there.
 
 This changes compatibility with plugins that read secrets as config strings.

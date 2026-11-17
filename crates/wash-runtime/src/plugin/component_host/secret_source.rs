@@ -60,6 +60,18 @@ pub struct SecretSourceExport {
     pub(crate) owned: bool,
 }
 
+/// The export the host calls, of `held` and a later `found`: the owned one
+/// when a plugin exports both, whichever it lists first.
+pub(super) fn prefer_owned(
+    held: Option<SecretSourceExport>,
+    found: SecretSourceExport,
+) -> SecretSourceExport {
+    match held {
+        Some(held) if held.owned && !found.owned => held,
+        _ => found,
+    }
+}
+
 /// The typed `resolve` of a plugin's secret-source export.
 #[derive(Clone, Copy)]
 pub(crate) enum SecretSourceResolve {
@@ -436,5 +448,61 @@ impl HostSecretSource for ComponentSecretSource {
             }
         }
         Ok(answer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::engine::Engine;
+
+    /// Each secret-source export of the fixture `wasm`, by whether it is
+    /// `owned-secret-source`.
+    fn exports(wasm: &str) -> Vec<(bool, ExportedInterface)> {
+        let path = format!("{}/tests/wasm/{wasm}", env!("CARGO_MANIFEST_DIR"));
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {path}: {e}"));
+        let engine = Engine::builder().build().unwrap();
+        let (component, _) = engine.prepare_host_component(&bytes).unwrap();
+        super::super::introspect_exports(&component)
+            .unwrap()
+            .into_iter()
+            .filter_map(|export| {
+                let owned = export
+                    .wit
+                    .interfaces
+                    .contains(HOST_OWNED_SECRET_SOURCE_EXPORT);
+                (owned || export.wit.interfaces.contains(HOST_SECRET_SOURCE_EXPORT))
+                    .then_some((owned, export))
+            })
+            .collect()
+    }
+
+    /// Each export passes the check for its own shape and fails the other's,
+    /// including `secret-source@0.1.6` as released.
+    #[test]
+    fn an_export_matches_only_its_own_shape() {
+        let named = exports("secret_source_plugin.wasm");
+        assert!(matches!(named.as_slice(), [(false, e)] if e.name.ends_with("@0.1.6")));
+        let both = exports("owned_secret_source_plugin.wasm");
+        assert_eq!(both.len(), 2);
+        for (owned, export) in named.iter().chain(&both) {
+            check_secret_source_export("test", export, *owned)
+                .unwrap_or_else(|e| panic!("{}: {e:#}", export.name));
+            let err = check_secret_source_export("test", export, !*owned).unwrap_err();
+            assert!(format!("{err:#}").contains("does not match"), "{err:#}");
+        }
+    }
+
+    #[test]
+    fn the_owned_export_wins_in_either_order() {
+        let export = |owned| SecretSourceExport {
+            name: Arc::from(if owned { "owned" } else { "named" }),
+            owned,
+        };
+        assert!(prefer_owned(Some(export(true)), export(false)).owned);
+        assert!(prefer_owned(Some(export(false)), export(true)).owned);
+        assert!(!prefer_owned(None, export(false)).owned);
     }
 }
