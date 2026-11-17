@@ -739,26 +739,28 @@ impl PooledClient {
         );
         Self::bounded(
             tls,
-            None,
-            quota,
-            crate::host::quota::DEFAULT_HTTP_WAIT,
-            MIN_IDLE_PER_AUTHORITY,
-            Arc::default(),
-            HostLoopbackGrants::default(),
+            ClientBounds {
+                workload: None,
+                quota,
+                permit_wait: crate::host::quota::DEFAULT_HTTP_WAIT,
+                idle_per_authority: MIN_IDLE_PER_AUTHORITY,
+                gate: Arc::default(),
+                host_loopback: HostLoopbackGrants::default(),
+            },
         )
     }
 
     /// Charge both the workload's HTTP quota and the host-wide quota for
     /// each new connection's lifetime.
-    fn bounded(
-        tls: Arc<rustls::ClientConfig>,
-        workload: Option<Arc<str>>,
-        quota: crate::host::quota::GuestConnectionQuota,
-        permit_wait: Duration,
-        idle_per_authority: usize,
-        gate: Arc<OnceLock<EgressAddressGate>>,
-        host_loopback: HostLoopbackGrants,
-    ) -> Self {
+    fn bounded(tls: Arc<rustls::ClientConfig>, bounds: ClientBounds) -> Self {
+        let ClientBounds {
+            workload,
+            quota,
+            permit_wait,
+            idle_per_authority,
+            gate,
+            host_loopback,
+        } = bounds;
         crate::init_crypto();
         // Both protocols use the current identity on every new connection.
         let tls_config = without_resumption(&tls);
@@ -1121,12 +1123,17 @@ impl WorkloadClients {
                 .unwrap_or(1);
             PooledClient::bounded(
                 self.tls.config_for(workload_id),
-                Some(Arc::from(workload_id)),
-                quota,
-                self.quotas.http_wait(),
-                idle_per_authority(calls, self.quotas.limits().outbound_http),
-                Arc::clone(&self.egress),
-                self.host_loopback.clone(),
+                ClientBounds {
+                    workload: Some(Arc::from(workload_id)),
+                    quota,
+                    permit_wait: self.quotas.http_wait(),
+                    idle_per_authority: idle_per_authority(
+                        calls,
+                        self.quotas.limits().outbound_http,
+                    ),
+                    gate: Arc::clone(&self.egress),
+                    host_loopback: self.host_loopback.clone(),
+                },
             )
         })
     }
@@ -1201,6 +1208,16 @@ impl WorkloadClients {
     pub fn tls_config_resolver(&self) -> Arc<dyn ClientTlsConfigResolver> {
         Arc::clone(&self.tls)
     }
+}
+
+/// What bounds a pooled client's new connections.
+struct ClientBounds {
+    workload: Option<Arc<str>>,
+    quota: crate::host::quota::GuestConnectionQuota,
+    permit_wait: Duration,
+    idle_per_authority: usize,
+    gate: Arc<OnceLock<EgressAddressGate>>,
+    host_loopback: HostLoopbackGrants,
 }
 
 /// Connector that gates every *new* connection on the host's
