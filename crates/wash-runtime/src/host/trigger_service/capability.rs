@@ -18,10 +18,8 @@ use crate::engine::ctx::{CallerIdentity, SharedCtx, WorkloadCaller};
 use crate::engine::lent_reply::{LentReplies, LentReply};
 use crate::engine::store::relocate::{self, Relocated};
 use crate::host::job_registry::{JobGuard, JobRegistry};
-use crate::plugin::SecretValue;
-use crate::plugin::component_host::{
-    SecretSourceRequest, SecretSourceResolve, SourceError, secret_value,
-};
+use crate::plugin::component_host::SecretSourceResolve;
+use crate::plugin::{SecretRequest, SecretSourceError, SecretValue};
 
 /// One exported capability function the TriggerService should be ready to serve,
 /// identified by its interface and function name (e.g. `acme:kv/store@0.1.0` /
@@ -82,12 +80,12 @@ pub struct CapabilityCall {
 
 /// What a `secret-source` resolve answers: each key's value, or the plugin's
 /// `source-error`.
-pub type SecretSourceReply = Result<Vec<(String, SecretValue)>, SourceError>;
+pub type SecretSourceReply = Result<Vec<(String, SecretValue)>, SecretSourceError>;
 
 /// A `secret-source` resolve, made through the typed `resolve` the incarnation
 /// checked when it instantiated. Runs as [`CallerIdentity::Host`].
 pub struct SecretSourceCall {
-    pub request: SecretSourceRequest,
+    pub request: SecretRequest,
     /// Carries the plugin's answer, or a trap or routing error, back to the
     /// host.
     pub reply: tokio::sync::oneshot::Sender<wasmtime::Result<SecretSourceReply>>,
@@ -260,7 +258,7 @@ pub(super) fn admit_and_spawn_secret_source(
 ) {
     let Some(resolve) = resolve else {
         let _ = call.reply.send(Err(wasmtime::format_err!(
-            "plugin does not export wasmcloud:host/secret-source"
+            "plugin exports neither wasmcloud:host/secret-source nor owned-secret-source"
         )));
         return;
     };
@@ -305,36 +303,11 @@ impl AccessorTask<SharedCtx> for SecretSourceTask {
             _in_flight,
             mut job_guard,
         } = self;
-        let calls = accessor.with(|mut access| {
-            crate::engine::abandon::rearm_for_call(&mut access);
-            Arc::clone(&access.get().abandoned)
-        });
-        let started = accessor
-            .with(|mut access| resolve.start_call_concurrent(access.as_context_mut(), (request,)));
-        let call = match started {
-            Ok(call) => call,
-            Err(e) => {
-                let _ = reply.send(Err(e));
-                return Ok(());
-            }
-        };
-        // Bound as the host, so no call it makes is attributed to a workload.
-        job_guard.set_task(call.task(), CallerIdentity::Host);
-        let result = crate::engine::abandon::watch_until_abandoned(
-            &calls,
-            abandoned,
-            resolve.finish_call_concurrent(accessor, call),
-        )
-        .await;
-        let _ = reply.send(match result {
-            Ok((answer,)) => Ok(answer.map(|pairs| {
-                pairs
-                    .into_iter()
-                    .map(|(key, value)| (key, secret_value(value)))
-                    .collect()
-            })),
-            Err(e) => Err(e.context("secret-source resolve trapped")),
-        });
+        let _ = reply.send(
+            resolve
+                .call(accessor, request, &mut job_guard, abandoned)
+                .await,
+        );
         Ok(())
     }
 }
