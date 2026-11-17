@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::str::FromStr;
 
-use anyhow::{Context as _, bail};
+use anyhow::Context as _;
 use bigdecimal::num_traits::Float;
 use bit_vec::BitVec;
 use bytes::{BufMut, BytesMut};
@@ -58,24 +58,6 @@ fn rect_to_hashable_f64s(r: Rect<f64>) -> ((HashableF64, HashableF64), (Hashable
         ),
         (top_right_x.integer_decode(), top_right_y.integer_decode()),
     )
-}
-
-/// Convert a [`LineString`] (expected to have exactly two points) into a tuple of `HashableF64` pairs
-fn linestring_to_hashable_f64s_tuple(
-    l: LineString<f64>,
-) -> anyhow::Result<((HashableF64, HashableF64), (HashableF64, HashableF64))> {
-    match linestring_to_hashable_f64s(l)[..] {
-        [start, end] => Ok((start, end)),
-        _ => bail!("unexpected number of points in line string"),
-    }
-}
-
-/// Convert a [`LineString`] into a vector of point pairs
-fn linestring_to_hashable_f64s(l: LineString<f64>) -> Vec<(HashableF64, HashableF64)> {
-    l.into_points()
-        .into_iter()
-        .map(point_to_hashable_f64s)
-        .collect::<Vec<_>>()
 }
 
 /// Convert a [`Point`] into two `HashableF64`s
@@ -253,6 +235,29 @@ impl ToSql for PgLseg<'_> {
     }
 
     tokio_postgres::types::to_sql_checked!();
+}
+
+/// An `lseg` column: exactly four `float8`s, the first point's `x` and `y`
+/// and then the second's.
+///
+/// Not postgres-types' `LineString`, which reads an `lseg` as a `path` and so
+/// takes the first coordinate's bytes for a point count: a negative one panics,
+/// and a large one aborts the host while room is made for it.
+struct PgLsegValue(PointPair);
+
+impl FromSql<'_> for PgLsegValue {
+    fn from_sql(ty: &PgType, raw: &[u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        let (&[start_x, start_y, end_x, end_y], []) = raw.as_chunks::<8>() else {
+            return Err(format!("invalid {ty}, expected 32 bytes but got {}", raw.len()).into());
+        };
+        let [start_x, start_y, end_x, end_y] =
+            [start_x, start_y, end_x, end_y].map(|f| f64::from_be_bytes(f).integer_decode());
+        Ok(PgLsegValue(((start_x, start_y), (end_x, end_y))))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::LSEG
+    }
 }
 
 // ── MAC address helpers ─────────────────────────────────────────────────────
@@ -1190,23 +1195,19 @@ impl FromSql<'_> for PgValue {
             &tokio_postgres::types::Type::CIRCLE | &tokio_postgres::types::Type::CIRCLE_ARRAY => {
                 Err("circle & circle[] are not supported".into())
             }
-            &tokio_postgres::types::Type::LINE => Ok(PgValue::Line(
-                linestring_to_hashable_f64s_tuple(LineString::<f64>::from_sql(ty, raw)?)?,
-            )),
-            &tokio_postgres::types::Type::LINE_ARRAY => Ok(PgValue::LineArray(
-                Vec::<LineString<f64>>::from_sql(ty, raw)?
-                    .into_iter()
-                    .map(linestring_to_hashable_f64s_tuple)
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
-            &tokio_postgres::types::Type::LSEG => Ok(PgValue::Lseg(
-                linestring_to_hashable_f64s_tuple(LineString::<f64>::from_sql(ty, raw)?)?,
-            )),
+            // Postgres sends a line as the coefficients of `Ax + By + C = 0`,
+            // three `float8`s, not the two points `pg-value` has for one.
+            &tokio_postgres::types::Type::LINE | &tokio_postgres::types::Type::LINE_ARRAY => {
+                Err("line & line[] are not supported (consider a cast like ::text)".into())
+            }
+            &tokio_postgres::types::Type::LSEG => {
+                Ok(PgValue::Lseg(PgLsegValue::from_sql(ty, raw)?.0))
+            }
             &tokio_postgres::types::Type::LSEG_ARRAY => Ok(PgValue::LsegArray(
-                Vec::<LineString<f64>>::from_sql(ty, raw)?
+                Vec::<PgLsegValue>::from_sql(ty, raw)?
                     .into_iter()
-                    .map(linestring_to_hashable_f64s_tuple)
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .map(|lseg| lseg.0)
+                    .collect(),
             )),
             &tokio_postgres::types::Type::PATH => Ok(PgValue::Path(
                 PgPath::from_sql(ty, raw)?
@@ -1874,6 +1875,55 @@ mod tests {
     }
 
     #[test]
+    fn lseg_and_line_columns_decode_without_reading_a_point_count() -> TestResult {
+        // lseg_send: four float8s. A first x of 1.0 starts 0x3FF00000, which a
+        // path decoder reads as a negative point count and panicked on; one of
+        // 511.9999990463257 reads as i32::MAX and made room for 32 GiB.
+        for start_x in [1.0_f64, -1.0, 1.5, 511.999_999_046_325_7, 0.0] {
+            let mut wire = BytesMut::new();
+            for v in [start_x, 2.0, 3.0, -4.5] {
+                wire.put_f64(v);
+            }
+            let expected = (
+                (start_x.integer_decode(), 2.0_f64.integer_decode()),
+                (3.0_f64.integer_decode(), (-4.5_f64).integer_decode()),
+            );
+            match PgValue::from_sql(&PgType::LSEG, &wire)? {
+                PgValue::Lseg(lseg) => assert_eq!(lseg, expected),
+                other => panic!("an lseg decoded as {other:?}"),
+            }
+
+            // Round trip through the encoder, then as an lseg[] element.
+            let mut encoded = BytesMut::new();
+            PgValue::Lseg(expected).to_sql_checked(&PgType::LSEG, &mut encoded)?;
+            assert_eq!(encoded, wire);
+            let mut array = BytesMut::new();
+            PgValue::LsegArray(vec![expected, expected])
+                .to_sql_checked(&PgType::LSEG_ARRAY, &mut array)?;
+            match PgValue::from_sql(&PgType::LSEG_ARRAY, &array)? {
+                PgValue::LsegArray(lsegs) => assert_eq!(lsegs, vec![expected, expected]),
+                other => panic!("an lseg[] decoded as {other:?}"),
+            }
+
+            // A line is three float8s; refuse it rather than misread it.
+            let err = PgValue::from_sql(&PgType::LINE, &wire[..24])
+                .err()
+                .ok_or("a line decoded")?;
+            assert!(err.to_string().contains("line & line[]"), "{err}");
+        }
+
+        // Any other length is an error, never an allocation.
+        let wire = [0x3F, 0xF0, 0, 0, 0, 0, 0, 0].repeat(5);
+        for len in [0, 1, 8, 24, 31, 33, 40] {
+            let err = PgValue::from_sql(&PgType::LSEG, &wire[..len])
+                .err()
+                .ok_or("a malformed lseg decoded")?;
+            assert!(err.to_string().contains("lseg"), "{err}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn fixed_width_values_are_refused_for_other_types_as_wide() {
         let point = (1.5_f64.integer_decode(), (-2.5_f64).integer_decode());
         let uuid = Uuid::from_u128(123).to_string();
@@ -2146,19 +2196,7 @@ mod tests {
     }
 
     #[test]
-    fn geometry_and_mac_helpers_enforce_sizes_and_types() -> TestResult {
-        let point = coord! { x: 1.5, y: -2.5 };
-        let line = LineString::new(vec![point, point]);
-        let expected = (1.5_f64.integer_decode(), (-2.5_f64).integer_decode());
-        assert_eq!(
-            linestring_to_hashable_f64s_tuple(line)?,
-            (expected, expected)
-        );
-        for length in [0, 1, 3] {
-            assert!(
-                linestring_to_hashable_f64s_tuple(LineString::new(vec![point; length])).is_err()
-            );
-        }
+    fn mac_helpers_enforce_sizes_and_types() -> TestResult {
         let mac48 = MacAddressEui48 {
             bytes: (0, 1, 2, 3, 4, 5),
         };
