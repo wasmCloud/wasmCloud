@@ -178,6 +178,15 @@ pub(crate) async fn resolve_component_volume_mounts_in_map(
     Ok(())
 }
 
+/// `path` as is, or taken against the working directory if it is relative.
+fn absolute_from_cwd(path: PathBuf) -> PathBuf {
+    if path.is_relative() {
+        std::env::current_dir().unwrap_or_default().join(path)
+    } else {
+        path
+    }
+}
+
 /// Host paths no workload volume may expose: the host's own credentials and
 /// configuration, and the `emptyDir` scratch root holding every workload's
 /// scratch. Kernel filesystems such as `/proc` are refused as well, whatever
@@ -192,15 +201,6 @@ pub(crate) async fn resolve_component_volume_mounts_in_map(
 /// path such as an OCI cache may not exist until after the host starts. It is
 /// matched both as written and as it resolves now, and a path that does not
 /// exist resolves through its nearest existing ancestor.
-/// `path` as is, or taken against the working directory if it is relative.
-fn absolute_from_cwd(path: PathBuf) -> PathBuf {
-    if path.is_relative() {
-        std::env::current_dir().unwrap_or_default().join(path)
-    } else {
-        path
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ReservedHostPaths(Arc<[PathBuf]>);
 
@@ -377,28 +377,51 @@ impl HostPathPolicy {
         self
     }
 
-    /// Keep workload volumes out of the directories a host plugin has opened
-    /// until the returned registration is dropped. Every clone of this policy
-    /// sees them. A workload that already holds one of them keeps it.
+    /// Open the plugin's directories and register them before a workload can
+    /// open an overlapping directory. If any open fails, none are registered.
+    /// A workload that already holds a directory keeps it.
     #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
-    pub(crate) fn register_plugin_volumes(&self, paths: Vec<PathBuf>) -> PluginVolumeRegistration {
-        self.plugin_volumes
+    pub(crate) fn open_plugin_volumes(
+        &self,
+        volumes: Vec<(String, PathBuf)>,
+        owner: &str,
+    ) -> anyhow::Result<(BTreeMap<String, OpenedVolume>, PluginVolumeRegistration)> {
+        let mut listed = self
+            .plugin_volumes
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .extend(paths.iter().cloned());
-        PluginVolumeRegistration {
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut opened = BTreeMap::new();
+        for (name, path) in volumes {
+            let dir = self.open_host_config_volume(&path).with_context(|| {
+                format!(
+                    "{owner}: volume '{name}' hostPath {} cannot be mounted",
+                    path.display()
+                )
+            })?;
+            opened.insert(name, dir);
+        }
+        let paths: Vec<_> = opened.values().map(|dir| dir.path.clone()).collect();
+        listed.extend(paths.iter().cloned());
+        let registration = PluginVolumeRegistration {
             listed: Arc::clone(&self.plugin_volumes),
             paths,
-        }
+        };
+        Ok((opened, registration))
     }
 
     /// Check a workload's `hostPath` volume and open the directory that was
     /// checked. Every rule applies.
     pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
         let canonical = canonicalize_volume(volume)?;
+        // Keep the read lock through the open so registration cannot slip
+        // between the policy check and obtaining the directory handle.
+        let listed = self
+            .plugin_volumes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.reserved
             .check_canonical(volume, &canonical)
-            .and_then(|()| self.check_plugin_volumes(volume, &canonical))
+            .and_then(|()| Self::check_plugin_volumes(&listed, volume, &canonical))
             .and_then(|()| self.check_allowed(volume, &canonical))
             .inspect_err(|_| {
                 if let Some(meters) = &self.meters {
@@ -412,7 +435,7 @@ impl HostPathPolicy {
     /// checks apply, the workload rules do not. A refusal here is a config
     /// error, not a workload denied by policy, so it is not counted as one.
     #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
-    pub(crate) fn open_host_config_volume(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
+    fn open_host_config_volume(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
         let canonical = canonicalize_volume(volume)?;
         self.reserved.check_canonical(volume, &canonical)?;
         ReservedHostPaths::open_checked(volume, canonical)
@@ -420,12 +443,12 @@ impl HostPathPolicy {
 
     /// A workload volume must not expose a directory a host plugin mounts: a
     /// workload able to write it could change what the plugin serves.
-    fn check_plugin_volumes(&self, volume: &Path, canonical: &Path) -> anyhow::Result<()> {
-        let listed = self
-            .plugin_volumes
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(plugin_volume) = exposed_in(&listed, canonical) else {
+    fn check_plugin_volumes(
+        listed: &[PathBuf],
+        volume: &Path,
+        canonical: &Path,
+    ) -> anyhow::Result<()> {
+        let Some(plugin_volume) = exposed_in(listed, canonical) else {
             return Ok(());
         };
         tracing::warn!(
