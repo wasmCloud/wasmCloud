@@ -168,33 +168,34 @@ impl Default for LocalResources {
 }
 
 /// A named volume that can be mounted into components.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Volume {
     pub name: String,
     pub volume_type: VolumeType,
 }
 
 /// The type of volume - either host path or empty directory.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VolumeType {
     HostPath(HostPathVolume),
     EmptyDir(EmptyDirVolume),
 }
 
 /// Describes how a volume should be mounted into a component.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeMount {
     pub name: String,
+    /// Absolute path the guest sees the volume at, without `.` or `..`.
     pub mount_path: String,
     pub read_only: bool,
 }
 
 /// An ephemeral empty directory volume that exists for the lifetime of the workload.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmptyDirVolume {}
 
 /// A volume that mounts a directory from the host filesystem.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostPathVolume {
     pub local_path: String,
 }

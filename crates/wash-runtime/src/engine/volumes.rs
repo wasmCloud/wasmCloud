@@ -29,14 +29,26 @@ pub(crate) struct ResolvedVolumeMount {
 
 impl ResolvedVolumeMount {
     pub(crate) fn from_opened(volume: &OpenedVolume, mount: &VolumeMount) -> anyhow::Result<Self> {
-        let (perms, mode) = if mount.read_only {
+        Self::new(volume, &mount.mount_path, mount.read_only)
+    }
+
+    /// Mount an opened directory at `mount_path` in the guest. The path is
+    /// refused unless [`normalize_mount_path`] accepts it.
+    pub(crate) fn new(
+        volume: &OpenedVolume,
+        mount_path: &str,
+        read_only: bool,
+    ) -> anyhow::Result<Self> {
+        let mount_path = normalize_mount_path(mount_path)
+            .map_err(|why| anyhow::anyhow!("volumeMount mountPath {mount_path:?} {why}"))?;
+        let (perms, mode) = if read_only {
             (FsPerms::ReadOnly, OpenMode::READ)
         } else {
             (FsPerms::ReadWrite, OpenMode::READ | OpenMode::WRITE)
         };
         Ok(Self {
             dir: Dir::new(volume.dir.try_clone()?, perms, mode, false),
-            mount_path: mount.mount_path.clone(),
+            mount_path,
         })
     }
 
@@ -46,6 +58,30 @@ impl ResolvedVolumeMount {
             tokio::task::spawn_blocking(move || ReservedHostPaths::default().open(&path)).await??;
         Self::from_opened(&volume, mount)
     }
+
+    /// The path the guest sees the directory at.
+    #[cfg(all(test, feature = "host-component-plugins", feature = "oci"))]
+    pub(crate) fn mount_path(&self) -> &str {
+        &self.mount_path
+    }
+}
+
+/// A guest mount path without empty segments or a trailing `/`, so `/models`
+/// and `/models/` name one mount.
+pub(crate) fn normalize_mount_path(path: &str) -> Result<String, &'static str> {
+    let rest = path.strip_prefix('/').ok_or("must be absolute")?;
+    let mut normalized = String::new();
+    for part in rest.split('/').filter(|part| !part.is_empty()) {
+        if part == "." || part == ".." {
+            return Err("must not contain `.` or `..`");
+        }
+        normalized.push('/');
+        normalized.push_str(part);
+    }
+    if normalized.is_empty() {
+        normalized.push('/');
+    }
+    Ok(normalized)
 }
 
 /// Expose retained handles alongside any preopens supplied by an embedder.
@@ -217,11 +253,7 @@ impl ReservedHostPaths {
                 kernel.display()
             );
         }
-        match self
-            .0
-            .iter()
-            .find(|reserved| exposed(reserved) || exposed(&resolve_existing(reserved)))
-        {
+        match self.exposed_by(canonical) {
             Some(reserved) => {
                 tracing::warn!(
                     volume = %canonical.display(),
@@ -237,6 +269,15 @@ impl ReservedHostPaths {
             }
             None => Ok(()),
         }
+    }
+
+    /// The listed path `canonical` equals, lies inside, or contains.
+    fn exposed_by(&self, canonical: &Path) -> Option<&PathBuf> {
+        let exposed =
+            |listed: &Path| canonical.starts_with(listed) || listed.starts_with(canonical);
+        self.0
+            .iter()
+            .find(|listed| exposed(listed) || exposed(&resolve_existing(listed)))
     }
 }
 
@@ -264,6 +305,8 @@ fn canonicalize_volume(volume: &Path) -> anyhow::Result<PathBuf> {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HostPathPolicy {
     reserved: ReservedHostPaths,
+    /// Directories host plugins mount. No workload volume may expose one.
+    plugin_volumes: ReservedHostPaths,
     /// Directories a volume must lie within. Empty permits none.
     allowed: Arc<[PathBuf]>,
     meters: Option<Arc<crate::host::quota::PolicyMeters>>,
@@ -280,18 +323,46 @@ impl HostPathPolicy {
     ) -> Self {
         Self {
             reserved: ReservedHostPaths::new(reserved.into_iter().chain(scratch)),
+            plugin_volumes: ReservedHostPaths::default(),
             allowed: ReservedHostPaths::new(allowed).0,
             meters,
         }
     }
 
-    /// Check a `hostPath` volume and open the directory that was checked.
+    /// Keep workload volumes out of the directories host plugins mount.
+    pub(crate) fn with_plugin_volumes(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.plugin_volumes = ReservedHostPaths::new(paths);
+        self
+    }
+
+    /// Check a workload's `hostPath` volume and open the directory that was
+    /// checked. Every rule applies.
     pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
+        self.check_and_open(volume, |canonical| {
+            self.check_plugin_volumes(volume, canonical)?;
+            self.check_allowed(volume, canonical)
+        })
+    }
+
+    /// Open a volume the host config declares: the reserved-path and kernel
+    /// checks apply, the workload rules do not.
+    #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+    pub(crate) fn open_host_config_volume(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
+        self.check_and_open(volume, |_| Ok(()))
+    }
+
+    /// Apply the reserved-path and kernel checks, then `workload_rules`, and
+    /// open what was checked.
+    fn check_and_open(
+        &self,
+        volume: &Path,
+        workload_rules: impl FnOnce(&Path) -> anyhow::Result<()>,
+    ) -> anyhow::Result<OpenedVolume> {
         let canonical = canonicalize_volume(volume)?;
         let checked = self
             .reserved
             .check_canonical(volume, &canonical)
-            .and_then(|()| self.check_allowed(volume, &canonical));
+            .and_then(|()| workload_rules(&canonical));
         if checked.is_err()
             && let Some(meters) = &self.meters
         {
@@ -299,6 +370,23 @@ impl HostPathPolicy {
         }
         checked?;
         ReservedHostPaths::open_checked(volume, canonical)
+    }
+
+    /// A workload volume must not expose a directory a host plugin mounts: a
+    /// workload able to write it could change what the plugin serves.
+    fn check_plugin_volumes(&self, volume: &Path, canonical: &Path) -> anyhow::Result<()> {
+        let Some(plugin_volume) = self.plugin_volumes.exposed_by(canonical) else {
+            return Ok(());
+        };
+        tracing::warn!(
+            volume = %canonical.display(),
+            plugin_volume = %plugin_volume.display(),
+            "refused a hostPath volume that would expose a host plugin's volume"
+        );
+        anyhow::bail!(
+            "hostPath volume '{}' would expose a directory a host plugin mounts as a volume",
+            volume.display()
+        )
     }
 
     /// A volume must lie within an allowed directory. Each is resolved at the
@@ -788,6 +876,43 @@ mod allowlist_tests {
         assert!(policy.open(root.path()).is_err());
     }
 
+    /// A directory a host plugin mounts is refused to a workload even when
+    /// allowed: a volume equal to it, inside it, or containing it.
+    #[test]
+    fn a_plugin_volume_is_refused_to_a_workload_even_when_allowed() {
+        let root = tempfile::tempdir().unwrap();
+        let models = root.path().join("models");
+        let other = root.path().join("other");
+        std::fs::create_dir_all(models.join("weights")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let meters = Arc::new(PolicyMeters::default());
+        let policy = HostPathPolicy::new(
+            [],
+            [root.path().to_path_buf()],
+            None,
+            Some(Arc::clone(&meters)),
+        )
+        .with_plugin_volumes([models.clone()]);
+        for volume in [&models, &models.join("weights"), &root.path().to_path_buf()] {
+            let err = policy.open(volume).unwrap_err().to_string();
+            assert!(err.contains("host plugin"), "{}: {err}", volume.display());
+        }
+        assert_eq!(meters.host_path_denied(), 3);
+        policy.open(&other).unwrap();
+    }
+
+    /// The list binds workloads only: the plugin mounts its directory, and a
+    /// second plugin may mount the same one.
+    #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+    #[test]
+    fn a_plugin_volume_stays_open_to_plugins() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = HostPathPolicy::new([], [], None, None)
+            .with_plugin_volumes([root.path().to_path_buf()]);
+        policy.open_host_config_volume(root.path()).unwrap();
+        policy.open_host_config_volume(root.path()).unwrap();
+    }
+
     /// The scratch root is reserved like a credential path: a volume equal to
     /// it, inside it, or containing it is refused even when allowed, and every
     /// refusal is counted.
@@ -813,6 +938,34 @@ mod allowlist_tests {
             );
         }
         assert_eq!(meters.host_path_denied(), 3);
+    }
+
+    /// Every mount is held to one rule, a workload's as a plugin's: the path
+    /// is absolute, has no `.` or `..`, and has one spelling.
+    #[test]
+    fn a_mount_path_must_be_absolute_and_plain() {
+        let root = tempfile::tempdir().unwrap();
+        let volume = ReservedHostPaths::default().open(root.path()).unwrap();
+        let mount = |mount_path: &str| VolumeMount {
+            name: "data".into(),
+            mount_path: mount_path.into(),
+            read_only: false,
+        };
+        for (path, why) in [
+            ("data", "must be absolute"),
+            ("", "must be absolute"),
+            ("/a/../data", "must not contain"),
+            ("/./data", "must not contain"),
+        ] {
+            let Err(err) = ResolvedVolumeMount::from_opened(&volume, &mount(path)) else {
+                panic!("mount path {path:?} should be refused");
+            };
+            assert!(err.to_string().contains(why), "{path:?}: {err}");
+        }
+        for path in ["/data", "/data/", "//data"] {
+            let resolved = ResolvedVolumeMount::from_opened(&volume, &mount(path)).unwrap();
+            assert_eq!(resolved.mount_path, "/data", "{path:?}");
+        }
     }
 
     /// The gate decides which paths, never which permissions.

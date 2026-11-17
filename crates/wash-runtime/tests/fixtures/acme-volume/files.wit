@@ -1,0 +1,17 @@
+package acme:volume@0.1.0;
+
+/// A bespoke capability a host component plugin exports, so a workload can
+/// drive the plugin's own filesystem — its `volumes` — indirectly, through the
+/// plugin's cross-store capability call.
+///
+/// Both functions report their outcome as a string, so a test can tell what
+/// the plugin's filesystem allowed apart from what the call itself did:
+///
+/// - `read`:  "ok:<contents>", or "error: .."
+/// - `write`: "ok", or "error: .."
+interface files {
+    /// Read the file at `path`, an absolute path in the plugin's filesystem.
+    read: async func(path: string) -> string;
+    /// Create or replace the file at `path` with `contents`.
+    write: async func(path: string, contents: string) -> string;
+}
