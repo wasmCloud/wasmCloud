@@ -250,20 +250,31 @@ func TestPodHostDeletionTreatsTerminatingHostAsGone(t *testing.T) {
 	}
 }
 
-func TestHostStatusRebaseKeepsNewerHeartbeat(t *testing.T) {
+func TestHostStatusRebase(t *testing.T) {
 	earlier, later := metav1.NewTime(time.Now().Add(-time.Second)), metav1.Now()
 	for _, tt := range []struct {
 		name         string
 		fresh, probe metav1.Time
+		ready        bool
 		want         metav1.Time
+		keep         bool
 	}{
-		{name: "heartbeat landed after the probe", fresh: later, probe: earlier, want: later},
-		{name: "probe is newer", fresh: earlier, probe: later, want: later},
+		{name: "heartbeat landed after a successful probe", fresh: later, probe: earlier, ready: true, want: later, keep: true},
+		{name: "probe is newer", fresh: earlier, probe: later, ready: true, want: later, keep: true},
+		{name: "heartbeat refutes a not-Ready verdict", fresh: later, probe: earlier, want: earlier},
+		{name: "no newer heartbeat behind a not-Ready verdict", fresh: earlier, probe: later, want: later, keep: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fresh, desired := &runtimev1alpha1.Host{}, &runtimev1alpha1.Host{}
 			fresh.Status.LastSeen, desired.Status.LastSeen = tt.fresh, tt.probe
-			keepNewerLastSeen(fresh, desired)
+			if tt.ready {
+				desired.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+			} else {
+				desired.Status.SetConditions(condition.ErrorCondition(condition.TypeReady, condition.ReasonUnavailable, errors.New("host down")))
+			}
+			if keep := rebaseHostStatus(fresh, desired); keep != tt.keep {
+				t.Fatalf("rebase kept the pass = %v, want %v", keep, tt.keep)
+			}
 			if !desired.Status.LastSeen.Equal(&tt.want) {
 				t.Fatalf("LastSeen = %v, want %v", desired.Status.LastSeen, tt.want)
 			}

@@ -256,12 +256,21 @@ func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *r
 	})
 }
 
-// keepNewerLastSeen rebases a conflicted Host status patch: the heartbeat
-// subscriber owns LastSeen too, and a later heartbeat must not be rolled back.
-func keepNewerLastSeen(fresh, desired *runtimev1alpha1.Host) {
-	if fresh.Status.LastSeen.After(desired.Status.LastSeen.Time) {
-		desired.Status.LastSeen = fresh.Status.LastSeen
+// rebaseHostStatus rebases a conflicted Host status patch onto a fresh read.
+// The heartbeat subscriber owns LastSeen too, so a later heartbeat is kept
+// rather than rolled back. A heartbeat newer than anything this pass saw also
+// refutes a not-Ready verdict drawn from the older LastSeen: writing it would
+// let deleteUnresponsiveHost delete a Host that just reported, so the pass is
+// refused and starts over from the fresh read.
+func rebaseHostStatus(fresh, desired *runtimev1alpha1.Host) bool {
+	if !fresh.Status.LastSeen.After(desired.Status.LastSeen.Time) {
+		return true
 	}
+	if !desired.Status.AllTrue(condition.TypeReady) {
+		return false
+	}
+	desired.Status.LastSeen = fresh.Status.LastSeen
+	return true
 }
 
 // deleteUnresponsiveHost is the reconcile post-hook: a Host whose Ready
@@ -317,8 +326,9 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// not overwrite a same-name replacement or a newer heartbeat's LastSeen.
 	// Heartbeats patch LastSeen often, so a conflict is expected: reapply the
 	// pass to the same Host rather than dropping its Ready transition and
-	// post-hooks, keeping whichever LastSeen is newer.
-	reconciler.RetryStatusConflicts(r.apiReader, keepNewerLastSeen)
+	// post-hooks, keeping whichever LastSeen is newer. A heartbeat that refutes
+	// a not-Ready verdict drops the pass instead (see rebaseHostStatus).
+	reconciler.RetryStatusConflicts(r.apiReader, rebaseHostStatus)
 
 	reconciler.SetFinalizer(hostFinalizerName, r.finalize)
 	cleanup := reconciler.SeparateFinalizer()
@@ -376,8 +386,9 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(cleanup)
 }
 
-// minHostWorkers keeps a worker free to register a replacement while another
-// worker finalizes a retiring Host, which can take a while with many Workloads.
+// minHostWorkers keeps Host passes moving while one waits out a heartbeat
+// probe to an unreachable host. Retiring Hosts are finalized by the separate
+// workload-host-cleanup controller, so they no longer hold these workers.
 const minHostWorkers = 2
 
 // hostControllerOptions honors explicit manager tuning for the Host controller

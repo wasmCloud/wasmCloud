@@ -156,7 +156,7 @@ type ConditionedReconciler[T ConditionedType] struct {
 	// conflictReader and conflictRebase let a status patch rejected by the
 	// optimistic lock be reapplied to the same object. See RetryStatusConflicts.
 	conflictReader client.Reader
-	conflictRebase func(fresh, desired T)
+	conflictRebase func(fresh, desired T) bool
 }
 
 // restampOnly reports whether next differs from current in its generation
@@ -206,6 +206,11 @@ func (r *ConditionedReconciler[T]) OptimisticStatusWrites() {
 // reapplied in one pass before the pass is requeued.
 const statusConflictAttempts = 3
 
+// errStaleVerdict is the conflict reported when a rebase refuses a fresh read:
+// another writer changed what the pass's conclusions were drawn from.
+var errStaleVerdict = apierrors.NewConflict(schema.GroupResource{}, "",
+	errors.New("a concurrent write invalidated this pass's conclusions"))
+
 // RetryStatusConflicts turns on OptimisticStatusWrites and, when the lock
 // rejects a status patch, rereads the object through reader (uncached) instead
 // of discarding the pass. If the object is the same one (same UID), rebase
@@ -213,10 +218,15 @@ const statusConflictAttempts = 3
 // writer may own, and the pass's changes are patched again under the fresh
 // resource version. A replaced or deleted object is never written.
 //
+// rebase returns false when the fresh read invalidates what the pass concluded
+// (a verdict computed from a field the other writer just changed). The pass is
+// then dropped and requeued, as with plain OptimisticStatusWrites, and its
+// post-hooks do not run.
+//
 // Use it when another writer updates the same object often, so a conflict is
 // expected rather than a sign that the pass's conclusions are stale. rebase
 // may be nil when the pass owns every field it writes.
-func (r *ConditionedReconciler[T]) RetryStatusConflicts(reader client.Reader, rebase func(fresh, desired T)) {
+func (r *ConditionedReconciler[T]) RetryStatusConflicts(reader client.Reader, rebase func(fresh, desired T) bool) {
 	r.optimisticStatusWrites = true
 	r.conflictReader = reader
 	r.conflictRebase = rebase
@@ -482,7 +492,7 @@ func (r *ConditionedReconciler[T]) patchStatus(ctx context.Context, original, ob
 		return err
 	}
 	for range statusConflictAttempts {
-		if err = r.reapplyStatus(ctx, original, obj); !apierrors.IsConflict(err) {
+		if err = r.reapplyStatus(ctx, original, obj); !apierrors.IsConflict(err) || errors.Is(err, errStaleVerdict) {
 			return err
 		}
 	}
@@ -502,8 +512,8 @@ func (r *ConditionedReconciler[T]) reapplyStatus(ctx context.Context, original, 
 		return apierrors.NewConflict(schema.GroupResource{Group: fresh.GetObjectKind().GroupVersionKind().Group},
 			fresh.GetName(), errors.New("object was replaced during reconcile"))
 	}
-	if r.conflictRebase != nil {
-		r.conflictRebase(fresh, obj)
+	if r.conflictRebase != nil && !r.conflictRebase(fresh, obj) {
+		return errStaleVerdict
 	}
 	data, err := client.MergeFrom(original).Data(obj)
 	if err != nil {

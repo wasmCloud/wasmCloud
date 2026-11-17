@@ -2,13 +2,16 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
 )
@@ -65,4 +68,76 @@ func TestHostProbeCannotOverwriteReplacementStatus(t *testing.T) {
 	if current.UID != replacement.UID || current.Status.OSName != replacement.Status.OSName || !current.DeletionTimestamp.IsZero() {
 		t.Fatalf("old probe changed its replacement: uid=%s, os=%s, deleting=%v", current.UID, current.Status.OSName, current.DeletionTimestamp)
 	}
+}
+
+// A heartbeat that lands while a pass is deciding the Host is down refutes
+// that verdict. The pass's conflicted status patch must not be reapplied with
+// Ready false, or the post-hook deletes a Host that just reported.
+func TestHostHeartbeatMidPassSparesTheHost(t *testing.T) {
+	c, mgr := newHostRecoveryManager(t)
+	ctx := t.Context()
+	ns := createTestNamespace(t, ctx, c, "host-heartbeat-mid-pass")
+	const window = time.Minute
+	host := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: "late-heartbeat", Namespace: ns, Finalizers: []string{hostFinalizerName}},
+		HostID:     "late-heartbeat-id",
+	}
+	if err := c.Create(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	// Last seen past the window: a pass whose probe fails concludes Ready false
+	// unless something changes.
+	host.Status.LastSeen = metav1.NewTime(time.Now().Add(-2 * window))
+	if err := c.Status().Update(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+
+	// The probe times out. On the second pass, which reaches the Ready verdict,
+	// the host's own heartbeat lands while the probe is waiting.
+	landHeartbeat := false
+	bus := &recoveryHeartbeatBus{heartbeat: func(ctx context.Context, _ *wasmbus.Message) (*wasmbus.Message, error) {
+		if !landHeartbeat {
+			return nil, errors.New("probe timed out")
+		}
+		patch, err := hostStatusPatch("")
+		if err != nil {
+			return nil, err
+		}
+		if err := c.Status().Patch(ctx, host.DeepCopy(), client.RawPatch(types.MergePatchType, patch)); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("probe timed out")
+	}}
+	r := &HostReconciler{Client: c, Scheme: c.Scheme(), Bus: bus, UnreachableTimeout: window}
+	r.fleet.heard(time.Now().Add(-2 * window))
+	r.fleet.observe(time.Now().Add(-2*window), window)
+	r.fleet.heard(time.Now())
+	if err := r.SetupWithManager(mgr); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first pass records Reporting false and stops there.
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(host)}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	landHeartbeat = true
+	result, err := r.Reconcile(ctx, req)
+	if err != nil || result.RequeueAfter <= 0 {
+		t.Fatalf("refuted pass should requeue: result=%+v, err=%v", result, err)
+	}
+	current := &runtimev1alpha1.Host{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(host), current); err != nil {
+		t.Fatal(err)
+	}
+	if !current.DeletionTimestamp.IsZero() {
+		t.Fatal("a Host that heartbeated mid-pass was deleted")
+	}
+	if current.Status.GetCondition(condition.TypeReady).Status == condition.ConditionFalse {
+		t.Fatal("a Host that heartbeated mid-pass was marked not Ready")
+	}
+	t.Cleanup(func() {
+		current.Finalizers = nil
+		_ = c.Update(context.Background(), current)
+	})
 }
