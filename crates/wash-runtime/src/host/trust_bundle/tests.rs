@@ -398,6 +398,18 @@ fn a_jwt_svid_is_refused_unless_every_rule_holds() {
             ),
         ),
         (
+            "exp out of range",
+            sign(&key, header.clone(), claims(PEER, u64::MAX)),
+        ),
+        (
+            "nbf out of range",
+            sign(
+                &key,
+                header.clone(),
+                serde_json::json!({ "sub": PEER, "aud": "svc", "exp": in_secs(600), "nbf": u64::MAX }),
+            ),
+        ),
+        (
             "not yet",
             sign(
                 &key,

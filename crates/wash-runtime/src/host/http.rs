@@ -3029,6 +3029,8 @@ async fn dispatch_local(
     request
         .extensions_mut()
         .insert(ResponseBodyCompletion::Stream);
+    // A co-located caller is no more verified than a remote one.
+    crate::host::ingress_identity::strip(request.headers_mut());
     // Mirror the wire: a network send would carry the request authority as its
     // `Host` header, and handlers routinely read it.
     if !request.headers().contains_key(hyper::header::HOST)

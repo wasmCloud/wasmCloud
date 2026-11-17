@@ -729,11 +729,16 @@ impl TrustBundles {
             "the JWT-SVID for {id} is not for {audience}"
         );
         let now = SystemTime::now();
-        let expires_at = SystemTime::UNIX_EPOCH + Duration::from_secs(claims.exp);
+        let at = |secs: u64| {
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_secs(secs))
+                .ok_or_else(|| anyhow::anyhow!("the JWT-SVID for {id} has a time out of range"))
+        };
+        let expires_at = at(claims.exp)?;
         anyhow::ensure!(expires_at > now, "the JWT-SVID for {id} has expired");
         if let Some(nbf) = claims.nbf {
             anyhow::ensure!(
-                SystemTime::UNIX_EPOCH + Duration::from_secs(nbf) <= now + NBF_SKEW,
+                at(nbf)? <= now + NBF_SKEW,
                 "the JWT-SVID for {id} is not valid yet"
             );
         }
