@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,7 +73,8 @@ func TestHostProbeCannotOverwriteReplacementStatus(t *testing.T) {
 
 // A heartbeat that lands while a pass is deciding the Host is down refutes
 // that verdict. The pass's conflicted status patch must not be reapplied with
-// Ready false, or the post-hook deletes a Host that just reported.
+// Ready false, or the post-hook deletes a Host that just reported; it is
+// reapplied with Ready Unknown instead.
 func TestHostHeartbeatMidPassSparesTheHost(t *testing.T) {
 	c, mgr := newHostRecoveryManager(t)
 	ctx := t.Context()
@@ -124,7 +126,7 @@ func TestHostHeartbeatMidPassSparesTheHost(t *testing.T) {
 	landHeartbeat = true
 	result, err := r.Reconcile(ctx, req)
 	if err != nil || result.RequeueAfter <= 0 {
-		t.Fatalf("refuted pass should requeue: result=%+v, err=%v", result, err)
+		t.Fatalf("pass should be written and requeued: result=%+v, err=%v", result, err)
 	}
 	current := &runtimev1alpha1.Host{}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(host), current); err != nil {
@@ -133,8 +135,12 @@ func TestHostHeartbeatMidPassSparesTheHost(t *testing.T) {
 	if !current.DeletionTimestamp.IsZero() {
 		t.Fatal("a Host that heartbeated mid-pass was deleted")
 	}
-	if current.Status.GetCondition(condition.TypeReady).Status == condition.ConditionFalse {
-		t.Fatal("a Host that heartbeated mid-pass was marked not Ready")
+	// The pass is still written, with Ready downgraded to what the new
+	// LastSeen supports, so a host whose probes fail while it heartbeats keeps
+	// its status moving.
+	ready := current.Status.GetCondition(condition.TypeReady)
+	if ready.Status != condition.ConditionUnknown || !strings.Contains(ready.Message, errHostNotReporting.Error()) {
+		t.Fatalf("Ready = %s %q, want Unknown: %v", ready.Status, ready.Message, errHostNotReporting)
 	}
 	t.Cleanup(func() {
 		current.Finalizers = nil

@@ -6,9 +6,11 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -166,7 +168,7 @@ func testPodStaleHostDeletion(t *testing.T, ctx context.Context, c client.Client
 
 	retired := &RetiredHosts{}
 	r := &HostPodReconciler{
-		Client: &staleHostListClient{Client: c, snapshot: snapshot}, OperatorNamespace: ns, RetiredHosts: retired,
+		Client: &staleHostListClient{Client: c, snapshot: snapshot}, apiReader: c, OperatorNamespace: ns, RetiredHosts: retired,
 	}
 	if err := r.deleteHostForPod(ctx, terminatingPod(podIP, time.Now().Add(time.Minute), 0)); err != nil {
 		t.Fatalf("deleteHostForPod: %v", err)
@@ -236,7 +238,7 @@ func TestPodHostDeletionTreatsTerminatingHostAsGone(t *testing.T) {
 
 	retired := &RetiredHosts{}
 	counting := &countingDeleteClient{staleHostListClient: &staleHostListClient{Client: c, snapshot: snapshot}}
-	r := &HostPodReconciler{Client: counting, OperatorNamespace: ns, RetiredHosts: retired}
+	r := &HostPodReconciler{Client: counting, apiReader: c, OperatorNamespace: ns, RetiredHosts: retired}
 	if err := r.deleteHostForPod(ctx, terminatingPod(podIP, time.Now().Add(time.Minute), 0)); err != nil {
 		t.Fatalf("deleteHostForPod: %v", err)
 	}
@@ -255,29 +257,56 @@ func TestHostStatusRebase(t *testing.T) {
 	for _, tt := range []struct {
 		name         string
 		fresh, probe metav1.Time
-		ready        bool
+		ready        corev1.ConditionStatus
 		want         metav1.Time
-		keep         bool
+		wantReady    corev1.ConditionStatus
 	}{
-		{name: "heartbeat landed after a successful probe", fresh: later, probe: earlier, ready: true, want: later, keep: true},
-		{name: "probe is newer", fresh: earlier, probe: later, ready: true, want: later, keep: true},
-		{name: "heartbeat refutes a not-Ready verdict", fresh: later, probe: earlier, want: earlier},
-		{name: "no newer heartbeat behind a not-Ready verdict", fresh: earlier, probe: later, want: later, keep: true},
+		{name: "heartbeat landed after a successful probe", fresh: later, probe: earlier,
+			ready: condition.ConditionTrue, want: later, wantReady: condition.ConditionTrue},
+		{name: "probe is newer", fresh: earlier, probe: later,
+			ready: condition.ConditionTrue, want: later, wantReady: condition.ConditionTrue},
+		{name: "heartbeat refutes a not-Ready verdict", fresh: later, probe: earlier,
+			ready: condition.ConditionFalse, want: later, wantReady: condition.ConditionUnknown},
+		{name: "heartbeat behind an Unknown verdict", fresh: later, probe: earlier,
+			ready: condition.ConditionUnknown, want: later, wantReady: condition.ConditionUnknown},
+		{name: "no newer heartbeat behind a not-Ready verdict", fresh: earlier, probe: later,
+			ready: condition.ConditionFalse, want: later, wantReady: condition.ConditionFalse},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fresh, desired := &runtimev1alpha1.Host{}, &runtimev1alpha1.Host{}
 			fresh.Status.LastSeen, desired.Status.LastSeen = tt.fresh, tt.probe
-			if tt.ready {
+			switch tt.ready {
+			case condition.ConditionTrue:
 				desired.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
-			} else {
+			case condition.ConditionFalse:
 				desired.Status.SetConditions(condition.ErrorCondition(condition.TypeReady, condition.ReasonUnavailable, errors.New("host down")))
+			default:
+				desired.Status.SetConditions(condition.UnknownCondition(condition.TypeReady, "Reconcile", "waiting"))
 			}
-			if keep := rebaseHostStatus(fresh, desired); keep != tt.keep {
-				t.Fatalf("rebase kept the pass = %v, want %v", keep, tt.keep)
+			if !rebaseHostStatus(fresh, desired) {
+				t.Fatal("rebase dropped the pass; it should write it")
 			}
 			if !desired.Status.LastSeen.Equal(&tt.want) {
 				t.Fatalf("LastSeen = %v, want %v", desired.Status.LastSeen, tt.want)
 			}
+			if got := desired.Status.GetCondition(condition.TypeReady).Status; got != tt.wantReady {
+				t.Fatalf("Ready = %s, want %s", got, tt.wantReady)
+			}
 		})
+	}
+}
+
+// Without the uncached reader its conflict path needs, a Pod cleanup fails
+// loudly rather than rereading through the cache, and deletes nothing.
+func TestPodHostDeletionNeedsAnAPIReader(t *testing.T) {
+	host := hostAt("no-reader", "10.1.2.8", time.Now().Add(-time.Hour))
+	host.Namespace = testNamespace
+	c := fake.NewClientBuilder().WithScheme(newScaleTestScheme(t)).WithObjects(host).Build()
+	r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace, RetiredHosts: &RetiredHosts{}}
+	if _, err := r.deletePodHost(t.Context(), host, host.Hostname); !errors.Is(err, errNoAPIReader) {
+		t.Fatalf("deletePodHost without an API reader = %v, want errNoAPIReader", err)
+	}
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(host), &runtimev1alpha1.Host{}); err != nil {
+		t.Fatalf("Host was deleted without an API reader: %v", err)
 	}
 }

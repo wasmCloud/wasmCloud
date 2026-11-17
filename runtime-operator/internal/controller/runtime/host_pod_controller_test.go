@@ -153,7 +153,7 @@ func TestHeartbeatHandler_SkipsRetiredHostAfterPodIsGone(t *testing.T) {
 			return nil
 		},
 	}).Build()
-	r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace, RetiredHosts: retired}
+	r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace, RetiredHosts: retired}
 	if err := r.deleteHostForPod(context.Background(), terminatingPod(podIP, condemnedAt, 0)); err != nil {
 		t.Fatalf("deleteHostForPod: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestHeartbeatHandler_SkipsRetiredPodWhenHostWasAlreadyGone(t *testing.T) {
 			return nil
 		},
 	}).Build()
-	r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace, RetiredHosts: retired}
+	r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace, RetiredHosts: retired}
 	if err := r.deleteHostForPod(context.Background(), terminatingPod(podIP, condemnedAt, 0)); err != nil {
 		t.Fatalf("deleteHostForPod: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestDeleteHostForPod(t *testing.T) {
 	t.Run("deletes the host this pod registered", func(t *testing.T) {
 		host := hostAt("own-host", podIP, condemnedAt.Add(-10*time.Minute))
 		c := newHostPodClient(t, host)
-		r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}
+		r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace}
 
 		pod := terminatingPod(podIP, condemnedAt, 0)
 		if err := r.deleteHostForPod(context.Background(), pod); err != nil {
@@ -316,7 +316,7 @@ func TestDeleteHostForPod(t *testing.T) {
 	t.Run("spares a host registered after this pod was deleted", func(t *testing.T) {
 		recycled := hostAt("replacement-host", podIP, condemnedAt.Add(2*time.Second))
 		c := newHostPodClient(t, recycled)
-		r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}
+		r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace}
 
 		pod := terminatingPod(podIP, condemnedAt, 0)
 		if err := r.deleteHostForPod(context.Background(), pod); err != nil {
@@ -334,7 +334,7 @@ func TestDeleteHostForPod(t *testing.T) {
 		// registered while this Pod wound down.
 		recycled := hostAt("replacement-host", podIP, condemnedAt.Add(8*time.Second))
 		c := newHostPodClient(t, recycled)
-		r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}
+		r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace}
 
 		pod := terminatingPod(podIP, condemnedAt, 30)
 		if err := r.deleteHostForPod(context.Background(), pod); err != nil {
@@ -348,7 +348,7 @@ func TestDeleteHostForPod(t *testing.T) {
 	t.Run("still deletes its own host when a grace period is set", func(t *testing.T) {
 		host := hostAt("own-host", podIP, condemnedAt.Add(-10*time.Minute))
 		c := newHostPodClient(t, host)
-		r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}
+		r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace}
 
 		pod := terminatingPod(podIP, condemnedAt, 30)
 		if err := r.deleteHostForPod(context.Background(), pod); err != nil {
@@ -362,7 +362,7 @@ func TestDeleteHostForPod(t *testing.T) {
 	t.Run("leaves hosts on other IPs alone", func(t *testing.T) {
 		other := hostAt("other-host", "10.1.2.4", condemnedAt.Add(-10*time.Minute))
 		c := newHostPodClient(t, other)
-		r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}
+		r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace}
 
 		pod := terminatingPod(podIP, condemnedAt, 0)
 		if err := r.deleteHostForPod(context.Background(), pod); err != nil {
@@ -376,7 +376,7 @@ func TestDeleteHostForPod(t *testing.T) {
 	t.Run("pod without an IP deletes nothing", func(t *testing.T) {
 		host := hostAt("own-host", podIP, condemnedAt.Add(-10*time.Minute))
 		c := newHostPodClient(t, host)
-		r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}
+		r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace}
 
 		pod := terminatingPod("", condemnedAt, 0)
 		if err := r.deleteHostForPod(context.Background(), pod); err != nil {
@@ -398,7 +398,7 @@ func TestHostPodReconcile_RemovesFinalizerAfterCleanup(t *testing.T) {
 	host := hostAt("own-host", podIP, condemnedAt.Add(-10*time.Minute))
 	pod := terminatingPod(podIP, condemnedAt, 0)
 	c := newHostPodClient(t, host, pod)
-	r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace}
+	r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace}
 
 	ctx := context.Background()
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pod)}

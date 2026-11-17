@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -18,7 +19,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
@@ -35,10 +36,13 @@ import (
 )
 
 const (
-	hostHeartbeatTimeout          = 5 * time.Second
-	hostReconcileInterval         = 1 * time.Minute
-	hostFinalizerName             = "runtime.wasmcloud.dev/host-finalizer"
-	hostCleanupConcurrency        = 2
+	hostHeartbeatTimeout   = 5 * time.Second
+	hostReconcileInterval  = 1 * time.Minute
+	hostFinalizerName      = "runtime.wasmcloud.dev/host-finalizer"
+	hostCleanupConcurrency = 2
+	// hostCleanupPassTimeout bounds one cleanup pass, so a Host whose deletes
+	// hang cannot hold one of the hostCleanupConcurrency workers indefinitely.
+	hostCleanupPassTimeout        = 30 * time.Second
 	hostFinalizeDeleteConcurrency = 24
 	// workloadByHostIDIndex indexes Workloads by their Status.HostID so
 	// the host finalizer can fan out to assigned workloads without
@@ -178,7 +182,7 @@ func (r *HostReconciler) reconcileReady(_ context.Context, host *runtimev1alpha1
 
 	now := time.Now()
 	if host.Status.LastSeen.Add(r.UnreachableTimeout).After(now) {
-		return condition.ErrStatusUnknown(fmt.Errorf("host is not reporting"))
+		return condition.ErrStatusUnknown(errHostNotReporting)
 	}
 
 	// A definite failure here costs the host every Workload on it, so it is
@@ -236,40 +240,40 @@ func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Hos
 // conflict is retried against an uncached read, since assignment or unrelated
 // status may have changed since the index was read.
 func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *runtimev1alpha1.Workload, hostID string) error {
-	snapshot := workload
-	key := client.ObjectKeyFromObject(workload)
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		if snapshot == nil {
-			snapshot = &runtimev1alpha1.Workload{}
-			if err := r.apiReader.Get(ctx, key, snapshot); err != nil {
-				return client.IgnoreNotFound(err)
+	_, err := deleteObservedWithReread(ctx, r.Client, r.apiReader, workload,
+		func() *runtimev1alpha1.Workload { return &runtimev1alpha1.Workload{} },
+		func(snapshot *runtimev1alpha1.Workload) rereadVerdict {
+			if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
+				return spareSnapshot
 			}
-		}
-		if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
-			return nil
-		}
-		err := deleteObservedObject(ctx, r.Client, snapshot)
-		if apierrors.IsConflict(err) {
-			snapshot = nil
-		}
-		return err
-	})
+			return deleteSnapshot
+		})
+	return err
 }
+
+// errHostNotReporting is reconcileReady's verdict for a host that has stopped
+// answering probes but was seen within UnreachableTimeout.
+var errHostNotReporting = errors.New("host is not reporting")
 
 // rebaseHostStatus rebases a conflicted Host status patch onto a fresh read.
 // The heartbeat subscriber owns LastSeen too, so a later heartbeat is kept
-// rather than rolled back. A heartbeat newer than anything this pass saw also
-// refutes a not-Ready verdict drawn from the older LastSeen: writing it would
-// let deleteUnresponsiveHost delete a Host that just reported, so the pass is
-// refused and starts over from the fresh read.
+// rather than rolled back.
+//
+// A heartbeat newer than anything this pass saw also refutes a not-Ready
+// verdict drawn from the older LastSeen: writing it would let
+// deleteUnresponsiveHost delete a Host that just reported. Ready is downgraded
+// to Unknown instead, which is what the next pass concludes from the new
+// LastSeen. The rest of the pass, Reporting included, is still written, so a
+// host that heartbeats while its probes fail does not have every pass dropped.
 func rebaseHostStatus(fresh, desired *runtimev1alpha1.Host) bool {
 	if !fresh.Status.LastSeen.After(desired.Status.LastSeen.Time) {
 		return true
 	}
-	if !desired.Status.AllTrue(condition.TypeReady) {
-		return false
-	}
 	desired.Status.LastSeen = fresh.Status.LastSeen
+	if desired.Status.GetCondition(condition.TypeReady).Status == condition.ConditionFalse {
+		desired.Status.SetConditions(condition.UnknownCondition(condition.TypeReady, "Reconcile",
+			condition.ErrStatusUnknown(errHostNotReporting).Error()))
+	}
 	return true
 }
 
@@ -284,28 +288,20 @@ func rebaseHostStatus(fresh, desired *runtimev1alpha1.Host) bool {
 // That is expected: the Host is reread uncached and the decision made again,
 // rather than failing the pass into backoff.
 func (r *HostReconciler) deleteUnresponsiveHost(ctx context.Context, host *runtimev1alpha1.Host) error {
-	snapshot := host
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		if snapshot == nil {
-			snapshot = &runtimev1alpha1.Host{}
-			if err := r.apiReader.Get(ctx, client.ObjectKeyFromObject(host), snapshot); err != nil {
-				return client.IgnoreNotFound(err)
-			}
+	_, err := deleteObservedWithReread(ctx, r.Client, r.apiReader, host,
+		func() *runtimev1alpha1.Host { return &runtimev1alpha1.Host{} },
+		func(snapshot *runtimev1alpha1.Host) rereadVerdict {
 			// A replacement, or a Host whose deletion is already under way.
 			if snapshot.UID != host.UID || !snapshot.DeletionTimestamp.IsZero() {
-				return nil
+				return spareSnapshot
 			}
-		}
-		if snapshot.Status.AllTrue(condition.TypeReady) || snapshot.Status.AnyUnknown(condition.TypeReady) {
-			return nil
-		}
-		// Delete unresponsive host; the finalizer will clean up assigned workloads.
-		err := deleteObservedObject(ctx, r.Client, snapshot)
-		if apierrors.IsConflict(err) {
-			snapshot = nil
-		}
-		return err
-	})
+			if snapshot.Status.AllTrue(condition.TypeReady) || snapshot.Status.AnyUnknown(condition.TypeReady) {
+				return spareSnapshot
+			}
+			// Delete unresponsive host; the finalizer will clean up assigned workloads.
+			return deleteSnapshot
+		})
+	return err
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -327,7 +323,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Heartbeats patch LastSeen often, so a conflict is expected: reapply the
 	// pass to the same Host rather than dropping its Ready transition and
 	// post-hooks, keeping whichever LastSeen is newer. A heartbeat that refutes
-	// a not-Ready verdict drops the pass instead (see rebaseHostStatus).
+	// a not-Ready verdict turns it into Unknown (see rebaseHostStatus).
 	reconciler.RetryStatusConflicts(r.apiReader, rebaseHostStatus)
 
 	reconciler.SetFinalizer(hostFinalizerName, r.finalize)
@@ -383,7 +379,24 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(hostCleanupPredicate())).
 		Named("workload-host-cleanup").
 		WithOptions(controller.Options{MaxConcurrentReconciles: hostCleanupConcurrency}).
-		Complete(cleanup)
+		Complete(boundCleanupPass(cleanup, hostCleanupPassTimeout))
+}
+
+// boundCleanupPass runs each cleanup pass under timeout. A pass that runs out of
+// time is requeued rather than failed: the Workloads it deleted stay deleted,
+// and the next pass lists only the ones still assigned, so the other worker
+// and the Hosts queued behind it get a turn in between.
+func boundCleanupPass(cleanup reconcile.Reconciler, timeout time.Duration) reconcile.Reconciler {
+	return reconcile.Func(func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		passCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		result, err := cleanup.Reconcile(passCtx, req)
+		if err != nil && ctx.Err() == nil && errors.Is(passCtx.Err(), context.DeadlineExceeded) {
+			ctrl.LoggerFrom(ctx).Info("Host cleanup pass ran out of time; requeueing", "host", req.Name, "timeout", timeout)
+			return reconcile.Result{RequeueAfter: time.Second}, nil
+		}
+		return result, err
+	})
 }
 
 // minHostWorkers keeps Host passes moving while one waits out a heartbeat
