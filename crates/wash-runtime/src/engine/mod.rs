@@ -689,6 +689,17 @@ impl PreparedVolumes {
     fn into_inner(mut self) -> WorkloadVolumes {
         self.0.take().unwrap_or_default()
     }
+
+    /// Releases the volumes on the blocking pool and waits for that, so a
+    /// start that fails reports it with its scratch directory already gone.
+    async fn release(self) {
+        let volumes = self.into_inner();
+        if volumes.opened.is_empty() && volumes.scratch.is_none() {
+            return;
+        }
+        // A join error is the release panicking: the start already failed.
+        let _ = tokio::task::spawn_blocking(move || drop(volumes)).await;
+    }
 }
 
 impl Drop for PreparedVolumes {
@@ -996,7 +1007,8 @@ impl Engine {
         let volumes = std::mem::take(&mut workload.volumes);
         let has_volumes = !volumes.is_empty();
         // Held across the compiles below, and released on the blocking pool if
-        // one of them fails or this start is cancelled first.
+        // one of them fails, which is waited for, or this start is cancelled
+        // first, which cannot be.
         let prepared_volumes = PreparedVolumes(Some(if has_volumes {
             let engine = self.clone();
             let span = span.clone();
@@ -1013,19 +1025,29 @@ impl Engine {
             WorkloadVolumes::default()
         }));
         let mut pinned = Vec::new();
-        if let Some(service) = &mut workload.service {
-            pinned.push(
-                self.prepare_compile(service.bytes.clone(), &mut service.digest, admission)
-                    .await
-                    .context("failed to create component from bytes")?,
-            );
+        let compiled: anyhow::Result<()> = async {
+            if let Some(service) = &mut workload.service {
+                pinned.push(
+                    self.prepare_compile(service.bytes.clone(), &mut service.digest, admission)
+                        .await
+                        .context("failed to create component from bytes")?,
+                );
+            }
+            for component in &mut workload.components {
+                pinned.push(
+                    self.prepare_compile(component.bytes.clone(), &mut component.digest, admission)
+                        .await
+                        .context("failed to create component from bytes")?,
+                );
+            }
+            Ok(())
         }
-        for component in &mut workload.components {
-            pinned.push(
-                self.prepare_compile(component.bytes.clone(), &mut component.digest, admission)
-                    .await
-                    .context("failed to create component from bytes")?,
-            );
+        .await;
+        if let Err(e) = compiled {
+            // Awaited, unlike the drop a cancelled start is left with: the
+            // caller is told of the failure once the volumes are released.
+            prepared_volumes.release().await;
+            return Err(e);
         }
         // Every compile is now held. With no volumes or service, and nothing
         // left to read off a component's source, what remains blocks nothing:
