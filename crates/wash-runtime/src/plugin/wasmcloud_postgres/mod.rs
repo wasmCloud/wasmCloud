@@ -14,15 +14,23 @@ mod conversions {
     };
 
     /// Build a `result-row` (a list of named `result-row-entry`) from a [`Row`].
-    pub(super) fn into_result_row(r: Row) -> ResultRow {
-        let mut rr = Vec::new();
-        for (idx, col) in r.columns().iter().enumerate() {
-            rr.push(ResultRowEntry {
-                column_name: col.name().into(),
-                value: r.get(idx),
-            });
-        }
-        rr
+    ///
+    /// A column that does not decode is an error for the guest, not a panic:
+    /// `Row::get` panics on any decode failure.
+    pub(super) fn into_result_row(r: Row) -> Result<ResultRow, String> {
+        r.columns()
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| {
+                let value = r
+                    .try_get(idx)
+                    .map_err(|e| format!("column {idx} ({}): {e}", col.name()))?;
+                Ok(ResultRowEntry {
+                    column_name: col.name().into(),
+                    value,
+                })
+            })
+            .collect()
     }
 
     include!("conversions.rs");
@@ -595,7 +603,10 @@ async fn execute_query(
     let rows = stream.try_collect::<Vec<_>>().await.map_err(|e| {
         QueryError::Unexpected(format!("failed to collect rows: {}", pg_error_string(&e)))
     })?;
-    Ok(rows.into_iter().map(into_result_row).collect())
+    rows.into_iter()
+        .map(into_result_row)
+        .collect::<Result<_, _>>()
+        .map_err(|e| QueryError::Unexpected(format!("failed to convert row: {e}")))
 }
 
 // ── HostPlugin implementation ───────────────────────────────────────────────
