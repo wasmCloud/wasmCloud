@@ -76,7 +76,7 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 
 	// Placement ends by skipping the rest of the reconciliation, having sent
 	// the start request this test reads back.
-	if err := r.reconcilePlacement(context.Background(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+	if err := place(context.Background(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 		t.Fatalf("reconcilePlacement: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestPlacementCarriesIdentityRef(t *testing.T) {
 				},
 				Status: runtimev1alpha1.WorkloadStatus{HostID: testHeartbeatHostID},
 			}
-			if err := r.reconcilePlacement(context.Background(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+			if err := place(context.Background(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 				t.Fatalf("reconcilePlacement: %v", err)
 			}
 			var req runtimev2.WorkloadStartRequest
@@ -524,7 +524,7 @@ func TestPlacementSkipsHostBeingDeleted(t *testing.T) {
 			workload.Spec.HostID = testHeartbeatHostID
 		}
 
-		if err := r.reconcilePlacement(context.Background(), workload); err == nil {
+		if err := place(context.Background(), r, workload); err == nil {
 			t.Fatalf("pinned=%v: placement succeeded on a host being deleted", pinned)
 		}
 		if bus.gotSubject != "" {
@@ -553,7 +553,7 @@ func TestPlacementSkipsHostThatIsGone(t *testing.T) {
 			workload.Spec.HostID = testHeartbeatHostID
 		}
 
-		_ = r.reconcilePlacement(context.Background(), workload)
+		_ = place(context.Background(), r, workload)
 		if sent := bus.gotSubject != ""; sent != pinned {
 			t.Errorf("pinned=%v: start sent = %v", pinned, sent)
 		}

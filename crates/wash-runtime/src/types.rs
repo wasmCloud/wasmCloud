@@ -35,16 +35,16 @@ pub struct Workload {
     pub host_interfaces: Vec<WitInterface>,
     pub volumes: Vec<Volume>,
     /// The controller the workload belongs to. `None` matches no grant that
-    /// names a workload.
+    /// names an owner; a secret grant by name alone still matches `name`.
     pub owner: Option<WorkloadOwner>,
 }
 
 /// The controller a workload belongs to in its namespace, as its control
 /// plane verified it: for example the `WorkloadDeployment` named `billing`,
-/// and its UID. Grants that name a workload match its namespace and this,
-/// never a name alone, so no workload takes another's grants by its own name
-/// or annotations. Kinds keep names apart, and the UID tells an object from
-/// one recreated under its name.
+/// and its UID. Egress credential, broker and kind-qualified secret grants
+/// match its namespace and this, so no workload takes them by its own name or
+/// annotations. Kinds keep names apart, and the UID tells an object from one
+/// recreated under its name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorkloadOwner {
     kind: Arc<str>,

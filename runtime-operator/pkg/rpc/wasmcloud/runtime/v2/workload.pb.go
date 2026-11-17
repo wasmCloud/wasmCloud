@@ -166,8 +166,10 @@ type Workload struct {
 	// The identity the workload runs as. Unset runs it with none.
 	Identity *WorkloadIdentity `protobuf:"bytes,7,opt,name=identity,proto3" json:"identity,omitempty"`
 	// The object that controls the workload's replicas, as the control plane
-	// verified it. Grants name a workload by its namespace and this owner, never
-	// by name alone. Unset leaves the workload matching no such grant.
+	// verified it. Egress credential, broker and kind-qualified secret grants
+	// match a workload by its namespace and this owner. Unset leaves the
+	// workload matching none of them; a secret grant by name alone still
+	// matches the workload's name.
 	Owner         *WorkloadOwner `protobuf:"bytes,8,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

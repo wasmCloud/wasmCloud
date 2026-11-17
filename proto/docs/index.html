@@ -1321,8 +1321,10 @@ The &#39;config&#39; on each host_interface may carry Workload Specific configur
                   <td><a href="#wasmcloud.runtime.v2.WorkloadOwner">WorkloadOwner</a></td>
                   <td></td>
                   <td><p>The object that controls the workload&#39;s replicas, as the control plane
-verified it. Grants name a workload by its namespace and this owner, never
-by name alone. Unset leaves the workload matching no such grant. </p></td>
+verified it. Egress credential, broker and kind-qualified secret grants
+match a workload by its namespace and this owner. Unset leaves the
+workload matching none of them; a secret grant by name alone still
+matches the workload&#39;s name. </p></td>
                 </tr>
               
             </tbody>

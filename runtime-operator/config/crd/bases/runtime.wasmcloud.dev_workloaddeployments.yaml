@@ -845,20 +845,27 @@ spec:
                 type: array
               currentReplicaSet:
                 description: |-
-                  LocalObjectReference contains enough information to let you locate the
-                  referenced object inside the same namespace.
+                  WorkloadReplicaSetReference names a WorkloadReplicaSet this deployment
+                  made. Its Workloads are the deployment's only while the set still has this
+                  UID and template digest, so a set edited, or deleted and made again under
+                  its name, stops standing for the deployment.
                 properties:
                   name:
-                    default: ""
-                    description: |-
-                      Name of the referent.
-                      This field is effectively required, but due to backwards compatibility is
-                      allowed to be empty. Instances of this type with an empty value here are
-                      almost certainly wrong.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
                     type: string
+                  templateDigest:
+                    description: |-
+                      TemplateDigest is WorkloadReplicaTemplate.Digest of the template the
+                      deployment gave the set.
+                    type: string
+                  uid:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                required:
+                - name
                 type: object
-                x-kubernetes-map-type: atomic
               currentReplicas:
                 description: |-
                   CurrentReplicas is the number of workload instances currently running.
@@ -868,20 +875,27 @@ spec:
                 type: integer
               previousReplicaSet:
                 description: |-
-                  LocalObjectReference contains enough information to let you locate the
-                  referenced object inside the same namespace.
+                  WorkloadReplicaSetReference names a WorkloadReplicaSet this deployment
+                  made. Its Workloads are the deployment's only while the set still has this
+                  UID and template digest, so a set edited, or deleted and made again under
+                  its name, stops standing for the deployment.
                 properties:
                   name:
-                    default: ""
-                    description: |-
-                      Name of the referent.
-                      This field is effectively required, but due to backwards compatibility is
-                      allowed to be empty. Instances of this type with an empty value here are
-                      almost certainly wrong.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
                     type: string
+                  templateDigest:
+                    description: |-
+                      TemplateDigest is WorkloadReplicaTemplate.Digest of the template the
+                      deployment gave the set.
+                    type: string
+                  uid:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                required:
+                - name
                 type: object
-                x-kubernetes-map-type: atomic
               replicas:
                 properties:
                   current:
