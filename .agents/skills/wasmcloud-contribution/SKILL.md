@@ -1,6 +1,6 @@
 ---
 name: wasmcloud-contribution
-description: Apply wasmCloud commit, pull request, and documentation conventions when preparing commits or PRs, reviewing PR readiness, or editing documentation.
+description: wasmCloud commit, pull request, release, and documentation conventions, covering Conventional Commits titles, DCO sign-off, breaking-change markers, draft PRs, rebasing, and semantic line breaks. Use when writing a commit message, preparing or reviewing a pull request, checking PR readiness, or editing Markdown docs such as README.md, CONTRIBUTING.md, or files under docs/.
 ---
 
 # Contribution conventions
@@ -10,13 +10,13 @@ These conventions describe how to prepare a contribution; they do not authorize 
 
 ## Commits
 
-- Do development work on a feature branch, never directly on `main`.
 - Write titles as [Conventional Commits](https://www.conventionalcommits.org),
   for example `fix(wash-runtime): handle empty component names`.
 - Keep titles under 70 characters.
 - Keep commits small, and organize them around semantically distinct changes.
-- Do not write a commit body unless explicitly asked to.
-- When a body is asked for, wrap it at 70 characters.
+- Add a body only when the title and diff do not make the reason for the change clear,
+  as [CONTRIBUTING.md](../../../CONTRIBUTING.md#commit-message-format) asks for messages that explain what and why.
+  Keep it to a few lines on why, and wrap it at 70 characters.
 - Sign off every commit with `git commit -s`.
   The DCO `Signed-off-by:` trailer and any required `BREAKING CHANGE:` footer
   do not count as a body.
