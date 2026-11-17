@@ -22,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -200,16 +201,13 @@ func (r *HostReconciler) finalize(ctx context.Context, host *runtimev1alpha1.Hos
 	// operator's namespace.
 	//
 	// UnsafeDisableDeepCopy makes the items share the informer cache's memory
-	// instead of being deep copied,
-	// which a host with many Workloads would pay for on every pass.
-	// That is safe here because the items are only read:
-	//   - finalize and deleteAssignedWorkload read their identity, assignment
-	//     and deletion timestamp, and never assign to them.
-	//   - Delete builds its request from the object's name and namespace and
-	//     does not decode the response back into it.
-	//   - The informer replaces a cached object on update rather than changing
-	//     it in place, so these reads do not race with the cache.
-	// Anything added below that writes to a listed Workload must DeepCopy it first.
+	// instead of being deep copied, which a host with many Workloads would pay
+	// for on every pass. The items are only read here, and the informer
+	// replaces a cached object on update rather than changing it in place, so
+	// the reads do not race with the cache. Nothing writes through them:
+	// deleteAssignedWorkload deletes through a fresh object that carries only
+	// the listed identity (see workloadDeleteTarget). Anything added below that
+	// writes to a listed Workload must DeepCopy it first.
 	workloadList := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, workloadList,
 		client.MatchingFields{workloadByHostIDIndex: host.HostID},
@@ -258,12 +256,25 @@ func (r *HostReconciler) deleteAssignedWorkload(ctx context.Context, workload *r
 		if snapshot.UID != workload.UID || snapshot.Status.HostID != hostID || snapshot.DeletionTimestamp != nil {
 			return nil
 		}
-		err := deleteObservedChild(ctx, r.Client, snapshot)
+		err := deleteObservedChild(ctx, r.Client, workloadDeleteTarget(snapshot))
 		if apierrors.IsConflict(err) {
 			snapshot = nil
 		}
 		return err
 	})
+}
+
+// workloadDeleteTarget returns a new Workload carrying only what a guarded
+// delete needs. finalize lists from the cache without copying, so the client
+// and any wrapper around it must never be handed the listed object itself: a
+// write there would land in the informer cache that every controller reads.
+func workloadDeleteTarget(workload *runtimev1alpha1.Workload) *runtimev1alpha1.Workload {
+	return &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{
+		Name:            workload.Name,
+		Namespace:       workload.Namespace,
+		UID:             workload.UID,
+		ResourceVersion: workload.ResourceVersion,
+	}}
 }
 
 // deleteUnresponsiveHost is the reconcile post-hook: a Host whose Ready
@@ -334,19 +345,26 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	// Keep a worker available to register a replacement while the previous
-	// Host is deleting its assigned Workloads. Respect explicit manager tuning.
-	managerOptions := mgr.GetControllerOptions()
-	hostOptions := controller.Options{}
-	hostGroupKind := runtimev1alpha1.GroupVersion.WithKind("Host").GroupKind().String()
-	if managerOptions.MaxConcurrentReconciles == 0 && managerOptions.GroupKindConcurrency[hostGroupKind] == 0 {
-		hostOptions.MaxConcurrentReconciles = 2
-	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.Host{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("workload-host").
-		WithOptions(hostOptions).
+		WithOptions(hostControllerOptions(mgr.GetControllerOptions())).
 		Complete(r)
+}
+
+// minHostWorkers keeps a worker free to register a replacement while another
+// worker finalizes a retiring Host, which can take a while with many Workloads.
+const minHostWorkers = 2
+
+// hostControllerOptions honors explicit manager tuning for the Host controller
+// (its GroupKind entry first, then the manager-wide value, as the builder
+// resolves them) but never drops below minHostWorkers.
+func hostControllerOptions(manager config.Controller) controller.Options {
+	workers := manager.GroupKindConcurrency[runtimev1alpha1.GroupVersion.WithKind("Host").GroupKind().String()]
+	if workers == 0 {
+		workers = manager.MaxConcurrentReconciles
+	}
+	return controller.Options{MaxConcurrentReconciles: max(minHostWorkers, workers)}
 }
 
 type hostStatusUpdater struct {
