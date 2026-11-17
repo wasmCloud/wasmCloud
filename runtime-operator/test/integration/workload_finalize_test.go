@@ -352,7 +352,9 @@ var _ = Describe("Workload waiting for a host", func() {
 			var got runtimev1alpha1.Workload
 			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
 			g.Expect(got.Status.HostID).To(Equal(arrivingHostID))
-		}, "5s").Should(Succeed())
+			// Wake-ups are spread over hostArrivalSpread; this is still well
+			// inside the 30s reconcile interval the watch replaces.
+		}, "8s").Should(Succeed())
 	})
 })
 

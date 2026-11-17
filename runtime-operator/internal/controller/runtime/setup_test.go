@@ -228,7 +228,8 @@ func TestRegisteredIndexesExtract(t *testing.T) {
 		{"workload by environment", hostEnvironmentIndex, &runtimev1alpha1.Workload{Spec: runtimev1alpha1.WorkloadSpec{Environment: testTenant}}, nil},
 
 		{"unplaced workload", workloadUnplacedIndex, &runtimev1alpha1.Workload{}, []string{string(condition.ConditionTrue)}},
-		{"placed workload", workloadUnplacedIndex, &runtimev1alpha1.Workload{Status: runtimev1alpha1.WorkloadStatus{HostID: indexedHostID}}, nil},
+		{"placed workload", workloadUnplacedIndex, placedOn(indexedHostID), nil},
+		{"workload with a host chosen but not placed", workloadUnplacedIndex, &runtimev1alpha1.Workload{Status: runtimev1alpha1.WorkloadStatus{HostID: indexedHostID}}, []string{string(condition.ConditionTrue)}},
 		{"workload being deleted", workloadUnplacedIndex, &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &metav1.Time{Time: time.Now()}}}, nil},
 		{"host by unplaced", workloadUnplacedIndex, &runtimev1alpha1.Host{}, nil},
 
@@ -254,4 +255,10 @@ func TestRegisteredIndexesExtract(t *testing.T) {
 			}
 		})
 	}
+}
+
+func placedOn(hostID string) *runtimev1alpha1.Workload {
+	w := &runtimev1alpha1.Workload{Status: runtimev1alpha1.WorkloadStatus{HostID: hostID}}
+	w.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadConditionPlacement))
+	return w
 }
