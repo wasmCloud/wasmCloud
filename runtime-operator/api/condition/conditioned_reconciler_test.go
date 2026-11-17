@@ -536,6 +536,83 @@ func TestConditionedReconcilerOptimisticLock(t *testing.T) {
 	}
 }
 
+// With RetryStatusConflicts a conflict from another writer no longer costs
+// the pass: its changes are reapplied to the same object, the rebase keeps the
+// other writer's field, and the post-hooks run. A same-name replacement is
+// never written.
+func TestConditionedReconcilerRetryStatusConflicts(t *testing.T) {
+	const concurrentCondition ConditionType = "Concurrent"
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 to scheme: %v", err)
+	}
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+
+	for _, replace := range []bool{false, true} {
+		obj := &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName, UID: "original"}}
+		kubeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(obj).
+			WithStatusSubresource(obj).
+			Build()
+
+		r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+		rebased := 0
+		r.RetryStatusConflicts(kubeClient, func(fresh, desired *conditionedResource) {
+			rebased++
+			desired.Status.SetConditions(fresh.Status.GetCondition(concurrentCondition))
+		})
+		r.SetCondition(testCondition, func(ctx context.Context, _ *conditionedResource) error {
+			if replace {
+				gone := &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName}}
+				if err := kubeClient.Delete(ctx, gone); err != nil {
+					return err
+				}
+				return kubeClient.Create(ctx, &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName, UID: "replacement"}})
+			}
+			newer := &conditionedResource{}
+			if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(obj), newer); err != nil {
+				return err
+			}
+			newer.Status.SetConditions(ReadyCondition(concurrentCondition))
+			return kubeClient.Status().Update(ctx, newer)
+		})
+		hooked := false
+		r.AddPostHook(func(context.Context, *conditionedResource) error {
+			hooked = true
+			return nil
+		})
+
+		result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+		if err != nil {
+			t.Fatalf("replace=%v: reconcile: %v", replace, err)
+		}
+		stored := &conditionedResource{}
+		if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), stored); err != nil {
+			t.Fatalf("replace=%v: get: %v", replace, err)
+		}
+		if replace {
+			if stored.UID != "replacement" || len(stored.Status.Conditions) != 0 {
+				t.Errorf("a stale pass wrote to the replacement: %+v", stored)
+			}
+			if hooked || result.RequeueAfter == 0 {
+				t.Errorf("a pass about a replaced object ran its post-hooks or was not requeued")
+			}
+			continue
+		}
+		if rebased != 1 {
+			t.Errorf("rebase ran %d times, want 1", rebased)
+		}
+		if stored.Status.GetCondition(testCondition).Status != ConditionTrue ||
+			stored.Status.GetCondition(concurrentCondition).Status != ConditionTrue {
+			t.Errorf("retried patch lost a write: %+v", stored.Status.Conditions)
+		}
+		if !hooked {
+			t.Errorf("a retried pass skipped its post-hooks")
+		}
+	}
+}
+
 // An object that finishes deleting during a pass has no status left to write,
 // which is not a failure. NotFound on any other object is one.
 func TestConditionedReconcilerStatusPatchNotFound(t *testing.T) {

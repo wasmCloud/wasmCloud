@@ -2,12 +2,15 @@ package condition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -150,6 +153,10 @@ type ConditionedReconciler[T ConditionedType] struct {
 	batchStatusUpdates     bool
 	readyRequeueInterval   time.Duration
 	optimisticStatusWrites bool
+	// conflictReader and conflictRebase let a status patch rejected by the
+	// optimistic lock be reapplied to the same object. See RetryStatusConflicts.
+	conflictReader client.Reader
+	conflictRebase func(fresh, desired T)
 }
 
 // restampOnly reports whether next differs from current in its generation
@@ -193,6 +200,26 @@ func (r *ConditionedReconciler[T]) ReadyRequeueInterval(interval time.Duration) 
 // status after another write advanced its resource version.
 func (r *ConditionedReconciler[T]) OptimisticStatusWrites() {
 	r.optimisticStatusWrites = true
+}
+
+// statusConflictAttempts bounds how often a conflicted status patch is
+// reapplied in one pass before the pass is requeued.
+const statusConflictAttempts = 3
+
+// RetryStatusConflicts turns on OptimisticStatusWrites and, when the lock
+// rejects a status patch, rereads the object through reader (uncached) instead
+// of discarding the pass. If the object is the same one (same UID), rebase
+// reconciles the pass's desired status with the fresh read, for fields another
+// writer may own, and the pass's changes are patched again under the fresh
+// resource version. A replaced or deleted object is never written.
+//
+// Use it when another writer updates the same object often, so a conflict is
+// expected rather than a sign that the pass's conclusions are stale. rebase
+// may be nil when the pass owns every field it writes.
+func (r *ConditionedReconciler[T]) RetryStatusConflicts(reader client.Reader, rebase func(fresh, desired T)) {
+	r.optimisticStatusWrites = true
+	r.conflictReader = reader
+	r.conflictRebase = rebase
 }
 
 // AddPreHook adds a function to be called before the conditions are evaluated.
@@ -447,8 +474,56 @@ func (r *ConditionedReconciler[T]) patchStatus(ctx context.Context, original, ob
 	if string(data) == "{}" {
 		return nil
 	}
-	if optimisticLock {
-		patch = client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})
+	if !optimisticLock {
+		return r.client.Status().Patch(ctx, obj, patch)
 	}
-	return r.client.Status().Patch(ctx, obj, patch)
+	err = r.client.Status().Patch(ctx, obj, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{}))
+	if !apierrors.IsConflict(err) || r.conflictReader == nil {
+		return err
+	}
+	for range statusConflictAttempts {
+		if err = r.reapplyStatus(ctx, original, obj); !apierrors.IsConflict(err) {
+			return err
+		}
+	}
+	return err
+}
+
+// reapplyStatus patches the pass's status changes onto a fresh read of the
+// same object, locked to that read's resource version.
+func (r *ConditionedReconciler[T]) reapplyStatus(ctx context.Context, original, obj T) error {
+	fresh := original.DeepCopyObject().(T)
+	if err := r.conflictReader.Get(ctx, client.ObjectKeyFromObject(original), fresh); err != nil {
+		return err
+	}
+	if fresh.GetUID() != original.GetUID() {
+		// A same-name replacement: what this pass concluded is about another
+		// object. Report it as the conflict it is so the pass is requeued.
+		return apierrors.NewConflict(schema.GroupResource{Group: fresh.GetObjectKind().GroupVersionKind().Group},
+			fresh.GetName(), errors.New("object was replaced during reconcile"))
+	}
+	if r.conflictRebase != nil {
+		r.conflictRebase(fresh, obj)
+	}
+	data, err := client.MergeFrom(original).Data(obj)
+	if err != nil {
+		return err
+	}
+	var body map[string]any
+	if err := json.Unmarshal(data, &body); err != nil {
+		return err
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	metadata, _ := body["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["resourceVersion"] = fresh.GetResourceVersion()
+	body["metadata"] = metadata
+	if data, err = json.Marshal(body); err != nil {
+		return err
+	}
+	return r.client.Status().Patch(ctx, obj, client.RawPatch(types.MergePatchType, data))
 }

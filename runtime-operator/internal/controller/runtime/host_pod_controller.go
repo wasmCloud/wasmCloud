@@ -170,6 +170,13 @@ func (r *HostPodReconciler) deletePodHost(ctx context.Context, host *runtimev1al
 		if snapshot.Hostname != podIP {
 			return nil
 		}
+		// Already deleting: its own finalizer finishes the job. Deleting again
+		// would only race the draining host's heartbeats into conflicts until
+		// the retries ran out and Pod finalization failed.
+		if !snapshot.DeletionTimestamp.IsZero() {
+			gone = true
+			return nil
+		}
 		err := deleteObservedObject(ctx, r.Client, snapshot)
 		if apierrors.IsConflict(err) {
 			snapshot = nil
