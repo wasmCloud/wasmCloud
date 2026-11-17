@@ -318,6 +318,9 @@ pub struct ComponentHostPlugin {
     /// This plugin's claim on the real addresses its `ports` declared, held so
     /// nothing else takes one while the plugin is loaded.
     _port_reservations: Vec<crate::host::ports::PortReservation>,
+    /// Keeps workloads out of the directories this plugin mounts while it is
+    /// loaded.
+    _volume_registration: crate::engine::volumes::PluginVolumeRegistration,
 }
 
 #[bon::bon]
@@ -375,8 +378,10 @@ impl ComponentHostPlugin {
         socket_policy: Option<Arc<crate::sockets::policy::SocketPolicy>>,
     ) -> anyhow::Result<Self> {
         crate::host::declared_port::validate_plugin_ports(&ports, &format!("host plugin '{id}'"))?;
-        let volumes =
-            resolve_plugin_volumes(id, &volumes, &volume_mounts, engine.host_paths()).await?;
+        let ResolvedPluginVolumes {
+            mounts: volumes,
+            opened: opened_volumes,
+        } = resolve_plugin_volumes(id, &volumes, &volume_mounts, engine.host_paths()).await?;
         let socket_policy = socket_policy.unwrap_or_default();
         let egress_policy = crate::plugin::PluginEgressPolicy::new(
             Arc::clone(&allowed_hosts),
@@ -510,6 +515,9 @@ impl ComponentHostPlugin {
                 func: Arc::clone(&lifecycle.unbind.name),
             });
         }
+        // Registered last, once nothing else can fail, so a plugin that does
+        // not load closes no directory to workloads.
+        let volume_registration = engine.host_paths().register_plugin_volumes(opened_volumes);
         Ok(Self {
             id,
             runtime: PluginRuntime {
@@ -533,6 +541,7 @@ impl ComponentHostPlugin {
             max_restarts: DEFAULT_MAX_RESTARTS,
             state,
             _port_reservations: port_reservations,
+            _volume_registration: volume_registration,
         })
     }
 
@@ -2273,29 +2282,38 @@ fn build_plugin_store(
     store
 }
 
+/// A plugin's volumes, resolved at load.
+struct ResolvedPluginVolumes {
+    /// What each incarnation of the plugin mounts.
+    mounts: Arc<[ResolvedVolumeMount]>,
+    /// The canonical directory of each volume opened, for the host to keep
+    /// workloads out of.
+    opened: Vec<std::path::PathBuf>,
+}
+
 /// Resolve a plugin's declared volumes once, at load: a declaration that cannot
 /// work fails the host's start naming the plugin, rather than failing every
 /// incarnation the supervisor starts. Each mounted directory is opened here and
 /// its handle kept, so what was checked is what every incarnation mounts.
 ///
-/// Every directory opened is registered with `host_paths`, so from then on no
-/// workload volume may equal, contain, or lie inside it. A volume no mount
-/// uses is neither opened nor registered: the plugin cannot see it.
+/// A volume no mount uses is not opened: the plugin cannot see it.
 async fn resolve_plugin_volumes(
     id: &str,
     volumes: &[Volume],
     volume_mounts: &[VolumeMount],
     host_paths: &HostPathPolicy,
-) -> anyhow::Result<Arc<[ResolvedVolumeMount]>> {
+) -> anyhow::Result<ResolvedPluginVolumes> {
     let owner = format!("host component plugin '{id}'");
     crate::plugin::component_plugin_spec::validate_plugin_volumes(volumes, volume_mounts, &owner)?;
 
     let mounted: BTreeSet<&str> = volume_mounts.iter().map(|m| m.name.as_str()).collect();
     let mut to_open = Vec::with_capacity(mounted.len());
     for volume in volumes {
-        // Validation refused every other volume type.
-        let VolumeType::HostPath(HostPathVolume { local_path }) = &volume.volume_type else {
-            continue;
+        let local_path = match &volume.volume_type {
+            VolumeType::HostPath(HostPathVolume { local_path }) => local_path,
+            VolumeType::EmptyDir(_) => {
+                anyhow::bail!("{owner}: volume '{}' is not a hostPath", volume.name)
+            }
         };
         if mounted.contains(volume.name.as_str()) {
             to_open.push((volume.name.clone(), local_path.clone()));
@@ -2309,35 +2327,36 @@ async fn resolve_plugin_volumes(
     }
 
     let policy = host_paths.clone();
+    let open_owner = owner.clone();
     let opened = tokio::task::spawn_blocking(move || {
         let mut opened = HashMap::with_capacity(to_open.len());
         for (name, local_path) in to_open {
             let dir = policy
                 .open_host_config_volume(std::path::Path::new(&local_path))
                 .with_context(|| {
-                    format!("{owner}: volume '{name}' hostPath {local_path} cannot be mounted")
+                    format!("{open_owner}: volume '{name}' hostPath {local_path} cannot be mounted")
                 })?;
             opened.insert(name, dir);
         }
-        // Only once every volume opened, so a plugin that fails to load
-        // leaves no directory closed to workloads.
-        policy.register_plugin_volumes(opened.values().map(|dir| dir.path.clone()));
         anyhow::Ok(opened)
     })
     .await??;
 
-    volume_mounts
+    let mounts = volume_mounts
         .iter()
         .map(|mount| {
             // Validation checked every mount names a declared volume, and every
             // mounted volume was opened, so this does not fail.
-            let dir = opened
-                .get(mount.name.as_str())
-                .ok_or_else(|| anyhow::anyhow!("{id}: volume '{}' was not opened", mount.name))?;
+            let dir = opened.get(mount.name.as_str()).ok_or_else(|| {
+                anyhow::anyhow!("{owner}: volume '{}' was not opened", mount.name)
+            })?;
             ResolvedVolumeMount::from_opened(dir, mount)
         })
-        .collect::<anyhow::Result<Vec<_>>>()
-        .map(Into::into)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(ResolvedPluginVolumes {
+        mounts: mounts.into(),
+        opened: opened.into_values().map(|dir| dir.path).collect(),
+    })
 }
 
 fn component_plugin_socket_policy(
@@ -3521,7 +3540,8 @@ mod tests {
             &HostPathPolicy::default(),
         )
         .await
-        .expect("both volumes resolve");
+        .expect("both volumes resolve")
+        .mounts;
 
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].mount_path(), "/models");
@@ -3545,7 +3565,8 @@ mod tests {
             &HostPathPolicy::default(),
         )
         .await
-        .expect("one volume at two paths, and a volume nothing mounts, both resolve");
+        .expect("one volume at two paths, and a volume nothing mounts, both resolve")
+        .mounts;
 
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].mount_path(), "/models");
@@ -3611,7 +3632,7 @@ mod tests {
             .open(data.path())
             .expect("nothing is closed before the plugin loads");
 
-        resolve_plugin_volumes(
+        let resolved = resolve_plugin_volumes(
             "vol",
             &[host_path("data", data.path())],
             &[mount("data", "/data", true)],
@@ -3619,6 +3640,10 @@ mod tests {
         )
         .await
         .unwrap();
+        workloads
+            .open(data.path())
+            .expect("resolving alone closes nothing, so a plugin that fails later leaves no trace");
+        let registration = policy.register_plugin_volumes(resolved.opened);
 
         for refused in [data.path(), inside.as_path(), &std::env::temp_dir()] {
             let err = workloads
@@ -3633,6 +3658,30 @@ mod tests {
         workloads
             .open(unrelated.path())
             .expect("a directory apart from the plugin's is still permitted");
+
+        drop(registration);
+        workloads
+            .open(data.path())
+            .expect("an unloaded plugin's directories are released");
+    }
+
+    #[tokio::test]
+    async fn a_directory_two_plugins_mount_stays_closed_until_both_unload() {
+        let data = tempfile::tempdir().unwrap();
+        let policy = HostPathPolicy::new([], [data.path().to_path_buf()], None, None);
+        let canonical = data.path().canonicalize().unwrap();
+        let first = policy.register_plugin_volumes(vec![canonical.clone()]);
+        let second = policy.register_plugin_volumes(vec![canonical]);
+
+        drop(first);
+        assert!(
+            policy.open(data.path()).is_err(),
+            "the second plugin still mounts it"
+        );
+        drop(second);
+        policy
+            .open(data.path())
+            .expect("released once neither plugin mounts it");
     }
 
     #[tokio::test]
@@ -3656,7 +3705,9 @@ mod tests {
         )
         .await
         .expect("an unmounted volume is not opened, so a missing one is no error");
-        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved.mounts.len(), 1);
+        assert_eq!(resolved.opened, [used.canonicalize().unwrap()]);
+        let _registration = policy.register_plugin_volumes(resolved.opened);
         policy
             .open(&unused)
             .expect("an unmounted volume is not closed to workloads");
@@ -3754,7 +3805,8 @@ mod tests {
                 &HostPathPolicy::default(),
             )
             .await
-            .unwrap(),
+            .unwrap()
+            .mounts,
         };
         let store = build_plugin_store(&engine, "vol", &HashMap::new(), &store_context);
         assert_eq!(store.data().active_ctx.volume_mounts.len(), 1);

@@ -88,14 +88,6 @@ impl ComponentPluginSpec {
     }
 }
 
-/// Parse a `wash host --host-plugin` value: a comma-separated list of
-/// `key=value` fields. Required: `id`, and exactly one of `image` / `file`.
-/// Optional: `pull` (image only), `max-restarts`, `digest` (image only).
-///
-/// ```text
-/// id=acme-kv,image=ghcr.io/acme/kv-host:1.0.0,pull=ifNotPresent,max-restarts=3
-/// id=acme-kv,file=./build/kv_plugin.wasm
-/// ```
 /// Check a plugin's volumes and volume mounts without touching the host
 /// filesystem: every volume has a unique, non-empty name and is a `hostPath`,
 /// every mount names a declared volume at an absolute path with no `.` or `..`
@@ -123,11 +115,12 @@ pub fn validate_plugin_volumes(
             names.insert(name),
             "{owner}: two volumes are named '{name}'"
         );
-        if let VolumeType::EmptyDir(_) = volume.volume_type {
-            bail!(
+        match volume.volume_type {
+            VolumeType::HostPath(_) => {}
+            VolumeType::EmptyDir(_) => bail!(
                 "{owner}: volume '{name}' is an emptyDir, which host component plugins do not \
                  support yet"
-            );
+            ),
         }
     }
 
@@ -153,6 +146,14 @@ pub fn validate_plugin_volumes(
     Ok(())
 }
 
+/// Parse a `wash host --host-plugin` value: a comma-separated list of
+/// `key=value` fields. Required: `id`, and exactly one of `image` / `file`.
+/// Optional: `pull` (image only), `max-restarts`, `digest` (image only).
+///
+/// ```text
+/// id=acme-kv,image=ghcr.io/acme/kv-host:1.0.0,pull=ifNotPresent,max-restarts=3
+/// id=acme-kv,file=./build/kv_plugin.wasm
+/// ```
 impl FromStr for ComponentPluginSpec {
     type Err = anyhow::Error;
 

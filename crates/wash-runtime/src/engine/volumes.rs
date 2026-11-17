@@ -273,11 +273,47 @@ impl ReservedHostPaths {
 
     /// The listed path `canonical` equals, lies inside, or contains.
     fn exposed_by(&self, canonical: &Path) -> Option<&PathBuf> {
-        let exposed =
-            |listed: &Path| canonical.starts_with(listed) || listed.starts_with(canonical);
-        self.0
-            .iter()
-            .find(|listed| exposed(listed) || exposed(&resolve_existing(listed)))
+        exposed_in(&self.0, canonical)
+    }
+}
+
+/// The path in `listed` that `canonical` equals, lies inside, or contains,
+/// matching each listed path both as written and as it resolves now.
+fn exposed_in<'a>(listed: &'a [PathBuf], canonical: &Path) -> Option<&'a PathBuf> {
+    let exposed = |listed: &Path| canonical.starts_with(listed) || listed.starts_with(canonical);
+    listed
+        .iter()
+        .find(|listed| exposed(listed) || exposed(&resolve_existing(listed)))
+}
+
+/// Directories host plugins mount, which no workload volume may expose. One
+/// list is shared by every clone of a [`HostPathPolicy`]. A path appears once
+/// for each registration of it, so a plugin unloading does not reopen a
+/// directory another plugin still mounts.
+type PluginVolumes = Arc<std::sync::RwLock<Vec<PathBuf>>>;
+
+/// A plugin's claim that keeps workloads out of the directories it mounts.
+/// Dropping it, when the plugin is dropped, releases them.
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+#[derive(Debug)]
+#[must_use = "the directories are released when this is dropped"]
+pub(crate) struct PluginVolumeRegistration {
+    listed: PluginVolumes,
+    paths: Vec<PathBuf>,
+}
+
+#[cfg(all(feature = "host-component-plugins", feature = "oci"))]
+impl Drop for PluginVolumeRegistration {
+    fn drop(&mut self) {
+        let mut listed = self
+            .listed
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for path in &self.paths {
+            if let Some(at) = listed.iter().position(|listed| listed == path) {
+                listed.swap_remove(at);
+            }
+        }
     }
 }
 
@@ -306,9 +342,9 @@ fn canonicalize_volume(volume: &Path) -> anyhow::Result<PathBuf> {
 pub(crate) struct HostPathPolicy {
     reserved: ReservedHostPaths,
     /// Directories host plugins mount. No workload volume may expose one.
-    /// Shared by every clone, so a plugin that opens a volume after the
-    /// engine is built still keeps workloads out of it.
-    plugin_volumes: Arc<std::sync::RwLock<ReservedHostPaths>>,
+    /// Shared by every clone, so a plugin that loads after the engine is
+    /// built still keeps workloads out of its volumes.
+    plugin_volumes: PluginVolumes,
     /// Directories a volume must lie within. Empty permits none.
     allowed: Arc<[PathBuf]>,
     meters: Option<Arc<crate::host::quota::PolicyMeters>>,
@@ -331,21 +367,30 @@ impl HostPathPolicy {
         }
     }
 
-    /// Keep workload volumes out of the directories host plugins mount.
-    pub(crate) fn with_plugin_volumes(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
-        self.plugin_volumes = Arc::new(std::sync::RwLock::new(ReservedHostPaths::new(paths)));
+    /// Keep workload volumes out of these directories for as long as the
+    /// policy lives, before any plugin that mounts them has loaded. Adds to
+    /// the shared list, so every clone sees them.
+    pub(crate) fn with_plugin_volumes(self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.plugin_volumes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(ReservedHostPaths::new(paths).0.iter().cloned());
         self
     }
 
-    /// Keep workload volumes out of a directory a host plugin has opened.
-    /// Every clone of this policy sees it.
+    /// Keep workload volumes out of the directories a host plugin has opened
+    /// until the returned registration is dropped. Every clone of this policy
+    /// sees them. A workload that already holds one of them keeps it.
     #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
-    pub(crate) fn register_plugin_volumes(&self, paths: impl IntoIterator<Item = PathBuf>) {
-        let mut listed = self
-            .plugin_volumes
+    pub(crate) fn register_plugin_volumes(&self, paths: Vec<PathBuf>) -> PluginVolumeRegistration {
+        self.plugin_volumes
             .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *listed = ReservedHostPaths::new(listed.0.iter().cloned().chain(paths));
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(paths.iter().cloned());
+        PluginVolumeRegistration {
+            listed: Arc::clone(&self.plugin_volumes),
+            paths,
+        }
     }
 
     /// Check a workload's `hostPath` volume and open the directory that was
@@ -381,7 +426,7 @@ impl HostPathPolicy {
             .plugin_volumes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(plugin_volume) = listed.exposed_by(canonical) else {
+        let Some(plugin_volume) = exposed_in(&listed, canonical) else {
             return Ok(());
         };
         tracing::warn!(
