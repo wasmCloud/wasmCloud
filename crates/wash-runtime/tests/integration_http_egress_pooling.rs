@@ -174,6 +174,7 @@ fn egress_workload_with(
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "http-egress-pool".to_string(),
             annotations: HashMap::new(),

@@ -241,6 +241,7 @@ fn component_workload_with(
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: workload_id.to_string(),
             annotations: HashMap::new(),
@@ -277,6 +278,7 @@ fn service_workload_with(
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: workload_id.to_string(),
             annotations: HashMap::new(),

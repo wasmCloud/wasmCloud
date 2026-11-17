@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -56,11 +57,16 @@ const (
 	// workloadReplicaSetLegacyAnnotation is an older spelling of
 	// workloadReplicaSetNameAnnotation that the host still reads.
 	workloadReplicaSetLegacyAnnotation = "runtime.wasmcloud.dev/workload-replicaset"
-	// appNameAnnotation is the last name the host groups replicas by.
-	appNameAnnotation = "app.kubernetes.io/name"
-	// reasonStableNameChanged refuses a placement that would change the name
-	// recorded in status.stableName.
-	reasonStableNameChanged = "StableNameChanged"
+	workloadKind                       = "Workload"
+	workloadReplicaSetKind             = "WorkloadReplicaSet"
+	workloadDeploymentKind             = "WorkloadDeployment"
+	// reasonOwnerChanged refuses a placement whose owner differs from the one
+	// recorded in status.owner.
+	reasonOwnerChanged = "OwnerChanged"
+	// reasonOwnerUnverified holds a placement whose controller cannot be shown
+	// to have made the Workload. It is retried, since a deployment names a new
+	// set only after creating it.
+	reasonOwnerUnverified = "OwnerUnverified"
 )
 
 // WorkloadReconciler reconciles a Workload object
@@ -655,17 +661,18 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	if err != nil {
 		return err
 	}
-	name := stableName(spec.Annotations, spec.Name)
-	if placed := workload.Status.StableName; placed != "" && placed != name {
-		if r.Recorder != nil {
-			r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning, reasonStableNameChanged, "Place",
-				"The host would name this workload %q, but it was first placed as %q; recreate the Workload to run it under the new name",
-				name, placed)
-		}
-		return condition.ErrWithReason(reasonStableNameChanged, fmt.Errorf(
-			"the host would name this workload %q, but it was first placed as %q; recreate the Workload to run it under the new name",
-			name, placed))
+	owner, err := r.workloadOwner(ctx, workload)
+	if err != nil {
+		r.warn(workload, reasonOwnerUnverified, err)
+		return condition.ErrWithReason(reasonOwnerUnverified, err)
 	}
+	if placed := workload.Status.Owner; placed != nil && *placed != *owner {
+		err := fmt.Errorf("this workload is owned by %s %s (uid %s), but it was first placed for %s %s (uid %s); recreate the Workload to run it for its new owner",
+			owner.Kind, owner.Name, owner.UID, placed.Kind, placed.Name, placed.UID)
+		r.warn(workload, reasonOwnerChanged, err)
+		return condition.ErrWithReason(reasonOwnerChanged, err)
+	}
+	spec.Owner = &runtimev2.WorkloadOwner{Kind: owner.Kind, Name: owner.Name, Uid: string(owner.UID)}
 	req := &runtimev2.WorkloadStartRequest{WorkloadId: string(workload.GetUID()), Workload: spec}
 
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
@@ -691,7 +698,7 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	r.startWaits.Delete(workload.UID)
 
 	workload.Status.WorkloadID = workloadID
-	workload.Status.StableName = name
+	workload.Status.Owner = owner
 	condition.ForceStatusUpdate(ctx)
 	return condition.ErrSkipReconciliation()
 }
@@ -883,7 +890,8 @@ func (r *WorkloadReconciler) materializeWorkload(ctx context.Context, workload *
 // replicaAnnotations is workload's annotations for the host, with the names of
 // its WorkloadReplicaSet and WorkloadDeployment taken from its controlling
 // owners rather than from anything written on it. The host groups replicas,
-// and matches plugin secret grants, by those names.
+// and matches plugin secret grants written by name, by those names. Grants
+// that name an owner's kind match the owner sent alongside instead.
 func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *runtimev1alpha1.Workload) (map[string]string, error) {
 	annotations := make(map[string]string, len(workload.Annotations)+2)
 	for k, v := range workload.Annotations {
@@ -907,33 +915,84 @@ func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *r
 			return annotations, err
 		}
 		annotations[workloadDaemonSetNameAnnotation] = daemonSet.Name
-	case "WorkloadReplicaSet":
+	case workloadReplicaSetKind:
 		var replicaSet runtimev1alpha1.WorkloadReplicaSet
 		if found, err := r.getOwner(ctx, key, owner, &replicaSet); !found {
 			return annotations, err
 		}
 		annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
 		deployment := metav1.GetControllerOf(&replicaSet)
-		if deployment != nil && deployment.APIVersion == runtimev1alpha1.GroupVersion.String() && deployment.Kind == "WorkloadDeployment" {
+		if deployment != nil && deployment.APIVersion == runtimev1alpha1.GroupVersion.String() && deployment.Kind == workloadDeploymentKind {
 			annotations[workloadDeploymentNameAnnotation] = deployment.Name
 		}
 	}
 	return annotations, nil
 }
 
-// stableName is the name the host gives a workload's replicas from the
-// annotations it is sent, by the precedence of wash-runtime's stable_name.
-func stableName(annotations map[string]string, name string) string {
-	for _, key := range []string{
-		workloadDeploymentNameAnnotation, workloadDaemonSetNameAnnotation,
-		workloadReplicaSetNameAnnotation, workloadReplicaSetLegacyAnnotation,
-		appNameAnnotation,
-	} {
-		if value := strings.TrimSpace(annotations[key]); value != "" {
-			return value
-		}
+// workloadOwner is what grants name workload by: its controller, read back
+// by UID, or the Workload itself when nothing in this API controls it. The
+// controller must have made the Workload, as its current template, and a set
+// stands for its WorkloadDeployment only while the deployment names it current
+// or previous. So a copied owner reference never carries another object's
+// grants, and an error means the chain could not be shown.
+func (r *WorkloadReconciler) workloadOwner(ctx context.Context, workload *runtimev1alpha1.Workload) (*runtimev1alpha1.WorkloadOwner, error) {
+	ref := metav1.GetControllerOf(workload)
+	if ref == nil || ref.APIVersion != runtimev1alpha1.GroupVersion.String() {
+		return &runtimev1alpha1.WorkloadOwner{Kind: workloadKind, Name: workload.Name, UID: workload.UID}, nil
 	}
-	return name
+	key := client.ObjectKey{Namespace: workload.Namespace, Name: ref.Name}
+	gone := func(err error) error {
+		return cmp.Or(err, fmt.Errorf("%s %s, which controls this Workload, is gone or was replaced", ref.Kind, ref.Name))
+	}
+	switch ref.Kind {
+	case workloadDaemonSetKind:
+		var daemonSet runtimev1alpha1.WorkloadDaemonSet
+		if found, err := r.getOwner(ctx, key, ref, &daemonSet); !found {
+			return nil, gone(err)
+		}
+		template := daemonSet.Spec.Template.DeepCopy()
+		if err := resolveDaemonSetTemplate(ctx, r.Client, &daemonSet, template); err != nil {
+			return nil, err
+		}
+		want := template.Spec.DeepCopy()
+		want.HostID = workload.Spec.HostID
+		if workload.Annotations[workloadDaemonSetGenerationAnnotation] != template.Hash() || !apiequality.Semantic.DeepEqual(workload.Spec, *want) {
+			return nil, fmt.Errorf("this Workload is not what WorkloadDaemonSet %s makes from its current template", daemonSet.Name)
+		}
+		return &runtimev1alpha1.WorkloadOwner{Kind: workloadDaemonSetKind, Name: daemonSet.Name, UID: daemonSet.UID}, nil
+	case workloadReplicaSetKind:
+		var replicaSet runtimev1alpha1.WorkloadReplicaSet
+		if found, err := r.getOwner(ctx, key, ref, &replicaSet); !found {
+			return nil, gone(err)
+		}
+		if workload.Annotations[workloadReplicaSetGenerationAnnotation] != replicaSet.Spec.Template.Hash() ||
+			!apiequality.Semantic.DeepEqual(workload.Spec, replicaSet.Spec.Template.Spec) {
+			return nil, fmt.Errorf("this Workload is not what WorkloadReplicaSet %s makes from its template", replicaSet.Name)
+		}
+		deploymentRef := metav1.GetControllerOf(&replicaSet)
+		if deploymentRef == nil || deploymentRef.APIVersion != runtimev1alpha1.GroupVersion.String() || deploymentRef.Kind != workloadDeploymentKind {
+			return &runtimev1alpha1.WorkloadOwner{Kind: workloadReplicaSetKind, Name: replicaSet.Name, UID: replicaSet.UID}, nil
+		}
+		var deployment runtimev1alpha1.WorkloadDeployment
+		key.Name = deploymentRef.Name
+		if found, err := r.getOwner(ctx, key, deploymentRef, &deployment); !found {
+			return nil, cmp.Or(err, fmt.Errorf("WorkloadDeployment %s, which controls WorkloadReplicaSet %s, is gone or was replaced", deploymentRef.Name, replicaSet.Name))
+		}
+		for _, set := range []*corev1.LocalObjectReference{deployment.Status.CurrentReplicaSet, deployment.Status.PreviousReplicaSet} {
+			if set != nil && set.Name == replicaSet.Name {
+				return &runtimev1alpha1.WorkloadOwner{Kind: workloadDeploymentKind, Name: deployment.Name, UID: deployment.UID}, nil
+			}
+		}
+		return nil, fmt.Errorf("WorkloadDeployment %s does not name WorkloadReplicaSet %s as its current or previous set", deployment.Name, replicaSet.Name)
+	default:
+		return &runtimev1alpha1.WorkloadOwner{Kind: workloadKind, Name: workload.Name, UID: workload.UID}, nil
+	}
+}
+
+func (r *WorkloadReconciler) warn(workload *runtimev1alpha1.Workload, reason string, err error) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(workload, nil, corev1.EventTypeWarning, reason, "Place", "%s", err.Error())
+	}
 }
 
 // getOwner reads the object owner names into obj. It reports false, with no

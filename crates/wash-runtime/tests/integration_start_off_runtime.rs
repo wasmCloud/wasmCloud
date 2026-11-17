@@ -50,6 +50,7 @@ async fn compiling_a_workload_leaves_the_runtime_free() -> Result<()> {
         .workload_start(WorkloadStartRequest {
             workload_id: "compile-off-runtime".to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "wasmcloud".to_string(),
                 name: "compile-off-runtime".to_string(),
                 annotations: Default::default(),

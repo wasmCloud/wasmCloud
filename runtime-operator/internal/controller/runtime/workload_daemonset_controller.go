@@ -178,13 +178,27 @@ func (r *WorkloadDaemonSetReconciler) resolveTemplate(
 	}
 
 	template := daemonSet.Spec.Template.DeepCopy()
-	if err := resolveArtifacts(ctx, r.Client, daemonSet.Namespace, template, daemonSet.Spec.Artifacts); err != nil {
+	if err := resolveDaemonSetTemplate(ctx, r.Client, daemonSet, template); err != nil {
 		return nil, "", err
+	}
+	return template, template.Hash(), nil
+}
+
+// resolveDaemonSetTemplate fills template, a copy of daemonSet's, as its
+// instances are made from it.
+func resolveDaemonSetTemplate(
+	ctx context.Context,
+	c client.Client,
+	daemonSet *runtimev1alpha1.WorkloadDaemonSet,
+	template *runtimev1alpha1.WorkloadReplicaTemplate,
+) error {
+	if err := resolveArtifacts(ctx, c, daemonSet.Namespace, template, daemonSet.Spec.Artifacts); err != nil {
+		return err
 	}
 	if daemonSet.Spec.Kubernetes != nil {
 		template.Spec.Kubernetes = daemonSet.Spec.Kubernetes.DeepCopy()
 	}
-	return template, template.Hash(), nil
+	return nil
 }
 
 // syncHosts brings every desired Host to the current template, respecting the

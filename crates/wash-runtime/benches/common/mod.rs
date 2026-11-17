@@ -147,6 +147,7 @@ pub async fn start_host_and_workload(
 /// client under bench calls.
 pub async fn start_backend_host(flavor: Flavor) -> anyhow::Result<BenchHost> {
     start_host_and_workload(|host| Workload {
+        owner: None,
         namespace: "bench".to_string(),
         name: format!("backend-{}", flavor.name()),
         annotations: HashMap::new(),
@@ -173,6 +174,7 @@ pub async fn start_backend_host(flavor: Flavor) -> anyhow::Result<BenchHost> {
 /// egress is allowed so the routed benchmarks can reach a backend host.
 pub async fn start_service_host() -> anyhow::Result<BenchHost> {
     start_host_and_workload(|host| Workload {
+        owner: None,
         namespace: "bench".to_string(),
         name: "bench-service".to_string(),
         annotations: HashMap::new(),

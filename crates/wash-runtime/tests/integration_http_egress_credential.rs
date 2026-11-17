@@ -23,7 +23,7 @@ use wash_runtime::{
         },
     },
     plugin::{wasi_config::DynamicConfig, wasi_logging::TracingLogger},
-    types::{Component, LocalResources, Workload, WorkloadStartRequest},
+    types::{Component, LocalResources, Workload, WorkloadOwner, WorkloadStartRequest},
     wit::WitInterface,
 };
 use zeroize::Zeroizing;
@@ -134,7 +134,7 @@ impl Router for CredentialingRouter {
             .unwrap()
             .push(caller.component_id.map(str::to_string));
         anyhow::ensure!(
-            (caller.namespace, caller.name) == ("test", "http-egress-credential"),
+            caller.namespace == "test" && caller.owner == Some(&deployment_owner()),
             "egress names its workload: {caller:?}"
         );
         let secret = EgressSecret::new(PLACEHOLDER, Arc::new(Fixed), SecretForm::Bearer)?
@@ -158,12 +158,22 @@ impl Router for CredentialingRouter {
     }
 }
 
+fn deployment_owner() -> WorkloadOwner {
+    WorkloadOwner::new(
+        "WorkloadDeployment",
+        "http-egress-credential",
+        "deployment-uid",
+    )
+    .unwrap()
+}
+
 fn workload() -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: Some(deployment_owner()),
             namespace: "test".to_string(),
-            name: "http-egress-credential".to_string(),
+            name: "http-egress-credential-7d9f-x2k".to_string(),
             annotations: HashMap::new(),
             service: None,
             components: vec![Component {
@@ -229,8 +239,14 @@ async fn get_with(
 /// A real guest sends the placeholder from its environment with an ordinary
 /// HTTP client, and the request leaves with the host's secret in its place.
 /// The same placeholder sent to a host the secret is not for is refused.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_guest_placeholder_leaves_as_the_host_secret() -> Result<()> {
+struct Started {
+    addr: std::net::SocketAddr,
+    outgoing: RecordingOutgoing,
+    callers: Arc<Mutex<Vec<Option<String>>>>,
+    _host: Arc<wash_runtime::host::Host>,
+}
+
+async fn start(request: WorkloadStartRequest) -> Result<Started> {
     let outgoing = RecordingOutgoing::default();
     let callers = Arc::<Mutex<Vec<Option<String>>>>::default();
     let router = CredentialingRouter {
@@ -250,7 +266,23 @@ async fn a_guest_placeholder_leaves_as_the_host_secret() -> Result<()> {
         .build()?
         .start()
         .await?;
-    host.workload_start(workload()).await?;
+    host.workload_start(request).await?;
+    Ok(Started {
+        addr,
+        outgoing,
+        callers,
+        _host: host,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_guest_placeholder_leaves_as_the_host_secret() -> Result<()> {
+    let Started {
+        addr,
+        outgoing,
+        callers,
+        _host,
+    } = start(workload()).await?;
 
     let (status, body) = get(addr, "/token").await?;
     assert_eq!(status, 200, "{body}");
@@ -277,5 +309,32 @@ async fn a_guest_placeholder_leaves_as_the_host_secret() -> Result<()> {
             .all(|c| c.as_deref().is_some_and(|id| !id.is_empty())),
         "{callers:?}"
     );
+    Ok(())
+}
+
+/// The router sees the owner the host was started with and nothing else: a
+/// workload that names the deployment and carries its annotations, but was
+/// given no owner, is not the deployment's and gets none of its secrets.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_claimed_name_is_not_an_owner() -> Result<()> {
+    let mut request = workload();
+    request.workload.owner = None;
+    request.workload.name = "http-egress-credential".to_string();
+    request.workload.annotations = HashMap::from([
+        (
+            "runtime.wasmcloud.dev/workload-deployment".to_string(),
+            "http-egress-credential".to_string(),
+        ),
+        (
+            "app.kubernetes.io/name".to_string(),
+            "http-egress-credential".to_string(),
+        ),
+    ]);
+    let started = start(request).await?;
+
+    let (status, body) = get(started.addr, "/token").await?;
+    assert_ne!(status, 200, "{body}");
+    assert!(started.outgoing.sent.lock().unwrap().is_empty());
+    assert_eq!(started.callers.lock().unwrap().len(), 1);
     Ok(())
 }

@@ -7,6 +7,7 @@ import (
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -470,16 +471,29 @@ type WorkloadStatus struct {
 	Environment string `json:"environment,omitempty"`
 	// +kubebuilder:validation:Optional
 	WorkloadID string `json:"workloadId,omitempty"`
-	// StableName is the name the host gives this Workload's replicas, as
-	// computed from what it was sent when first placed. It comes from names
-	// in the Workload's own namespace, chosen by whoever created it or its
-	// owners, so it is unique only within that namespace. It is fixed once
-	// placed: a later placement that would change it is refused with reason
-	// StableNameChanged, and the remedy is to recreate the Workload. Workloads
-	// placed before this field existed do not have it until they are
-	// recreated.
+	// Owner is what grants name this Workload by, with its namespace: the
+	// WorkloadDeployment, WorkloadDaemonSet or WorkloadReplicaSet that
+	// controls it, or the Workload itself when nothing does. The operator
+	// verifies it when it first places the Workload and sends it to the host.
+	// It is fixed once placed: a later placement with another owner is
+	// refused with reason OwnerChanged, and the remedy is to recreate the
+	// Workload. Workloads placed before this field existed do not have it,
+	// and hold no grant, until they are placed again.
 	// +kubebuilder:validation:Optional
-	StableName string `json:"stableName,omitempty"`
+	Owner *WorkloadOwner `json:"owner,omitempty"`
+}
+
+// WorkloadOwner names an object in the Workload's namespace by kind, name and
+// UID. Kinds keep names apart, so a Workload and a WorkloadDeployment of the
+// same name are different owners, and the UID tells an object from one
+// recreated under its name.
+type WorkloadOwner struct {
+	// +kubebuilder:validation:Required
+	Kind string `json:"kind"`
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// +kubebuilder:validation:Required
+	UID types.UID `json:"uid"`
 }
 
 // +kubebuilder:object:root=true

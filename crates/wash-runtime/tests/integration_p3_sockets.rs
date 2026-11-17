@@ -82,6 +82,7 @@ async fn test_p3_tcp_and_udp_loopback() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-socket-tcp".to_string(),
             annotations: HashMap::new(),
@@ -121,6 +122,7 @@ async fn test_p3_socket_component_initialization() -> Result<()> {
     let engine = engine_with_p3();
 
     let workload = Workload {
+        owner: None,
         namespace: "test".to_string(),
         name: "p3-socket-init".to_string(),
         annotations: HashMap::new(),

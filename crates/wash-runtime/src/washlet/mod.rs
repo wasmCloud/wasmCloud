@@ -1889,6 +1889,7 @@ async fn workload_start(
         wit_world,
         volumes,
         identity,
+        owner,
     }) = req.workload
     else {
         anyhow::bail!("workload is required");
@@ -1898,6 +1899,9 @@ async fn workload_start(
     if workload_id.is_empty() {
         anyhow::bail!("workload_id is required");
     }
+    let owner = owner
+        .map(|owner| crate::types::WorkloadOwner::new(&owner.kind, &owner.name, &owner.uid))
+        .transpose()?;
 
     // Claimed before any image is fetched. Until the host holds the id a
     // status reports it missing and a stop reports it already gone, so a stop
@@ -2030,6 +2034,7 @@ async fn workload_start(
                 components,
                 host_interfaces,
                 volumes,
+                owner,
             },
         };
         Ok(request)
@@ -2371,6 +2376,54 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    /// A start that names an owner names all of it, or is refused before the
+    /// host claims the id or pulls anything.
+    #[tokio::test]
+    async fn a_partial_owner_is_refused() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::new()
+            .with_engine(crate::engine::Engine::builder().build()?)
+            .build()?;
+        for owner in [
+            types::v2::WorkloadOwner {
+                kind: "WorkloadDeployment".into(),
+                name: "billing".into(),
+                uid: String::new(),
+            },
+            types::v2::WorkloadOwner {
+                kind: String::new(),
+                name: "billing".into(),
+                uid: "uid".into(),
+            },
+        ] {
+            let request = types::v2::WorkloadStartRequest {
+                workload_id: "w1".into(),
+                workload: Some(types::v2::Workload {
+                    namespace: "default".into(),
+                    name: "billing-7d9f".into(),
+                    owner: Some(owner),
+                    ..Default::default()
+                }),
+            };
+            let err = workload_start(
+                &host,
+                request,
+                host.config(),
+                &tokio::sync::Semaphore::new(1),
+            )
+            .await
+            .expect_err("a partial owner starts nothing");
+            assert!(
+                format!("{err:#}").contains("needs a kind, a name and a uid"),
+                "{err:#}"
+            );
+        }
+        assert!(
+            host.workload_reserve("w1").await.is_ok(),
+            "the id was never claimed"
+        );
+        Ok(())
+    }
 
     #[test]
     fn cluster_host_id_matches_the_inner_builder() -> anyhow::Result<()> {

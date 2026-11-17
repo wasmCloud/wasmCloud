@@ -77,6 +77,7 @@ async fn wasi_blobstore_handlers_emit_namespaced_spans() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "span-name-workload".to_string(),
             annotations: HashMap::new(),

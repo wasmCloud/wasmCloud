@@ -2189,6 +2189,9 @@ impl serde::Serialize for Workload {
         if self.identity.is_some() {
             len += 1;
         }
+        if self.owner.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.Workload", len)?;
         if !self.namespace.is_empty() {
             struct_ser.serialize_field("namespace", &self.namespace)?;
@@ -2211,6 +2214,9 @@ impl serde::Serialize for Workload {
         if let Some(v) = self.identity.as_ref() {
             struct_ser.serialize_field("identity", v)?;
         }
+        if let Some(v) = self.owner.as_ref() {
+            struct_ser.serialize_field("owner", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -2229,6 +2235,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
             "witWorld",
             "volumes",
             "identity",
+            "owner",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2240,6 +2247,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
             WitWorld,
             Volumes,
             Identity,
+            Owner,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2268,6 +2276,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
                             "witWorld" | "wit_world" => Ok(GeneratedField::WitWorld),
                             "volumes" => Ok(GeneratedField::Volumes),
                             "identity" => Ok(GeneratedField::Identity),
+                            "owner" => Ok(GeneratedField::Owner),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2294,6 +2303,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
                 let mut wit_world__ = None;
                 let mut volumes__ = None;
                 let mut identity__ = None;
+                let mut owner__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Namespace => {
@@ -2340,6 +2350,12 @@ impl<'de> serde::Deserialize<'de> for Workload {
                             }
                             identity__ = map_.next_value()?;
                         }
+                        GeneratedField::Owner => {
+                            if owner__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("owner"));
+                            }
+                            owner__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(Workload {
@@ -2350,6 +2366,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
                     wit_world: wit_world__,
                     volumes: volumes__.unwrap_or_default(),
                     identity: identity__,
+                    owner: owner__,
                 })
             }
         }
@@ -2771,6 +2788,131 @@ impl<'de> serde::Deserialize<'de> for WorkloadIdentityRenewResponse {
             }
         }
         deserializer.deserialize_struct("wasmcloud.runtime.v2.WorkloadIdentityRenewResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for WorkloadOwner {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.kind.is_empty() {
+            len += 1;
+        }
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if !self.uid.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.WorkloadOwner", len)?;
+        if !self.kind.is_empty() {
+            struct_ser.serialize_field("kind", &self.kind)?;
+        }
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if !self.uid.is_empty() {
+            struct_ser.serialize_field("uid", &self.uid)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkloadOwner {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "kind",
+            "name",
+            "uid",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Kind,
+            Name,
+            Uid,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "kind" => Ok(GeneratedField::Kind),
+                            "name" => Ok(GeneratedField::Name),
+                            "uid" => Ok(GeneratedField::Uid),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WorkloadOwner;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct wasmcloud.runtime.v2.WorkloadOwner")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WorkloadOwner, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut kind__ = None;
+                let mut name__ = None;
+                let mut uid__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Kind => {
+                            if kind__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("kind"));
+                            }
+                            kind__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Uid => {
+                            if uid__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("uid"));
+                            }
+                            uid__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(WorkloadOwner {
+                    kind: kind__.unwrap_or_default(),
+                    name: name__.unwrap_or_default(),
+                    uid: uid__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("wasmcloud.runtime.v2.WorkloadOwner", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for WorkloadStartRequest {

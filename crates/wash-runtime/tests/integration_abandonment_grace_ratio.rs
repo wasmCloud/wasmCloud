@@ -64,6 +64,7 @@ async fn a_disconnect_does_not_trap_a_healthy_guest_when_the_deadline_outlives_t
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "healthy".to_string(),
             annotations: HashMap::new(),

@@ -106,6 +106,7 @@ fn service_workload(name: &str) -> wash_runtime::types::WorkloadStartRequest {
     wash_runtime::types::WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: wash_runtime::types::Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: name.to_string(),
             annotations: HashMap::new(),

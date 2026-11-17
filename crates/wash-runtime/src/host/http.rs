@@ -3406,7 +3406,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         let caller = EgressCaller {
             workload_id,
             namespace: "",
-            name: "",
+            owner: None,
             component_id: None,
         };
         self.outgoing_request_from(caller, request, options, fut, allowed_hosts)
@@ -5996,10 +5996,12 @@ mod tests {
         request: hyper::Request<WasiBody>,
         allowed_hosts: &[AllowedHost],
     ) -> SendResult {
+        let billing_owner =
+            crate::types::WorkloadOwner::new("WorkloadDeployment", "billing-agent", "uid").unwrap();
         let caller = EgressCaller {
             workload_id: "wl",
             namespace: "default",
-            name: "billing-agent",
+            owner: Some(&billing_owner),
             component_id: Some("billing"),
         };
         Box::into_pin(server.outgoing_request_from(caller, request, None, no_io(), allowed_hosts))
@@ -6511,10 +6513,13 @@ mod tests {
 
         tracing::subscriber::with_default(subscriber, || {
             tracing::callsite::rebuild_interest_cache();
+            let billing_owner =
+                crate::types::WorkloadOwner::new("WorkloadDeployment", "billing-agent", "uid")
+                    .unwrap();
             let caller = EgressCaller {
                 workload_id: "wl",
                 namespace: "default",
-                name: "billing-agent",
+                owner: Some(&billing_owner),
                 component_id: Some("billing"),
             };
             drop(server.outgoing_request_from(

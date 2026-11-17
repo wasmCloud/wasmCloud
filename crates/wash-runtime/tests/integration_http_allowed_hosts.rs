@@ -113,6 +113,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "http-allowed-hosts".to_string(),
             annotations: HashMap::new(),

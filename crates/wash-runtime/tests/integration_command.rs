@@ -118,6 +118,7 @@ async fn resolve_components(
         .initialize_workload(
             "command-test",
             Workload {
+                owner: None,
                 name: "command-test".into(),
                 namespace: "test".into(),
                 annotations: HashMap::new(),

@@ -127,6 +127,7 @@ async fn a_workload_with_an_ephemeral_linked_call_releases_its_ingress() -> Resu
         let request = WorkloadStartRequest {
             workload_id: uuid::Uuid::new_v4().to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "test".to_string(),
                 name: "ingress-release-linked".to_string(),
                 annotations: HashMap::new(),

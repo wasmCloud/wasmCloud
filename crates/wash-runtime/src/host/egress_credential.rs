@@ -80,16 +80,12 @@ pub struct EgressCaller<'a> {
     /// The workload's namespace, for matching it to grants. Empty when the
     /// host was not told it, as for a host component plugin.
     pub namespace: &'a str,
-    /// The workload's name across replicas, so grants can target the
-    /// deployment: its deployment, daemonset or replicaset annotation, else
-    /// its `app.kubernetes.io/name` annotation, else its own name. Empty when
-    /// unknown.
-    ///
-    /// Both names come from the start request, so they are only as
-    /// trustworthy as its sender: any workload started in a namespace can
-    /// carry another's application-name annotation and claim its name. Bind
-    /// authority to something the sender cannot choose where that matters.
-    pub name: &'a str,
+    /// The controller the workload belongs to, as its control plane verified
+    /// it: what grants name the workload by, with `namespace`. `None` when the
+    /// host was not told one; such a caller matches no grant that names a
+    /// workload. Annotations and the workload's own name never stand in for
+    /// it, since any workload in the namespace can choose those.
+    pub owner: Option<&'a crate::types::WorkloadOwner>,
     /// `None` when no single component can be attested: the request reached
     /// the host without a component behind it, or a concurrent cross-component
     /// call was in flight on the store, so the active component may not be

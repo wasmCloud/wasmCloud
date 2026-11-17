@@ -42,6 +42,7 @@ fn svc_counter_request(host: &str, max_restarts: u64) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host.to_string(),
             annotations: HashMap::new(),
