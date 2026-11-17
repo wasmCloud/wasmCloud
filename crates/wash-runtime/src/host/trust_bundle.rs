@@ -717,9 +717,9 @@ impl TrustBundles {
         let key = held.bundle.jwt_keys.get(&kid).ok_or_else(|| {
             anyhow::anyhow!("{}'s bundle has no jwt-svid key {kid:?}", id.trust_domain())
         })?;
-        let signed = &token[..header.len() + 1 + payload.len()];
-        key.verify(alg, signed.as_bytes(), &decode(signature)?)
-            .map_err(|e| anyhow::anyhow!("the JWT-SVID for {id}: {e}"))?;
+        // The claims are checked first, so a token for another audience or
+        // out of date costs no signature check; it is accepted only once the
+        // signature verifies.
         let audiences = match claims.aud {
             Audience::One(aud) => vec![aud],
             Audience::Many(auds) => auds,
@@ -742,6 +742,9 @@ impl TrustBundles {
                 "the JWT-SVID for {id} is not valid yet"
             );
         }
+        let signed = &token[..header.len() + 1 + payload.len()];
+        key.verify(alg, signed.as_bytes(), &decode(signature)?)
+            .map_err(|e| anyhow::anyhow!("the JWT-SVID for {id}: {e}"))?;
         Ok(JwtSvidClaims {
             spiffe_id: id,
             audience: audiences,

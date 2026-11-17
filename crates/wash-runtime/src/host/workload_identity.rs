@@ -281,6 +281,10 @@ impl rustls::client::ResolvesClientCert for FixedClientCert {
 
 /// One workload's identity material.
 struct Entry {
+    /// The grant's, fixed at bind, so a handshake reads them with no lock.
+    ingress_hosts: Vec<String>,
+    /// The grant's namespace and identity_ref, when it names one.
+    identity: Option<(Option<String>, String)>,
     grant: Mutex<IdentityGrant>,
     loaded_digests: Mutex<Vec<String>>,
     svid: Arc<RotatingClientIdentity>,
@@ -486,10 +490,24 @@ impl WorkloadCredentials {
             .iter()
             .map(|host| {
                 canonical_host(host)
-                    .filter(|h| !h.starts_with('['))
+                    .filter(|h| !h.starts_with('[') && h.parse::<std::net::Ipv4Addr>().is_err())
                     .ok_or_else(|| anyhow::anyhow!("ingress host {host:?} is not an exact name"))
             })
             .collect::<anyhow::Result<_>>()?;
+        let mut seen = std::collections::HashSet::new();
+        for d in &grant.mtls_destinations {
+            // The first match is used, so a duplicate could unpin a server.
+            anyhow::ensure!(
+                seen.insert((d.host.as_str(), d.port)),
+                "mTLS destination {}:{} is listed twice",
+                d.host,
+                d.port
+            );
+        }
+        let identity = grant
+            .identity_ref
+            .clone()
+            .map(|name| (grant.namespace.clone(), name));
         let mut entries = self.entries();
         if let Some(entry) = entries.get(workload_id) {
             anyhow::ensure!(
@@ -501,19 +519,15 @@ impl WorkloadCredentials {
             if other == workload_id || entry.released() {
                 continue;
             }
-            let held = entry.grant.lock().unwrap_or_else(|e| e.into_inner());
             // Replicas of one identity may share a name: they present one
             // SPIFFE ID.
-            let same_identity = grant.identity_ref.is_some()
-                && held.identity_ref == grant.identity_ref
-                && held.namespace == grant.namespace;
-            if same_identity {
+            if identity.is_some() && entry.identity == identity {
                 continue;
             }
             if let Some(host) = grant
                 .ingress_hosts
                 .iter()
-                .find(|host| held.ingress_hosts.contains(host))
+                .find(|host| entry.ingress_hosts.contains(host))
             {
                 anyhow::bail!("ingress host {host} already presents workload {other}'s identity");
             }
@@ -524,9 +538,12 @@ impl WorkloadCredentials {
             .iter()
             .map(|audience| (audience.clone(), Arc::default()))
             .collect();
+        let ingress_hosts = grant.ingress_hosts.clone();
         entries.insert(
             workload_id.to_string(),
             Arc::new(Entry {
+                ingress_hosts,
+                identity,
                 grant: Mutex::new(grant),
                 loaded_digests: Mutex::default(),
                 svid,
@@ -692,6 +709,24 @@ impl WorkloadCredentials {
             .map(|id| id.to_string())
     }
 
+    /// Whether a request for `workload_id` may be answered on a connection
+    /// whose client authenticated `served`: the workload's own SPIFFE ID, or,
+    /// before it has one, the ID a replica of the same identity presents.
+    pub(crate) fn serves_as(&self, workload_id: &str, served: &str) -> bool {
+        let entries = self.entries();
+        let Some(entry) = entries.get(workload_id).filter(|e| !e.released()) else {
+            return false;
+        };
+        if let Some(id) = entry.spiffe_id.load_full() {
+            return *id == served;
+        }
+        entry.identity.is_some()
+            && entries.values().any(|other| {
+                other.identity == entry.identity
+                    && other.spiffe_id.load_full().is_some_and(|id| *id == served)
+            })
+    }
+
     /// The JWT-SVID for `audience`, as a bearer credential the host keeps
     /// current. `None` when the grant does not name that audience.
     pub fn jwt_source(
@@ -713,13 +748,7 @@ impl WorkloadCredentials {
     ) -> Option<(String, Arc<rustls::sign::CertifiedKey>)> {
         let name = canonical_host(server_name)?;
         self.entries().values().find_map(|entry| {
-            if !entry
-                .grant
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .ingress_hosts
-                .contains(&name)
-            {
+            if !entry.ingress_hosts.contains(&name) {
                 return None;
             }
             entry.presentable()?;
