@@ -233,6 +233,8 @@ pub struct BindingSchema {
     closed: bool,
     /// See [`BindingSchema::and_independent_keys`].
     independent_keys: bool,
+    /// See [`BindingSchema::and_implicit_ceilings`].
+    implicit_ceilings: BTreeMap<String, String>,
 }
 
 impl BindingSchema {
@@ -372,6 +374,36 @@ impl BindingSchema {
     pub fn and_independent_keys(mut self) -> Self {
         self.independent_keys = true;
         self
+    }
+
+    /// What an undeclared ceiling stands for, per key.
+    ///
+    /// Without one, a workload setting a ceiling key the host left unset is
+    /// refused, which is right for an allowlist, where unset grants nothing.
+    /// It is wrong for a limit where unset means "no limit": the workload
+    /// asking for less would be refused. The value is checked with the same
+    /// [`crate::plugin::HostPlugin::narrows`] predicate as a declared ceiling.
+    #[must_use]
+    pub fn and_implicit_ceilings<I, K, V>(mut self, pairs: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: Into<String>,
+    {
+        for (key, value) in pairs {
+            let key = self.canonical(key.as_ref());
+            self.implicit_ceilings.insert(key, value.into());
+        }
+        self
+    }
+
+    /// The ceiling `key` has when the host declares none, if the plugin gave
+    /// it one.
+    #[must_use]
+    pub fn implicit_ceiling(&self, key: &str) -> Option<&str> {
+        self.implicit_ceilings
+            .get(&self.canonical(key))
+            .map(String::as_str)
     }
 
     /// Whether [`BindingSchema::and_independent_keys`] was declared.
@@ -1264,40 +1296,42 @@ impl PluginBindingSet {
             let Some(workload_value) = workload.value(key) else {
                 continue;
             };
-            match lookup(host_layer, key, schema) {
+            let declared = lookup(host_layer, key, schema);
+            let (ceiling, shown) = match (&declared, schema.implicit_ceiling(key)) {
+                (Some(ceiling), _) => (ceiling.expose(), format!("`{ceiling}`")),
+                (None, Some(implicit)) => (
+                    implicit,
+                    format!("`{implicit}`, its default when the host sets none"),
+                ),
                 // No ceiling was declared, so nothing contains the request. An
                 // ungranted allowlist has to resolve to empty, not to whatever
                 // the manifest wrote.
-                None => findings.push(format!(
-                    "it sets `{key}`, which this host declares no ceiling for; a grant the \
-                     operator never declared cannot be narrowed into"
-                )),
-                Some(ceiling)
-                    if !narrows(
-                        &schema.canonical(key),
-                        ceiling.expose(),
-                        workload_value.expose(),
-                    ) =>
-                {
+                (None, None) => {
                     findings.push(format!(
-                        "`{key}: {workload_value}` is not within the grant this host declared \
-                         (`{ceiling}`){}. A workload may narrow a grant, never widen one",
-                        // The predicate is the only thing that knows what
-                        // containment means, so it is also what localizes the
-                        // failure: re-ask it per element to name the one that
-                        // does not fit.
-                        match first_widening_element(
-                            &schema.canonical(key),
-                            ceiling.expose(),
-                            workload_value,
-                            narrows
-                        ) {
-                            Some(element) => format!(" — `{element}` is outside it"),
-                            None => String::new(),
-                        }
+                        "it sets `{key}`, which this host declares no ceiling for; a grant the \
+                         operator never declared cannot be narrowed into"
                     ));
+                    continue;
                 }
-                Some(_) => {}
+            };
+            if !narrows(&schema.canonical(key), ceiling, workload_value.expose()) {
+                findings.push(format!(
+                    "`{key}: {workload_value}` is not within the grant this host declared \
+                     ({shown}){}. A workload may narrow a grant, never widen one",
+                    // The predicate is the only thing that knows what
+                    // containment means, so it is also what localizes the
+                    // failure: re-ask it per element to name the one that
+                    // does not fit.
+                    match first_widening_element(
+                        &schema.canonical(key),
+                        ceiling,
+                        workload_value,
+                        narrows
+                    ) {
+                        Some(element) => format!(" — `{element}` is outside it"),
+                        None => String::new(),
+                    }
+                ));
             }
         }
 
@@ -2316,6 +2350,53 @@ mod tests {
                 &nats_schema(),
                 prefix_narrows(),
             )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("declares no ceiling"), "got: {err}");
+    }
+
+    #[test]
+    fn an_implicit_ceiling_lets_a_workload_narrow_a_limit_the_host_left_unset() {
+        // A numeric limit: the workload's value narrows when it is no larger.
+        let at_most: NarrowsFn<'static> = &|_key: &str, host: &str, workload: &str| {
+            matches!(
+                (host.parse::<u64>(), workload.parse::<u64>()),
+                (Ok(h), Ok(w)) if w > 0 && w <= h
+            )
+        };
+        let schema = BindingSchema::with_host_owned_keys(["servers"])
+            .and_host_ceiling_keys(["max-size", "max-count", "subject-allow"])
+            .and_implicit_ceilings([("max_size", "1000"), ("max-count", "1")]);
+        assert_eq!(schema.implicit_ceiling("MAX-SIZE"), Some("1000"));
+        assert_eq!(schema.implicit_ceiling("subject-allow"), None);
+        let set = PluginBindingSet::new("wasmcloud-nats")
+            .with_workload_config(WorkloadConfigPolicy::Deny);
+
+        let resolved = set
+            .resolve("", &map(&[("max-size", "10")]), &schema, at_most)
+            .unwrap();
+        assert_eq!(resolved.get("max-size").unwrap(), "10");
+
+        let err = set
+            .resolve("", &map(&[("max-count", "2")]), &schema, at_most)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("`max-count: 2` is not within") && err.contains("`1`, its default"),
+            "got: {err}"
+        );
+
+        // A declared ceiling still wins over the implicit one.
+        let declared = set.clone().with_base(map(&[("max-count", "3")]));
+        assert!(
+            declared
+                .resolve("", &map(&[("max-count", "2")]), &schema, at_most)
+                .is_ok()
+        );
+
+        // A key without one is still refused when the host left it unset.
+        let err = set
+            .resolve("", &map(&[("subject-allow", "a")]), &schema, at_most)
             .unwrap_err()
             .to_string();
         assert!(err.contains("declares no ceiling"), "got: {err}");

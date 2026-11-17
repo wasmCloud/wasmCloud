@@ -170,17 +170,26 @@ pub struct PolicySpec {
     /// Replicas for a bucket a workload creates. `None` is the server's
     /// default, a single replica.
     pub bucket_replicas: Option<usize>,
+    /// How many buckets within the create grant may exist before a create of
+    /// a new one is refused. `None` is [`DEFAULT_BUCKET_MAX_COUNT`].
+    pub bucket_max_count: Option<u32>,
 }
 
 /// JetStream's cap on replicas per stream.
 pub const MAX_BUCKET_REPLICAS: usize = 5;
+
+/// Buckets a workload may create when the host sets no `bucket-max-count`:
+/// the one it makes at startup.
+pub const DEFAULT_BUCKET_MAX_COUNT: u32 = 1;
 
 impl PolicySpec {
     /// Whether a workload may create buckets with no host size limit, leaving
     /// only the JetStream account limits (and, for memory storage, server RAM).
     #[must_use]
     pub fn creates_unbounded_buckets(&self) -> bool {
-        !self.bucket_create_allow.is_empty() && self.bucket_max_bytes.is_none()
+        !self.bucket_allow.is_empty()
+            && !self.bucket_create_allow.is_empty()
+            && self.bucket_max_bytes.is_none()
     }
 }
 
@@ -635,6 +644,19 @@ fn read<A>(
         None => None,
     };
 
+    let bucket_max_count = match r.get("bucket-max-count") {
+        Some(raw) => Some(
+            raw.expose()
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .with_context(|| {
+                    format!("`bucket-max-count` must be a positive integer, got `{raw}`")
+                })?,
+        ),
+        None => None,
+    };
+
     let limits = Limits {
         max_in_flight: r.parse_usize("max-in-flight", DEFAULT_MAX_IN_FLIGHT)?,
         subscription_capacity: r
@@ -716,6 +738,7 @@ fn read<A>(
             bucket_delete_allow: r.list("bucket-delete-allow"),
             bucket_max_bytes,
             bucket_replicas,
+            bucket_max_count,
         },
         limits,
         ack_mode,
@@ -821,6 +844,7 @@ impl NatsConfig {
         }
         self.policy.bucket_max_bytes.hash(&mut hasher);
         self.policy.bucket_replicas.hash(&mut hasher);
+        self.policy.bucket_max_count.hash(&mut hasher);
         self.ack_mode.hash(&mut hasher);
         self.limits.max_in_flight.hash(&mut hasher);
         self.limits.subscription_capacity.hash(&mut hasher);
@@ -1336,15 +1360,41 @@ mod tests {
 
     #[test]
     fn a_create_grant_without_a_size_ceiling_is_unbounded() {
-        let spec = |create: &[&str], max_bytes| PolicySpec {
+        let spec = |allow: &[&str], create: &[&str], max_bytes| PolicySpec {
+            bucket_allow: allow.iter().map(|s| s.to_string()).collect(),
             bucket_create_allow: create.iter().map(|s| s.to_string()).collect(),
             bucket_max_bytes: max_bytes,
             ..Default::default()
         };
-        assert!(spec(&["cache"], None).creates_unbounded_buckets());
-        assert!(!spec(&["cache"], Some(1024)).creates_unbounded_buckets());
+        assert!(spec(&["cache"], &["cache"], None).creates_unbounded_buckets());
+        assert!(!spec(&["cache"], &["cache"], Some(1024)).creates_unbounded_buckets());
         // Nothing to bound when the workload may not create at all.
-        assert!(!spec(&[], None).creates_unbounded_buckets());
+        assert!(!spec(&["cache"], &[], None).creates_unbounded_buckets());
+        assert!(!spec(&[], &["cache"], None).creates_unbounded_buckets());
+    }
+
+    #[test]
+    fn bucket_max_count_must_be_a_positive_integer() {
+        let base = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
+        assert_eq!(base.policy.bucket_max_count, None);
+        let three = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("bucket-max-count", "3"),
+        ]))
+        .unwrap();
+        assert_eq!(three.policy.bucket_max_count, Some(3));
+        assert_ne!(base.connection_key(), three.connection_key());
+        for bad in ["0", "-1", "many", "4294967296"] {
+            let err = NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("bucket-max-count", bad),
+            ]))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("bucket-max-count"),
+                "{bad}: {err:#}"
+            );
+        }
     }
 
     #[test]

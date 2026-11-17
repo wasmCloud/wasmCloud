@@ -1,7 +1,8 @@
 //! `wasmcloud:nats/kv-admin@0.1.4` — KV bucket create, inspect and delete.
 //!
-//! Gated by `bucket-allow` plus `bucket-create-allow` or `bucket-delete-allow`,
-//! with `bucket-max-bytes` capping what a create may ask for.
+//! Gated by `bucket-allow` plus `bucket-create-allow` or `bucket-delete-allow`.
+//! A create is further limited by `bucket-max-bytes` (each bucket's size) and
+//! `bucket-max-count` (how many buckets the create grant may hold).
 
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ use async_nats::jetstream::context::{
     CreateKeyValueError, CreateKeyValueErrorKind, CreateStreamError, CreateStreamErrorKind,
     GetStreamError, GetStreamErrorKind, KeyValueError, KeyValueErrorKind,
 };
+use futures::TryStreamExt as _;
 use wasmtime::component::{Accessor, Resource};
 
 use crate::engine::ctx::SharedCtx;
@@ -57,8 +59,16 @@ impl<T: 'static + Send> labeled_kv_admin::HostWithStore<T> for SharedCtx {
         let requested = config.clone();
         let kv_config = match to_kv_config(&conn.policy, &server, config) {
             Ok(c) => c,
+            // Over `bucket-max-bytes`. The bucket may exist from before the
+            // ceiling was lowered, which makes it a conflict.
+            Err(types::NatsError::LimitExceeded(m)) => {
+                return Ok(Err(over_ceiling(&conn, &bucket, m).await));
+            }
             Err(e) => return Ok(Err(CreateBucketError::Nats(e))),
         };
+        if let Err(e) = check_bucket_count(&conn, &bucket).await {
+            return Ok(Err(CreateBucketError::Nats(e)));
+        }
         let store = match conn.jetstream.create_key_value(kv_config).await {
             Ok(store) => {
                 tracing::info!(bucket, "wasmcloud:nats created KV bucket");
@@ -133,15 +143,13 @@ async fn adopt_existing(
     requested: &kv_admin::BucketConfig,
 ) -> Result<jetstream::kv::Store, CreateBucketError> {
     let bucket = &requested.bucket;
-    let store = conn.jetstream.get_key_value(bucket).await.map_err(|e| {
-        // Gone or unreadable since the create saw it: still a conflict, so
-        // say so rather than surface the lookup's own error.
-        CreateBucketError::Nats(types::NatsError::Jetstream(format!(
-            "create bucket '{bucket}': the bucket exists with a different configuration, \
-             which could not be read back: {:?}",
-            bucket_lookup_err(bucket, e)
-        )))
-    })?;
+    // A timeout stays a timeout, and `not-found` means it was deleted since
+    // the create saw it, so a retry creates it.
+    let store = conn
+        .jetstream
+        .get_key_value(bucket)
+        .await
+        .map_err(|e| CreateBucketError::Nats(bucket_lookup_err(bucket, e)))?;
     let info = store.stream.cached_info();
     let existing = from_stream_config(store.name.clone(), &info.config);
     if !matches_request(&conn.policy, requested, &existing) {
@@ -160,6 +168,67 @@ async fn adopt_existing(
         );
     }
     Ok(store)
+}
+
+/// A create over `bucket-max-bytes`: `config-conflict` with what the bucket
+/// has when it exists, `limit-exceeded` when it does not.
+async fn over_ceiling(conn: &ConnHandle, bucket: &str, limit: String) -> CreateBucketError {
+    match conn.jetstream.get_key_value(bucket).await {
+        Ok(store) => CreateBucketError::ConfigConflict(from_stream_config(
+            store.name.clone(),
+            &store.stream.cached_info().config,
+        )),
+        Err(e) => match bucket_lookup_err(bucket, e) {
+            types::NatsError::NotFound(_) => {
+                CreateBucketError::Nats(types::NatsError::LimitExceeded(limit))
+            }
+            other => CreateBucketError::Nats(other),
+        },
+    }
+}
+
+/// Refuses a new bucket once the create grant already holds
+/// `bucket-max-count` of them. Counts what is on the server, whoever made it,
+/// so a restart or a second host shares the count and a delete frees a slot.
+/// Two concurrent creates of different names can both pass.
+async fn check_bucket_count(conn: &ConnHandle, bucket: &str) -> Result<(), types::NatsError> {
+    let max = conn.policy.bucket_max_count() as usize;
+    let mut held = Vec::new();
+    let mut names = conn.jetstream.stream_names();
+    loop {
+        let name = match names.try_next().await {
+            Ok(Some(name)) => name,
+            Ok(None) => break,
+            Err(e) => {
+                let timed_out = chain_timed_out(&e);
+                return Err(kv_err(
+                    format!("create bucket '{bucket}': listing buckets"),
+                    timed_out,
+                    e,
+                ));
+            }
+        };
+        let Some(existing) = name.strip_prefix("KV_") else {
+            continue;
+        };
+        // An existing bucket is opened, not created, so it never counts.
+        if existing == bucket {
+            return Ok(());
+        }
+        if conn.policy.check_bucket_create(existing).is_ok() {
+            held.push(existing.to_string());
+        }
+    }
+    if held.len() < max {
+        return Ok(());
+    }
+    held.sort();
+    Err(types::NatsError::LimitExceeded(format!(
+        "create bucket '{bucket}': this binding's bucket-max-count is {max} and its create \
+         grant already holds {}: {}",
+        held.len(),
+        held.join(", ")
+    )))
 }
 
 /// Whether an existing bucket is what `requested` asks for.

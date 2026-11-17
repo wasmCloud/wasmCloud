@@ -731,7 +731,8 @@ runtime:
       #
       # Keys are `wasmcloud:nats` config keys — `servers`, `subject-allow`,
       # `stream-allow`, `stream-delete-allow`, `bucket-allow`, `bucket-create-allow`,
-      # `bucket-delete-allow`, `bucket-max-bytes`, `bucket-replicas`, `creds`,
+      # `bucket-delete-allow`, `bucket-max-bytes`, `bucket-max-count`,
+      # `bucket-replicas`, `creds`,
       # `jwt`/`nkey-seed`, `username`/`password`, `token`, `tls-*`,
       # `jetstream-domain`. The
       # entry's own `config` applies to every binding; each entry under
@@ -756,12 +757,18 @@ runtime:
       # checks its stored subject. All grants are host-owned ceilings.
       # Creating or deleting a KV bucket (`kv-admin`) needs the bucket in
       # `bucket-allow` and in `bucket-create-allow` or `bucket-delete-allow`.
-      # `bucket-max-bytes` caps the size of a bucket a workload creates; unset
-      # leaves it to the JetStream account limits, and the host warns at bind.
+      # `bucket-max-bytes` caps the size of each bucket a workload creates;
+      # unset leaves it to the JetStream account limits, and the host warns at
+      # bind. `bucket-max-count` caps how many buckets the create grant may
+      # hold, counted on the server whoever made them; unset is one, and a
+      # delete frees a place. A workload may ask for less of either, even
+      # when they are unset. The most a binding can hold is `bucket-max-bytes`
+      # times `bucket-max-count`, times `bucket-replicas` on disk.
       # `bucket-replicas` (1-5, operator-only) sets how many copies such a
-      # bucket keeps; unset is one. Changing either later leaves existing
-      # buckets as they are, and a workload's repeat create still opens them
-      # (a bucket over a lowered `bucket-max-bytes` is reported as a conflict).
+      # bucket keeps; unset is one. Changing any of these later leaves
+      # existing buckets as they are, and a workload's repeat create still
+      # opens them (a bucket over a lowered `bucket-max-bytes` is reported as
+      # a conflict, whatever size the create asked for).
       #
       # `inbox-prefix` is refused on the entry's own `config`: it would give
       # every workload on the group the same inbox, and two workloads sharing
