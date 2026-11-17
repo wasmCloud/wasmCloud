@@ -88,6 +88,21 @@ impl ComponentPluginSpec {
     }
 }
 
+/// The directory a plugin volume names. Host component plugins take only
+/// `hostPath` volumes.
+pub(crate) fn plugin_host_path<'a>(
+    volume: &'a crate::types::Volume,
+    owner: &str,
+) -> anyhow::Result<&'a str> {
+    match &volume.volume_type {
+        crate::types::VolumeType::HostPath(host_path) => Ok(&host_path.local_path),
+        crate::types::VolumeType::EmptyDir(_) => bail!(
+            "{owner}: volume '{}' is an emptyDir, which host component plugins do not support yet",
+            volume.name
+        ),
+    }
+}
+
 /// Check a plugin's volumes and volume mounts without touching the host
 /// filesystem: every volume has a unique, non-empty name and is a `hostPath`,
 /// every mount names a declared volume at an absolute path with no `.` or `..`
@@ -105,8 +120,6 @@ pub fn validate_plugin_volumes(
     volume_mounts: &[crate::types::VolumeMount],
     owner: &str,
 ) -> anyhow::Result<()> {
-    use crate::types::VolumeType;
-
     let mut names = std::collections::HashSet::with_capacity(volumes.len());
     for volume in volumes {
         let name = volume.name.as_str();
@@ -115,13 +128,7 @@ pub fn validate_plugin_volumes(
             names.insert(name),
             "{owner}: two volumes are named '{name}'"
         );
-        match volume.volume_type {
-            VolumeType::HostPath(_) => {}
-            VolumeType::EmptyDir(_) => bail!(
-                "{owner}: volume '{name}' is an emptyDir, which host component plugins do not \
-                 support yet"
-            ),
-        }
+        plugin_host_path(volume, owner)?;
     }
 
     let mut mount_paths = std::collections::HashSet::with_capacity(volume_mounts.len());

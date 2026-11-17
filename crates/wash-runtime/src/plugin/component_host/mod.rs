@@ -106,7 +106,7 @@ use crate::plugin::component_plugin_spec::ComponentPluginSpec;
 use crate::plugin::wasmcloud_secrets::secret_handle;
 use crate::plugin::{HostPlugin, WitInterfaces};
 use crate::sockets::loopback;
-use crate::types::{HostPathVolume, LocalResources, Volume, VolumeMount, VolumeType};
+use crate::types::{LocalResources, Volume, VolumeMount};
 use crate::wit::{WitInterface, WitWorld, versions_compatible};
 
 mod lifecycle;
@@ -291,6 +291,10 @@ struct PluginStoreContext {
     /// The plugin's volumes, opened once at load. Every incarnation's store
     /// gets the same directory handles.
     volumes: Arc<[ResolvedVolumeMount]>,
+    /// Keeps workloads out of the directories in `volumes`. It sits beside the
+    /// handles so it lives as long as any copy of them does, including the
+    /// one a running supervisor holds.
+    _volume_registration: Arc<crate::engine::volumes::PluginVolumeRegistration>,
 }
 
 #[derive(Clone)]
@@ -318,9 +322,6 @@ pub struct ComponentHostPlugin {
     /// This plugin's claim on the real addresses its `ports` declared, held so
     /// nothing else takes one while the plugin is loaded.
     _port_reservations: Vec<crate::host::ports::PortReservation>,
-    /// Keeps workloads out of the directories this plugin mounts while it is
-    /// loaded.
-    _volume_registration: crate::engine::volumes::PluginVolumeRegistration,
 }
 
 #[bon::bon]
@@ -382,6 +383,11 @@ impl ComponentHostPlugin {
             mounts: volumes,
             opened: opened_volumes,
         } = resolve_plugin_volumes(id, &volumes, &volume_mounts, engine.host_paths()).await?;
+        // Closed to workloads as soon as they are open, so none can take one
+        // while the rest of the plugin loads. If loading fails below, dropping
+        // the registration opens them again.
+        let volume_registration =
+            Arc::new(engine.host_paths().register_plugin_volumes(opened_volumes));
         let socket_policy = socket_policy.unwrap_or_default();
         let egress_policy = crate::plugin::PluginEgressPolicy::new(
             Arc::clone(&allowed_hosts),
@@ -515,9 +521,6 @@ impl ComponentHostPlugin {
                 func: Arc::clone(&lifecycle.unbind.name),
             });
         }
-        // Registered last, once nothing else can fail, so a plugin that does
-        // not load closes no directory to workloads.
-        let volume_registration = engine.host_paths().register_plugin_volumes(opened_volumes);
         Ok(Self {
             id,
             runtime: PluginRuntime {
@@ -530,6 +533,7 @@ impl ComponentHostPlugin {
                     network: crate::host::ports::NetworkHandle::new(),
                     socket_policy,
                     volumes,
+                    _volume_registration: volume_registration,
                 },
             },
             egress_policy,
@@ -541,7 +545,6 @@ impl ComponentHostPlugin {
             max_restarts: DEFAULT_MAX_RESTARTS,
             state,
             _port_reservations: port_reservations,
-            _volume_registration: volume_registration,
         })
     }
 
@@ -2309,14 +2312,9 @@ async fn resolve_plugin_volumes(
     let mounted: BTreeSet<&str> = volume_mounts.iter().map(|m| m.name.as_str()).collect();
     let mut to_open = Vec::with_capacity(mounted.len());
     for volume in volumes {
-        let local_path = match &volume.volume_type {
-            VolumeType::HostPath(HostPathVolume { local_path }) => local_path,
-            VolumeType::EmptyDir(_) => {
-                anyhow::bail!("{owner}: volume '{}' is not a hostPath", volume.name)
-            }
-        };
+        let local_path = crate::plugin::component_plugin_spec::plugin_host_path(volume, &owner)?;
         if mounted.contains(volume.name.as_str()) {
-            to_open.push((volume.name.clone(), local_path.clone()));
+            to_open.push((volume.name.clone(), local_path.to_owned()));
         } else {
             warn!(
                 plugin = id,
@@ -2494,6 +2492,12 @@ mod tests {
     use super::*;
     use crate::host::allowed_loopback::AllowedLoopbackPort;
     use crate::sockets::{AddrDecision, DenyReason, Plane, SocketAddrUse};
+    use crate::types::{HostPathVolume, VolumeType};
+
+    /// A registration that keeps no directory closed, for stores built by hand.
+    fn no_volume_registration() -> Arc<crate::engine::volumes::PluginVolumeRegistration> {
+        Arc::new(HostPathPolicy::default().register_plugin_volumes(Vec::new()))
+    }
 
     #[tokio::test]
     async fn a_timed_out_plugin_stop_releases_its_store() -> anyhow::Result<()> {
@@ -2602,6 +2606,7 @@ mod tests {
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: Arc::default(),
             volumes: Arc::from([]),
+            _volume_registration: no_volume_registration(),
         };
         let store = build_plugin_store(
             &engine,
@@ -2637,6 +2642,7 @@ mod tests {
             network: crate::host::ports::NetworkHandle::new(),
             socket_policy: policy,
             volumes: Arc::from([]),
+            _volume_registration: no_volume_registration(),
         };
         let mut store = build_plugin_store(
             &engine,
@@ -3807,6 +3813,7 @@ mod tests {
             .await
             .unwrap()
             .mounts,
+            _volume_registration: no_volume_registration(),
         };
         let store = build_plugin_store(&engine, "vol", &HashMap::new(), &store_context);
         assert_eq!(store.data().active_ctx.volume_mounts.len(), 1);

@@ -1210,21 +1210,19 @@ impl HostCommand {
         // A credential file a `wasmcloud:nats` or `wasi:blobstore` binding
         // names, so a workload cannot mount the Secret the binding
         // authenticates with.
-        {
-            let bindings = self.plugin_bindings(config, project_dir)?;
-            for id in [
-                wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
-                wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
-            ] {
-                let declared = bindings.for_plugin(id);
-                let names: Vec<&str> = std::iter::once("")
-                    .chain(declared.binding_names())
-                    .collect();
-                for name in names {
-                    paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
-                        &declared.host_layer(name),
-                    ));
-                }
+        let bindings = self.plugin_bindings(config, project_dir)?;
+        for id in [
+            wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
+            wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
+        ] {
+            let declared = bindings.for_plugin(id);
+            let names: Vec<&str> = std::iter::once("")
+                .chain(declared.binding_names())
+                .collect();
+            for name in names {
+                paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
+                    &declared.host_layer(name),
+                ));
             }
         }
         paths.extend(
