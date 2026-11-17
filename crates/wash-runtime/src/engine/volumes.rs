@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use tokio::sync::RwLock;
-use wasmtime::error::Context as _;
 use wasmtime_wasi::filesystem::{Descriptor, Dir};
 use wasmtime_wasi::{FsPerms, OpenMode};
 
@@ -292,7 +292,7 @@ fn exposed_in<'a>(listed: &'a [PathBuf], canonical: &Path) -> Option<&'a PathBuf
 type PluginVolumes = Arc<std::sync::RwLock<Vec<PathBuf>>>;
 
 /// A plugin's claim that keeps workloads out of the directories it mounts.
-/// Dropping it, when the plugin is dropped, releases them.
+/// The plugin and its supervisor share this claim until both release it.
 #[cfg(all(feature = "host-component-plugins", feature = "oci"))]
 #[derive(Debug)]
 #[must_use = "the directories are released when this is dropped"]

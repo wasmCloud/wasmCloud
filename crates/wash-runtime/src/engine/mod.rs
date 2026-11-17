@@ -1539,12 +1539,11 @@ impl EngineBuilder {
     /// equal, contain, or lie inside one, even where
     /// [`Self::with_allowed_host_paths`] permits it. A plugin still mounts them.
     ///
-    /// A component plugin closes the directories it opens itself when it
-    /// loads, and releases them when it is dropped, so this is not needed for
-    /// that. It is for an embedder that starts workloads before its plugins
-    /// load: a workload that already holds a directory keeps it when a plugin
-    /// later mounts it, so list such directories here to close them from the
-    /// start. They stay closed for the engine's life.
+    /// Loading a component plugin reserves its mounted directories until the
+    /// plugin and its supervisor release them. Embedders that start workloads
+    /// before loading plugins can list the plugin directories here. A workload
+    /// that already holds a directory keeps it when a plugin later mounts it.
+    /// Directories listed here stay reserved for the engine's life.
     #[must_use]
     pub fn with_plugin_volume_host_paths(
         mut self,
