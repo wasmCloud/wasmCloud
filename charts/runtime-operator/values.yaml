@@ -1067,7 +1067,8 @@ runtime:
         # `allowedHostLoopbackPorts` entry naming the port. `127.0.0.1` keeps
         # meaning the guest's own virtual network either way.
         allowHostLoopback: false
-        # -- How the raw-socket egress policy is applied: `enforce` or `count`.
+        # -- How the egress policy is applied: `enforce` or `count`. It covers
+        # raw sockets and the addresses `wasi:http` requests resolve to.
         #
         # `enforce` refuses a connection the policy does not permit: a workload
         # reaches only what its `allowedHosts` declares. An entry permits an

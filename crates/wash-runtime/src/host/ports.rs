@@ -17,6 +17,16 @@ use anyhow::{Result, bail};
 use crate::host::declared_port::Protocol;
 use crate::sockets::loopback;
 
+/// Whether `ip` is an address of this machine: loopback, unspecified, or one
+/// assigned to a local interface. The last is asked of the kernel, which lets
+/// a socket bind only to an address the machine holds.
+fn is_own_address(ip: core::net::IpAddr) -> bool {
+    let ip = ip.to_canonical();
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || std::net::UdpSocket::bind(SocketAddr::new(ip, 0)).is_ok()
+}
+
 /// Who holds a port reservation. Labels only — the publisher's behavior does
 /// not branch on it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -144,10 +154,25 @@ impl PortTable {
     /// Whether `addr` is a port this host published. Once the host-loopback
     /// door of the wider design exists, this is what stops a co-tenant reaching
     /// a published service by dialing the machine's own address.
+    ///
+    /// A reservation on an unspecified address (`0.0.0.0`, `::`) is a listener
+    /// on every interface, so it also covers the port on each of this
+    /// machine's own addresses, such as a pod IP, and not only on loopback.
     pub fn is_published(&self, protocol: Protocol, addr: SocketAddr) -> bool {
-        self.reserved
-            .lock()
-            .is_ok_and(|reserved| reserved.contains_key(&(protocol, addr)))
+        let Ok(reserved) = self.reserved.lock() else {
+            return false;
+        };
+        if reserved.contains_key(&(protocol, addr)) {
+            return true;
+        }
+        let on_every_interface = [
+            core::net::IpAddr::from(core::net::Ipv4Addr::UNSPECIFIED),
+            core::net::IpAddr::from(core::net::Ipv6Addr::UNSPECIFIED),
+        ]
+        .into_iter()
+        .any(|any| reserved.contains_key(&(protocol, SocketAddr::new(any, addr.port()))));
+        drop(reserved);
+        on_every_interface && is_own_address(addr.ip())
     }
 
     fn release(&self, key: &PortKey) {
@@ -173,5 +198,61 @@ impl PortReservation {
 impl Drop for PortReservation {
     fn drop(&mut self) {
         self.table.release(&self.key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::net::{IpAddr, Ipv4Addr};
+
+    /// One of this machine's own non-loopback addresses, if it has one: the
+    /// source address the kernel would pick for a route out. No packet is sent.
+    fn own_interface_address() -> Option<IpAddr> {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("192.0.2.1:9").ok()?;
+        let ip = socket.local_addr().ok()?.ip();
+        (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+    }
+
+    /// A listener on every interface is reached through any of the machine's
+    /// addresses, not only loopback, and never through another machine's.
+    #[test]
+    fn a_wildcard_reservation_covers_every_own_address() {
+        let table = PortTable::new();
+        let _held = table
+            .reserve(
+                Protocol::Tcp,
+                SocketAddr::from(([0, 0, 0, 0], 9191)),
+                PortOwner::Host("test".into()),
+            )
+            .unwrap();
+        let at = |ip: IpAddr, port| table.is_published(Protocol::Tcp, SocketAddr::new(ip, port));
+        assert!(at(Ipv4Addr::LOCALHOST.into(), 9191));
+        assert!(at("::ffff:127.0.0.1".parse().unwrap(), 9191));
+        assert!(!at(Ipv4Addr::LOCALHOST.into(), 9192));
+        // TEST-NET-1 is never assigned to a machine.
+        assert!(!at("192.0.2.10".parse().unwrap(), 9191));
+        assert!(!table.is_published(Protocol::Udp, SocketAddr::from(([127, 0, 0, 1], 9191))));
+        if let Some(own) = own_interface_address() {
+            assert!(at(own, 9191), "{own} is this machine's own address");
+        }
+    }
+
+    /// A reservation on one address covers that address only.
+    #[test]
+    fn an_exact_reservation_covers_only_its_address() {
+        let table = PortTable::new();
+        let _held = table
+            .reserve(
+                Protocol::Tcp,
+                SocketAddr::from(([127, 0, 0, 1], 9191)),
+                PortOwner::Host("test".into()),
+            )
+            .unwrap();
+        assert!(table.is_published(Protocol::Tcp, SocketAddr::from(([127, 0, 0, 1], 9191))));
+        if let Some(own) = own_interface_address() {
+            assert!(!table.is_published(Protocol::Tcp, SocketAddr::new(own, 9191)));
+        }
     }
 }
