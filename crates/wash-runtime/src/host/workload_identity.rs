@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 
 use crate::host::client_identity::RotatingClientIdentity;
 use crate::host::egress_credential::{CredentialError, EgressCredentialSource};
-use crate::host::http_client::ClientTlsConfigResolver;
+use crate::host::http_client::{ClientTlsConfigResolver, DestinationTls};
 
 /// First wait after a failed issuance. Doubles, with jitter, up to
 /// [`MAX_BACKOFF`]. Also how often an expired lease is checked again.
@@ -85,21 +85,32 @@ pub struct MtlsDestination {
 }
 
 impl MtlsDestination {
-    /// An exact host name or address and port. No wildcards.
+    /// An exact host name or address and port. No wildcards. An IPv6
+    /// address may be given with or without brackets.
     pub fn new(host: &str, port: u16) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            !host.is_empty() && !host.contains(['*', '/', ':', '@']) && port != 0,
-            "an mTLS destination is an exact host and a port, not {host:?}:{port}"
-        );
-        Ok(Self {
-            host: host.to_ascii_lowercase(),
-            port,
-        })
+        let host = canonical_host(host).filter(|_| port != 0).ok_or_else(|| {
+            anyhow::anyhow!("an mTLS destination is an exact host and a port, not {host:?}:{port}")
+        })?;
+        Ok(Self { host, port })
     }
 
     fn matches(&self, host: &str, port: u16) -> bool {
-        self.port == port && self.host.eq_ignore_ascii_case(host.trim_end_matches('.'))
+        self.port == port && canonical_host(host).is_some_and(|host| host == self.host)
     }
+}
+
+/// `host` as a URI names it: lowercase, without a trailing dot, and an IPv6
+/// address bracketed in its shortest form. `None` if it is not one host.
+fn canonical_host(host: &str) -> Option<String> {
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = bare.parse::<std::net::Ipv6Addr>() {
+        return Some(format!("[{ip}]"));
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    (!host.is_empty() && !host.contains(['*', '/', ':', '@', '[', ']'])).then_some(host)
 }
 
 /// What the control plane granted one workload.
@@ -199,6 +210,7 @@ pub trait IdentityIssuer: Send + Sync + 'static {
 #[derive(Default)]
 struct JwtSvidSource {
     current: ArcSwapOption<(Zeroizing<Vec<u8>>, SystemTime)>,
+    revoked: std::sync::atomic::AtomicBool,
 }
 
 impl EgressCredentialSource for JwtSvidSource {
@@ -208,6 +220,35 @@ impl EgressCredentialSource for JwtSvidSource {
             _ => Err(CredentialError::Unavailable),
         }
     }
+
+    fn is_revoked(&self) -> bool {
+        self.revoked.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// The configuration presenting one issued X.509-SVID, and its `notAfter`.
+struct Presenting {
+    config: Arc<rustls::ClientConfig>,
+    not_after: SystemTime,
+}
+
+/// Presents one fixed credential, so a connection's certificate and its
+/// deadline always come from the same SVID.
+#[derive(Debug)]
+struct FixedClientCert(Arc<rustls::sign::CertifiedKey>);
+
+impl rustls::client::ResolvesClientCert for FixedClientCert {
+    fn resolve(
+        &self,
+        _root_hint_subjects: &[&[u8]],
+        _sigschemes: &[rustls::SignatureScheme],
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        Some(Arc::clone(&self.0))
+    }
+
+    fn has_certs(&self) -> bool {
+        true
+    }
 }
 
 /// One workload's identity material.
@@ -216,8 +257,10 @@ struct Entry {
     loaded_digests: Mutex<Vec<String>>,
     svid: Arc<RotatingClientIdentity>,
     spiffe_id: ArcSwapOption<String>,
-    /// Presents `svid`; served only while it holds an unexpired SVID.
-    presenting: Arc<rustls::ClientConfig>,
+    /// Built from `svid` each time one is installed.
+    presenting: ArcSwapOption<Presenting>,
+    /// Cancelled by revoke, closing every connection that presented an SVID.
+    revoked: tokio_util::sync::CancellationToken,
     jwts: HashMap<String, Arc<JwtSvidSource>>,
     /// Set by revoke. Every store of issued material holds this lock and
     /// checks it, so an issuance that finishes after revoke stores nothing.
@@ -237,14 +280,14 @@ impl Entry {
         *self.released.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The SPIFFE ID's expiry while the SVID may be presented.
-    fn presentable_until(&self) -> Option<SystemTime> {
+    /// The SVID to present now, if one is unexpired and not revoked.
+    fn presentable(&self) -> Option<Arc<Presenting>> {
         if self.released() {
             return None;
         }
-        self.svid
-            .expires_at()
-            .filter(|expires| *expires > SystemTime::now())
+        self.presenting
+            .load_full()
+            .filter(|presenting| presenting.not_after > SystemTime::now())
     }
 
     fn admitted(&self) -> bool {
@@ -259,11 +302,15 @@ impl Entry {
             let mut released = self.released.lock().unwrap_or_else(|e| e.into_inner());
             *released = true;
             self.svid.clear();
+            self.presenting.store(None);
             self.spiffe_id.store(None);
             for jwt in self.jwts.values() {
                 jwt.current.store(None);
+                jwt.revoked
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
         }
+        self.revoked.cancel();
         abort(&self.renewal);
     }
 
@@ -401,9 +448,6 @@ impl WorkloadCredentials {
             );
         }
         let svid = RotatingClientIdentity::empty();
-        let mut presenting = (*self.inner.host_tls).clone();
-        presenting.client_auth_cert_resolver = Arc::clone(&svid) as _;
-        presenting.resumption = rustls::client::Resumption::disabled();
         let jwts = grant
             .jwt_audiences
             .iter()
@@ -416,7 +460,8 @@ impl WorkloadCredentials {
                 loaded_digests: Mutex::default(),
                 svid,
                 spiffe_id: ArcSwapOption::empty(),
-                presenting: Arc::new(presenting),
+                presenting: ArcSwapOption::empty(),
+                revoked: tokio_util::sync::CancellationToken::new(),
                 jwts,
                 released: Mutex::new(false),
                 renewal: Mutex::new(None),
@@ -543,6 +588,19 @@ impl WorkloadCredentials {
         }
     }
 
+    /// [`Self::release`] `workload_id` if it was bound but never admitted.
+    pub fn release_unadmitted(&self, workload_id: &str) {
+        let mut entries = self.entries();
+        if entries
+            .get(workload_id)
+            .is_some_and(|entry| !entry.admitted())
+            && let Some(entry) = entries.remove(workload_id)
+        {
+            drop(entries);
+            entry.stop();
+        }
+    }
+
     /// [`Self::release`] every workload, as the host stops.
     pub fn release_all(&self) {
         let removed: Vec<_> = self.entries().drain().map(|(_, entry)| entry).collect();
@@ -618,8 +676,13 @@ impl ClientTlsConfigResolver for IdentityTls {
         host: &str,
         port: u16,
     ) -> Option<Arc<rustls::ClientConfig>> {
+        self.destination_tls(workload_id, host, port)
+            .map(|tls| tls.config)
+    }
+
+    fn destination_tls(&self, workload_id: &str, host: &str, port: u16) -> Option<DestinationTls> {
         let Some(entry) = self.credentials.entry(workload_id) else {
-            return self.inner.config_for_destination(workload_id, host, port);
+            return self.inner.destination_tls(workload_id, host, port);
         };
         let granted = entry
             .grant
@@ -629,35 +692,25 @@ impl ClientTlsConfigResolver for IdentityTls {
             .iter()
             .any(|destination| destination.matches(host, port));
         if !granted {
-            return self.inner.config_for_destination(workload_id, host, port);
+            return self.inner.destination_tls(workload_id, host, port);
         }
-        Some(match entry.presentable_until() {
-            Some(_) => Arc::clone(&entry.presenting),
-            None => Arc::clone(&self.not_issued),
-        })
-    }
-
-    fn destination_valid_until(
-        &self,
-        workload_id: &str,
-        host: &str,
-        port: u16,
-    ) -> Option<SystemTime> {
-        let Some(entry) = self.credentials.entry(workload_id) else {
-            return self.inner.destination_valid_until(workload_id, host, port);
+        let Some(presenting) = entry.presentable() else {
+            return Some(DestinationTls::new(Arc::clone(&self.not_issued)));
         };
-        let granted = entry
-            .grant
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .mtls_destinations
-            .iter()
-            .any(|destination| destination.matches(host, port));
-        if granted {
-            entry.presentable_until()
-        } else {
-            self.inner.destination_valid_until(workload_id, host, port)
-        }
+        let left = presenting
+            .not_after
+            .duration_since(SystemTime::now())
+            .unwrap_or_default();
+        let revoked = entry.revoked.clone().cancelled_owned();
+        Some(DestinationTls {
+            config: Arc::clone(&presenting.config),
+            closes: Some(Box::pin(async move {
+                tokio::select! {
+                    () = tokio::time::sleep(left) => {}
+                    () = revoked => {}
+                }
+            })),
+        })
     }
 }
 
@@ -805,14 +858,30 @@ async fn issue_x509(
     entry: &Entry,
     request: &IssueRequest<'_>,
 ) -> anyhow::Result<SystemTime> {
-    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
-    let csr = rcgen::CertificateParams::default().serialize_request(&key)?;
+    let (csr, der) = {
+        use zeroize::Zeroize as _;
+        let mut key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)?;
+        let csr = rcgen::CertificateParams::default().serialize_request(&key);
+        let der = Zeroizing::new(key.serialize_der());
+        key.zeroize();
+        (csr?, der)
+    };
     let svid = inner.issuer.issue_x509(request, csr.der()).await?;
     let spiffe_id = leaf_spiffe_id(&svid.chain)?;
-    let der = Zeroizing::new(key.serialize_der());
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der.as_slice()));
     entry.store(|| {
         let expires = entry.svid.install(svid.chain, &key)?;
+        let certified = entry
+            .svid
+            .certified()
+            .ok_or_else(|| anyhow::anyhow!("the installed X.509-SVID was not held"))?;
+        let mut config = (*inner.host_tls).clone();
+        config.client_auth_cert_resolver = Arc::new(FixedClientCert(certified));
+        config.resumption = rustls::client::Resumption::disabled();
+        entry.presenting.store(Some(Arc::new(Presenting {
+            config: Arc::new(config),
+            not_after: expires,
+        })));
         debug!(
             workload_id = request.workload_id,
             spiffe_id, "installed X.509-SVID"
@@ -879,8 +948,11 @@ fn jwt_claims(token: &str) -> anyhow::Result<Claims> {
         Some(serde_json::Value::String(aud)) => vec![aud.clone()],
         Some(serde_json::Value::Array(auds)) => auds
             .iter()
-            .filter_map(|a| a.as_str().map(str::to_string))
-            .collect(),
+            .map(|a| a.as_str().map(str::to_string))
+            .collect::<Option<_>>()
+            .ok_or_else(|| {
+                anyhow::anyhow!("the issued JWT-SVID has an aud that is not a string")
+            })?,
         _ => Vec::new(),
     };
     Ok(Claims { exp, aud })

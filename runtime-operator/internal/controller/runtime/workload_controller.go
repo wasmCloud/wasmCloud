@@ -56,6 +56,8 @@ const (
 	// workloadReplicaSetLegacyAnnotation is an older spelling of
 	// workloadReplicaSetNameAnnotation that the host still reads.
 	workloadReplicaSetLegacyAnnotation = "runtime.wasmcloud.dev/workload-replicaset"
+	// appNameAnnotation is the last name the host groups replicas by.
+	appNameAnnotation = "app.kubernetes.io/name"
 )
 
 // WorkloadReconciler reconciles a Workload object
@@ -650,6 +652,10 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	if err != nil {
 		return err
 	}
+	name := stableName(spec.Annotations, spec.Name)
+	if placed := workload.Status.StableName; placed != "" && placed != name {
+		return fmt.Errorf("the host would name this workload %q, but it was first placed as %q", name, placed)
+	}
 	req := &runtimev2.WorkloadStartRequest{WorkloadId: string(workload.GetUID()), Workload: spec}
 
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)
@@ -675,6 +681,7 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	r.startWaits.Delete(workload.UID)
 
 	workload.Status.WorkloadID = workloadID
+	workload.Status.StableName = name
 	condition.ForceStatusUpdate(ctx)
 	return condition.ErrSkipReconciliation()
 }
@@ -902,6 +909,21 @@ func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *r
 		}
 	}
 	return annotations, nil
+}
+
+// stableName is the name the host gives a workload's replicas from the
+// annotations it is sent, by the precedence of wash-runtime's stable_name.
+func stableName(annotations map[string]string, name string) string {
+	for _, key := range []string{
+		workloadDeploymentNameAnnotation, workloadDaemonSetNameAnnotation,
+		workloadReplicaSetNameAnnotation, workloadReplicaSetLegacyAnnotation,
+		appNameAnnotation,
+	} {
+		if value := strings.TrimSpace(annotations[key]); value != "" {
+			return value
+		}
+	}
+	return name
 }
 
 // getOwner reads the object owner names into obj. It reports false, with no

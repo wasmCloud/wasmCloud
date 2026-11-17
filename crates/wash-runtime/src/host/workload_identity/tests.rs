@@ -410,17 +410,23 @@ fn serve(
                 };
                 let peer = tls.get_ref().1.peer_certificates().unwrap()[0].clone();
                 let _ = seen.send(leaf_spiffe_id(&[peer]).unwrap());
-                let mut request = Vec::new();
-                while !request.ends_with(b"\r\n\r\n") {
-                    let Ok(byte) = tls.read_u8().await else {
+                // Keep-alive, so a pooled connection is reused until it closes.
+                loop {
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let Ok(byte) = tls.read_u8().await else {
+                            return;
+                        };
+                        request.push(byte);
+                    }
+                    if tls
+                        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+                        .await
+                        .is_err()
+                    {
                         return;
-                    };
-                    request.push(byte);
+                    }
                 }
-                let _ = tls
-                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
-                    .await;
-                let _ = tls.read_u8().await;
             });
         }
     });
@@ -510,11 +516,14 @@ async fn an_expired_x509_svid_is_never_presented() {
     eventually(|| credentials.spiffe_id("w1").is_some()).await;
 
     let resolver = credentials.tls_resolver(Arc::new(issuer.host_tls()));
-    assert!(
+    let closes = |resolver: &Arc<dyn ClientTlsConfigResolver>| {
         resolver
-            .destination_valid_until("w1", "127.0.0.1", port)
+            .destination_tls("w1", "127.0.0.1", port)
+            .unwrap()
+            .closes
             .is_some()
-    );
+    };
+    assert!(closes(&resolver));
     let clients = crate::host::http_client::WorkloadClients::with_tls_config_resolver(
         Arc::clone(&resolver),
         crate::host::quota::QuotaRegistry::new(Default::default(), None),
@@ -537,12 +546,54 @@ async fn an_expired_x509_svid_is_never_presented() {
 
     // The renewal waits on the gate, so the SVID lapses.
     tokio::time::sleep(Duration::from_millis(1700)).await;
-    assert!(
-        resolver
-            .destination_valid_until("w1", "127.0.0.1", port)
-            .is_none()
-    );
+    assert!(!closes(&resolver), "only the refusing config is left");
     assert!(send().await.is_err(), "neither reused nor reissued");
+}
+
+/// A revoke closes the connections that presented the SVID, idle or not.
+#[tokio::test]
+async fn revoking_an_identity_closes_its_pooled_connections() {
+    let issuer = FakeIssuer::new(Duration::from_secs(60));
+    let credentials = store(Arc::clone(&issuer));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut observed = serve(listener, issuer.server_config());
+    credentials
+        .bind(
+            "w1",
+            grant(vec![MtlsDestination::new("127.0.0.1", port).unwrap()], &[]),
+        )
+        .unwrap();
+    credentials.admit("w1", &app()).unwrap();
+    eventually(|| credentials.spiffe_id("w1").is_some()).await;
+    let clients = crate::host::http_client::WorkloadClients::with_tls_config_resolver(
+        credentials.tls_resolver(Arc::new(issuer.host_tls())),
+        crate::host::quota::QuotaRegistry::new(Default::default(), None),
+    );
+    let send = || {
+        let request = hyper::Request::builder()
+            .uri(format!("https://127.0.0.1:{port}/"))
+            .body(wasmtime_wasi_http::WasiBody::default())
+            .unwrap();
+        let client = clients.client("w1");
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), client.send_request(request, None))
+                .await
+                .unwrap()
+        }
+    };
+    let (response, _io) = send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(observed.recv().await.unwrap(), SPIFFE_ID);
+    drop(response);
+    let (reused, _io) = send().await.unwrap();
+    assert_eq!(reused.status(), 200);
+    assert!(observed.try_recv().is_err(), "the connection was reused");
+    drop(reused);
+
+    credentials.revoke("w1");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(send().await.is_err(), "the pooled connection was closed");
 }
 
 #[tokio::test]
@@ -587,8 +638,10 @@ async fn a_revoked_identity_cannot_be_rebound_until_released() {
     credentials.admit("w1", &app()).unwrap();
     eventually(|| source.current().is_ok()).await;
 
+    assert!(!source.is_revoked());
     credentials.revoke("w1");
     assert_eq!(source.current(), Err(CredentialError::Unavailable));
+    assert!(source.is_revoked(), "so an STS refresh built on it stops");
     assert!(credentials.jwt_source("w1", "aud").is_none());
     assert!(credentials.bind("w1", grant(vec![], &["aud"])).is_err());
     assert!(credentials.admit("w1", &app()).is_err());
@@ -683,6 +736,7 @@ fn a_jwt_without_exp_is_refused() {
     assert!(jwt_claims("not.a.jwt.at.all").is_err());
     let claims = jwt_claims(&jwt(&serde_json::json!({ "aud": ["a", "b"], "exp": 5 }))).unwrap();
     assert!(claims.aud == ["a", "b"] && claims.exp == 5);
+    assert!(jwt_claims(&jwt(&serde_json::json!({ "aud": ["a", 7], "exp": 5 }))).is_err());
 }
 
 #[test]
@@ -692,6 +746,12 @@ fn an_mtls_destination_is_exact() {
     assert!(MtlsDestination::new("example.com", 0).is_err());
     let d = MtlsDestination::new("Example.com", 443).unwrap();
     assert!(d.matches("example.COM.", 443) && !d.matches("example.com", 8443));
+    for v6 in ["::1", "[::1]", "0:0:0:0:0:0:0:1"] {
+        let d = MtlsDestination::new(v6, 443).unwrap();
+        assert!(d.matches("[::1]", 443), "{v6}");
+        assert!(!d.matches("[::2]", 443) && !d.matches("::1", 8443), "{v6}");
+    }
+    assert!(MtlsDestination::new("[example.com]", 443).is_err());
 }
 
 #[test]

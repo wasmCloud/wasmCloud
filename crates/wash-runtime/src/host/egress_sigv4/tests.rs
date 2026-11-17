@@ -93,8 +93,8 @@ fn the_canonical_request_matches_the_published_example() {
 fn a_placeholder_key_is_re_signed_with_the_hosts_credentials() {
     let secrets = [secret(credentials(Some("session-token")))];
     let mut req = request(URI, PLACEHOLDER, Some(EMPTY_SHA256));
-    let signed = resign(&mut req, &secrets, at()).unwrap();
-    assert_eq!(signed.as_deref(), Some(PLACEHOLDER));
+    let signed = resign(&mut req, &secrets, at()).unwrap().unwrap();
+    assert_eq!(&*signed.placeholder, PLACEHOLDER);
     let authorization = req.headers()[http::header::AUTHORIZATION].to_str().unwrap();
     assert!(
         authorization.starts_with(
@@ -117,7 +117,7 @@ fn a_placeholder_key_is_re_signed_with_the_hosts_credentials() {
 fn a_request_with_no_placeholder_is_left_alone() {
     let secrets = [secret(credentials(None))];
     let mut req = request(URI, "AKIAGUESTOWN", Some(EMPTY_SHA256));
-    assert_eq!(resign(&mut req, &secrets, at()), Ok(None));
+    assert!(matches!(resign(&mut req, &secrets, at()), Ok(None)));
     assert!(
         req.headers()[http::header::AUTHORIZATION]
             .to_str()
@@ -265,19 +265,20 @@ fn the_signature_matches_an_independent_signer() {
         SigningSettings, UriPathNormalizationMode, sign,
     };
 
-    let uri = "https://bucket.s3.us-east-1.amazonaws.com/reports/q%203.csv?versionId=a%2Fb&list-type=2&prefix=%E2%9C%93";
+    let uri = "https://bucket.s3.us-east-1.amazonaws.com/reports/q%203.csv?versionId=a%2Fb&list-type=2&prefix=%E2%9C%93&tag=a+b";
     let secrets = [secret(credentials(Some("session/token+value")))];
     let mut req = hyper::Request::put(uri)
         .header(
             http::header::AUTHORIZATION,
             format!(
                 "AWS4-HMAC-SHA256 Credential={PLACEHOLDER}/20200101/us-east-1/s3/aws4_request, \
-                 SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-meta-note, Signature=deadbeef"
+                 SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-meta-note;x-amz-meta-tab, Signature=deadbeef"
             ),
         )
         .header("x-amz-date", "20200101T000000Z")
         .header("x-amz-content-sha256", EMPTY_SHA256)
         .header("x-amz-meta-note", "  two   spaces ")
+        .header("x-amz-meta-tab", "a\t b")
         .body(())
         .unwrap();
     resign(&mut req, &secrets, at()).unwrap();
@@ -309,7 +310,11 @@ fn the_signature_matches_an_independent_signer() {
     let signable = SignableRequest::new(
         "PUT",
         uri,
-        [("x-amz-meta-note", "  two   spaces ")].into_iter(),
+        [
+            ("x-amz-meta-note", "  two   spaces "),
+            ("x-amz-meta-tab", "a\t b"),
+        ]
+        .into_iter(),
         SignableBody::Precomputed(EMPTY_SHA256.into()),
     )
     .unwrap();
@@ -428,4 +433,23 @@ fn a_sigv4_placeholder_has_the_shape_the_host_looks_for() {
         );
     }
     assert!(SigV4Secret::new("AKIAwash_ph_7Qm2xYk9Lr4Tz8Vb1Nc6", credentials(None)).is_ok());
+}
+
+#[test]
+fn the_guest_token_is_held_back_and_the_host_values_reverted() {
+    let signers = [secret(credentials(Some("host-session-token")))];
+    let mut req = request(URI, PLACEHOLDER, Some(EMPTY_SHA256));
+    req.headers_mut()
+        .insert("x-amz-security-token", META_PLACEHOLDER.parse().unwrap());
+    let done = substitute_and_sign(&mut req, &[], &signers, at()).unwrap();
+    assert_eq!(req.headers()["x-amz-security-token"], "host-session-token");
+    assert_eq!(done.signed().len(), 2);
+
+    let mut echoed = http::HeaderMap::new();
+    echoed.insert("x-amz-echo", "ASIAREAL host-session-token".parse().unwrap());
+    done.revert(&mut echoed);
+    assert_eq!(
+        echoed["x-amz-echo"].to_str().unwrap(),
+        format!("{PLACEHOLDER} {PLACEHOLDER}")
+    );
 }

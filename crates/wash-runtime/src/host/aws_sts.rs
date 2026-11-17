@@ -179,11 +179,14 @@ fn secret_text(body: bytes::Bytes) -> Zeroizing<String> {
 }
 
 /// Keep `into` holding credentials for `sts`'s role, exchanging the token
-/// `identity` holds, until the returned task is aborted.
+/// `identity` holds, until the returned task is aborted or `identity` is
+/// revoked.
 ///
 /// Credentials are exchanged again half way through their life. They are
 /// leased only until they expire, so a failing exchange leaves `into` empty
-/// once the last credentials run out rather than serving stale ones.
+/// once the last credentials run out rather than serving stale ones. Once
+/// `identity` is revoked, within [`RETRY`], `into` is revoked and the task
+/// ends.
 pub fn spawn_web_identity_refresh(
     sts: StsWebIdentity,
     identity: Arc<dyn EgressCredentialSource>,
@@ -191,6 +194,10 @@ pub fn spawn_web_identity_refresh(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
+            if identity.is_revoked() {
+                into.revoke();
+                return;
+            }
             let wait = match identity.current() {
                 Err(_) => RETRY,
                 Ok(token) => match sts.assume(&token).await {
@@ -208,7 +215,14 @@ pub fn spawn_web_identity_refresh(
                     }
                 },
             };
-            tokio::time::sleep(wait).await;
+            let until = tokio::time::Instant::now() + wait;
+            while !identity.is_revoked() {
+                let now = tokio::time::Instant::now();
+                if now >= until {
+                    break;
+                }
+                tokio::time::sleep((until - now).min(RETRY)).await;
+            }
         }
     })
 }
@@ -463,5 +477,46 @@ mod tests {
             "the lease ends with the credentials"
         );
         assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_revoked_identity_ends_the_refresh_and_its_credentials() {
+        #[derive(Default)]
+        struct Token(std::sync::atomic::AtomicBool);
+        impl EgressCredentialSource for Token {
+            fn current(
+                &self,
+            ) -> Result<Zeroizing<Vec<u8>>, crate::host::egress_credential::CredentialError>
+            {
+                Ok(Zeroizing::new(b"h.p.s".to_vec()))
+            }
+
+            fn is_revoked(&self) -> bool {
+                self.0.load(std::sync::atomic::Ordering::SeqCst)
+            }
+        }
+        use crate::host::egress_sigv4::AwsCredentialSource as _;
+        let (sts, _seen) = sts(
+            200,
+            credentials_xml(chrono::Utc::now() + chrono::Duration::seconds(600)),
+        )
+        .await;
+        let token = Arc::new(Token::default());
+        let leased = Arc::new(LeasedAwsCredentials::default());
+        let task = spawn_web_identity_refresh(sts, token.clone(), Arc::clone(&leased));
+        for _ in 0..200 {
+            if leased.current().is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(leased.current().is_ok());
+
+        token.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::timeout(RETRY + Duration::from_secs(1), task)
+            .await
+            .expect("the refresh ends")
+            .unwrap();
+        assert!(leased.current().is_err());
     }
 }

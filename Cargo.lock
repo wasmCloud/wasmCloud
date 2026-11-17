@@ -4660,6 +4660,7 @@ dependencies = [
  "time",
  "x509-parser",
  "yasna",
+ "zeroize",
 ]
 
 [[package]]
@@ -6545,6 +6546,7 @@ dependencies = [
  "imbl",
  "io-lifetimes 2.0.4",
  "libc",
+ "memchr",
  "mimalloc",
  "moka",
  "names",

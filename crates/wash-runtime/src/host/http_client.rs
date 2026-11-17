@@ -929,15 +929,32 @@ pub trait ClientTlsConfigResolver: Send + Sync + 'static {
         None
     }
 
-    /// When a connection made now with [`Self::config_for_destination`]'s
-    /// answer stops being valid. The pool closes it then.
-    fn destination_valid_until(
-        &self,
-        _workload_id: &str,
-        _host: &str,
-        _port: u16,
-    ) -> Option<std::time::SystemTime> {
-        None
+    /// [`Self::config_for_destination`], with when a connection made with it
+    /// stops being valid. Asked once per new connection, so the
+    /// configuration and its end always describe the same credential.
+    fn destination_tls(&self, workload_id: &str, host: &str, port: u16) -> Option<DestinationTls> {
+        self.config_for_destination(workload_id, host, port)
+            .map(DestinationTls::new)
+    }
+}
+
+/// A destination's own TLS configuration, and when connections made with
+/// it must close.
+pub struct DestinationTls {
+    pub config: Arc<rustls::ClientConfig>,
+    /// Resolves when a connection made with `config` must close, for example
+    /// when the credential it presents expires or is revoked. The pool closes
+    /// the connection then, idle or not.
+    pub closes: Option<std::pin::Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
+}
+
+impl DestinationTls {
+    /// A configuration whose connections stay valid while the pool keeps them.
+    pub fn new(config: Arc<rustls::ClientConfig>) -> Self {
+        Self {
+            config,
+            closes: None,
+        }
     }
 }
 
@@ -1367,35 +1384,29 @@ struct ConnectPolicy {
 }
 
 impl BoundedConnector {
-    /// The TLS configuration for a new connection to `uri`.
-    fn tls_for(&self, uri: &hyper::Uri, port: u16) -> Arc<rustls::ClientConfig> {
+    /// The TLS configuration for a new connection to `uri`, and when the
+    /// connection must close.
+    fn tls_for(&self, uri: &hyper::Uri, port: u16) -> (Arc<rustls::ClientConfig>, Option<Closes>) {
         let chosen = match (&self.policy.destination_tls, self.workload.as_deref()) {
             (Some(resolver), Some(workload))
                 if uri.scheme() == Some(&hyper::http::uri::Scheme::HTTPS) =>
             {
                 uri.host()
-                    .and_then(|host| resolver.config_for_destination(workload, host, port))
+                    .and_then(|host| resolver.destination_tls(workload, host, port))
             }
             _ => None,
         };
         match chosen {
-            Some(tls) => with_alpn(&without_resumption(&tls), self.alpn),
-            None => Arc::clone(&self.tls),
+            Some(tls) => (
+                with_alpn(&without_resumption(&tls.config), self.alpn),
+                tls.closes,
+            ),
+            None => (Arc::clone(&self.tls), None),
         }
-    }
-
-    fn valid_until(&self, uri: &hyper::Uri, port: u16) -> Option<std::time::SystemTime> {
-        let (Some(resolver), Some(workload)) =
-            (&self.policy.destination_tls, self.workload.as_deref())
-        else {
-            return None;
-        };
-        if uri.scheme() != Some(&hyper::http::uri::Scheme::HTTPS) {
-            return None;
-        }
-        resolver.destination_valid_until(workload, uri.host()?, port)
     }
 }
+
+type Closes = std::pin::Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
 
 impl tower_service::Service<hyper::Uri> for BoundedConnector {
     type Response = PermittedStream;
@@ -1435,9 +1446,8 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         // to the wrapping HttpsConnector.
         http.enforce_http(false);
         http.set_nodelay(true);
-        // Read before the handshake, so a renewal during it only closes early.
-        let valid_until = self.valid_until(&uri, port);
-        let mut inner = hyper_rustls::HttpsConnector::from((http, self.tls_for(&uri, port)));
+        let (tls, closes) = self.tls_for(&uri, port);
+        let mut inner = hyper_rustls::HttpsConnector::from((http, tls));
         let workload = self.workload.clone();
         let quota = self.quota.clone();
         let permit_wait = self.permit_wait;
@@ -1460,15 +1470,9 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
                     )
                 })?;
             let stream = tower_service::Service::call(&mut inner, uri).await?;
-            let expires = valid_until.map(|until| {
-                let left = until
-                    .duration_since(std::time::SystemTime::now())
-                    .unwrap_or_default();
-                Box::pin(tokio::time::sleep(left))
-            });
             Ok(PermittedStream {
                 inner: stream,
-                expires,
+                closes,
                 _slot: slot,
             })
         })
@@ -1623,19 +1627,20 @@ fn warn_permits_exhausted(
 /// the stream (connection close) releases them.
 struct PermittedStream {
     inner: hyper_rustls::MaybeHttpsStream<TokioIo<TcpStream>>,
-    /// When the credential the handshake presented expires. Polling it from
-    /// the I/O paths wakes an idle pooled connection so hyper drops it.
-    expires: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+    /// When the credential the handshake presented stops being valid.
+    /// Polling it from the I/O paths wakes an idle pooled connection so hyper
+    /// drops it.
+    closes: Option<Closes>,
     _slot: crate::host::quota::ConnectionSlot,
 }
 
 impl PermittedStream {
     fn expired(&mut self, cx: &mut std::task::Context<'_>) -> Option<std::io::Error> {
-        let expires = self.expires.as_mut()?;
-        expires.as_mut().poll(cx).is_ready().then(|| {
+        let closes = self.closes.as_mut()?;
+        closes.as_mut().poll(cx).is_ready().then(|| {
             std::io::Error::new(
                 std::io::ErrorKind::ConnectionAborted,
-                "the credential this connection presented has expired",
+                "the credential this connection presented is no longer valid",
             )
         })
     }

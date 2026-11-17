@@ -86,6 +86,7 @@ kube-derive = { version = "1", default-features = false }
 libc = { version = "0.2", default-features = false }
 notify = { version = "8.0.0", default-features = false, features = ["macos_fsevent"] }
 nkeys = { version = "0.4", default-features = false }
+memchr = { version = "2", default-features = false, features = ["std"] }
 moka = { version = "0.12", default-features = false }
 # Opt-in global allocators (`mimalloc` and `jemalloc` features on wash and
 # wash-runtime).

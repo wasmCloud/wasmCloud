@@ -89,6 +89,7 @@ hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }
 imbl = { workspace = true }
+memchr = { workspace = true }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
 object_store = { workspace = true, optional = true }
@@ -155,7 +156,7 @@ docker_credential = { workspace = true, optional = true }
 nkeys = { workspace = true, optional = true }
 oci-client = { workspace = true, optional = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, optional = true, features = ["rustls-tls"] }
-rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs"] }
+rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "zeroize"] }
 sha2 = { workspace = true }
 wit-component = { workspace = true, optional = true }
 

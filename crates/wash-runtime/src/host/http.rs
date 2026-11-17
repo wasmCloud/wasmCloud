@@ -33,7 +33,7 @@ use crate::host::egress_credential::{
     CarriesSecret, CredentialError, EgressCaller, EgressSecret, Refused, SecretUse, Substituted,
     carries_placeholder,
 };
-use crate::host::egress_sigv4::{SigV4Secret, substitute_and_sign};
+use crate::host::egress_sigv4::{SigV4Secret, scrub_signed_response, substitute_and_sign};
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
 use crate::observability::rate_limit::RateLimitedWarn;
 use crate::{
@@ -479,7 +479,8 @@ pub trait Router: Send + Sync + 'static {
 
     /// The placeholder AWS access key IDs a caller's requests are re-signed
     /// for, asked alongside [`Self::egress_secrets`] with the same rules. The
-    /// host re-signs before it substitutes. Default: none.
+    /// host substitutes the request's other placeholders first, then re-signs,
+    /// so the signature covers what is sent. Default: none.
     fn egress_signers(&self, _caller: EgressCaller<'_>) -> anyhow::Result<Arc<[SigV4Secret]>> {
         Ok(Arc::from([]))
     }
@@ -3439,17 +3440,17 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                         let (mut response, io) = send.await?;
                         let done = Arc::new(done);
                         done.revert(response.headers_mut());
+                        let reverting = Arc::clone(&done);
                         let response = response.map(|body| {
                             body.map_frame(move |frame| match frame.into_trailers() {
                                 Ok(mut trailers) => {
-                                    done.revert(&mut trailers);
+                                    reverting.revert(&mut trailers);
                                     hyper::body::Frame::trailers(trailers)
                                 }
                                 Err(frame) => frame,
                             })
-                            .boxed_unsync()
                         });
-                        Ok((response, io))
+                        Ok((scrub_signed_response(response, done), io))
                     })
                 }
                 Some(_) => {

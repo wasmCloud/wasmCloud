@@ -114,9 +114,12 @@ impl RotatingClientIdentity {
         Ok(not_after)
     }
 
-    /// When the held credential expires, if one is held.
-    pub fn expires_at(&self) -> Option<SystemTime> {
-        self.current.load().as_ref().map(|loaded| loaded.not_after)
+    /// The held credential, whether or not it has expired.
+    pub fn certified(&self) -> Option<Arc<CertifiedKey>> {
+        self.current
+            .load()
+            .as_ref()
+            .map(|loaded| Arc::clone(&loaded.key))
     }
 
     /// Drop the held credential, so none is presented.

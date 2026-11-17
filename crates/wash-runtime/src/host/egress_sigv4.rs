@@ -126,7 +126,7 @@ impl SigV4Secret {
                 });
         anyhow::ensure!(
             shaped,
-            "a SigV4 placeholder is an optional [A-Za-z0-9_] prefix, `{PLACEHOLDER_MARKER}`, then              at least {MIN_RANDOM} alphanumerics"
+            "a SigV4 placeholder is an optional [A-Za-z0-9_] prefix, `{PLACEHOLDER_MARKER}`, then at least {MIN_RANDOM} alphanumerics"
         );
         Ok(Self {
             placeholder: placeholder.into(),
@@ -249,8 +249,9 @@ fn take_authorization<B>(request: &mut hyper::Request<B>) -> Option<HeaderValue>
 }
 
 /// Substitute `secrets` into `request`, then re-sign it for `signers`, so
-/// the signature covers the values that go out. The SigV4 placeholder in
-/// `Authorization` is held back from substitution for the re-sign to find.
+/// the signature covers the values that go out. A SigV4 `Authorization`
+/// naming a placeholder, and the guest's session token beside it, are held
+/// back from substitution: the re-sign replaces both.
 pub(crate) fn substitute_and_sign<B>(
     request: &mut hyper::Request<B>,
     secrets: &[crate::host::egress_credential::EgressSecret],
@@ -258,24 +259,45 @@ pub(crate) fn substitute_and_sign<B>(
     now: SystemTime,
 ) -> Result<crate::host::egress_credential::Substituted, Refused> {
     let signing = take_authorization(request);
+    if signing.is_some() {
+        request.headers_mut().remove(&SECURITY_TOKEN);
+    }
     let mut done = crate::host::egress_credential::substitute(request, secrets)?;
     if let Some(authorization) = signing {
         request
             .headers_mut()
             .insert(http::header::AUTHORIZATION, authorization);
     }
-    done.used.extend(resign(request, signers, now)?);
+    if let Some(signed) = resign(request, signers, now)? {
+        for sent in &signed.sent {
+            done.note_signed(&signed.placeholder, sent);
+        }
+    }
     Ok(done)
 }
 
+/// What a re-sign put on a request: the placeholder it was for, and the
+/// host's values it carries (the access key ID and any session token).
+pub(crate) struct Resigned {
+    pub placeholder: Arc<str>,
+    sent: Vec<Zeroizing<Vec<u8>>>,
+}
+
+impl std::fmt::Debug for Resigned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Resigned")
+            .field("placeholder", &self.placeholder)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Re-sign `request` if its SigV4 access key ID is a placeholder in
-/// `secrets`. Returns the placeholder re-signed for, or `None` when the
-/// request carries no SigV4 placeholder.
+/// `secrets`. `None` when the request carries no SigV4 placeholder.
 pub(crate) fn resign<B>(
     request: &mut hyper::Request<B>,
     secrets: &[SigV4Secret],
     now: SystemTime,
-) -> Result<Option<Arc<str>>, Refused> {
+) -> Result<Option<Resigned>, Refused> {
     if request
         .uri()
         .query()
@@ -413,7 +435,19 @@ pub(crate) fn resign<B>(
         .headers_mut()
         .insert(http::header::AUTHORIZATION, value);
     request.extensions_mut().insert(CarriesSecret);
-    Ok(Some(Arc::clone(&secret.placeholder)))
+    let mut sent = vec![Zeroizing::new(
+        credentials.access_key_id.as_bytes().to_vec(),
+    )];
+    sent.extend(
+        credentials
+            .session_token
+            .as_ref()
+            .map(|token| Zeroizing::new(token.as_bytes().to_vec())),
+    );
+    Ok(Some(Resigned {
+        placeholder: Arc::clone(&secret.placeholder),
+        sent,
+    }))
 }
 
 /// The `Host` hyper sends for `uri`: its host, and its port unless it is
@@ -472,8 +506,8 @@ fn canonical_request<B>(
         .map(|pair| {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             (
-                encode(&percent_decode(k.as_bytes())),
-                encode(&percent_decode(v.as_bytes())),
+                encode(&query_decode(k.as_bytes())),
+                encode(&query_decode(v.as_bytes())),
             )
         })
         .collect();
@@ -519,9 +553,14 @@ fn canonical_request<B>(
     ))
 }
 
-/// Trim and collapse runs of spaces, as canonical header values are.
+/// Trim and collapse runs of spaces (0x20 only, as S3 does), as canonical
+/// header values are.
 fn collapse(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+    value
+        .split(' ')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// URI-encode as SigV4 does a query component: everything but unreserved
@@ -537,6 +576,15 @@ fn encode(value: &[u8]) -> String {
         }
     }
     out
+}
+
+/// A query component's bytes, decoded as a form is: `+` is a space.
+fn query_decode(bytes: &[u8]) -> Vec<u8> {
+    let spaced: Vec<u8> = bytes
+        .iter()
+        .map(|&b| if b == b'+' { b' ' } else { b })
+        .collect();
+    percent_decode(&spaced)
 }
 
 /// The bytes `bytes` percent-decodes to, which need not be UTF-8.
@@ -591,6 +639,9 @@ fn hex(bytes: &[u8]) -> String {
     }
     out
 }
+
+mod scrub;
+pub(crate) use scrub::scrub_signed_response;
 
 #[cfg(test)]
 mod tests;

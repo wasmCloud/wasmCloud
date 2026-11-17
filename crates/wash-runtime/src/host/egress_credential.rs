@@ -149,6 +149,12 @@ impl std::error::Error for CredentialError {}
 /// [`CredentialError::Unavailable`] once what it holds has expired.
 pub trait EgressCredentialSource: Send + Sync + 'static {
     fn current(&self) -> Result<Zeroizing<Vec<u8>>, CredentialError>;
+
+    /// Whether this source is gone for good, so anything derived from it
+    /// should be dropped too. Default: never.
+    fn is_revoked(&self) -> bool {
+        false
+    }
 }
 
 /// A value served only until its lease runs out or it is revoked.
@@ -585,6 +591,8 @@ pub(crate) struct Substituted {
     sent: Vec<(Zeroizing<Vec<u8>>, Vec<u8>)>,
     /// Each secret's own value.
     values: Vec<Zeroizing<Vec<u8>>>,
+    /// Values a re-signed request carried, which a response body may echo.
+    signed: Vec<(Zeroizing<Vec<u8>>, Vec<u8>)>,
 }
 
 impl std::fmt::Debug for Substituted {
@@ -601,6 +609,31 @@ impl Substituted {
             self.values.push(Zeroizing::new(value.to_vec()));
         }
         self.note(secret, value, secret.placeholder.as_bytes());
+    }
+
+    /// Record `sent`, a value the host signed in for `placeholder`, so it is
+    /// reverted in response headers and scrubbed from the response body.
+    pub(crate) fn note_signed(&mut self, placeholder: &Arc<str>, sent: &[u8]) {
+        if !self.used.contains(placeholder) {
+            self.used.push(Arc::clone(placeholder));
+        }
+        if sent.is_empty() || self.signed.iter().any(|(s, _)| **s == *sent) {
+            return;
+        }
+        let pair = (
+            Zeroizing::new(sent.to_vec()),
+            placeholder.as_bytes().to_vec(),
+        );
+        self.sent.push((pair.0.clone(), pair.1.clone()));
+        self.sent
+            .sort_by_key(|(sent, _)| std::cmp::Reverse(sent.len()));
+        self.values.push(Zeroizing::new(sent.to_vec()));
+        self.signed.push(pair);
+    }
+
+    /// What [`Self::note_signed`] recorded, and what each is replaced with.
+    pub(crate) fn signed(&self) -> &[(Zeroizing<Vec<u8>>, Vec<u8>)] {
+        &self.signed
     }
 
     fn note(&mut self, secret: &EgressSecret, sent: &[u8], placeholder: &[u8]) {

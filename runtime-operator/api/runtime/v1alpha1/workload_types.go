@@ -470,6 +470,10 @@ type WorkloadStatus struct {
 	Environment string `json:"environment,omitempty"`
 	// +kubebuilder:validation:Optional
 	WorkloadID string `json:"workloadId,omitempty"`
+	// StableName is the name the host gives this Workload's replicas, as
+	// computed from what it was sent when first placed. It never changes.
+	// +kubebuilder:validation:Optional
+	StableName string `json:"stableName,omitempty"`
 }
 
 // +kubebuilder:object:root=true
