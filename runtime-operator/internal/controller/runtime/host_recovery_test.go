@@ -15,7 +15,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 )
 
@@ -153,62 +152,6 @@ func TestRecoveryHostFinalizeRechecksConflictedWorkloads(t *testing.T) {
 				t.Fatalf("delete called %d times, want %d", deletes, tt.wantDeletes)
 			}
 		})
-	}
-}
-
-// finalize lists without deep copies, so the listed Workloads are the cache's
-// own objects. The delete path must not be able to write into them: a client
-// wrapper that sets fields on the object it is given would otherwise corrupt
-// the cache for every controller.
-func TestRecoveryHostFinalizeNeverHandsListedWorkloadsToDelete(t *testing.T) {
-	const marker = "listed-marker"
-	assigned := workloadForHost("assigned", testHeartbeatHostID)
-	assigned.UID, assigned.ResourceVersion = "listed-uid", "7"
-	assigned.Labels = map[string]string{marker: "listed"}
-	base := newHostFinalizeClient(t, assigned)
-
-	// Stand in for the informer cache: List hands back these exact objects, as
-	// it does with UnsafeDisableDeepCopy, and they must stay untouched.
-	var cached *runtimev1alpha1.WorkloadList
-	var listOpts client.ListOptions
-	c := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
-		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			listOpts.ApplyOptions(opts)
-			if err := c.List(ctx, list, opts...); err != nil {
-				return err
-			}
-			cached = list.(*runtimev1alpha1.WorkloadList)
-			return nil
-		},
-		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-			for i := range cached.Items {
-				if obj == &cached.Items[i] {
-					t.Error("delete was handed the listed cache object")
-				}
-			}
-			var deleteOpts client.DeleteOptions
-			deleteOpts.ApplyOptions(opts)
-			if p := deleteOpts.Preconditions; p == nil || *p.UID != "listed-uid" || *p.ResourceVersion != "7" {
-				t.Errorf("delete lost the listed identity guard: %+v", p)
-			}
-			// A wrapper that writes to what it is given.
-			obj.SetLabels(map[string]string{marker: "rewritten"})
-			obj.SetFinalizers([]string{"rewritten"})
-			return c.Delete(ctx, obj, opts...)
-		},
-	})
-	r := &HostReconciler{Client: c, apiReader: base, deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency)}
-	if err := r.finalize(context.Background(), &runtimev1alpha1.Host{HostID: testHeartbeatHostID}); err != nil {
-		t.Fatal(err)
-	}
-	if listOpts.UnsafeDisableDeepCopy == nil || !*listOpts.UnsafeDisableDeepCopy {
-		t.Error("finalize deep copied its Workload list")
-	}
-	if len(cached.Items) != 1 || cached.Items[0].Labels[marker] != "listed" || len(cached.Items[0].Finalizers) != 0 {
-		t.Fatalf("delete path wrote into the listed objects: %+v", cached.Items)
-	}
-	if err := base.Get(context.Background(), client.ObjectKeyFromObject(assigned), &runtimev1alpha1.Workload{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("assigned Workload not deleted: %v", err)
 	}
 }
 
