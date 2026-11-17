@@ -237,8 +237,11 @@ spec:
                               within a component.
                             properties:
                               mountPath:
-                                description: MountPath is the path within the component
-                                  where the volume should be mounted.
+                                description: |-
+                                  MountPath is the path within the component where the volume should be mounted.
+                                  It must be absolute, and no segment may be `.` or `..`; the host refuses
+                                  any other path when the workload starts.
+                                pattern: ^/(([^/]*[^/.][^/]*|[.][.][.]+)?/?)*$
                                 type: string
                               name:
                                 description: Name must match the Name of a Volume
@@ -652,8 +655,11 @@ spec:
                             within a component.
                           properties:
                             mountPath:
-                              description: MountPath is the path within the component
-                                where the volume should be mounted.
+                              description: |-
+                                MountPath is the path within the component where the volume should be mounted.
+                                It must be absolute, and no segment may be `.` or `..`; the host refuses
+                                any other path when the workload starts.
+                              pattern: ^/(([^/]*[^/.][^/]*|[.][.][.]+)?/?)*$
                               type: string
                             name:
                               description: Name must match the Name of a Volume defined
