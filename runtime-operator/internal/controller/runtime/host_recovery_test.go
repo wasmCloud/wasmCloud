@@ -15,6 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 )
 
 type deleteTestClient struct {
@@ -110,9 +112,10 @@ func TestRecoveryHostFinalizeRefreshesConflict(t *testing.T) {
 }
 
 // A conflict means the listed Workload is out of date, not that it may be
-// deleted: whatever now lives under its name is left alone unless it is the
-// same object, still assigned to the retiring host.
-func TestRecoveryHostFinalizeLeavesUnconfirmedWorkloads(t *testing.T) {
+// deleted: whatever now lives under its name is deleted only if it is the same
+// object, still assigned to the retiring host. If it keeps changing, the retries
+// run out and the conflict is returned, which keeps the Host finalizer.
+func TestRecoveryHostFinalizeRechecksConflictedWorkloads(t *testing.T) {
 	original := workloadForHost("assigned", testHeartbeatHostID)
 	original.UID, original.ResourceVersion = "same-object", "100"
 	recreated := original.DeepCopy()
@@ -130,8 +133,8 @@ func TestRecoveryHostFinalizeLeavesUnconfirmedWorkloads(t *testing.T) {
 		{name: "recreated under the same name", live: []client.Object{recreated}, wantDeletes: 1},
 		{name: "already gone", wantDeletes: 1},
 		{
-			// The error is what keeps the Host finalizer for another pass.
-			name: "never settles", live: []client.Object{touched},
+			// Each retry rereads, finds the same object, and conflicts again.
+			name: "keeps conflicting until retries run out", live: []client.Object{touched},
 			wantDeletes: retry.DefaultRetry.Steps, wantErr: true,
 		},
 	} {
@@ -148,6 +151,92 @@ func TestRecoveryHostFinalizeLeavesUnconfirmedWorkloads(t *testing.T) {
 			}
 			if deletes != tt.wantDeletes {
 				t.Fatalf("delete called %d times, want %d", deletes, tt.wantDeletes)
+			}
+		})
+	}
+}
+
+// finalize lists without deep copies, so the listed Workloads are the cache's
+// own objects. The delete path must not be able to write into them: a client
+// wrapper that sets fields on the object it is given would otherwise corrupt
+// the cache for every controller.
+func TestRecoveryHostFinalizeNeverHandsListedWorkloadsToDelete(t *testing.T) {
+	const marker = "listed-marker"
+	assigned := workloadForHost("assigned", testHeartbeatHostID)
+	assigned.UID, assigned.ResourceVersion = "listed-uid", "7"
+	assigned.Labels = map[string]string{marker: "listed"}
+	base := newHostFinalizeClient(t, assigned)
+
+	// Stand in for the informer cache: List hands back these exact objects, as
+	// it does with UnsafeDisableDeepCopy, and they must stay untouched.
+	var cached *runtimev1alpha1.WorkloadList
+	var listOpts client.ListOptions
+	c := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			listOpts.ApplyOptions(opts)
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			cached = list.(*runtimev1alpha1.WorkloadList)
+			return nil
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			for i := range cached.Items {
+				if obj == &cached.Items[i] {
+					t.Error("delete was handed the listed cache object")
+				}
+			}
+			var deleteOpts client.DeleteOptions
+			deleteOpts.ApplyOptions(opts)
+			if p := deleteOpts.Preconditions; p == nil || *p.UID != "listed-uid" || *p.ResourceVersion != "7" {
+				t.Errorf("delete lost the listed identity guard: %+v", p)
+			}
+			// A wrapper that writes to what it is given.
+			obj.SetLabels(map[string]string{marker: "rewritten"})
+			obj.SetFinalizers([]string{"rewritten"})
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	r := &HostReconciler{Client: c, apiReader: base, deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency)}
+	if err := r.finalize(context.Background(), &runtimev1alpha1.Host{HostID: testHeartbeatHostID}); err != nil {
+		t.Fatal(err)
+	}
+	if listOpts.UnsafeDisableDeepCopy == nil || !*listOpts.UnsafeDisableDeepCopy {
+		t.Error("finalize deep copied its Workload list")
+	}
+	if len(cached.Items) != 1 || cached.Items[0].Labels[marker] != "listed" || len(cached.Items[0].Finalizers) != 0 {
+		t.Fatalf("delete path wrote into the listed objects: %+v", cached.Items)
+	}
+	if err := base.Get(context.Background(), client.ObjectKeyFromObject(assigned), &runtimev1alpha1.Workload{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("assigned Workload not deleted: %v", err)
+	}
+}
+
+func TestHostControllerKeepsAWorkerForReplacements(t *testing.T) {
+	host := runtimev1alpha1.GroupVersion.WithKind("Host").GroupKind().String()
+	for _, tt := range []struct {
+		name    string
+		manager config.Controller
+		want    int
+	}{
+		{name: "untuned", want: minHostWorkers},
+		{name: "manager-wide single worker", manager: config.Controller{MaxConcurrentReconciles: 1}, want: minHostWorkers},
+		{name: "manager-wide more workers", manager: config.Controller{MaxConcurrentReconciles: 6}, want: 6},
+		{name: "host single worker", manager: config.Controller{GroupKindConcurrency: map[string]int{host: 1}}, want: minHostWorkers},
+		{
+			name:    "host entry wins over manager-wide",
+			manager: config.Controller{MaxConcurrentReconciles: 1, GroupKindConcurrency: map[string]int{host: 4}},
+			want:    4,
+		},
+		{
+			name:    "other kinds are ignored",
+			manager: config.Controller{GroupKindConcurrency: map[string]int{"Workload.runtime.wasmcloud.dev": 9}},
+			want:    minHostWorkers,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hostControllerOptions(tt.manager).MaxConcurrentReconciles; got != tt.want {
+				t.Fatalf("got %d workers, want %d", got, tt.want)
 			}
 		})
 	}
