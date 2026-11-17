@@ -62,8 +62,10 @@ use tracing::{debug, warn};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi_http::{Error as HttpError, RequestOptions, WasiBody};
 
+use crate::host::allowed_loopback::AllowedLoopbackPort;
 use crate::host::egress_policy::{EgressAddressGate, EgressRefused};
 use crate::host::http::{RequestIoFuture, SendResult};
+use crate::sockets::internal_names::{self, InternalName};
 
 /// Error type carried by the request body handed to the pooled client.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -742,6 +744,7 @@ impl PooledClient {
             crate::host::quota::DEFAULT_HTTP_WAIT,
             MIN_IDLE_PER_AUTHORITY,
             Arc::default(),
+            HostLoopbackGrants::default(),
         )
     }
 
@@ -754,6 +757,7 @@ impl PooledClient {
         permit_wait: Duration,
         idle_per_authority: usize,
         gate: Arc<OnceLock<EgressAddressGate>>,
+        host_loopback: HostLoopbackGrants,
     ) -> Self {
         crate::init_crypto();
         // Both protocols use the current identity on every new connection.
@@ -762,6 +766,7 @@ impl PooledClient {
         let connector = |alpn: Alpn| BoundedConnector {
             tls: with_alpn(&tls_config, alpn),
             gate: Arc::clone(&gate),
+            host_loopback: host_loopback.clone(),
             workload: workload.clone(),
             quota: quota.clone(),
             permit_wait,
@@ -959,6 +964,7 @@ pub struct WorkloadClients {
     /// while a task is dropping them, so a burst of unbinds runs one task
     /// rather than one each.
     release_pending: Arc<std::sync::atomic::AtomicUsize>,
+    host_loopback: HostLoopbackGrants,
 }
 
 /// Owns maintenance before it is queued, including if the runtime cancels it
@@ -1044,7 +1050,17 @@ impl WorkloadClients {
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
             egress: Arc::default(),
+            host_loopback: HostLoopbackGrants::default(),
         }
+    }
+
+    /// Let `workload_id` reach `ports` on the machine's own loopback through
+    /// `host.wasmcloud.internal`, where the host's gate enables that door.
+    ///
+    /// Adds to what the workload already holds: each of its components binds
+    /// separately, and they share one client.
+    pub fn grant_host_loopback(&self, workload_id: &str, ports: &[AllowedLoopbackPort]) {
+        self.host_loopback.grant(workload_id, ports);
     }
 
     /// Check every address these clients connect to against `gate`.
@@ -1110,6 +1126,7 @@ impl WorkloadClients {
                 self.quotas.http_wait(),
                 idle_per_authority(calls, self.quotas.limits().outbound_http),
                 Arc::clone(&self.egress),
+                self.host_loopback.clone(),
             )
         })
     }
@@ -1130,6 +1147,7 @@ impl WorkloadClients {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(workload_id);
+        self.host_loopback.revoke(workload_id);
         drop(self.release_invalidated());
     }
 
@@ -1200,6 +1218,9 @@ struct BoundedConnector {
     /// Installed by the host once it is built; read on every connect, so a
     /// client built before that still applies it. Empty checks nothing.
     gate: Arc<OnceLock<EgressAddressGate>>,
+    /// Read on every connect, so a port granted after this client was built
+    /// still applies.
+    host_loopback: HostLoopbackGrants,
     /// The workload this connector belongs to, named in the exhaustion
     /// warning. `None` for a standalone [`PooledClient::new`] client.
     workload: Option<Arc<str>>,
@@ -1233,9 +1254,15 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         );
         // The resolver is per connect because it has to know the port, which
         // hyper-util does not pass it, to judge the host's own ports.
+        let granted = self
+            .workload
+            .as_deref()
+            .map(|workload| self.host_loopback.granted(workload))
+            .unwrap_or_default();
         let mut http = HttpConnector::new_with_resolver(GatedResolver {
             gate: gate.clone(),
             port,
+            host_loopback: granted,
             inner: hyper_util::client::legacy::connect::dns::GaiResolver::new(),
         });
         // The inner connector sees https URIs too; scheme handling belongs
@@ -1273,6 +1300,43 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
     }
 }
 
+/// The machine-loopback ports each workload may reach over `wasi:http`.
+#[derive(Clone, Default)]
+struct HostLoopbackGrants(Arc<std::sync::RwLock<BTreeMap<String, Arc<[AllowedLoopbackPort]>>>>);
+
+impl HostLoopbackGrants {
+    fn grant(&self, workload_id: &str, ports: &[AllowedLoopbackPort]) {
+        if ports.is_empty() {
+            return;
+        }
+        let mut grants = self.0.write().unwrap_or_else(|e| e.into_inner());
+        let held = grants.entry(workload_id.to_string()).or_default();
+        let mut merged = held.to_vec();
+        for port in ports {
+            if !merged.contains(port) {
+                merged.push(*port);
+            }
+        }
+        *held = merged.into();
+    }
+
+    fn granted(&self, workload_id: &str) -> Arc<[AllowedLoopbackPort]> {
+        self.0
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(workload_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn revoke(&self, workload_id: &str) {
+        self.0
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(workload_id);
+    }
+}
+
 /// The host part of `uri` when it is an address literal.
 fn uri_ip(uri: &hyper::Uri) -> Option<std::net::IpAddr> {
     uri.host()?
@@ -1291,6 +1355,9 @@ struct GatedResolver {
     /// The destination port, which the address check needs and a resolver is
     /// otherwise never told.
     port: u16,
+    /// The machine-loopback ports this workload may reach through
+    /// `host.wasmcloud.internal`.
+    host_loopback: Arc<[AllowedLoopbackPort]>,
     inner: hyper_util::client::legacy::connect::dns::GaiResolver,
 }
 
@@ -1307,9 +1374,22 @@ impl tower_service::Service<hyper_util::client::legacy::connect::dns::Name> for 
     }
 
     fn call(&mut self, name: hyper_util::client::legacy::connect::dns::Name) -> Self::Future {
-        let resolving = self.inner.call(name);
         let gate = self.gate.clone();
         let port = self.port;
+        // The reserved zone is answered here and never by the system resolver,
+        // or a cluster running a real `wasmcloud.internal` zone could answer
+        // for it. Only the host's own name means anything to `wasi:http`.
+        if let (Some(gate), Some(internal)) = (&gate, internal_names::resolve(name.as_str())) {
+            let answer: Result<_, BoxError> = match internal {
+                Ok(InternalName::Host) => gate
+                    .host_loopback(port, &self.host_loopback)
+                    .map(|addr| vec![addr].into_iter())
+                    .map_err(Into::into),
+                _ => Err(format!("`{name}` does not name an HTTP destination").into()),
+            };
+            return Box::pin(std::future::ready(answer));
+        }
+        let resolving = self.inner.call(name);
         Box::pin(async move {
             let resolved = resolving
                 .await?
@@ -3224,6 +3304,60 @@ mod tests {
         }
         assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(meters.denied(crate::sockets::DenyReason::BlockedRange) >= 2);
+    }
+
+    /// `host.wasmcloud.internal` is the one way `wasi:http` reaches the
+    /// machine's loopback: with the host's door open and the port granted to
+    /// that workload, and for no other workload or port.
+    #[tokio::test]
+    async fn host_loopback_is_reached_only_through_its_name_and_a_granted_port() {
+        let (addr, conns) = spawn_counting_server().await;
+        let gate = EgressAddressGate::from_socket_policy(&crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        });
+        let clients = WorkloadClients::new(default_client_tls_config());
+        assert!(clients.install_egress_gate(gate));
+        clients.grant_host_loopback("granted", &[AllowedLoopbackPort::tcp(addr.port())]);
+        let uri = format!("http://host.wasmcloud.internal:{}/", addr.port());
+
+        let (response, _io) = clients
+            .client("granted")
+            .send_request(request(&uri), test_options())
+            .await
+            .expect("the granted port is reachable by name");
+        assert_eq!(response.status(), 200);
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let refused = [
+            ("another workload", "other", uri.clone()),
+            (
+                "a port not granted",
+                "granted",
+                "http://host.wasmcloud.internal:1/".to_string(),
+            ),
+            ("the literal address", "granted", format!("http://{addr}/")),
+            (
+                "another name in the zone",
+                "granted",
+                format!("http://service.wasmcloud.internal:{}/", addr.port()),
+            ),
+        ];
+        for (case, workload, uri) in refused {
+            let result = clients
+                .client(workload)
+                .send_request(request(&uri), test_options())
+                .await;
+            assert!(result.is_err(), "{case}: {uri} must be refused");
+        }
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        clients.invalidate("granted");
+        let result = clients
+            .client("granted")
+            .send_request(request(&uri), test_options())
+            .await;
+        assert!(result.is_err(), "a stopped workload keeps no grant");
     }
 
     /// The metadata address in its IPv4-mapped spelling, as a literal: judged

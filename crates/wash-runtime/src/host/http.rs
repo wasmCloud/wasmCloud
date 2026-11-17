@@ -1242,6 +1242,22 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     /// guessing. The default is a no-op.
     fn on_workload_bind(&self, _workload_id: &str, _call_concurrency: usize) {}
 
+    /// Called as a workload's component binds, with the machine-loopback
+    /// ports it declared (`allowedHostLoopbackPorts`).
+    ///
+    /// A handler that connects to the network itself should dial
+    /// `host.wasmcloud.internal` only on these ports, and only through
+    /// [`EgressAddressGate::host_loopback`]. The default is a no-op, which
+    /// leaves the name unreachable.
+    ///
+    /// [`EgressAddressGate::host_loopback`]: crate::host::egress_policy::EgressAddressGate::host_loopback
+    fn on_workload_host_loopback(
+        &self,
+        _workload_id: &str,
+        _ports: &[crate::host::allowed_loopback::AllowedLoopbackPort],
+    ) {
+    }
+
     /// Called when a workload is stopped (unbound from the host).
     ///
     /// Implementations holding per-workload state — connection pools, TLS
@@ -1414,6 +1430,14 @@ impl OutgoingHandler for DefaultOutgoingHandler {
     fn on_workload_bind(&self, workload_id: &str, call_concurrency: usize) {
         self.clients()
             .set_call_concurrency(workload_id, call_concurrency);
+    }
+
+    fn on_workload_host_loopback(
+        &self,
+        workload_id: &str,
+        ports: &[crate::host::allowed_loopback::AllowedLoopbackPort],
+    ) {
+        self.clients().grant_host_loopback(workload_id, ports);
     }
 
     fn on_workload_unbind(&self, workload_id: &str) {
@@ -2917,6 +2941,12 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         self.outgoing_handler.on_workload_bind(
             resolved_handle.id(),
             resolved_handle.call_concurrency(component_id).await,
+        );
+        self.outgoing_handler.on_workload_host_loopback(
+            resolved_handle.id(),
+            &resolved_handle
+                .allowed_host_loopback_ports(component_id)
+                .await,
         );
 
         // Only components that export wasi:http are routable HTTP entrypoints.

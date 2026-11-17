@@ -19,6 +19,7 @@
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
+use crate::host::allowed_loopback::{AllowedLoopbackPort, check_allowed_loopback};
 use crate::host::declared_port::Protocol;
 use crate::host::ports::PortTable;
 use crate::host::quota::PolicyMeters;
@@ -87,6 +88,7 @@ impl EgressAddressPolicy {
 pub struct EgressAddressGate {
     egress_addrs: EgressAddressPolicy,
     egress_mode: EgressMode,
+    host_loopback_enabled: bool,
     host_owned_ports: Option<Arc<PortTable>>,
     meters: Option<Arc<PolicyMeters>>,
 }
@@ -115,6 +117,7 @@ impl EgressAddressGate {
         Self {
             egress_addrs: policy.egress_addrs,
             egress_mode: policy.egress_mode,
+            host_loopback_enabled: policy.host_loopback_enabled,
             host_owned_ports: policy.host_owned_ports.clone(),
             meters: policy.meters.clone(),
         }
@@ -166,6 +169,44 @@ impl EgressAddressGate {
             (true, Some(reason)) => Err(EgressRefused(reason)),
             _ => Ok(permitted),
         }
+    }
+
+    /// Where `host.wasmcloud.internal:port` connects for a workload granted
+    /// `granted`: the machine's own loopback, which the range policy refuses
+    /// every other way.
+    ///
+    /// The same two keys as for a socket: the host enables the door and the
+    /// workload names the port. Refused in either mode, because count mode
+    /// measures the range policy and does not open this door. A port the host
+    /// owns stays refused however it was granted.
+    pub fn host_loopback(
+        &self,
+        port: u16,
+        granted: &[AllowedLoopbackPort],
+    ) -> Result<SocketAddr, EgressRefused> {
+        let target = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let reason = if !self.host_loopback_enabled
+            || !check_allowed_loopback(granted, target, Protocol::Tcp)
+        {
+            DenyReason::HostLoopbackNotPermitted
+        } else if self
+            .host_owned_ports
+            .as_ref()
+            .is_some_and(|table| table.is_published(Protocol::Tcp, target))
+        {
+            DenyReason::HostOwnedPort
+        } else {
+            return Ok(target);
+        };
+        if let Some(meters) = &self.meters {
+            meters.record_deny(reason);
+        }
+        tracing::warn!(
+            port,
+            reason = reason.as_str(),
+            "HTTP egress to host.wasmcloud.internal refused"
+        );
+        Err(EgressRefused(reason))
     }
 
     /// One address, before the mode is applied.
@@ -460,6 +501,57 @@ mod tests {
         assert_eq!(meters.denied(DenyReason::HostOwnedPort), 6);
         for free in ["127.0.0.1:9000", "10.0.0.5:8000", "10.0.0.6:50051"] {
             assert!(gate.filter([sock(free)]).is_ok(), "{free} should pass");
+        }
+    }
+
+    /// `host.wasmcloud.internal` reaches the machine's loopback only with both
+    /// keys, in either mode, and never on a port the host owns.
+    #[test]
+    fn host_loopback_needs_the_host_door_and_the_workload_port() {
+        let table = PortTable::new();
+        let _ingress = table
+            .reserve(
+                Protocol::Tcp,
+                sock("127.0.0.1:8000"),
+                crate::host::ports::PortOwner::Host("ingress".into()),
+            )
+            .unwrap();
+        let gate = |enabled, mode| {
+            EgressAddressGate::from_socket_policy(&SocketPolicy {
+                egress_mode: mode,
+                host_loopback_enabled: enabled,
+                host_owned_ports: Some(Arc::clone(&table)),
+                ..Default::default()
+            })
+        };
+        let granted = [
+            AllowedLoopbackPort::tcp(11434),
+            AllowedLoopbackPort::tcp(8000),
+        ];
+        let open = gate(true, EgressMode::Enforce);
+
+        assert_eq!(
+            open.host_loopback(11434, &granted),
+            Ok(sock("127.0.0.1:11434"))
+        );
+        assert_eq!(
+            open.host_loopback(5432, &granted),
+            Err(EgressRefused(DenyReason::HostLoopbackNotPermitted))
+        );
+        assert_eq!(
+            open.host_loopback(11434, &[AllowedLoopbackPort::udp(11434)]),
+            Err(EgressRefused(DenyReason::HostLoopbackNotPermitted))
+        );
+        assert_eq!(
+            open.host_loopback(8000, &granted),
+            Err(EgressRefused(DenyReason::HostOwnedPort))
+        );
+        for mode in [EgressMode::Enforce, EgressMode::Count] {
+            assert_eq!(
+                gate(false, mode).host_loopback(11434, &granted),
+                Err(EgressRefused(DenyReason::HostLoopbackNotPermitted)),
+                "the host has not enabled the door"
+            );
         }
     }
 

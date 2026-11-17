@@ -2424,6 +2424,20 @@ impl ResolvedWorkload {
             .map_or(1, |component| component.instances.call_concurrency())
     }
 
+    /// The machine-loopback ports `component_id` declared. None for an
+    /// unknown component.
+    pub(crate) async fn allowed_host_loopback_ports(
+        &self,
+        component_id: &str,
+    ) -> Arc<[crate::host::allowed_loopback::AllowedLoopbackPort]> {
+        self.components
+            .read()
+            .await
+            .get(component_id)
+            .map(|component| Arc::clone(&component.local_resources.allowed_host_loopback_ports))
+            .unwrap_or_default()
+    }
+
     /// The manifest identity an item's guest-execution measurements carry.
     ///
     /// Manifest names throughout, never the ids — see
