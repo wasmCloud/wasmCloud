@@ -31,17 +31,8 @@ pub struct ComponentBuildCommand {
 impl CliCommand for ComponentBuildCommand {
     #[instrument(level = "debug", skip(self, ctx), name = "component_build")]
     async fn handle(&self, ctx: &CliContext) -> anyhow::Result<CommandOutput> {
-        // Load configuration with CLI arguments override
         let mut config = ctx.load_config(None::<Config>)?;
-        // Ensure the CLI argument takes precedence
-        if let Some(wit) = config.wit.as_mut() {
-            wit.skip_fetch = self.skip_fetch;
-        } else {
-            config.wit = Some(WitConfig {
-                skip_fetch: self.skip_fetch,
-                ..Default::default()
-            })
-        }
+        apply_skip_fetch_flag(&mut config, self.skip_fetch);
 
         let result = build_component(ctx, &config).await?;
 
@@ -55,6 +46,18 @@ impl CliCommand for ComponentBuildCommand {
                 "project_path": result.project_path,
             })),
         ))
+    }
+}
+
+/// Layer the `--skip-fetch` flag over `wit.skip_fetch` from the loaded config.
+///
+/// The flag can only turn fetching off. It is a plain switch, so leaving it
+/// out cannot be told apart from asking for a fetch; treating its absence as
+/// "fetch" would throw away a `wit.skip_fetch: true` set in the project or
+/// user config, which `wash build` would then never honor.
+fn apply_skip_fetch_flag(config: &mut Config, skip_fetch: bool) {
+    if skip_fetch {
+        config.wit.get_or_insert_with(WitConfig::default).skip_fetch = true;
     }
 }
 
@@ -404,7 +407,74 @@ fn is_core_wasm_module(bytes: &[u8]) -> bool {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::is_core_wasm_module;
+    use std::collections::HashMap;
+
+    use super::{apply_skip_fetch_flag, is_core_wasm_module};
+    use crate::{config::Config, wit::WitConfig};
+
+    fn config_with_wit(skip_fetch: bool) -> Config {
+        Config {
+            wit: Some(WitConfig {
+                skip_fetch,
+                sources: HashMap::from([("example:dep".to_string(), "./wit-deps".to_string())]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn skip_fetch(config: &Config) -> bool {
+        config.wit.as_ref().is_some_and(|w| w.skip_fetch)
+    }
+
+    #[test]
+    fn config_skip_fetch_survives_absent_flag() {
+        let mut config = config_with_wit(true);
+        apply_skip_fetch_flag(&mut config, false);
+        assert!(
+            skip_fetch(&config),
+            "wit.skip_fetch: true must not be reset when --skip-fetch is not passed"
+        );
+    }
+
+    #[test]
+    fn flag_skips_fetch_when_config_fetches() {
+        let mut config = config_with_wit(false);
+        apply_skip_fetch_flag(&mut config, true);
+        assert!(skip_fetch(&config));
+    }
+
+    #[test]
+    fn fetch_stays_on_by_default() {
+        let mut config = config_with_wit(false);
+        apply_skip_fetch_flag(&mut config, false);
+        assert!(!skip_fetch(&config));
+
+        let mut config = Config::default();
+        apply_skip_fetch_flag(&mut config, false);
+        assert!(
+            config.wit.is_none(),
+            "no flag and no wit section leaves the config untouched"
+        );
+    }
+
+    #[test]
+    fn flag_without_wit_section_creates_one() {
+        let mut config = Config::default();
+        apply_skip_fetch_flag(&mut config, true);
+        assert!(skip_fetch(&config));
+    }
+
+    #[test]
+    fn flag_keeps_the_rest_of_the_wit_section() {
+        let mut config = config_with_wit(false);
+        apply_skip_fetch_flag(&mut config, true);
+        let wit = config.wit.expect("wit section");
+        assert_eq!(
+            wit.sources.get("example:dep").map(String::as_str),
+            Some("./wit-deps")
+        );
+    }
 
     #[test]
     fn distinguishes_core_module_from_component() {
