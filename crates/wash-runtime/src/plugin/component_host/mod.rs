@@ -91,7 +91,7 @@ use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx, WorkloadCaller};
 use crate::engine::instance_pool::InstancePolicy;
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
-use crate::engine::volumes::{HostPathPolicy, ResolvedVolumeMount, normalize_mount_path};
+use crate::engine::volumes::{HostPathPolicy, ResolvedVolumeMount};
 use crate::engine::workload::{
     ResolvedWorkload, UnresolvedWorkload, WorkloadComponent, WorkloadItem,
 };
@@ -2275,68 +2275,69 @@ fn build_plugin_store(
 
 /// Resolve a plugin's declared volumes once, at load: a declaration that cannot
 /// work fails the host's start naming the plugin, rather than failing every
-/// incarnation the supervisor starts. Each directory is opened here and its
-/// handle kept, so what was checked is what every incarnation mounts.
+/// incarnation the supervisor starts. Each mounted directory is opened here and
+/// its handle kept, so what was checked is what every incarnation mounts.
+///
+/// Every directory opened is registered with `host_paths`, so from then on no
+/// workload volume may equal, contain, or lie inside it. A volume no mount
+/// uses is neither opened nor registered: the plugin cannot see it.
 async fn resolve_plugin_volumes(
     id: &str,
     volumes: &[Volume],
     volume_mounts: &[VolumeMount],
     host_paths: &HostPathPolicy,
 ) -> anyhow::Result<Arc<[ResolvedVolumeMount]>> {
-    let mut opened = HashMap::with_capacity(volumes.len());
+    let owner = format!("host component plugin '{id}'");
+    crate::plugin::component_plugin_spec::validate_plugin_volumes(volumes, volume_mounts, &owner)?;
+
+    let mounted: BTreeSet<&str> = volume_mounts.iter().map(|m| m.name.as_str()).collect();
+    let mut to_open = Vec::with_capacity(mounted.len());
     for volume in volumes {
-        let name = volume.name.as_str();
-        anyhow::ensure!(
-            !name.is_empty(),
-            "host component plugin '{id}': a volume has an empty name"
-        );
-        anyhow::ensure!(
-            !opened.contains_key(name),
-            "host component plugin '{id}': two volumes are named '{name}'"
-        );
-        let local_path = match &volume.volume_type {
-            VolumeType::HostPath(HostPathVolume { local_path }) => local_path.clone(),
-            VolumeType::EmptyDir(_) => anyhow::bail!(
-                "host component plugin '{id}': volume '{name}' is an emptyDir, which host \
-                 component plugins do not support yet"
-            ),
+        // Validation refused every other volume type.
+        let VolumeType::HostPath(HostPathVolume { local_path }) = &volume.volume_type else {
+            continue;
         };
-        let policy = host_paths.clone();
-        let host_path = std::path::PathBuf::from(&local_path);
-        let dir = tokio::task::spawn_blocking(move || policy.open_host_config_volume(&host_path))
-            .await?
-            .with_context(|| {
-                format!(
-                    "host component plugin '{id}': volume '{name}' hostPath {local_path} cannot \
-                     be mounted"
-                )
-            })?;
-        opened.insert(name, dir);
+        if mounted.contains(volume.name.as_str()) {
+            to_open.push((volume.name.clone(), local_path.clone()));
+        } else {
+            warn!(
+                plugin = id,
+                volume = %volume.name,
+                "host component plugin declares a volume no volumeMount uses; it is not opened"
+            );
+        }
     }
 
-    let mut mount_paths = std::collections::HashSet::new();
-    let mut resolved = Vec::with_capacity(volume_mounts.len());
-    for mount in volume_mounts {
-        let dir = opened.get(mount.name.as_str()).ok_or_else(|| {
-            anyhow::anyhow!(
-                "host component plugin '{id}': a volumeMount names volume '{}', which the \
-                 plugin does not declare",
-                mount.name
-            )
-        })?;
-        let mount_path = normalize_mount_path(&mount.mount_path).map_err(|why| {
-            anyhow::anyhow!(
-                "host component plugin '{id}': volumeMount mountPath {:?} {why}",
-                mount.mount_path
-            )
-        })?;
-        anyhow::ensure!(
-            mount_paths.insert(mount_path.clone()),
-            "host component plugin '{id}': two volumeMounts mount at {mount_path:?}"
-        );
-        resolved.push(ResolvedVolumeMount::new(dir, &mount_path, mount.read_only)?);
-    }
-    Ok(resolved.into())
+    let policy = host_paths.clone();
+    let opened = tokio::task::spawn_blocking(move || {
+        let mut opened = HashMap::with_capacity(to_open.len());
+        for (name, local_path) in to_open {
+            let dir = policy
+                .open_host_config_volume(std::path::Path::new(&local_path))
+                .with_context(|| {
+                    format!("{owner}: volume '{name}' hostPath {local_path} cannot be mounted")
+                })?;
+            opened.insert(name, dir);
+        }
+        // Only once every volume opened, so a plugin that fails to load
+        // leaves no directory closed to workloads.
+        policy.register_plugin_volumes(opened.values().map(|dir| dir.path.clone()));
+        anyhow::Ok(opened)
+    })
+    .await??;
+
+    volume_mounts
+        .iter()
+        .map(|mount| {
+            // Validation checked every mount names a declared volume, and every
+            // mounted volume was opened, so this does not fail.
+            let dir = opened
+                .get(mount.name.as_str())
+                .ok_or_else(|| anyhow::anyhow!("{id}: volume '{}' was not opened", mount.name))?;
+            ResolvedVolumeMount::from_opened(dir, mount)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(Into::into)
 }
 
 fn component_plugin_socket_policy(
@@ -3584,7 +3585,82 @@ mod tests {
         let err = format!("{err:#}");
         assert!(err.contains("reserves"), "{err}");
         assert!(err.contains("'vol'"), "error should name the plugin: {err}");
-        assert_eq!(meters.host_path_denied(), 1);
+        // A plugin's config error is not a workload denied by policy.
+        assert_eq!(meters.host_path_denied(), 0);
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_close_their_directories_to_workloads() {
+        let data = tempfile::tempdir().unwrap();
+        let inside = data.path().join("inside");
+        std::fs::create_dir(&inside).unwrap();
+        let unrelated = tempfile::tempdir().unwrap();
+        let policy = HostPathPolicy::new(
+            [],
+            [
+                data.path().to_path_buf(),
+                std::env::temp_dir(),
+                unrelated.path().to_path_buf(),
+            ],
+            None,
+            None,
+        );
+        // A clone made before the plugin loads, as the engine hands out.
+        let workloads = policy.clone();
+        workloads
+            .open(data.path())
+            .expect("nothing is closed before the plugin loads");
+
+        resolve_plugin_volumes(
+            "vol",
+            &[host_path("data", data.path())],
+            &[mount("data", "/data", true)],
+            &policy,
+        )
+        .await
+        .unwrap();
+
+        for refused in [data.path(), inside.as_path(), &std::env::temp_dir()] {
+            let err = workloads
+                .open(refused)
+                .err()
+                .unwrap_or_else(|| panic!("{} should be refused", refused.display()));
+            assert!(
+                format!("{err:#}").contains("a host plugin mounts"),
+                "{err:#}"
+            );
+        }
+        workloads
+            .open(unrelated.path())
+            .expect("a directory apart from the plugin's is still permitted");
+    }
+
+    #[tokio::test]
+    async fn plugin_volumes_no_mount_uses_are_not_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let used = dir.path().join("used");
+        let unused = dir.path().join("unused");
+        std::fs::create_dir(&used).unwrap();
+        std::fs::create_dir(&unused).unwrap();
+        let policy = HostPathPolicy::new([], [dir.path().to_path_buf()], None, None);
+
+        let resolved = resolve_plugin_volumes(
+            "vol",
+            &[
+                host_path("used", &used),
+                host_path("unused", &unused),
+                host_path("missing", &dir.path().join("missing")),
+            ],
+            &[mount("used", "/used", true)],
+            &policy,
+        )
+        .await
+        .expect("an unmounted volume is not opened, so a missing one is no error");
+        assert_eq!(resolved.len(), 1);
+        policy
+            .open(&unused)
+            .expect("an unmounted volume is not closed to workloads");
+        assert!(policy.open(&used).is_err());
     }
 
     #[tokio::test]
@@ -3642,12 +3718,12 @@ mod tests {
             (vec![scratch.clone()], vec![], "do not support yet"),
             (
                 vec![host_path("models", &dir.path().join("missing"))],
-                vec![],
+                vec![mount("models", "/models", true)],
                 "failed to resolve hostPath volume",
             ),
             (
                 vec![host_path("models", &file)],
-                vec![],
+                vec![mount("models", "/models", true)],
                 "failed to open hostPath volume",
             ),
         ] {
