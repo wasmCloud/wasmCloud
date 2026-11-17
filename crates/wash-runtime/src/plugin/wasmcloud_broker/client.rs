@@ -42,7 +42,16 @@ use crate::host::http::{BrokeredRequest, HostHandler, RequestIoFuture, SendFutur
 use crate::host::token_exchange::{TokenExchange, TokenType};
 
 /// Headers proxies take as the client's address.
-const CLIENT_ADDRESS_HEADERS: &[&str] = &["x-real-ip", "true-client-ip", "client-ip"];
+const CLIENT_ADDRESS_HEADERS: &[&str] = &[
+    "x-real-ip",
+    "true-client-ip",
+    "client-ip",
+    "x-client-ip",
+    "x-cluster-client-ip",
+    "cf-connecting-ip",
+    "fastly-client-ip",
+    "x-originating-ip",
+];
 
 /// What a presented credential is replaced with in a response.
 const REDACTED: &[u8] = b"[redacted]";
@@ -117,11 +126,7 @@ impl ClientBinding {
             .ok_or(DeniedReason::DestinationNotAllowed)?;
         let host = authority.host().to_ascii_lowercase();
         let port = authority.port_u16().unwrap_or(443);
-        if !self
-            .destinations
-            .iter()
-            .any(|(h, p)| *h == host && *p == port)
-        {
+        if !self.destinations.contains(&(host.clone(), port)) {
             return Err(DeniedReason::DestinationNotAllowed);
         }
         if !self.routes.is_empty()
@@ -228,7 +233,7 @@ impl ClientBinding {
             headers.insert(DPOP, proof);
         }
         request.extensions_mut().insert(CarriesSecret);
-        request.extensions_mut().insert(BrokeredRequest);
+        request.extensions_mut().insert(BrokeredRequest::new());
         Ok(scrub)
     }
 
@@ -532,6 +537,7 @@ struct Ready {
     issuer: Issuer,
     state: Arc<BodyState>,
     scrub: Substituted,
+    uri: http::Uri,
 }
 
 fn denied(reason: DeniedReason) -> SendError {
@@ -562,10 +568,25 @@ pub(super) async fn send(
     let binding = &bound.inner;
     let (transmit_tx, transmit_rx) = oneshot::channel::<Transmit>();
     let (upload_tx, upload_rx) = oneshot::channel::<()>();
+    let unread = http::Method::from_bytes(b"-").unwrap_or_default();
+    let op = Arc::new(std::sync::Mutex::new((unread, http::Uri::default())));
+    let note = |seen| *op.lock().unwrap_or_else(|e| e.into_inner()) = seen;
+    let audit = {
+        let (bound, audit_id, op) = (Arc::clone(bound), audit_id.clone(), Arc::clone(&op));
+        Audit::new(move |outcome| {
+            let (method, uri) = &*op.lock().unwrap_or_else(|e| e.into_inner());
+            let operation = BrokerOperation::Send {
+                method,
+                authority: uri.authority().map_or("", |a| a.as_str()),
+                path: uri.path(),
+            };
+            bound.audit(&audit_id, operation, outcome);
+        })
+    };
 
     let prepared = accessor.with(|mut store| -> wasmtime::Result<_> {
         let request = store.get().table.delete(request)?;
-        let op = (request.method.clone(), named_uri(&request));
+        note((request.method.clone(), named_uri(&request)));
         let (request, options) = match request.into_http(&mut store, transmit_result(transmit_rx)) {
             Ok(converted) => converted,
             Err(e) => {
@@ -575,7 +596,7 @@ pub(super) async fn send(
                     )))),
                     Err(trap) => Unsent::Trap(trap),
                 };
-                return Ok((op, Err(unsent)));
+                return Ok(Err(unsent));
             }
         };
         let (parts, body) = request.into_parts();
@@ -588,7 +609,7 @@ pub(super) async fn send(
             .ok()
             .filter(|h| h.sends_brokered_requests())
         else {
-            return Ok((op, Err(Unsent::Denied(DeniedReason::NotSupported))));
+            return Ok(Err(Unsent::Denied(DeniedReason::NotSupported)));
         };
         let (namespace, name) = ctx.egress_names();
         let issuer = Issuer {
@@ -605,9 +626,10 @@ pub(super) async fn send(
             .and_then(|()| binding.present(&mut request));
         let scrub = match checked {
             Ok(scrub) => scrub,
-            Err(reason) => return Ok((op, Err(Unsent::Denied(reason)))),
+            Err(reason) => return Ok(Err(Unsent::Denied(reason))),
         };
-        let op = (request.method().clone(), request.uri().clone());
+        let uri = request.uri().clone();
+        note((request.method().clone(), uri.clone()));
         let replay = binding.dpop_key().map(|_| {
             let (mut parts, ()) = http::Request::new(()).into_parts();
             parts.method = request.method().clone();
@@ -616,38 +638,24 @@ pub(super) async fn send(
             Replay(parts)
         });
         let first = issuer.issue(request);
-        Ok((
-            op,
-            Ok(Ready {
-                first,
-                replay,
-                issuer,
-                state,
-                scrub,
-            }),
-        ))
-    })?;
+        Ok(Ok(Ready {
+            first,
+            replay,
+            issuer,
+            state,
+            scrub,
+            uri,
+        }))
+    });
 
-    let ((method, uri), ready) = prepared;
-    let audit = {
-        let (bound, audit_id, method, uri) =
-            (Arc::clone(bound), audit_id.clone(), method, uri.clone());
-        Audit::new(move |outcome| {
-            let operation = BrokerOperation::Send {
-                method: &method,
-                authority: uri.authority().map_or("", |a| a.as_str()),
-                path: uri.path(),
-            };
-            bound.audit(&audit_id, operation, outcome);
-        })
-    };
     let Ready {
         first: mut attempt,
         replay,
         issuer,
         state,
         mut scrub,
-    } = match ready {
+        uri,
+    } = match prepared.unwrap_or_else(|trap| Err(Unsent::Trap(trap))) {
         Ok(ready) => ready,
         Err(Unsent::Denied(reason)) => {
             audit.record(BrokerOutcome::Denied(reason_name(&reason)));
@@ -1010,6 +1018,11 @@ mod tests {
             ("x-real-ip", "10.0.0.1"),
             ("true-client-ip", "10.0.0.1"),
             ("client-ip", "10.0.0.1"),
+            ("x-client-ip", "10.0.0.1"),
+            ("x-cluster-client-ip", "10.0.0.1"),
+            ("cf-connecting-ip", "10.0.0.1"),
+            ("fastly-client-ip", "10.0.0.1"),
+            ("x-originating-ip", "10.0.0.1"),
             ("via", "1.1 proxy"),
         ] {
             let mut req = request("https://api.example.com/v1/repos");

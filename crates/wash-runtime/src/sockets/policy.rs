@@ -120,6 +120,9 @@ pub struct SocketPolicy {
     /// `allowed_hosts` entry naming a host permit a socket. Configuration only:
     /// the history itself belongs to the store.
     pub resolved_names: super::resolved_names::ResolvedNameLimits,
+    /// Refuse the guest's own virtual network too: a connect or datagram to a
+    /// loopback or unspecified address, which would reach a sibling.
+    pub no_virtual_connect: bool,
 }
 
 impl Default for SocketPolicy {
@@ -148,6 +151,7 @@ impl Default for SocketPolicy {
             quotas: Some(crate::host::quota::default_registry()),
             meters: None,
             resolved_names: super::resolved_names::ResolvedNameLimits::default(),
+            no_virtual_connect: false,
         }
     }
 }
@@ -326,6 +330,9 @@ impl SocketPolicy {
         //    names this machine too, so it never reaches the host plane.
         let ip = addr.ip().to_canonical();
         if ip.is_loopback() || ip.is_unspecified() {
+            if self.no_virtual_connect {
+                return Err(DenyReason::NotPermitted);
+            }
             return Ok(Route::standing(addr, Plane::Virtual));
         }
 
@@ -685,6 +692,22 @@ mod tests {
         // `allowed_hosts` is empty, yet the guest's own network is reachable.
         let decision = policy.decide(SocketAddrUse::TcpConnect, addr("127.0.0.1:6432"));
         assert_eq!(plane_of(&decision), Some(Plane::Virtual));
+
+        let sealed = SocketPolicy {
+            no_virtual_connect: true,
+            ..enforcing(GuestKind::Component)
+        };
+        for to in [
+            "127.0.0.1:6432",
+            "[::1]:80",
+            "0.0.0.0:80",
+            "[::ffff:127.0.0.1]:80",
+        ] {
+            let decision = sealed.decide(SocketAddrUse::TcpConnect, addr(to));
+            assert!(plane_of(&decision).is_none(), "{to}");
+            let decision = sealed.decide(SocketAddrUse::UdpOutgoingDatagram, addr(to));
+            assert!(plane_of(&decision).is_none(), "{to}");
+        }
     }
 
     /// `0.0.0.0` and `::` name this machine, so they stay on the guest's own

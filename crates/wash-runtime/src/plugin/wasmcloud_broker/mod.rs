@@ -8,13 +8,18 @@
 //! forge at run time.
 //!
 //! This is the managed class: a component that imports the broker has no
-//! network of its own. Its `wasi:http` requests are all refused and its
-//! sockets get a policy that allows nothing, so a library that imports either
-//! still links. `wasi:tls` and `reveal` are refused at bind, since neither has
-//! a useful deny-all form. The only way out with a credential is an operation
-//! the binding allows. All of this is per component: a sibling in the same
-//! workload is not covered, so a managed component linked to one that has
-//! network access can reach out through it.
+//! network of its own. Its own linker redefines `wasi:http` egress and every
+//! `wasi:sockets` interface to reach nothing: requests are refused and sockets
+//! allow no address, not even the workload's virtual network. The view is
+//! fixed at link time, so it holds whichever component the store's active
+//! context names, and a library that imports either still links. `wasi:tls`
+//! and `reveal` are refused at bind, since neither has a useful deny-all form.
+//! The only way out with a credential is an operation the binding allows.
+//!
+//! This is per component: a sibling in the same workload keeps its own
+//! network, so a managed component that imports a sibling's export can reach
+//! out through it. A plugin that overrides WASI binds after the broker and
+//! would replace these definitions.
 
 mod client;
 mod keys;
@@ -181,6 +186,17 @@ pub type BoundClient = Arc<Bound<ClientBinding>>;
 pub type BoundSigner = Arc<Bound<SignerKey>>;
 pub type BoundVerifier = Arc<Bound<VerifierKey>>;
 
+/// A key operation has no effect outside the host, so anything but a refusal
+/// or a result is a plain failure.
+fn key_outcome<T>(result: &wasmtime::Result<Result<T, ErrorCode>>) -> BrokerOutcome<'static> {
+    match result {
+        Ok(Ok(_)) => BrokerOutcome::Completed,
+        Ok(Err(ErrorCode::Denied(reason))) => BrokerOutcome::Denied(reason_name(reason)),
+        Ok(Err(_)) => BrokerOutcome::Failed("the key operation failed"),
+        Err(_) => BrokerOutcome::Failed("the key operation trapped"),
+    }
+}
+
 fn reason_name(reason: &DeniedReason) -> &'static str {
     match reason {
         DeniedReason::NotEntitled => "not-entitled",
@@ -250,6 +266,22 @@ impl WasmcloudBroker {
     pub fn new(policy: Arc<dyn BrokerPolicy>) -> Self {
         Self { policy }
     }
+
+    fn bound<T: ?Sized>(
+        &self,
+        caller: &Arc<BrokerCaller>,
+        label: &str,
+        inner: Arc<T>,
+        limits: keys::Limits,
+    ) -> Arc<Bound<T>> {
+        Arc::new(Bound {
+            caller: Arc::clone(caller),
+            label: label.into(),
+            inner,
+            policy: Arc::clone(&self.policy),
+            limits,
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -288,7 +320,7 @@ impl HostPlugin for WasmcloudBroker {
         let world = item.world();
         refuse_unlabeled(&world)?;
         refuse_bypasses(&world)?;
-        item.brokered_egress = true;
+        crate::engine::ctx::link_denied_egress(item.linker()?)?;
 
         let caller = Arc::new(BrokerCaller {
             workload_id: item.workload_id().into(),
@@ -302,13 +334,6 @@ impl HostPlugin for WasmcloudBroker {
         });
         let component = item.component().clone();
         let linker = item.linker()?;
-        let bound = |label: &str| Bound {
-            caller: Arc::clone(&caller),
-            label: label.into(),
-            inner: Arc::new(()),
-            policy: Arc::clone(&self.policy),
-            limits: keys::Limits::default(),
-        };
         let unbound = |label: &str| {
             wasmtime::format_err!(
                 "no broker credential is bound to `{label}` for workload {}/{}",
@@ -329,7 +354,7 @@ impl HostPlugin for WasmcloudBroker {
                     .policy
                     .client(&caller, label)
                     .ok_or_else(|| unbound(label))?;
-                Ok(Arc::new(with_inner(bound(label), inner)))
+                Ok(self.bound(&caller, label, inner, keys::Limits::default()))
             },
             extract_active_ctx,
         )?;
@@ -342,10 +367,7 @@ impl HostPlugin for WasmcloudBroker {
                     .signer(&caller, label)
                     .ok_or_else(|| unbound(label))?;
                 let limits = inner.limits();
-                Ok(Arc::new(Bound {
-                    limits,
-                    ..with_inner(bound(label), inner)
-                }))
+                Ok(self.bound(&caller, label, inner, limits))
             },
             extract_active_ctx,
         )?;
@@ -358,24 +380,11 @@ impl HostPlugin for WasmcloudBroker {
                     .verifier(&caller, label)
                     .ok_or_else(|| unbound(label))?;
                 let limits = inner.limits();
-                Ok(Arc::new(Bound {
-                    limits,
-                    ..with_inner(bound(label), inner)
-                }))
+                Ok(self.bound(&caller, label, inner, limits))
             },
             extract_active_ctx,
         )?;
         Ok(())
-    }
-}
-
-fn with_inner<T: ?Sized>(bound: Bound<()>, inner: Arc<T>) -> Bound<T> {
-    Bound {
-        caller: bound.caller,
-        label: bound.label,
-        inner,
-        policy: bound.policy,
-        limits: bound.limits,
     }
 }
 
@@ -392,13 +401,9 @@ impl bindings::named_imports::wasmcloud::broker::signer::HostWithStore<SharedCtx
     ) -> wasmtime::Result<Result<Vec<u8>, ErrorCode>> {
         let audit_id = crate::ids::now_v7().to_string();
         let audit = Audit::new(|outcome| bound.audit(&audit_id, BrokerOperation::Sign, outcome));
-        let result = keys::sign(accessor, &bound.inner, &bound.limits, message).await?;
-        audit.record(match &result {
-            Ok(_) => BrokerOutcome::Completed,
-            Err(ErrorCode::Denied(reason)) => BrokerOutcome::Denied(reason_name(reason)),
-            Err(_) => BrokerOutcome::Indeterminate("signing failed"),
-        });
-        Ok(result)
+        let result = keys::sign(accessor, &bound.inner, &bound.limits, message).await;
+        audit.record(key_outcome(&result));
+        result
     }
 
     async fn get_key_info(
@@ -424,13 +429,9 @@ impl bindings::named_imports::wasmcloud::broker::verifier::HostWithStore<SharedC
     ) -> wasmtime::Result<Result<bool, ErrorCode>> {
         let audit_id = crate::ids::now_v7().to_string();
         let audit = Audit::new(|outcome| bound.audit(&audit_id, BrokerOperation::Verify, outcome));
-        let result = keys::verify(accessor, &bound.inner, &bound.limits, message, &tag).await?;
-        audit.record(match &result {
-            Ok(_) => BrokerOutcome::Completed,
-            Err(ErrorCode::Denied(reason)) => BrokerOutcome::Denied(reason_name(reason)),
-            Err(_) => BrokerOutcome::Indeterminate("verification failed"),
-        });
-        Ok(result)
+        let result = keys::verify(accessor, &bound.inner, &bound.limits, message, &tag).await;
+        audit.record(key_outcome(&result));
+        result
     }
 }
 

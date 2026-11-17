@@ -127,6 +127,21 @@ dependencies = [
 name = "broker-client-p3"
 version = "0.0.0"
 dependencies = [
+ "futures",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "broker-managed-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "broker-slow-p3"
+version = "0.0.0"
+dependencies = [
  "wit-bindgen 0.60.0",
 ]
 

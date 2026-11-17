@@ -22,6 +22,7 @@ use zeroize::Zeroizing;
 
 use crate::host::dpop::{DPOP, DpopKey};
 use crate::host::egress_credential::{CredentialError, EgressCredentialSource, LeasedSource};
+use crate::host::http_client::{Alpn, https_connector};
 
 const TOKEN_EXCHANGE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const JWT_BEARER: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
@@ -34,7 +35,6 @@ const RETRY: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const MIN_SKEW: Duration = Duration::from_secs(30);
 const CLOCK_SKEW: Duration = Duration::from_secs(60);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How the SVID is presented to the token endpoint.
@@ -289,16 +289,7 @@ impl TokenExchange {
         if let Some(details) = &self.authorization_details {
             pairs.push(("authorization_details", details));
         }
-        let mut form = Zeroizing::new(String::new());
-        for (i, (k, v)) in pairs.iter().enumerate() {
-            if i > 0 {
-                form.push('&');
-            }
-            form_encode(&mut form, k);
-            form.push('=');
-            form_encode(&mut form, v);
-        }
-        form
+        crate::host::aws_sts::form(&pairs)
     }
 
     async fn post(
@@ -320,14 +311,14 @@ impl TokenExchange {
         }
         let client =
             hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-                .build(connector(&self.tls));
+                .build(https_connector(&self.tls, Alpn::Http1));
         let response = client.request(request).await?;
         let (parts, body) = response.into_parts();
         if let Some(key) = &self.dpop {
             key.observe(&self.endpoint, &parts.headers);
         }
         let mut body = std::pin::pin!(Limited::new(body, MAX_RESPONSE));
-        let mut read = Zeroizing::new(Vec::new());
+        let mut read = Zeroizing::new(Vec::with_capacity(MAX_RESPONSE));
         while let Some(frame) = body.frame().await {
             let frame =
                 frame.map_err(|e| anyhow::anyhow!("failed to read the token response: {e}"))?;
@@ -467,6 +458,10 @@ impl EgressCredentialSource for TokenExchange {
     fn current(&self) -> Result<Zeroizing<Vec<u8>>, CredentialError> {
         self.held.current()
     }
+
+    fn revocation(&self) -> Option<tokio_util::sync::CancellationToken> {
+        self.subject.revocation()
+    }
 }
 
 /// Keeps a [`TokenExchange`] holding a current token until dropped, which
@@ -486,8 +481,9 @@ impl Drop for TokenRefresh {
 }
 
 /// Keep `exchange` holding a current token until the returned guard is
-/// dropped. Each token is renewed well before it expires; failures back off
-/// exponentially with jitter. An exchange is refreshed at most once in its
+/// dropped or the subject is revoked, which closes the exchange for good, even
+/// mid-exchange. Each token is renewed well before it expires; failures back
+/// off exponentially with jitter. An exchange is refreshed at most once in its
 /// life, so a second call is refused.
 pub fn spawn_token_refresh(exchange: Arc<TokenExchange>) -> anyhow::Result<TokenRefresh> {
     anyhow::ensure!(
@@ -495,10 +491,16 @@ pub fn spawn_token_refresh(exchange: Arc<TokenExchange>) -> anyhow::Result<Token
         "this token exchange is already refreshed"
     );
     let held = Arc::clone(&exchange);
+    let revoked = exchange.subject.revocation().unwrap_or_default();
     let task = tokio::spawn(async move {
         let mut failures: u32 = 0;
-        loop {
-            let wait = match exchange.exchange().await {
+        while !revoked.is_cancelled() {
+            let exchanged = tokio::select! {
+                () = revoked.cancelled() => break,
+                exchanged = exchange.exchange() => exchanged,
+            };
+            let wait = match exchanged {
+                Ok(_) if revoked.is_cancelled() => break,
                 Ok(issued) => {
                     failures = 0;
                     *exchange
@@ -517,8 +519,12 @@ pub fn spawn_token_refresh(exchange: Arc<TokenExchange>) -> anyhow::Result<Token
                     backoff(failures)
                 }
             };
-            tokio::time::sleep(wait).await;
+            tokio::select! {
+                () = revoked.cancelled() => break,
+                () = tokio::time::sleep(wait) => {}
+            }
         }
+        exchange.held.close();
     });
     Ok(TokenRefresh {
         task,
@@ -557,21 +563,6 @@ fn numeric_date(value: &serde_json::Value, claim: &str) -> anyhow::Result<f64> {
         .ok_or_else(|| anyhow::anyhow!("the access token's {claim} is not a NumericDate"))
 }
 
-fn connector(
-    tls: &rustls::ClientConfig,
-) -> hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector> {
-    crate::init_crypto();
-    let mut http = hyper_util::client::legacy::connect::HttpConnector::new();
-    http.enforce_http(false);
-    http.set_nodelay(true);
-    http.set_connect_timeout(Some(CONNECT_TIMEOUT));
-    hyper_rustls::HttpsConnectorBuilder::new()
-        .with_tls_config(tls.clone())
-        .https_or_http()
-        .enable_http1()
-        .wrap_connector(http)
-}
-
 fn jwt_claims(token: &str) -> Option<serde_json::Value> {
     let mut parts = token.split('.');
     let (_, payload, _) = (parts.next()?, parts.next()?, parts.next()?);
@@ -579,20 +570,6 @@ fn jwt_claims(token: &str) -> Option<serde_json::Value> {
         return None;
     }
     serde_json::from_slice(&B64.decode(payload).ok()?).ok()
-}
-
-fn form_encode(out: &mut String, value: &str) {
-    use std::fmt::Write as _;
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(char::from(byte))
-            }
-            _ => {
-                let _ = write!(out, "%{byte:02X}");
-            }
-        }
-    }
 }
 
 #[cfg(test)]

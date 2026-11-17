@@ -1219,10 +1219,16 @@ pub type SendResult =
     Result<(hyper::Response<WasiBody>, RequestIoFuture), wasmtime_wasi_http::Error>;
 
 /// Set by the broker on a request it has already authorized and written its
-/// credential into. Only the host can set an extension, so a guest's own
-/// request never carries it.
+/// credential into. Only this crate can make one, so neither a guest nor an
+/// embedder's handler can mark a request of its own.
 #[derive(Clone, Copy, Debug)]
-pub struct BrokeredRequest;
+pub struct BrokeredRequest(());
+
+impl BrokeredRequest {
+    pub(crate) fn new() -> Self {
+        Self(())
+    }
+}
 
 /// Future returned by [`OutgoingHandler::send_request`].
 pub type SendFuture = Box<dyn std::future::Future<Output = SendResult> + Send>;

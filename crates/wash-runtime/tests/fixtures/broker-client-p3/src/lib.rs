@@ -4,7 +4,10 @@
 //!   `x-authorization` as `authorization` when given. 200 carries the upstream
 //!   status, audit id, `x-echo-*` response headers and body; 502 carries the
 //!   broker error.
-//! - `POST /direct` sends the same request through `wasi:http/client`.
+//! - `POST /direct` sends the same request through `wasi:http/client`, and
+//!   `POST /linked` does so while a call into the sibling's `slow` is in
+//!   flight.
+//! - `POST /tcp` connects to the `x-to` address through `wasi:sockets`.
 //! - `POST /sign` signs the body with `release`, in hex. `GET /key-info`
 //!   returns its algorithm and hex public key.
 //! - `POST /verify` checks the body against the hex `x-tag` with `webhook`.
@@ -50,6 +53,19 @@ impl Handler for Component {
                     Err(e) => respond(502, e),
                 }
             }
+            "/linked" => {
+                let to = to.unwrap_or_default();
+                let (_held, unread) = bindings::wit_stream::new();
+                let (_, sent) = futures::join!(
+                    bindings::wasmcloud::broker_test::slow::wait(300, unread),
+                    send(true, to, None, body, trailers)
+                );
+                match sent {
+                    Ok(text) => respond(200, text),
+                    Err(e) => respond(502, e),
+                }
+            }
+            "/tcp" => respond(200, connect(&to.unwrap_or_default()).await),
             "/sign" => match release::sign(body).await {
                 Ok(signature) => respond(200, hex(&signature)),
                 Err(e) => respond(502, format!("{e:?}")),
@@ -141,6 +157,28 @@ async fn send(
         "{status} {audit} {echoed} {}",
         String::from_utf8_lossy(&received)
     ))
+}
+
+async fn connect(to: &str) -> String {
+    use bindings::wasi::sockets::types::{
+        IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket,
+    };
+    let Ok(std::net::SocketAddr::V4(addr)) = to.parse() else {
+        return "x-to is not an IPv4 address".into();
+    };
+    let [a, b, c, d] = addr.ip().octets();
+    let socket = match TcpSocket::create(IpAddressFamily::Ipv4) {
+        Ok(socket) => socket,
+        Err(e) => return format!("{e:?}"),
+    };
+    let to = IpSocketAddress::Ipv4(Ipv4SocketAddress {
+        port: addr.port(),
+        address: (a, b, c, d),
+    });
+    match socket.connect(to).await {
+        Ok(()) => "connected".into(),
+        Err(e) => format!("{e:?}"),
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

@@ -85,8 +85,6 @@ pub(crate) struct ComponentCtxTemplate {
     /// `allowedHostLoopbackPorts`) comes from `local_resources` and is layered over
     /// this when the check is built.
     socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
-    /// No network of the guest's own; see [`WorkloadMetadata::brokered_egress`].
-    brokered_egress: bool,
     /// The host-wide guest memory budget this component's stores draw on.
     guest_memory: Arc<crate::engine::guest_memory::GuestMemoryBudget>,
     /// What every store built from this template is configured with.
@@ -109,7 +107,6 @@ impl ComponentCtxTemplate {
             plugins: metadata.store_plugins.clone(),
             loopback: metadata.loopback.clone(),
             socket_policy: metadata.socket_policy.clone(),
-            brokered_egress: metadata.brokered_egress,
             guest_memory: metadata.guest_memory.clone(),
             store_settings: metadata.store_settings,
             trap_hints: metadata.trap_hints.clone(),
@@ -367,30 +364,16 @@ async fn build_ctx_from_template(
     };
     // Keyed on the workload, not the component: a workload's components share
     // one allowance, the same way they share one virtual network.
-    let resources = &template.local_resources;
-    let (allowed_hosts, loopback_ports, lookups) = if template.brokered_egress {
-        (Arc::from([]), Arc::from([]), Arc::from([]))
-    } else {
-        (
-            Arc::clone(&resources.allowed_hosts),
-            Arc::clone(&resources.allowed_host_loopback_ports),
-            Arc::clone(&resources.allowed_ip_name_lookups),
-        )
-    };
-    let mut policy = template.socket_policy.for_guest(
+    let policy = Arc::new(template.socket_policy.for_guest(
         kind,
         &template.workload_id,
-        Arc::clone(&allowed_hosts),
-        loopback_ports,
-    );
-    if template.brokered_egress {
-        policy.egress_mode = sockets::policy::EgressMode::Enforce;
-        policy.host_loopback_enabled = false;
-    }
+        Arc::clone(&template.local_resources.allowed_hosts),
+        Arc::clone(&template.local_resources.allowed_host_loopback_ports),
+    ));
     let sockets_ctx = sockets::WasiSocketsCtx::for_store(
-        Arc::new(policy),
+        policy,
         Arc::clone(&template.loopback),
-        lookups,
+        Arc::clone(&template.local_resources.allowed_ip_name_lookups),
     );
 
     let mut ctx_builder = Ctx::builder(template.workload_id.clone(), template.component_id.clone())
@@ -398,7 +381,7 @@ async fn build_ctx_from_template(
         .with_store_id(Arc::clone(store_id))
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
-        .with_allowed_hosts(allowed_hosts)
+        .with_allowed_hosts(template.local_resources.allowed_hosts.clone())
         .with_workload_names(
             Arc::clone(&template.workload_namespace),
             Arc::clone(&template.workload_name),
@@ -406,9 +389,6 @@ async fn build_ctx_from_template(
 
     if let Some(plugins) = &template.plugins {
         ctx_builder = ctx_builder.with_store_plugins(Arc::clone(plugins));
-    }
-    if template.brokered_egress {
-        ctx_builder = ctx_builder.denying_http();
     }
 
     #[cfg(feature = "wasi-tls")]

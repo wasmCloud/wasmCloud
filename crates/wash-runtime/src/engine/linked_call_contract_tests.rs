@@ -301,7 +301,6 @@ fn template(engine: &crate::engine::Engine, id: &str) -> ComponentCtxTemplate {
         workload_id: "contract-workload".into(),
         workload_namespace: "default".into(),
         workload_name: "contract".into(),
-        brokered_egress: false,
         local_resources: crate::types::LocalResources::default(),
         volume_mounts: vec![],
         plugins: Some(Arc::default()),

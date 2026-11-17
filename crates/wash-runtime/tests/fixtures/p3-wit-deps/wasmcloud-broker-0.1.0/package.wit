@@ -46,16 +46,17 @@ interface types {
 
 /// The caller may perform the requests this import is bound to, with the
 /// credential bound to it. The implementer writes the credential in and
-/// removes it from response headers and trailers. Response bodies are passed
-/// through unread, so an upstream that echoes the credential in a body hands
-/// it to the caller.
+/// removes it from response headers and trailers in the spellings it
+/// recognizes (wasmCloud: as sent and percent-encoded, not base64 or other
+/// encodings). Response bodies are passed through unread, so an upstream that
+/// echoes the credential in a body hands it to the caller.
 ///
 /// `send` takes and returns `wasi:http` requests and responses, but its error
 /// type is this interface's own, so a component exporting `wasi:http/client`
 /// cannot stand in for it unchanged.
 @since(version = 0.1.0)
 interface client {
-  use wasi:http/types@0.3.0.{request, response, error-code as http-error-code};
+  use wasi:http/types@0.3.2.{request, response, error-code as http-error-code};
   use types.{denied-reason};
 
   /// Why a send failed.
@@ -117,10 +118,11 @@ interface signer {
     /// The public half as DER `SubjectPublicKeyInfo`. `none` for a MAC key.
     public-key: option<list<u8>>,
     /// The context the binding fixes, if any. With one, what is signed is the
-    /// 25 bytes `wasmcloud:broker/context` followed by a zero byte, then the
+    /// 24 bytes `wasmcloud:broker/context` and a zero byte, then the
     /// context's length as a big-endian u64, then the context, then
-    /// `message`. Without one, it is `message` alone. A verifier needs this
-    /// to check a signature elsewhere.
+    /// `message`. Without one, it is `message` alone, and a message that
+    /// begins with those 25 bytes is refused. A verifier needs this to check
+    /// a signature elsewhere.
     context: option<list<u8>>,
   }
 

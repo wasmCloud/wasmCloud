@@ -40,6 +40,8 @@ mod common;
 use common::http_incoming_handler_interface;
 
 const BROKER_CLIENT_P3_WASM: &[u8] = include_bytes!("wasm/broker_client_p3.wasm");
+const BROKER_SLOW_P3_WASM: &[u8] = include_bytes!("wasm/broker_slow_p3.wasm");
+const BROKER_MANAGED_P2_WASM: &[u8] = include_bytes!("wasm/broker_managed_p2.wasm");
 const WEBHOOK_SECRET: &[u8] = b"whsec_test";
 
 /// A request URI and one header of it.
@@ -282,7 +284,62 @@ fn broker_import(interface: &str, label: &str) -> WitInterface {
     }
 }
 
+fn component(name: &str, bytes: &'static [u8], local_resources: LocalResources) -> Component {
+    Component {
+        name: name.to_string(),
+        digest: None,
+        bytes: Bytes::from_static(bytes),
+        local_resources,
+        pool_size: 1,
+        max_invocations: 100,
+        max_concurrency: 1,
+        ..Default::default()
+    }
+}
+
+/// The managed client beside a sibling that has no broker import. Both
+/// declare `api.example.com`, which only the sibling's own network honours.
 fn workload() -> WorkloadStartRequest {
+    let declared = || LocalResources {
+        allowed_hosts: Arc::from(["api.example.com".parse::<AllowedHost>().unwrap()]),
+        ..Default::default()
+    };
+    start_request(
+        vec![
+            component("broker-client-p3", BROKER_CLIENT_P3_WASM, declared()),
+            component("broker-slow-p3", BROKER_SLOW_P3_WASM, declared()),
+        ],
+        vec![
+            http_incoming_handler_interface("broker", None),
+            broker_import("client", "github"),
+            broker_import("signer", "release"),
+            broker_import("verifier", "webhook"),
+        ],
+    )
+}
+
+fn p2_workload() -> WorkloadStartRequest {
+    let declared = LocalResources {
+        allowed_hosts: Arc::from(["api.example.com".parse::<AllowedHost>().unwrap()]),
+        ..Default::default()
+    };
+    start_request(
+        vec![component(
+            "broker-managed-p2",
+            BROKER_MANAGED_P2_WASM,
+            declared,
+        )],
+        vec![
+            http_incoming_handler_interface("broker", None),
+            broker_import("signer", "release"),
+        ],
+    )
+}
+
+fn start_request(
+    components: Vec<Component>,
+    host_interfaces: Vec<WitInterface>,
+) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
@@ -290,22 +347,8 @@ fn workload() -> WorkloadStartRequest {
             name: "broker-client".to_string(),
             annotations: HashMap::new(),
             service: None,
-            components: vec![Component {
-                name: "broker-client-p3".to_string(),
-                digest: None,
-                bytes: Bytes::from_static(BROKER_CLIENT_P3_WASM),
-                local_resources: LocalResources::default(),
-                pool_size: 1,
-                max_invocations: 100,
-                max_concurrency: 1,
-                ..Default::default()
-            }],
-            host_interfaces: vec![
-                http_incoming_handler_interface("broker", None),
-                broker_import("client", "github"),
-                broker_import("signer", "release"),
-                broker_import("verifier", "webhook"),
-            ],
+            components,
+            host_interfaces,
             volumes: vec![],
         },
     }
@@ -332,10 +375,15 @@ enum Upstream {
 }
 
 async fn start(policy: Policy) -> Result<Running> {
-    start_with(policy, false, Upstream::Echo).await
+    start_with(policy, false, Upstream::Echo, workload()).await
 }
 
-async fn start_with(policy: Policy, veto: bool, upstream: Upstream) -> Result<Running> {
+async fn start_with(
+    policy: Policy,
+    veto: bool,
+    upstream: Upstream,
+    workload: WorkloadStartRequest,
+) -> Result<Running> {
     let echo = Echo::default();
     let brokered = Arc::default();
     let saw_credential = Arc::default();
@@ -374,7 +422,7 @@ async fn start_with(policy: Policy, veto: bool, upstream: Upstream) -> Result<Ru
         .start()
         .await
         .context("failed to start host")?;
-    let response = host.workload_start(workload()).await?;
+    let response = host.workload_start(workload).await?;
     Ok(Running {
         addr,
         echo,
@@ -480,7 +528,7 @@ async fn a_guest_sends_with_a_credential_it_never_holds() -> Result<()> {
 /// An upstream that never said it handles secrets is never handed one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_handler_that_does_not_accept_secrets_is_not_supported() -> Result<()> {
-    let running = start_with(Policy::new(true), false, Upstream::Naive).await?;
+    let running = start_with(Policy::new(true), false, Upstream::Naive, workload()).await?;
     assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
 
     let to = [("x-to", "https://api.example.com/v1/repos")];
@@ -508,6 +556,61 @@ async fn a_managed_component_cannot_send_without_the_broker() -> Result<()> {
     assert!(body.contains("HttpRequestDenied"), "{body}");
     assert!(running.echo.sent.lock().unwrap().is_empty());
     assert!(running.policy.uses.lock().unwrap().is_empty());
+    Ok(())
+}
+
+/// The deny-all is part of the managed component's own linker, so it holds
+/// while a call into a sibling with network access is in flight and the
+/// store's active context names the sibling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_managed_component_cannot_send_through_a_siblings_context() -> Result<()> {
+    let running = start(Policy::new(true)).await?;
+    assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
+
+    let to = [("x-to", "https://api.example.com/v1/repos")];
+    let (status, body) = call(running.addr, "/linked", &to, "").await?;
+    assert_eq!(status, 502, "{body}");
+    assert!(body.contains("HttpRequestDenied"), "{body}");
+    assert!(running.echo.sent.lock().unwrap().is_empty());
+    Ok(())
+}
+
+/// A managed component's p3 sockets reach nothing, its own virtual network
+/// included: a refusal, not a connection refused for want of a listener.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_managed_component_has_no_p3_sockets() -> Result<()> {
+    let running = start(Policy::new(true)).await?;
+    assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
+
+    for to in ["203.0.113.7:443", "127.0.0.1:9", "0.0.0.0:9"] {
+        let (status, body) = call(running.addr, "/tcp", &[("x-to", to)], "").await?;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("AccessDenied"), "{to}: {body}");
+    }
+    Ok(())
+}
+
+/// The same holds for p2: `wasi:http/outgoing-handler` and `wasi:sockets`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_managed_p2_component_has_no_network_of_its_own() -> Result<()> {
+    let running = start_with(Policy::new(false), false, Upstream::Echo, p2_workload()).await?;
+    assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
+
+    let (status, body) = call(
+        running.addr,
+        "/http?https://api.example.com/v1/repos",
+        &[],
+        "",
+    )
+    .await?;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("HttpRequestDenied"), "{body}");
+    assert!(running.echo.sent.lock().unwrap().is_empty());
+    for to in ["203.0.113.7:443", "127.0.0.1:9", "0.0.0.0:9"] {
+        let (status, body) = call(running.addr, &format!("/tcp?{to}"), &[], "").await?;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("access-denied"), "{to}: {body}");
+    }
     Ok(())
 }
 
@@ -646,7 +749,7 @@ async fn a_resource_server_nonce_challenge_is_answered_once() -> Result<()> {
 /// The router has the last word on a brokered request, after the broker's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_router_can_refuse_a_brokered_request() -> Result<()> {
-    let running = start_with(Policy::new(true), true, Upstream::Echo).await?;
+    let running = start_with(Policy::new(true), true, Upstream::Echo, workload()).await?;
     assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
 
     let to = [("x-to", "https://api.example.com/v1/repos")];
@@ -675,6 +778,7 @@ async fn a_granted_hostname_that_resolves_to_loopback_is_refused() -> Result<()>
         Policy::new(true).to("localhost", port),
         false,
         Upstream::Network,
+        workload(),
     )
     .await?;
     assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
@@ -752,6 +856,12 @@ async fn the_guest_signs_and_verifies_with_host_held_keys() -> Result<()> {
     UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, unhex(public))
         .verify(manifest.as_bytes(), &unhex(&signature))
         .expect("the signature verifies against the published key");
+
+    let mut forged = b"wasmcloud:broker/context\0".to_vec();
+    forged.extend_from_slice(b"\0\0\0\0\0\0\0\0rest");
+    let (status, body) = call(running.addr, "/sign", &[], forged).await?;
+    assert_eq!(status, 502, "a plain key refuses the context label: {body}");
+    assert!(body.contains("OperationNotAllowed"), "{body}");
 
     let payload = r#"{"event":"push"}"#;
     let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, WEBHOOK_SECRET);

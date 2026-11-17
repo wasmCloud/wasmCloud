@@ -29,8 +29,9 @@ pub const DEFAULT_MAX_MESSAGE: usize = 16 * 1024 * 1024;
 /// How long a message stream may go without a chunk before the call fails.
 pub const ABSORB_IDLE: Duration = Duration::from_secs(30);
 
-/// Hashed ahead of a context's length, so a contextual message can never be
-/// mistaken for a plain one.
+/// Hashed ahead of a context's length. A key with no context refuses a
+/// message that begins with it, so a plain message can never pass for a
+/// contextual one.
 const CONTEXT_LABEL: &[u8] = b"wasmcloud:broker/context\0";
 
 enum SigningKey {
@@ -121,7 +122,9 @@ macro_rules! key_options {
         /// one purpose cannot be passed off as one for another with the same
         /// key. What is hashed is [`CONTEXT_LABEL`], the context's length as a
         /// big-endian u64, the context, then the message. Signer and verifier
-        /// must agree on it.
+        /// must agree on it. Never bind the same key material both with and
+        /// without a context, or with two contexts: only the plain binding's
+        /// refusal of the label keeps them apart.
         pub fn with_context(mut self, context: &[u8]) -> Self {
             self.context = Some(context.to_vec());
             self
@@ -353,7 +356,14 @@ pub(super) async fn sign<T: 'static, D: HasData>(
         Err(e) => return Ok(Err(e)),
     };
     Ok(
-        match absorb(accessor, key.start(), key.limits.max_message, message).await? {
+        match absorb(
+            accessor,
+            key.start(),
+            (key.limits.max_message, key.context.is_none()),
+            message,
+        )
+        .await?
+        {
             Ok(hasher) => key.finish(hasher),
             Err(e) => Err(e),
         },
@@ -371,17 +381,20 @@ pub(super) async fn verify<T: 'static, D: HasData>(
         Ok(permit) => permit,
         Err(e) => return Ok(Err(e)),
     };
-    Ok(
-        absorb(accessor, key.start(), key.limits.max_message, message)
-            .await?
-            .map(|hasher| key.check(hasher, tag)),
+    Ok(absorb(
+        accessor,
+        key.start(),
+        (key.limits.max_message, key.context.is_none()),
+        message,
     )
+    .await?
+    .map(|hasher| key.check(hasher, tag)))
 }
 
 async fn absorb<T: 'static, D: HasData>(
     accessor: &Accessor<T, D>,
     hasher: Hasher,
-    limit: usize,
+    (limit, plain): (usize, bool),
     message: StreamReader<u8>,
 ) -> wasmtime::Result<Result<Hasher, ErrorCode>> {
     let (tx, mut rx) = tokio::sync::oneshot::channel();
@@ -393,6 +406,7 @@ async fn absorb<T: 'static, D: HasData>(
                 hasher: Some(hasher),
                 seen: 0,
                 limit,
+                head: plain.then_some(0),
                 done: Some(tx),
                 progress: Arc::clone(&progress),
             },
@@ -421,6 +435,8 @@ struct Absorb {
     hasher: Option<Hasher>,
     seen: usize,
     limit: usize,
+    /// How much of [`CONTEXT_LABEL`] a plain message has begun with so far.
+    head: Option<usize>,
     done: Option<tokio::sync::oneshot::Sender<Result<Hasher, ErrorCode>>>,
     progress: Arc<tokio::sync::Notify>,
 }
@@ -460,10 +476,16 @@ impl<D> StreamConsumer<D> for Absorb {
         let n = bytes.len();
         this.progress.notify_one();
         this.seen = this.seen.saturating_add(n);
-        if this.seen > this.limit {
+        let refused = if this.seen > this.limit {
+            Some(DeniedReason::BudgetExceeded)
+        } else {
+            this.head = this.head.and_then(|matched| labelled(matched, bytes));
+            (this.head == Some(CONTEXT_LABEL.len())).then_some(DeniedReason::OperationNotAllowed)
+        };
+        if let Some(reason) = refused {
             this.hasher.take();
             if let Some(tx) = this.done.take() {
-                let _ = tx.send(Err(ErrorCode::Denied(DeniedReason::BudgetExceeded)));
+                let _ = tx.send(Err(ErrorCode::Denied(reason)));
             }
             return Poll::Ready(Ok(StreamResult::Dropped));
         }
@@ -473,6 +495,14 @@ impl<D> StreamConsumer<D> for Absorb {
         src.mark_read(n);
         Poll::Ready(Ok(StreamResult::Completed))
     }
+}
+
+/// How much of [`CONTEXT_LABEL`] a message has begun with once `bytes` follow
+/// the `matched` it began with, or `None` once it diverges.
+fn labelled(matched: usize, bytes: &[u8]) -> Option<usize> {
+    let rest = CONTEXT_LABEL.get(matched..)?;
+    let n = rest.len().min(bytes.len());
+    (rest.get(..n) == bytes.get(..n)).then_some(matched + n)
 }
 
 #[cfg(test)]
@@ -542,6 +572,17 @@ mod tests {
         );
         let no_context = run(&SignerKey::hmac_sha256(b"k"), b"abc");
         assert_ne!(ab_c, no_context);
+
+        let label = CONTEXT_LABEL.len();
+        assert_eq!(labelled(0, &framed), Some(label), "the forgery is caught");
+        assert_eq!(
+            labelled(0, &CONTEXT_LABEL[..10]).and_then(|m| labelled(m, &framed[10..])),
+            Some(label),
+            "across chunks"
+        );
+        assert_eq!(labelled(0, b"wasmcloud:broker/contexts"), None);
+        assert_eq!(labelled(0, b"wasm"), Some(4));
+        assert_eq!(labelled(label, b"anything"), Some(label));
 
         let info = SignerKey::hmac_sha256(b"k")
             .with_context(b"ctx:")

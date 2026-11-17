@@ -228,7 +228,8 @@ pub fn spawn_web_identity_refresh(
     })
 }
 
-fn form(pairs: &[(&str, &str)]) -> Zeroizing<String> {
+/// `pairs` form-encoded straight into a zeroizing buffer.
+pub(crate) fn form(pairs: &[(&str, &str)]) -> Zeroizing<String> {
     let capacity = pairs.iter().map(|(k, v)| (k.len() + v.len()) * 3 + 2).sum();
     let mut out = Zeroizing::new(String::with_capacity(capacity));
     for (i, (key, value)) in pairs.iter().enumerate() {

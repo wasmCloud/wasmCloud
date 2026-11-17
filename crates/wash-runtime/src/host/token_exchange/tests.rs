@@ -418,6 +418,60 @@ async fn the_refresh_task_leases_the_token_it_was_issued() {
     assert!(spawn_token_refresh(Arc::clone(&exchange)).is_err());
 }
 
+/// An SVID source that can be revoked.
+struct Revocable(tokio_util::sync::CancellationToken);
+
+impl EgressCredentialSource for Revocable {
+    fn current(&self) -> Result<Zeroizing<Vec<u8>>, CredentialError> {
+        Ok(Zeroizing::new(b"svid.jwt.sig".to_vec()))
+    }
+
+    fn revocation(&self) -> Option<tokio_util::sync::CancellationToken> {
+        Some(self.0.child_token())
+    }
+}
+
+#[tokio::test]
+async fn a_revoked_subject_ends_the_refresh_and_closes_the_exchange() {
+    let (uri, _) = endpoint(|_, _| ok("Bearer")).await;
+    let revoked = tokio_util::sync::CancellationToken::new();
+    let exchange = Arc::new(
+        TokenExchange::new(
+            "https://idp.example/token",
+            Grant::TokenExchange,
+            Arc::new(Revocable(revoked.clone())),
+            crate::host::http_client::default_client_tls_config(),
+        )
+        .unwrap()
+        .with_test_endpoint(uri),
+    );
+    let _task = spawn_token_refresh(Arc::clone(&exchange)).unwrap();
+    for _ in 0..100 {
+        if exchange.current().is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(exchange.current().is_ok());
+    assert!(!exchange.is_revoked());
+    revoked.cancel();
+    assert!(exchange.is_revoked(), "revocation is forwarded");
+    for _ in 0..100 {
+        if exchange.current().is_err() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(exchange.current().is_err(), "the token is dropped");
+    exchange
+        .held
+        .renew(Zeroizing::new(b"late".to_vec()), Duration::from_secs(60));
+    assert!(
+        exchange.current().is_err(),
+        "the exchange is closed for good"
+    );
+}
+
 #[tokio::test]
 async fn expires_in_may_be_a_string_and_counts_from_before_the_request() {
     let (uri, _) = endpoint(|_, _| {

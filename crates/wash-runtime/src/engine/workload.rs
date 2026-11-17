@@ -171,9 +171,6 @@ pub struct WorkloadMetadata {
     /// from [`crate::engine::Engine`]'s configuration; the workload-level half
     /// (`allowedHosts`, `allowedHostLoopbackPorts`) comes from `local_resources`.
     pub(crate) socket_policy: Arc<crate::sockets::policy::SocketPolicy>,
-    /// Set by the broker for a component that imports it: every store built
-    /// for this component gets no network of its own, only the broker's.
-    pub(crate) brokered_egress: bool,
     /// The host-wide guest memory budget every store built for this component
     /// draws on. Installed by the engine alongside `socket_policy`; the
     /// [`Default`] here is an unmetered budget, so a metadata built outside an
@@ -630,7 +627,6 @@ impl WorkloadService {
                 store_plugins: None,
                 loopback,
                 socket_policy: Arc::default(),
-                brokered_egress: false,
                 guest_memory: Arc::default(),
                 store_settings: Default::default(),
                 trap_hints: Arc::default(),
@@ -759,7 +755,6 @@ impl WorkloadComponent {
                 store_plugins: None,
                 loopback,
                 socket_policy: Arc::default(),
-                brokered_egress: false,
                 guest_memory: Arc::default(),
                 store_settings: Default::default(),
                 trap_hints: Arc::default(),
