@@ -6573,6 +6573,7 @@ dependencies = [
  "rustix",
  "rustls",
  "rustls-native-certs",
+ "rustls-webpki",
  "semver",
  "serde",
  "serde_json",

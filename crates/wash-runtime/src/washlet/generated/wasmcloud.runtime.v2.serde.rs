@@ -1353,12 +1353,18 @@ impl serde::Serialize for MtlsDestination {
         if self.port != 0 {
             len += 1;
         }
+        if !self.server_spiffe_id.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.MtlsDestination", len)?;
         if !self.host.is_empty() {
             struct_ser.serialize_field("host", &self.host)?;
         }
         if self.port != 0 {
             struct_ser.serialize_field("port", &self.port)?;
+        }
+        if !self.server_spiffe_id.is_empty() {
+            struct_ser.serialize_field("serverSpiffeId", &self.server_spiffe_id)?;
         }
         struct_ser.end()
     }
@@ -1372,12 +1378,15 @@ impl<'de> serde::Deserialize<'de> for MtlsDestination {
         const FIELDS: &[&str] = &[
             "host",
             "port",
+            "server_spiffe_id",
+            "serverSpiffeId",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Host,
             Port,
+            ServerSpiffeId,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1401,6 +1410,7 @@ impl<'de> serde::Deserialize<'de> for MtlsDestination {
                         match value {
                             "host" => Ok(GeneratedField::Host),
                             "port" => Ok(GeneratedField::Port),
+                            "serverSpiffeId" | "server_spiffe_id" => Ok(GeneratedField::ServerSpiffeId),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1422,6 +1432,7 @@ impl<'de> serde::Deserialize<'de> for MtlsDestination {
             {
                 let mut host__ = None;
                 let mut port__ = None;
+                let mut server_spiffe_id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Host => {
@@ -1438,11 +1449,18 @@ impl<'de> serde::Deserialize<'de> for MtlsDestination {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::ServerSpiffeId => {
+                            if server_spiffe_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("serverSpiffeId"));
+                            }
+                            server_spiffe_id__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(MtlsDestination {
                     host: host__.unwrap_or_default(),
                     port: port__.unwrap_or_default(),
+                    server_spiffe_id: server_spiffe_id__.unwrap_or_default(),
                 })
             }
         }
@@ -2382,6 +2400,9 @@ impl serde::Serialize for WorkloadIdentity {
         if !self.mtls_destinations.is_empty() {
             len += 1;
         }
+        if !self.ingress_hosts.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.WorkloadIdentity", len)?;
         if !self.identity_ref.is_empty() {
             struct_ser.serialize_field("identityRef", &self.identity_ref)?;
@@ -2405,6 +2426,9 @@ impl serde::Serialize for WorkloadIdentity {
         if !self.mtls_destinations.is_empty() {
             struct_ser.serialize_field("mtlsDestinations", &self.mtls_destinations)?;
         }
+        if !self.ingress_hosts.is_empty() {
+            struct_ser.serialize_field("ingressHosts", &self.ingress_hosts)?;
+        }
         struct_ser.end()
     }
 }
@@ -2427,6 +2451,8 @@ impl<'de> serde::Deserialize<'de> for WorkloadIdentity {
             "jwtAudiences",
             "mtls_destinations",
             "mtlsDestinations",
+            "ingress_hosts",
+            "ingressHosts",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2437,6 +2463,7 @@ impl<'de> serde::Deserialize<'de> for WorkloadIdentity {
             SchedulingLeaseExpiresAt,
             JwtAudiences,
             MtlsDestinations,
+            IngressHosts,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2464,6 +2491,7 @@ impl<'de> serde::Deserialize<'de> for WorkloadIdentity {
                             "schedulingLeaseExpiresAt" | "scheduling_lease_expires_at" => Ok(GeneratedField::SchedulingLeaseExpiresAt),
                             "jwtAudiences" | "jwt_audiences" => Ok(GeneratedField::JwtAudiences),
                             "mtlsDestinations" | "mtls_destinations" => Ok(GeneratedField::MtlsDestinations),
+                            "ingressHosts" | "ingress_hosts" => Ok(GeneratedField::IngressHosts),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2489,6 +2517,7 @@ impl<'de> serde::Deserialize<'de> for WorkloadIdentity {
                 let mut scheduling_lease_expires_at__ = None;
                 let mut jwt_audiences__ = None;
                 let mut mtls_destinations__ = None;
+                let mut ingress_hosts__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::IdentityRef => {
@@ -2531,6 +2560,12 @@ impl<'de> serde::Deserialize<'de> for WorkloadIdentity {
                             }
                             mtls_destinations__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::IngressHosts => {
+                            if ingress_hosts__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ingressHosts"));
+                            }
+                            ingress_hosts__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(WorkloadIdentity {
@@ -2540,6 +2575,7 @@ impl<'de> serde::Deserialize<'de> for WorkloadIdentity {
                     scheduling_lease_expires_at: scheduling_lease_expires_at__.unwrap_or_default(),
                     jwt_audiences: jwt_audiences__.unwrap_or_default(),
                     mtls_destinations: mtls_destinations__.unwrap_or_default(),
+                    ingress_hosts: ingress_hosts__.unwrap_or_default(),
                 })
             }
         }

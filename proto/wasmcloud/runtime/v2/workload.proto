@@ -41,14 +41,22 @@ message WorkloadIdentity {
   repeated string jwt_audiences = 5;
   // HTTPS destinations the host presents the X.509-SVID to.
   repeated MtlsDestination mtls_destinations = 6;
+  // Exact host names the host's HTTPS ingress presents the X.509-SVID for,
+  // picked by SNI. Requests on such a connection must route to this workload.
+  repeated string ingress_hosts = 7;
 }
 
 // An exact HTTPS host and port the X.509-SVID is presented to. The server is
-// verified against the host's roots, by host name.
+// verified against the host's roots, by host name, unless server_spiffe_id is
+// set.
 message MtlsDestination {
   string host = 1;
   uint32 port = 2;
   reserved 3;
+  // Verify the server by its X.509-SVID against the host's trust bundles
+  // instead: spiffe://<trust domain> admits any ID in that trust domain, and
+  // an ID with a path admits that ID alone. The host name is not checked.
+  string server_spiffe_id = 4;
 }
 
 enum WorkloadState {

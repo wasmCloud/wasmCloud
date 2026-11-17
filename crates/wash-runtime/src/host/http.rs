@@ -2185,6 +2185,8 @@ pub struct Ingress<T: Router, O: OutgoingHandler = DefaultOutgoingHandler> {
     messaging_handlers: MessagingHandlers,
     shutdown_tx: Arc<RwLock<Option<mpsc::Sender<()>>>>,
     tls_acceptor: Option<TlsAcceptor>,
+    /// Lets HTTPS ingress serve workload SVIDs; see [`crate::host::ingress_identity`].
+    identity: crate::host::ingress_identity::IdentitySlot,
     listener: Arc<tokio::sync::Mutex<Option<TcpListener>>>,
     /// Ceiling on the TCP connections this ingress holds at once, and the
     /// permits enforcing it. Sized from the process's descriptor budget unless
@@ -2394,6 +2396,7 @@ impl<T: Router, O: OutgoingHandler> IngressBuilder<T, O> {
             messaging_handlers: Arc::default(),
             shutdown_tx: Arc::new(RwLock::new(None)),
             tls_acceptor,
+            identity: Arc::default(),
             listener: Arc::new(tokio::sync::Mutex::new(Some(listener))),
             connections: ConnectionLimit::new(max_connections),
             meters: RwLock::new(Meters::new(MeterKind::Off)),
@@ -3105,6 +3108,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         &self,
         credentials: crate::host::workload_identity::WorkloadCredentials,
     ) {
+        let _ = self.identity.set(credentials.clone());
         self.outgoing_handler
             .install_workload_credentials(credentials);
     }
@@ -3116,6 +3120,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         let workload_handles = self.workload_handles.clone();
         let service_handlers = self.service_handlers.clone();
         let tls_acceptor = self.tls_acceptor.clone();
+        let identity = Arc::clone(&self.identity);
 
         // Store the shutdown sender
         *shutdown_tx_clone.write().await = Some(shutdown_tx);
@@ -3146,6 +3151,7 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 service_handlers,
                 &mut shutdown_rx,
                 tls_acceptor,
+                identity,
                 guest_meter,
                 connections,
             )
@@ -3802,6 +3808,7 @@ async fn run_http_server<T: Router>(
     service_handlers: ServiceHandlers,
     shutdown_rx: &mut mpsc::Receiver<()>,
     tls_acceptor: Option<TlsAcceptor>,
+    identity: crate::host::ingress_identity::IdentitySlot,
     guest_meter: GuestMeter,
     connections: ConnectionLimit,
 ) -> anyhow::Result<()> {
@@ -3855,6 +3862,12 @@ async fn run_http_server<T: Router>(
                         let tls_acceptor_clone = tls_acceptor.clone();
                         let handler_clone = handler.clone();
                         let guest_meter = guest_meter.clone();
+                        let identity = Arc::clone(&identity);
+                        // Filled in once the handshake is done, before any
+                        // request is read.
+                        let connection: Arc<OnceLock<Arc<crate::host::ingress_identity::IngressConnection>>> =
+                            Arc::default();
+                        let served_connection = Arc::clone(&connection);
                         // What a guest is told it was reached over: this
                         // listener's own scheme, not a header a client can set.
                         let client_scheme = if tls_acceptor.is_some() {
@@ -3875,6 +3888,7 @@ async fn run_http_server<T: Router>(
                                 let handler = handler_clone.clone();
                                 let guest_meter = guest_meter.clone();
                                 let scheme = client_scheme.clone();
+                                let connection = served_connection.get().cloned();
                                 async move {
                                     let extractor = opentelemetry_http::HeaderExtractor(req.headers());
                                     let remote_context =
@@ -3882,7 +3896,7 @@ async fn run_http_server<T: Router>(
 
                                     // Defer `#[instrument]` until the propagated parent is active.
                                     async move {
-                                        handle_http_request(handler, req, scheme, handles, service_handlers, guest_meter).await
+                                        handle_http_request(handler, req, scheme, handles, service_handlers, guest_meter, connection).await
                                     }
                                     .with_context(remote_context)
                                     .await
@@ -3910,14 +3924,17 @@ async fn run_http_server<T: Router>(
                                 // slot that no request will ever release.
                                 let handshake = tokio::time::timeout(
                                     TLS_HANDSHAKE_TIMEOUT,
-                                    acceptor.accept(client),
+                                    crate::host::ingress_identity::accept(&acceptor, &identity, client),
                                 );
                                 match handshake.await {
                                     Err(_) => {
                                         warn!(addr = ?client_addr, "TLS handshake timed out");
                                         Ok(())
                                     }
-                                    Ok(Ok(tls_stream)) => {
+                                    Ok(Ok((tls_stream, established))) => {
+                                        if let Some(established) = established {
+                                            let _ = connection.set(established);
+                                        }
                                         builder
                                             .serve_connection_with_upgrades(TokioIo::new(tls_stream), service)
                                             .await
@@ -4071,6 +4088,7 @@ async fn handle_http_request<T: Router>(
     workload_handles: WorkloadHandles,
     service_handlers: ServiceHandlers,
     guest_meter: GuestMeter,
+    connection: Option<Arc<crate::host::ingress_identity::IngressConnection>>,
 ) -> Result<hyper::Response<WasiBody>, hyper::Error> {
     let completion = ResponseBodyCompletion::for_network(req.version());
     req.extensions_mut().insert(completion);
@@ -4104,6 +4122,7 @@ async fn handle_http_request<T: Router>(
         record_response_status(&resp);
         return Ok(resp);
     }
+    crate::host::ingress_identity::strip(req.headers_mut());
     let method = req.method().clone();
     let uri = req.uri().clone();
 
@@ -4127,6 +4146,16 @@ async fn handle_http_request<T: Router>(
             return Ok(resp);
         }
     };
+
+    if let Some(connection) = &connection
+        && let Err(status) =
+            crate::host::ingress_identity::admit(connection, &workload_id, req.headers_mut())
+    {
+        debug!(host = %workload_id, "refusing a request routed away from the identity that served its connection");
+        let resp = error_response(status);
+        record_response_status(&resp);
+        return Ok(resp);
+    }
 
     debug!(
         method = %method,
@@ -5499,6 +5528,7 @@ mod tests {
                 ServiceHandlers::default(),
                 &mut shutdown_rx,
                 None,
+                Arc::default(),
                 Meters::default().guest(),
                 ConnectionLimit::new(1),
             )
@@ -5661,6 +5691,7 @@ mod tests {
                 ServiceHandlers::default(),
                 &mut shutdown_rx,
                 None,
+                Arc::default(),
                 Meters::default().guest(),
                 served,
             )
