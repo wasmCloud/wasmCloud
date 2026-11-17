@@ -296,7 +296,7 @@ pub use wash_runtime::config_source::{
 pub struct DevVolume {
     /// Host path to mount
     pub host_path: PathBuf,
-    /// Guest path inside the dev environment
+    /// Absolute guest path inside the dev environment
     pub guest_path: PathBuf,
 }
 

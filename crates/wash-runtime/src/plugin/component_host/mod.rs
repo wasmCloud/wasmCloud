@@ -91,7 +91,7 @@ use crate::engine::ctx::{CallerIdentity, Ctx, SharedCtx, WorkloadCaller};
 use crate::engine::instance_pool::InstancePolicy;
 use crate::engine::store::relocate::{self, Relocated};
 use crate::engine::store::resource_bridge::{self, ProxyResource};
-use crate::engine::volumes::{HostPathPolicy, ResolvedVolumeMount};
+use crate::engine::volumes::{HostPathPolicy, ResolvedVolumeMount, normalize_mount_path};
 use crate::engine::workload::{
     ResolvedWorkload, UnresolvedWorkload, WorkloadComponent, WorkloadItem,
 };
@@ -2334,27 +2334,9 @@ async fn resolve_plugin_volumes(
             mount_paths.insert(mount_path.clone()),
             "host component plugin '{id}': two volumeMounts mount at {mount_path:?}"
         );
-        resolved.push(ResolvedVolumeMount::new(dir, mount_path, mount.read_only)?);
+        resolved.push(ResolvedVolumeMount::new(dir, &mount_path, mount.read_only)?);
     }
     Ok(resolved.into())
-}
-
-/// A guest mount path without empty segments or a trailing `/`, so `/models`
-/// and `/models/` name one mount.
-fn normalize_mount_path(path: &str) -> Result<String, &'static str> {
-    let rest = path.strip_prefix('/').ok_or("must be absolute")?;
-    let mut normalized = String::new();
-    for part in rest.split('/').filter(|part| !part.is_empty()) {
-        if part == "." || part == ".." {
-            return Err("must not contain `.` or `..`");
-        }
-        normalized.push('/');
-        normalized.push_str(part);
-    }
-    if normalized.is_empty() {
-        normalized.push('/');
-    }
-    Ok(normalized)
 }
 
 fn component_plugin_socket_policy(
