@@ -169,7 +169,7 @@ type Workload struct {
 	// verified it. Egress credential, broker and kind-qualified secret grants
 	// match a workload by its namespace and this owner. Unset leaves the
 	// workload matching none of them; a secret grant by name alone still
-	// matches the workload's name.
+	// matches the workload's grouping name.
 	Owner         *WorkloadOwner `protobuf:"bytes,8,opt,name=owner,proto3" json:"owner,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

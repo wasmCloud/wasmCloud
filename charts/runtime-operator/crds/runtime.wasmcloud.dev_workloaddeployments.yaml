@@ -845,10 +845,8 @@ spec:
                 type: array
               currentReplicaSet:
                 description: |-
-                  WorkloadReplicaSetReference names a WorkloadReplicaSet this deployment
-                  made. Its Workloads are the deployment's only while the set still has this
-                  UID and template digest, so a set edited, or deleted and made again under
-                  its name, stops standing for the deployment.
+                  WorkloadReplicaSetReference is a set this deployment made. Its Workloads
+                  are the deployment's only while the set keeps this UID and template digest.
                 properties:
                   name:
                     type: string
@@ -858,10 +856,7 @@ spec:
                       deployment gave the set.
                     type: string
                   uid:
-                    description: |-
-                      UID is a type that holds unique ID values, including UUIDs.  Because we
-                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
-                      intent and helps make sure that UIDs and names do not get conflated.
+                    description: UID is the set's UID when the deployment made it.
                     type: string
                 required:
                 - name
@@ -875,10 +870,8 @@ spec:
                 type: integer
               previousReplicaSet:
                 description: |-
-                  WorkloadReplicaSetReference names a WorkloadReplicaSet this deployment
-                  made. Its Workloads are the deployment's only while the set still has this
-                  UID and template digest, so a set edited, or deleted and made again under
-                  its name, stops standing for the deployment.
+                  WorkloadReplicaSetReference is a set this deployment made. Its Workloads
+                  are the deployment's only while the set keeps this UID and template digest.
                 properties:
                   name:
                     type: string
@@ -888,10 +881,7 @@ spec:
                       deployment gave the set.
                     type: string
                   uid:
-                    description: |-
-                      UID is a type that holds unique ID values, including UUIDs.  Because we
-                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
-                      intent and helps make sure that UIDs and names do not get conflated.
+                    description: UID is the set's UID when the deployment made it.
                     type: string
                 required:
                 - name

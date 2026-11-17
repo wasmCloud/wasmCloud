@@ -3,15 +3,14 @@
 use super::RequestingWorkload;
 use crate::types::WorkloadOwner;
 
-/// Matches workloads in a namespace: every one, the replicas of one owner, or,
-/// in the older form, those that keep one name.
+/// Matches workloads in a namespace: every one, the replicas of one owner, or
+/// those that keep one name.
 ///
-/// With `kind`, it names an owner as the control plane verified it: its kind
-/// and name, and its UID when `uid` is given. Without `kind`, `name` is the
-/// name a workload keeps across replicas, which its start request chooses, so
-/// any workload in the namespace given that name or a replica annotation
-/// carrying it matches. That form is kept for existing plugin secret grants;
-/// name the owner's kind instead.
+/// With `kind`, it names an owner as the control plane verified it, pinned to
+/// one object when `uid` is given. Without `kind`, `name` is the name a
+/// workload keeps across replicas, which its start request chooses, so any
+/// workload in the namespace can claim it. That form is for plugin secret
+/// grants that predate owners; name the owner's kind instead.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkloadSelector {
@@ -135,8 +134,11 @@ impl std::fmt::Display for WorkloadSelector {
                 Some(uid) => write!(f, "`{}/{kind}/{name}` (uid `{uid}`)", self.namespace),
                 None => write!(f, "`{}/{kind}/{name}`", self.namespace),
             },
-            (_, Some(name)) => write!(f, "`{}/{name}`", self.namespace),
-            (_, None) => write!(f, "namespace `{}`", self.namespace),
+            (None, Some(name)) => write!(f, "`{}/{name}`", self.namespace),
+            (Some(kind), None) => {
+                write!(f, "`{}/{kind}/` (no name, matches nothing)", self.namespace)
+            }
+            (None, None) => write!(f, "namespace `{}`", self.namespace),
         }
     }
 }
@@ -155,6 +157,14 @@ mod tests {
         assert_eq!(
             WorkloadSelector::workload("acme", "billing").to_string(),
             "`acme/billing`"
+        );
+        let nameless = WorkloadSelector {
+            kind: Some("WorkloadDeployment".into()),
+            ..WorkloadSelector::namespace("acme")
+        };
+        assert!(
+            nameless.to_string().contains("matches nothing"),
+            "{nameless}"
         );
     }
 

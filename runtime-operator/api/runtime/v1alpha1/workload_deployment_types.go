@@ -45,13 +45,12 @@ type WorkloadDeploymentSpec struct {
 	Kubernetes *KubernetesSpec `json:"kubernetes,omitempty"`
 }
 
-// WorkloadReplicaSetReference names a WorkloadReplicaSet this deployment
-// made. Its Workloads are the deployment's only while the set still has this
-// UID and template digest, so a set edited, or deleted and made again under
-// its name, stops standing for the deployment.
+// WorkloadReplicaSetReference is a set this deployment made. Its Workloads
+// are the deployment's only while the set keeps this UID and template digest.
 type WorkloadReplicaSetReference struct {
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
+	// UID is the set's UID when the deployment made it.
 	// +kubebuilder:validation:Optional
 	UID types.UID `json:"uid,omitempty"`
 	// TemplateDigest is WorkloadReplicaTemplate.Digest of the template the

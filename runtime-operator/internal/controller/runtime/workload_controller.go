@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
@@ -663,7 +664,9 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 	}
 	owner, err := r.workloadOwner(ctx, workload)
 	if errors.Is(err, errOwnerUnverified) {
-		r.warn(workload, reasonOwnerUnverified, err)
+		if !errors.Is(err, errSetNotRecorded) {
+			r.warn(workload, reasonOwnerUnverified, err)
+		}
 		return condition.ErrWithReason(reasonOwnerUnverified, err)
 	} else if err != nil {
 		return err
@@ -916,7 +919,7 @@ func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *r
 	}
 
 	owner := metav1.GetControllerOf(workload)
-	if owner == nil || owner.APIVersion != runtimev1alpha1.GroupVersion.String() {
+	if !inThisAPI(owner) {
 		return annotations, nil
 	}
 	key := client.ObjectKey{Namespace: workload.Namespace, Name: owner.Name}
@@ -934,7 +937,7 @@ func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *r
 		}
 		annotations[workloadReplicaSetNameAnnotation] = replicaSet.Name
 		deployment := metav1.GetControllerOf(&replicaSet)
-		if deployment != nil && deployment.APIVersion == runtimev1alpha1.GroupVersion.String() && deployment.Kind == workloadDeploymentKind {
+		if inThisAPI(deployment) && deployment.Kind == workloadDeploymentKind {
 			annotations[workloadDeploymentNameAnnotation] = deployment.Name
 		}
 	}
@@ -943,21 +946,31 @@ func (r *WorkloadReconciler) replicaAnnotations(ctx context.Context, workload *r
 
 var errOwnerUnverified = errors.New("owner unverified")
 
+// errSetNotRecorded is a set its deployment has not recorded yet, as while a
+// rollout's status write lands. It holds placement without a warning.
+var errSetNotRecorded = errors.New("set not recorded")
+
+// inThisAPI reports whether ref names an object of this API group, at any
+// version.
+func inThisAPI(ref *metav1.OwnerReference) bool {
+	if ref == nil {
+		return false
+	}
+	gv, err := schema.ParseGroupVersion(ref.APIVersion)
+	return err == nil && gv.Group == runtimev1alpha1.GroupVersion.Group
+}
+
 func unverified(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{errOwnerUnverified}, args...)...)
 }
 
-// workloadOwner is what grants name workload by: its controller, read back
-// by UID, or the Workload itself when nothing in this API controls it. The
-// Workload's spec must be its controller's current template, and a set stands
-// for its WorkloadDeployment only while the deployment records it, by UID and
-// template digest, as current or previous. What binds a Workload to its owner
-// is that spec: one copied from the template, with a copied controller
-// reference, runs the owner's own code under the owner's grants. A failed
-// check wraps errOwnerUnverified; any other error is a failed read.
+// workloadOwner is what grants name workload by: its controller, read back by
+// UID, whose current template workload's spec must be, or workload itself.
+// A set stands for its deployment only while the deployment records it. A
+// failed check wraps errOwnerUnverified; any other error is a failed read.
 func (r *WorkloadReconciler) workloadOwner(ctx context.Context, workload *runtimev1alpha1.Workload) (*runtimev1alpha1.WorkloadOwner, error) {
 	ref := metav1.GetControllerOf(workload)
-	if ref == nil || ref.APIVersion != runtimev1alpha1.GroupVersion.String() {
+	if !inThisAPI(ref) {
 		return &runtimev1alpha1.WorkloadOwner{Kind: workloadKind, Name: workload.Name, UID: workload.UID}, nil
 	}
 	key := client.ObjectKey{Namespace: workload.Namespace, Name: ref.Name}
@@ -979,6 +992,14 @@ func (r *WorkloadReconciler) workloadOwner(ctx context.Context, workload *runtim
 		if workload.Annotations[workloadDaemonSetGenerationAnnotation] != template.Hash() || !apiequality.Semantic.DeepEqual(workload.Spec, *want) {
 			return nil, unverified("this Workload is not what WorkloadDaemonSet %s makes from its current template", daemonSet.Name)
 		}
+		// hostId is the one field an instance chooses for itself.
+		host, err := r.lookupHostByID(ctx, workload.Spec.HostID)
+		if err != nil {
+			return nil, err
+		}
+		if host == nil || !labels.SelectorFromSet(template.Spec.HostSelector).Matches(labels.Set(host.Labels)) {
+			return nil, unverified("host %s is not one WorkloadDaemonSet %s selects", workload.Spec.HostID, daemonSet.Name)
+		}
 		return &runtimev1alpha1.WorkloadOwner{Kind: workloadDaemonSetKind, Name: daemonSet.Name, UID: daemonSet.UID}, nil
 	case workloadReplicaSetKind:
 		var replicaSet runtimev1alpha1.WorkloadReplicaSet
@@ -990,7 +1011,7 @@ func (r *WorkloadReconciler) workloadOwner(ctx context.Context, workload *runtim
 			return nil, unverified("this Workload is not what WorkloadReplicaSet %s makes from its template", replicaSet.Name)
 		}
 		deploymentRef := metav1.GetControllerOf(&replicaSet)
-		if deploymentRef == nil || deploymentRef.APIVersion != runtimev1alpha1.GroupVersion.String() || deploymentRef.Kind != workloadDeploymentKind {
+		if !inThisAPI(deploymentRef) || deploymentRef.Kind != workloadDeploymentKind {
 			return &runtimev1alpha1.WorkloadOwner{Kind: workloadReplicaSetKind, Name: replicaSet.Name, UID: replicaSet.UID}, nil
 		}
 		var deployment runtimev1alpha1.WorkloadDeployment
@@ -1007,7 +1028,9 @@ func (r *WorkloadReconciler) workloadOwner(ctx context.Context, workload *runtim
 			}
 			return &runtimev1alpha1.WorkloadOwner{Kind: workloadDeploymentKind, Name: deployment.Name, UID: deployment.UID}, nil
 		}
-		return nil, unverified("WorkloadDeployment %s does not name WorkloadReplicaSet %s as its current or previous set", deployment.Name, replicaSet.Name)
+		// %.0w wraps errSetNotRecorded without printing it.
+		return nil, fmt.Errorf("%w: %.0wWorkloadDeployment %s does not name WorkloadReplicaSet %s as its current or previous set",
+			errOwnerUnverified, errSetNotRecorded, deployment.Name, replicaSet.Name)
 	default:
 		return &runtimev1alpha1.WorkloadOwner{Kind: workloadKind, Name: workload.Name, UID: workload.UID}, nil
 	}
@@ -1226,6 +1249,50 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&runtimev1alpha1.Host{},
 			enqueueSpread(r.workloadsForHost, hostArrivalSpread),
 			builder.WithPredicates(hostPlacementChanged, ignoreDeletes)).
+		Watches(&runtimev1alpha1.WorkloadDeployment{},
+			handler.EnqueueRequestsFromMapFunc(r.unplacedReplicasOf),
+			builder.WithPredicates(recordedSetsChanged)).
 		Named("workload-replica").
 		Complete(r)
+}
+
+// recordedSetsChanged passes a WorkloadDeployment whose status names a set it
+// did not name before.
+var recordedSetsChanged = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		old, okOld := e.ObjectOld.(*runtimev1alpha1.WorkloadDeployment)
+		updated, okNew := e.ObjectNew.(*runtimev1alpha1.WorkloadDeployment)
+		return okOld && okNew && (!apiequality.Semantic.DeepEqual(old.Status.CurrentReplicaSet, updated.Status.CurrentReplicaSet) ||
+			!apiequality.Semantic.DeepEqual(old.Status.PreviousReplicaSet, updated.Status.PreviousReplicaSet))
+	},
+}
+
+// unplacedReplicasOf is the unplaced Workloads of the sets obj records, which
+// placement refuses until the deployment records their set. The index is
+// registered by WorkloadReplicaSetReconciler.
+func (r *WorkloadReconciler) unplacedReplicasOf(ctx context.Context, obj client.Object) []reconcile.Request {
+	deployment, ok := obj.(*runtimev1alpha1.WorkloadDeployment)
+	if !ok {
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, set := range []*runtimev1alpha1.WorkloadReplicaSetReference{deployment.Status.CurrentReplicaSet, deployment.Status.PreviousReplicaSet} {
+		if set == nil || set.UID == "" {
+			continue
+		}
+		var workloads runtimev1alpha1.WorkloadList
+		if err := r.List(ctx, &workloads, client.InNamespace(deployment.Namespace), client.MatchingFields{workloadReplicaSetOwnerIndex: string(set.UID)}); err != nil {
+			ctrl.LoggerFrom(ctx).Error(err, "listing the replicas of a recorded set", "replicaSet", set.Name)
+			continue
+		}
+		for i := range workloads.Items {
+			if w := &workloads.Items[i]; w.Status.WorkloadID == "" {
+				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: w.Namespace, Name: w.Name}})
+			}
+		}
+	}
+	return requests
 }

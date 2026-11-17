@@ -109,14 +109,17 @@ func (r *WorkloadDeploymentReconciler) reconcileSync(ctx context.Context, deploy
 		return fmt.Errorf("template hash mismatch: want %s, got %s", want, got)
 	}
 
-	// A status from an operator that recorded only the name is completed
-	// once the set is shown to hold the deployment's own template.
-	if current := deployment.Status.CurrentReplicaSet; current.UID == "" {
+	// A set recorded by name alone is completed once it is shown to hold the
+	// deployment's own template.
+	current := deployment.Status.CurrentReplicaSet
+	if current.UID == "" {
 		if digest := templateCopy.Digest(); currentReplica.Spec.Template.Digest() == digest {
 			current.UID = currentReplica.UID
 			current.TemplateDigest = digest
 			condition.ForceStatusUpdate(ctx)
 		}
+	} else if current.UID != currentReplica.UID || current.TemplateDigest != currentReplica.Spec.Template.Digest() {
+		return fmt.Errorf("WorkloadReplicaSet %s is not the set this deployment recorded, or its template changed since; its replicas are refused placement", currentReplica.Name)
 	}
 
 	return nil
@@ -191,6 +194,12 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 		}
 		return fmt.Errorf("creating WorkloadReplicaSet: %w", err)
 	}
+	// Owner checks compare with the set as the API server stored it. A set
+	// that already existed may hold fields this deployment did not give it.
+	digest := created.Spec.Template.Digest()
+	if created != newReplicaSet {
+		digest = replicaSetTemplate.Template.Digest()
+	}
 
 	if current := deployment.Status.CurrentReplicaSet; (current == nil || current.Name != replicaSetName) &&
 		deployment.Spec.DeployPolicy != runtimev1alpha1.WorkloadDeployPolicyRecreate {
@@ -200,7 +209,7 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 	deployment.Status.CurrentReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{
 		Name:           created.Name,
 		UID:            created.UID,
-		TemplateDigest: replicaSetTemplate.Template.Digest(),
+		TemplateDigest: digest,
 	}
 	// reconcileScale deletes the previous ReplicaSet, so it must never be the
 	// current one, as it would be on going back to its template under Recreate.
