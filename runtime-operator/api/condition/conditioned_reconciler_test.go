@@ -558,9 +558,10 @@ func TestConditionedReconcilerRetryStatusConflicts(t *testing.T) {
 
 		r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
 		rebased := 0
-		r.RetryStatusConflicts(kubeClient, func(fresh, desired *conditionedResource) {
+		r.RetryStatusConflicts(kubeClient, func(fresh, desired *conditionedResource) bool {
 			rebased++
 			desired.Status.SetConditions(fresh.Status.GetCondition(concurrentCondition))
+			return true
 		})
 		r.SetCondition(testCondition, func(ctx context.Context, _ *conditionedResource) error {
 			if replace {
@@ -610,6 +611,57 @@ func TestConditionedReconcilerRetryStatusConflicts(t *testing.T) {
 		if !hooked {
 			t.Errorf("a retried pass skipped its post-hooks")
 		}
+	}
+}
+
+// A rebase that refuses the fresh read drops the pass: nothing it concluded is
+// written, its post-hooks do not run, and it is requeued to start over.
+func TestConditionedReconcilerRetryStatusConflictsRefusedRebase(t *testing.T) {
+	const concurrentCondition ConditionType = "Concurrent"
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add corev1 to scheme: %v", err)
+	}
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+	obj := &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName, UID: "original"}}
+	kubeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).WithStatusSubresource(obj).Build()
+
+	r := NewConditionedReconciler(kubeClient, scheme, obj, time.Second)
+	rebased := 0
+	r.RetryStatusConflicts(kubeClient, func(_, _ *conditionedResource) bool {
+		rebased++
+		return false
+	})
+	r.SetCondition(testCondition, func(ctx context.Context, _ *conditionedResource) error {
+		newer := &conditionedResource{}
+		if err := kubeClient.Get(ctx, client.ObjectKeyFromObject(obj), newer); err != nil {
+			return err
+		}
+		newer.Status.SetConditions(ReadyCondition(concurrentCondition))
+		return kubeClient.Status().Update(ctx, newer)
+	})
+	hooked := false
+	r.AddPostHook(func(context.Context, *conditionedResource) error {
+		hooked = true
+		return nil
+	})
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	stored := &conditionedResource{}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(obj), stored); err != nil {
+		t.Fatal(err)
+	}
+	if rebased != 1 {
+		t.Errorf("rebase ran %d times, want 1", rebased)
+	}
+	if stored.Status.GetCondition(testCondition).Status == ConditionTrue {
+		t.Error("a refused pass still wrote its conclusions")
+	}
+	if hooked || result.RequeueAfter == 0 {
+		t.Error("a refused pass ran its post-hooks or was not requeued")
 	}
 }
 
