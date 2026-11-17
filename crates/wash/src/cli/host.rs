@@ -1156,6 +1156,7 @@ impl HostCommand {
         &self,
         config: &crate::config::Config,
         ctx: &CliContext,
+        bindings: &plugin::PluginBindings,
     ) -> anyhow::Result<Vec<PathBuf>> {
         let project_dir = ctx.project_dir();
         let mut paths: Vec<PathBuf> = [
@@ -1210,7 +1211,6 @@ impl HostCommand {
         // A credential file a `wasmcloud:nats` or `wasi:blobstore` binding
         // names, so a workload cannot mount the Secret the binding
         // authenticates with.
-        let bindings = self.plugin_bindings(config, project_dir)?;
         for id in [
             wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
             wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
@@ -1477,10 +1477,13 @@ impl CliCommand for HostCommand {
             None => tracing::debug!("descriptor limit is not known on this platform"),
         }
 
+        // Use the same resolved bindings for path reservations and the host.
+        // File-backed config sources can change during startup.
+        let plugin_bindings = self.plugin_bindings(&config, project_dir)?;
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel())
-            .with_reserved_host_paths(self.reserved_paths(&config, ctx)?)
+            .with_reserved_host_paths(self.reserved_paths(&config, ctx, &plugin_bindings)?)
             .with_allowed_host_paths(self.allowed_host_paths.iter().cloned());
         if let Some(root) = &self.scratch_root {
             engine_builder = engine_builder.with_scratch_root(root);
@@ -1576,10 +1579,6 @@ impl CliCommand for HostCommand {
             )
         }
 
-        // Resolved before anything is built: a binding an operator declared
-        // wrong is a typo in the host's config file, and the workload that
-        // later asks for it is not the thing at fault.
-        let plugin_bindings = self.plugin_bindings(&config, project_dir)?;
         // Stated at startup because it decides what every workload on the
         // plugin can reach, and the default declines to take a manifest's word
         // for it. `warn` is called out rather than merely reported: it enforces
@@ -2316,14 +2315,16 @@ mod nats_tests {
             .keep_working_dir()
             .build()
             .await?;
-        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx)?;
+        let config = crate::config::Config::default();
+        let bindings = wash_runtime::plugin::PluginBindings::default();
+        let paths = host.reserved_paths(&config, &ctx, &bindings)?;
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.creds")));
         assert!(paths.contains(&std::path::PathBuf::from("data.password")));
         let host = parse(&[
             "--scheduler-nats-nkey=scheduler.nk",
             "--data-nats-token-file=data.token",
         ]);
-        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx)?;
+        let paths = host.reserved_paths(&config, &ctx, &bindings)?;
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.nk")));
         assert!(paths.contains(&std::path::PathBuf::from("data.token")));
         Ok(())
@@ -2333,8 +2334,14 @@ mod nats_tests {
     /// from the base config and from each named binding.
     #[tokio::test]
     async fn reserved_paths_cover_nats_binding_files() -> anyhow::Result<()> {
+        let project = tempfile::tempdir()?;
+        let binding_config = project.path().join("orders.env");
+        std::fs::write(&binding_config, "token-file=/secrets/orders.token\n")?;
         let config = config_from(
             r#"
+configs:
+  orders:
+    file: orders.env
 host:
   plugins:
     - id: wasmcloud-nats
@@ -2342,16 +2349,22 @@ host:
         creds: /secrets/base.creds
       bindings:
         orders:
+          configFrom: [orders]
           config:
-            token-file: /secrets/orders.token
             password-file: /secrets/orders.password
 "#,
         );
         let ctx = crate::cli::CliContextBuilder::default()
+            .project_dir(project.path().to_path_buf())
             .keep_working_dir()
             .build()
             .await?;
-        let paths = parse(&[]).reserved_paths(&config, &ctx)?;
+        let host = parse(&[]);
+        let bindings = host.plugin_bindings(&config, ctx.project_dir())?;
+        // A source can change after resolution. Reserve the paths from the
+        // bindings the host actually installs.
+        std::fs::write(&binding_config, "token-file=/secrets/rotated.token\n")?;
+        let paths = host.reserved_paths(&config, &ctx, &bindings)?;
         for path in [
             "/secrets/base.creds",
             "/secrets/orders.token",
@@ -2359,6 +2372,7 @@ host:
         ] {
             assert!(paths.contains(&std::path::PathBuf::from(path)), "{path}");
         }
+        assert!(!paths.contains(&std::path::PathBuf::from("/secrets/rotated.token")));
         Ok(())
     }
 
