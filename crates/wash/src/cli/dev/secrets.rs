@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail, ensure};
 use wash_runtime::host::egress_credential::{
-    CredentialError, EgressCredentialSource, EgressSecret, SecretRoute, mint_placeholder,
+    CredentialError, EgressCredentialSource, EgressSecret, MIN_SECRET_LEN, SecretForm, SecretRoute,
+    mint_placeholder,
 };
 use zeroize::Zeroizing;
 
@@ -26,6 +27,14 @@ impl EgressCredentialSource for Captured {
     fn current(&self) -> Result<Zeroizing<Vec<u8>>, CredentialError> {
         Ok(self.0.clone())
     }
+}
+
+fn captured(value: Zeroizing<Vec<u8>>) -> anyhow::Result<Captured> {
+    ensure!(
+        value.len() >= MIN_SECRET_LEN,
+        "the value is shorter than {MIN_SECRET_LEN} bytes"
+    );
+    Ok(Captured(value))
 }
 
 /// Re-read on every request, so a developer can rotate the value in place.
@@ -78,7 +87,7 @@ fn secret(entry: &DevSecret, project_dir: &Path) -> anyhow::Result<EgressSecret>
         (Some(var), None) => {
             let value =
                 std::env::var(var).with_context(|| format!("`{var}` is not set in this shell"))?;
-            Arc::new(Captured(Zeroizing::new(value.into_bytes())))
+            Arc::new(captured(Zeroizing::new(value.into_bytes()))?)
         }
         (None, Some(path)) => {
             let path = project_dir.join(path);
@@ -91,11 +100,13 @@ fn secret(entry: &DevSecret, project_dir: &Path) -> anyhow::Result<EgressSecret>
     let destinations = entry
         .destinations
         .iter()
-        .map(|d| d.parse().with_context(|| format!("`{d}` is not a host")))
+        .map(|d| {
+            d.parse()
+                .with_context(|| format!("`{d}` is not an https host"))
+        })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let mut secret = EgressSecret::new(placeholder, source)?
+    let secret = EgressSecret::new(placeholder, source, form(entry)?)?
         .for_destinations(destinations)?
-        .in_query(&entry.query)
         .for_routes(
             entry
                 .routes
@@ -103,18 +114,28 @@ fn secret(entry: &DevSecret, project_dir: &Path) -> anyhow::Result<EgressSecret>
                 .map(|r| route(r))
                 .collect::<anyhow::Result<Vec<_>>>()?,
         );
-    if !entry.headers.is_empty() {
-        let headers = entry
-            .headers
-            .iter()
-            .map(|h| {
-                h.parse()
-                    .with_context(|| format!("`{h}` is not a header name"))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        secret = secret.in_headers(headers)?;
-    }
     Ok(secret)
+}
+
+/// The one place the placeholder goes: a query parameter, a header's whole
+/// value, or by default a bearer token.
+fn form(entry: &DevSecret) -> anyhow::Result<SecretForm> {
+    ensure!(
+        entry.headers.len() + entry.query.len() <= 1,
+        "a secret goes in one header or one query parameter"
+    );
+    if let Some(name) = entry.query.first() {
+        return Ok(SecretForm::Query(name.clone()));
+    }
+    match entry.headers.first() {
+        None => Ok(SecretForm::Bearer),
+        Some(name) if name.eq_ignore_ascii_case("authorization") => Ok(SecretForm::Bearer),
+        Some(name) => {
+            Ok(SecretForm::Header(name.parse().with_context(|| {
+                format!("`{name}` is not a header name")
+            })?))
+        }
+    }
 }
 
 fn route(route: &str) -> anyhow::Result<SecretRoute> {
@@ -189,6 +210,11 @@ mod tests {
                 routes: vec!["GET v1".into()],
                 ..entry()
             },
+            DevSecret {
+                headers: vec!["x-api-key".into()],
+                query: vec!["key".into()],
+                ..entry()
+            },
         ];
         for secret in refused {
             assert!(
@@ -200,6 +226,31 @@ mod tests {
             mint(&[entry(), entry()], Path::new(".")).is_err(),
             "duplicate env"
         );
+    }
+
+    #[test]
+    fn the_form_follows_the_header_or_query_named() {
+        let form_of = |headers: &[&str], query: &[&str]| {
+            form(&DevSecret {
+                headers: headers.iter().map(|h| h.to_string()).collect(),
+                query: query.iter().map(|q| q.to_string()).collect(),
+                ..entry()
+            })
+            .unwrap()
+        };
+        assert_eq!(form_of(&[], &[]), SecretForm::Bearer);
+        assert_eq!(form_of(&["Authorization"], &[]), SecretForm::Bearer);
+        assert_eq!(
+            form_of(&["x-api-key"], &[]),
+            SecretForm::Header("x-api-key".parse().unwrap())
+        );
+        assert_eq!(form_of(&[], &["key"]), SecretForm::Query("key".into()));
+    }
+
+    #[test]
+    fn a_short_value_is_refused_when_the_session_starts() {
+        assert!(captured(Zeroizing::new(b"short".to_vec())).is_err());
+        assert!(captured(Zeroizing::new(vec![b'x'; MIN_SECRET_LEN])).is_ok());
     }
 
     #[test]
