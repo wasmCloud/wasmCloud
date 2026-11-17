@@ -96,6 +96,63 @@ impl ComponentPluginSpec {
 /// id=acme-kv,image=ghcr.io/acme/kv-host:1.0.0,pull=ifNotPresent,max-restarts=3
 /// id=acme-kv,file=./build/kv_plugin.wasm
 /// ```
+/// Check a plugin's volumes and volume mounts without touching the host
+/// filesystem: every volume has a unique, non-empty name and is a `hostPath`,
+/// every mount names a declared volume at an absolute path with no `.` or `..`
+/// segment, and no two mounts share a path. `owner` starts each error, so it
+/// can name the config entry the plugin came from.
+///
+/// The loader checks the same rules before it opens any directory, so a
+/// config validated here fails the same way at load.
+///
+/// # Errors
+///
+/// The first problem found.
+pub fn validate_plugin_volumes(
+    volumes: &[crate::types::Volume],
+    volume_mounts: &[crate::types::VolumeMount],
+    owner: &str,
+) -> anyhow::Result<()> {
+    use crate::types::VolumeType;
+
+    let mut names = std::collections::HashSet::with_capacity(volumes.len());
+    for volume in volumes {
+        let name = volume.name.as_str();
+        ensure!(!name.is_empty(), "{owner}: a volume has an empty name");
+        ensure!(
+            names.insert(name),
+            "{owner}: two volumes are named '{name}'"
+        );
+        if let VolumeType::EmptyDir(_) = volume.volume_type {
+            bail!(
+                "{owner}: volume '{name}' is an emptyDir, which host component plugins do not \
+                 support yet"
+            );
+        }
+    }
+
+    let mut mount_paths = std::collections::HashSet::with_capacity(volume_mounts.len());
+    for mount in volume_mounts {
+        ensure!(
+            names.contains(mount.name.as_str()),
+            "{owner}: a volumeMount names volume '{}', which the plugin does not declare",
+            mount.name
+        );
+        let mount_path =
+            crate::engine::volumes::normalize_mount_path(&mount.mount_path).map_err(|why| {
+                anyhow!(
+                    "{owner}: volumeMount mountPath {:?} {why}",
+                    mount.mount_path
+                )
+            })?;
+        ensure!(
+            mount_paths.insert(mount_path.clone()),
+            "{owner}: two volumeMounts mount at {mount_path:?}"
+        );
+    }
+    Ok(())
+}
+
 impl FromStr for ComponentPluginSpec {
     type Err = anyhow::Error;
 
