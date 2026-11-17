@@ -1904,21 +1904,22 @@ mod tests {
                 vec![PgType::INT8, PgType::FLOAT8],
             ),
         ] {
-            assert!(bind(&value, &own).is_ok(), "{value:?} as {own}");
+            // Name the case by its type, not the value, so failures never echo it.
+            assert!(bind(&value, &own).is_ok(), "{own} value as {own}");
             for ty in others {
                 let err = bind(&value, &ty).unwrap_err();
-                assert!(err.is::<WrongType>(), "{value:?} as {ty}: {err}");
+                assert!(err.is::<WrongType>(), "{own} value as {ty}");
             }
         }
         // Text by another name is refused where text is.
-        for value in [
-            PgValue::Name("12345678".into()),
-            PgValue::Xml("12345678".into()),
-            PgValue::Char((8, b"12345678".to_vec())),
-            PgValue::Varchar((None, b"12345678".to_vec())),
+        for (name, value) in [
+            ("name", PgValue::Name("12345678".into())),
+            ("xml", PgValue::Xml("12345678".into())),
+            ("char", PgValue::Char((8, b"12345678".to_vec()))),
+            ("varchar", PgValue::Varchar((None, b"12345678".to_vec()))),
         ] {
-            assert!(bind(&value, &PgType::INT8).is_err(), "{value:?}");
-            assert!(bind(&value, &PgType::TEXT).is_ok(), "{value:?}");
+            assert!(bind(&value, &PgType::INT8).is_err(), "{name} value as int8");
+            assert!(bind(&value, &PgType::TEXT).is_ok(), "{name} value as text");
         }
     }
 
