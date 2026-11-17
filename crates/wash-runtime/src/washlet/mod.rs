@@ -1870,6 +1870,15 @@ fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatu
         message,
     }
 }
+
+fn owner_from_wire(
+    owner: Option<types::v2::WorkloadOwner>,
+) -> anyhow::Result<Option<crate::types::WorkloadOwner>> {
+    owner
+        .map(|owner| crate::types::WorkloadOwner::new(&owner.kind, &owner.name, &owner.uid))
+        .transpose()
+}
+
 #[instrument(skip_all, fields(
     workload_id = %req.workload_id,
     workload.name=?req.workload.as_ref().map(|w| &w.name).unwrap_or(&"<none>".to_string()),
@@ -1899,9 +1908,7 @@ async fn workload_start(
     if workload_id.is_empty() {
         anyhow::bail!("workload_id is required");
     }
-    let owner = owner
-        .map(|owner| crate::types::WorkloadOwner::new(&owner.kind, &owner.name, &owner.uid))
-        .transpose()?;
+    let owner = owner_from_wire(owner)?;
 
     // Claimed before any image is fetched. Until the host holds the id a
     // status reports it missing and a stop reports it already gone, so a stop
@@ -2376,6 +2383,22 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    #[test]
+    fn a_whole_owner_crosses_the_wire_intact() -> anyhow::Result<()> {
+        let owner = owner_from_wire(Some(types::v2::WorkloadOwner {
+            kind: "WorkloadDeployment".into(),
+            name: "billing".into(),
+            uid: "deployment-uid".into(),
+        }))?
+        .expect("an owner was sent");
+        assert_eq!(
+            (owner.kind(), owner.name(), owner.uid()),
+            ("WorkloadDeployment", "billing", "deployment-uid")
+        );
+        assert!(owner_from_wire(None)?.is_none());
+        Ok(())
+    }
 
     /// A start that names an owner names all of it, or is refused before the
     /// host claims the id or pulls anything.

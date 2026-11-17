@@ -131,7 +131,10 @@ impl WorkloadSelector {
 impl std::fmt::Display for WorkloadSelector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (&self.kind, &self.name) {
-            (Some(kind), Some(name)) => write!(f, "`{}/{kind}/{name}`", self.namespace),
+            (Some(kind), Some(name)) => match &self.uid {
+                Some(uid) => write!(f, "`{}/{kind}/{name}` (uid `{uid}`)", self.namespace),
+                None => write!(f, "`{}/{kind}/{name}`", self.namespace),
+            },
             (_, Some(name)) => write!(f, "`{}/{name}`", self.namespace),
             (_, None) => write!(f, "namespace `{}`", self.namespace),
         }
@@ -141,6 +144,19 @@ impl std::fmt::Display for WorkloadSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pinned_selector_shows_its_uid() {
+        let owner = WorkloadOwner::new("WorkloadDeployment", "billing", "uid-1").unwrap();
+        assert_eq!(
+            WorkloadSelector::owner("acme", &owner).to_string(),
+            "`acme/WorkloadDeployment/billing` (uid `uid-1`)"
+        );
+        assert_eq!(
+            WorkloadSelector::workload("acme", "billing").to_string(),
+            "`acme/billing`"
+        );
+    }
 
     fn requesting(name: &str, owner: Option<WorkloadOwner>) -> RequestingWorkload {
         RequestingWorkload {

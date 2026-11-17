@@ -93,7 +93,7 @@ func TestWorkloadConfigRejectsMissingDependencies(t *testing.T) {
 func TestPlacementWaitsForHostSelection(t *testing.T) {
 	r, workload, bus := unplacedFixture(t)
 	before := workload.DeepCopy()
-	if err := r.reconcilePlacement(t.Context(), workload); !condition.IsStatusUnknown(err) {
+	if err := place(t.Context(), r, workload); !condition.IsStatusUnknown(err) {
 		t.Fatalf("unselected placement = %v", err)
 	}
 	if len(bus.requests) != 0 || !reflect.DeepEqual(before, workload) {
@@ -138,15 +138,16 @@ func TestPlacementFailedStartRetriesSameRequest(t *testing.T) {
 			r, workload, bus := placementFixture(t)
 			accepted := bus.reply
 			tc.fail(bus)
+			recordOwner(t, r, workload)
 			before := workload.DeepCopy()
-			if err := r.reconcilePlacement(t.Context(), workload); !tc.check(err) {
+			if err := place(t.Context(), r, workload); !tc.check(err) {
 				t.Fatalf("start error = %v", err)
 			}
 			if !reflect.DeepEqual(before, workload) || len(bus.requests) != 1 {
 				t.Fatalf("failed start changed retry state: %+v", workload.Status)
 			}
 			bus.err, bus.reply = nil, accepted
-			if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+			if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 				t.Fatal(err)
 			}
 			if workload.Status.HostID != testHeartbeatHostID || workload.Status.WorkloadID != fixtureRuntimeID || len(bus.requests) != 2 {
@@ -162,7 +163,7 @@ func TestPlacementFailedStartRetriesSameRequest(t *testing.T) {
 			if first.WorkloadId != testWorkloadUID || !proto.Equal(&first, &second) {
 				t.Fatal("retry changed the start identity or payload")
 			}
-			if err := r.reconcilePlacement(t.Context(), workload); err != nil {
+			if err := place(t.Context(), r, workload); err != nil {
 				t.Fatal(err)
 			}
 			if len(bus.requests) != 2 {
@@ -280,8 +281,9 @@ func TestPlacementRefusedStart(t *testing.T) {
 			if tc.noID {
 				wantRequests = 1
 			}
+			recordOwner(t, r, workload)
 			before := workload.DeepCopy()
-			err := r.reconcilePlacement(t.Context(), workload)
+			err := place(t.Context(), r, workload)
 			if len(bus.requests) != wantRequests {
 				t.Fatalf("sent %d requests, want %d", len(bus.requests), wantRequests)
 			}
@@ -310,7 +312,7 @@ func TestPlacementRefusedStart(t *testing.T) {
 				t.Fatalf("refused start was recorded: %+v", workload.Status)
 			}
 			recordPlacement(workload, err)
-			if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrNoop()) ||
+			if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrNoop()) ||
 				len(bus.requests) != wantRequests {
 				t.Fatalf("start after a refusal = %v with %d requests", err, len(bus.requests))
 			}
@@ -338,8 +340,9 @@ func TestPlacementOtherStartAnswers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r, workload, bus := placementFixture(t)
 			bus.reply = startReply(t, testWorkloadUID, tc.state, tc.message)
+			recordOwner(t, r, workload)
 			before := workload.DeepCopy()
-			err := r.reconcilePlacement(t.Context(), workload)
+			err := place(t.Context(), r, workload)
 			if len(bus.requests) != 1 {
 				t.Fatalf("sent %d requests, want the start alone", len(bus.requests))
 			}
@@ -354,7 +357,7 @@ func TestPlacementOtherStartAnswers(t *testing.T) {
 				t.Fatalf("start answered %s = %v, recorded %+v", tc.state, err, workload.Status)
 			}
 			recordPlacement(workload, err)
-			if err := r.reconcilePlacement(t.Context(), workload); err == nil || len(bus.requests) != 2 {
+			if err := place(t.Context(), r, workload); err == nil || len(bus.requests) != 2 {
 				t.Fatalf("retry = %v with %d requests, want a second start", err, len(bus.requests))
 			}
 		})
@@ -379,14 +382,14 @@ func TestPlacementStartWaitScope(t *testing.T) {
 	}
 	refuse := func(wantStarts int) {
 		t.Helper()
-		err := r.reconcilePlacement(t.Context(), workload)
+		err := place(t.Context(), r, workload)
 		if starts != wantStarts || err == nil || errors.Is(err, condition.ErrNoop()) {
 			t.Fatalf("start %d = %v after %d starts", wantStarts, err, starts)
 		}
 		recordPlacement(workload, err)
 	}
 	// Unrecorded, as when the status write failed, the refusal holds nothing.
-	if err := r.reconcilePlacement(t.Context(), workload); err == nil || starts != 1 {
+	if err := place(t.Context(), r, workload); err == nil || starts != 1 {
 		t.Fatalf("refused start = %v after %d starts", err, starts)
 	}
 	refuse(2)
@@ -394,7 +397,7 @@ func TestPlacementStartWaitScope(t *testing.T) {
 	if left := time.Until(wait.(startWait).until); left > workloadReconcileInterval || left < workloadReconcileInterval-5*time.Second {
 		t.Fatalf("next start held back %v, want a reconcile interval", left)
 	}
-	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrNoop()) || starts != 2 {
+	if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrNoop()) || starts != 2 {
 		t.Fatalf("held-back start = %v after %d starts", err, starts)
 	}
 	workload.Generation++
@@ -403,7 +406,7 @@ func TestPlacementStartWaitScope(t *testing.T) {
 	workload.Spec.HostID, workload.Status.HostID = otherHost, otherHost
 	refuse(4)
 	expireStartWaits(r)
-	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) ||
+	if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) ||
 		starts != 5 || workload.Status.WorkloadID != fixtureRuntimeID {
 		t.Fatalf("start after the wait = %v, recorded %q", err, workload.Status.WorkloadID)
 	}

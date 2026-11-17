@@ -416,8 +416,10 @@ pub struct Workload {
     #[prost(message, optional, tag = "7")]
     pub identity: ::core::option::Option<WorkloadIdentity>,
     /// The object that controls the workload's replicas, as the control plane
-    /// verified it. Grants name a workload by its namespace and this owner, never
-    /// by name alone. Unset leaves the workload matching no such grant.
+    /// verified it. Egress credential, broker and kind-qualified secret grants
+    /// match a workload by its namespace and this owner. Unset leaves the
+    /// workload matching none of them; a secret grant by name alone still
+    /// matches the workload's name.
     #[prost(message, optional, tag = "8")]
     pub owner: ::core::option::Option<WorkloadOwner>,
 }

@@ -11,7 +11,6 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -38,7 +37,7 @@ func TestPlacementStartRequestUsesWorkloadNamespace(t *testing.T) {
 			r, workload, bus := placementFixture(t)
 			workload.Namespace = namespace
 			before := workload.Spec.DeepCopy()
-			if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+			if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 				t.Fatal(err)
 			}
 			if workload.Status.WorkloadID != fixtureRuntimeID {
@@ -208,7 +207,7 @@ func TestPlacementAPIFailuresPreserveRetryState(t *testing.T) {
 			}
 			r.Client = interceptor.NewClient(r.Client.(client.WithWatch), tc.funcs)
 			before := workload.DeepCopy()
-			if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, errAPI) {
+			if err := place(t.Context(), r, workload); !errors.Is(err, errAPI) {
 				t.Fatalf("placement error = %v", err)
 			}
 			if len(bus.requests) != 0 || !reflect.DeepEqual(workload, before) {
@@ -244,7 +243,7 @@ func ownedFixtureWithUID(t *testing.T, r *WorkloadReconciler, workload *runtimev
 		},
 		Spec: runtimev1alpha1.WorkloadReplicaSetSpec{Template: runtimev1alpha1.WorkloadReplicaTemplate{Spec: *workload.Spec.DeepCopy()}},
 	}
-	deployment.Status.CurrentReplicaSet = &corev1.LocalObjectReference{Name: replicaSet.Name}
+	deployment.Status.CurrentReplicaSet = recorded(replicaSet)
 	workload.OwnerReferences = controls(replicaSet, workloadReplicaSetKind)
 	workload.Annotations[workloadReplicaSetGenerationAnnotation] = replicaSet.Spec.Template.Hash()
 	for _, obj := range []client.Object{deployment, replicaSet} {
@@ -253,6 +252,13 @@ func ownedFixtureWithUID(t *testing.T, r *WorkloadReconciler, workload *runtimev
 		}
 	}
 	return deployment, replicaSet
+}
+
+// recorded is the reference a deployment keeps to a set it made.
+func recorded(replicaSet *runtimev1alpha1.WorkloadReplicaSet) *runtimev1alpha1.WorkloadReplicaSetReference {
+	return &runtimev1alpha1.WorkloadReplicaSetReference{
+		Name: replicaSet.Name, UID: replicaSet.UID, TemplateDigest: replicaSet.Spec.Template.Digest(),
+	}
 }
 
 // sentOwner is the owner the last start request named.
@@ -291,15 +297,38 @@ func TestPlacementOwner(t *testing.T) {
 		}, want: deployment},
 		{name: "previous set", setup: func(t *testing.T, r *WorkloadReconciler, w *runtimev1alpha1.Workload) {
 			d, rs := ownedFixture(t, r, w)
-			d.Status.CurrentReplicaSet = &corev1.LocalObjectReference{Name: "newer"}
-			d.Status.PreviousReplicaSet = &corev1.LocalObjectReference{Name: rs.Name}
+			d.Status.CurrentReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: "newer"}
+			d.Status.PreviousReplicaSet = recorded(rs)
 			if err := r.Update(t.Context(), d); err != nil {
 				t.Fatal(err)
 			}
 		}, want: deployment},
+		{name: "edited set", setup: func(t *testing.T, r *WorkloadReconciler, w *runtimev1alpha1.Workload) {
+			_, rs := ownedFixture(t, r, w)
+			rs.Spec.Template.Spec.Components[0].Image = "registry.example/other:v1"
+			if err := r.Update(t.Context(), rs); err != nil {
+				t.Fatal(err)
+			}
+			w.Spec = *rs.Spec.Template.Spec.DeepCopy()
+			w.Annotations[workloadReplicaSetGenerationAnnotation] = rs.Spec.Template.Hash()
+		}, refused: "or its template changed since"},
+		{name: "set made again under its name", setup: func(t *testing.T, r *WorkloadReconciler, w *runtimev1alpha1.Workload) {
+			d, _ := ownedFixture(t, r, w)
+			d.Status.CurrentReplicaSet.UID = "deleted-set-uid"
+			if err := r.Update(t.Context(), d); err != nil {
+				t.Fatal(err)
+			}
+		}, refused: "is not the set WorkloadDeployment"},
+		{name: "set recorded by name only", setup: func(t *testing.T, r *WorkloadReconciler, w *runtimev1alpha1.Workload) {
+			d, rs := ownedFixture(t, r, w)
+			d.Status.CurrentReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: rs.Name}
+			if err := r.Update(t.Context(), d); err != nil {
+				t.Fatal(err)
+			}
+		}, refused: "is not the set WorkloadDeployment"},
 		{name: "set the deployment does not name", setup: func(t *testing.T, r *WorkloadReconciler, w *runtimev1alpha1.Workload) {
 			d, _ := ownedFixture(t, r, w)
-			d.Status.CurrentReplicaSet = &corev1.LocalObjectReference{Name: "forged"}
+			d.Status.CurrentReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: "forged"}
 			if err := r.Update(t.Context(), d); err != nil {
 				t.Fatal(err)
 			}
@@ -348,7 +377,7 @@ func TestPlacementOwner(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, r, workload)
 			}
-			err := r.reconcilePlacement(t.Context(), workload)
+			err := place(t.Context(), r, workload)
 			if tc.refused != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.refused) {
 					t.Fatalf("placement returned %v, want a refusal containing %q", err, tc.refused)
@@ -398,21 +427,26 @@ func daemonSetFixture(t *testing.T, r *WorkloadReconciler, workload *runtimev1al
 	return daemonSet
 }
 
-// Placement records the owner it sends and never changes it: a later start
-// for another owner is refused before it reaches a host.
+// Placement records the owner it sends and keeps its kind and name: a later
+// start for another owner is refused before it reaches a host. An owner
+// recreated under its name, adopting the Workload, replaces the UID.
 func TestPlacementRecordsOwnerOnce(t *testing.T) {
 	r, workload, bus := placementFixture(t)
 	recorder := events.NewFakeRecorder(4)
 	r.Recorder = recorder
 	deployment, replicaSet := ownedFixture(t, r, workload)
-	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+	recordOwner(t, r, workload)
+	if len(bus.requests) != 0 {
+		t.Fatal("a host was asked to start the Workload before its owner was recorded")
+	}
+	if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 		t.Fatal(err)
 	}
 	placed := *workload.Status.Owner
 
 	workload.Status.WorkloadID = ""
 	workload.OwnerReferences = nil
-	err := r.reconcilePlacement(t.Context(), workload)
+	err := place(t.Context(), r, workload)
 	if err == nil || !strings.Contains(err.Error(), "first placed for WorkloadDeployment billing") {
 		t.Fatalf("re-placing for a new owner returned %v", err)
 	}
@@ -427,14 +461,43 @@ func TestPlacementRecordsOwnerOnce(t *testing.T) {
 		t.Fatalf("refused re-placement recorded %+v after %d requests", workload.Status, len(bus.requests))
 	}
 
-	// A deployment recreated under the same name is a different owner.
 	for _, obj := range []client.Object{deployment, replicaSet} {
 		if err := r.Delete(t.Context(), obj); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ownedFixtureWithUID(t, r, workload, "recreated-uid")
-	if err := r.reconcilePlacement(t.Context(), workload); err == nil || !strings.Contains(err.Error(), "uid recreated-uid") {
+	if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
 		t.Fatalf("re-placing for a recreated deployment returned %v", err)
+	}
+	if got := sentOwner(t, bus).GetUid(); got != "recreated-uid" || workload.Status.Owner.UID != "recreated-uid" {
+		t.Fatalf("re-placement for a recreated deployment sent uid %q, recorded %+v", got, workload.Status.Owner)
+	}
+}
+
+// A failed read of the owner chain is retried as it is, not reported as an
+// owner that could not be verified.
+func TestPlacementOwnerReadErrorIsNotUnverified(t *testing.T) {
+	r, workload, _ := placementFixture(t)
+	recorder := events.NewFakeRecorder(4)
+	r.Recorder = recorder
+	ownedFixture(t, r, workload)
+	r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*runtimev1alpha1.WorkloadReplicaSet); ok {
+				return errors.New("apiserver unavailable")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	err := place(t.Context(), r, workload)
+	if err == nil || !strings.Contains(err.Error(), "apiserver unavailable") || errors.Is(err, errOwnerUnverified) {
+		t.Fatalf("placement returned %v", err)
+	}
+	if got := condition.ErrorConditionFor(runtimev1alpha1.WorkloadConditionPlacement, err); got.Reason == reasonOwnerUnverified {
+		t.Fatalf("a failed read was reported as %q", got.Reason)
+	}
+	if recorded := drainEvents(recorder); len(recorded) != 0 {
+		t.Fatalf("events = %q", recorded)
 	}
 }
