@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -685,7 +686,7 @@ func TestFinalize(t *testing.T) {
 	otherHost := workloadForHost("other-host", "host-id-2")
 
 	c := newHostFinalizeClient(t, assigned, deleting, otherHost)
-	r := &HostReconciler{Client: c, deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency)}
+	r := &HostReconciler{Client: c, apiReader: c, deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency)}
 	host := &runtimev1alpha1.Host{HostID: testHeartbeatHostID}
 
 	if err := r.finalize(context.Background(), host); err != nil {
@@ -725,7 +726,7 @@ func TestDeleteUnresponsiveHost(t *testing.T) {
 		host := &runtimev1alpha1.Host{}
 		host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
 		c, h := newHostDeleteClient(t, host)
-		r := &HostReconciler{Client: c}
+		r := &HostReconciler{Client: c, apiReader: c}
 		if err := r.deleteUnresponsiveHost(context.Background(), h); err != nil {
 			t.Fatalf("deleteUnresponsiveHost: %v", err)
 		}
@@ -738,7 +739,7 @@ func TestDeleteUnresponsiveHost(t *testing.T) {
 		host := &runtimev1alpha1.Host{}
 		host.Status.SetConditions(condition.UnknownCondition(condition.TypeReady, condition.ReasonUnavailable, "not reporting"))
 		c, h := newHostDeleteClient(t, host)
-		r := &HostReconciler{Client: c}
+		r := &HostReconciler{Client: c, apiReader: c}
 		if err := r.deleteUnresponsiveHost(context.Background(), h); err != nil {
 			t.Fatalf("deleteUnresponsiveHost: %v", err)
 		}
@@ -751,7 +752,7 @@ func TestDeleteUnresponsiveHost(t *testing.T) {
 		host := &runtimev1alpha1.Host{}
 		host.Status.SetConditions(condition.ErrorCondition(condition.TypeReady, condition.ReasonUnavailable, errors.New("host down")))
 		c, h := newHostDeleteClient(t, host)
-		r := &HostReconciler{Client: c}
+		r := &HostReconciler{Client: c, apiReader: c}
 		if err := r.deleteUnresponsiveHost(context.Background(), h); err != nil {
 			t.Fatalf("deleteUnresponsiveHost: %v", err)
 		}
@@ -947,5 +948,46 @@ func TestHeartbeatHandler_PreservesReportedStatus(t *testing.T) {
 	}
 	if !after.Status.LastSeen.After(seenBefore.Time) && !after.Status.LastSeen.Equal(&seenBefore) {
 		t.Errorf("LastSeen went backwards: %v -> %v", seenBefore, after.Status.LastSeen)
+	}
+}
+
+// A cleanup pass that runs out of time is requeued, not failed, and frees its
+// worker. One whose caller went away, or that failed for another reason, still
+// reports the error.
+func TestBoundCleanupPass(t *testing.T) {
+	stuck := reconcile.Func(func(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
+		<-ctx.Done()
+		return reconcile.Result{}, ctx.Err()
+	})
+	done := make(chan struct{})
+	var (
+		result reconcile.Result
+		err    error
+	)
+	go func() {
+		defer close(done)
+		result, err = boundCleanupPass(stuck, 20*time.Millisecond).Reconcile(t.Context(), reconcile.Request{})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stuck cleanup pass held its worker past the deadline")
+	}
+	if err != nil || result.RequeueAfter <= 0 {
+		t.Fatalf("timed-out pass = %+v, %v; want a requeue and no error", result, err)
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := boundCleanupPass(stuck, time.Minute).Reconcile(cancelled, reconcile.Request{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled pass = %v, want context.Canceled", err)
+	}
+
+	cause := errors.New("api down")
+	failing := reconcile.Func(func(context.Context, reconcile.Request) (reconcile.Result, error) {
+		return reconcile.Result{}, cause
+	})
+	if _, err := boundCleanupPass(failing, time.Minute).Reconcile(t.Context(), reconcile.Request{}); !errors.Is(err, cause) {
+		t.Fatalf("failed pass = %v, want its error", err)
 	}
 }

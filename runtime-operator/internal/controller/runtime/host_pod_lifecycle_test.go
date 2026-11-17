@@ -47,7 +47,7 @@ func TestHostPodReconcileFinalizers(t *testing.T) {
 			if state == missingPodCase {
 				key.Name = "absent"
 			}
-			r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace, RetiredHosts: &RetiredHosts{}}
+			r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace, RetiredHosts: &RetiredHosts{}}
 			for range 2 {
 				if result, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil || result != (ctrl.Result{}) {
 					t.Fatalf("Reconcile = %+v, %v", result, err)
@@ -106,7 +106,7 @@ func TestHostPodCleanupFailureRetainsFinalizerUntilRetry(t *testing.T) {
 					return c.Patch(ctx, obj, patch, opts...)
 				},
 			}).Build()
-			r := &HostPodReconciler{Client: c, OperatorNamespace: testNamespace, RetiredHosts: &RetiredHosts{}}
+			r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace, RetiredHosts: &RetiredHosts{}}
 			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pod)}
 			if _, err := r.Reconcile(t.Context(), req); !errors.Is(err, cause) {
 				t.Fatalf("Reconcile = %v, want API error", err)

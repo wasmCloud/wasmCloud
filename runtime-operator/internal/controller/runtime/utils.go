@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -28,6 +30,63 @@ import (
 func deleteObservedObject(ctx context.Context, c client.Client, obj client.Object) error {
 	uid, version := obj.GetUID(), obj.GetResourceVersion()
 	return client.IgnoreNotFound(c.Delete(ctx, obj, client.Preconditions{UID: &uid, ResourceVersion: &version}))
+}
+
+// rereadVerdict is what deleteObservedWithReread does with a snapshot.
+type rereadVerdict int
+
+const (
+	// deleteSnapshot deletes the snapshot under its UID and resource version.
+	deleteSnapshot rereadVerdict = iota
+	// spareSnapshot leaves the object in place.
+	spareSnapshot
+	// snapshotGone leaves the object alone because it is already as good as
+	// gone: replaced by a same-name object, or already deleting.
+	snapshotGone
+)
+
+// errNoAPIReader reports a reconciler used without the uncached reader its
+// conflict path needs, usually because SetupWithManager was not called.
+var errNoAPIReader = errors.New("no uncached API reader configured; call SetupWithManager")
+
+// deleteObservedWithReread deletes observed if verdict allows it, guarded by its
+// UID and resource version. A conflict means the object changed since it was
+// read, so it is reread through reader (uncached) and verdict decides again on
+// the fresh copy, until the retries run out. newObject returns an empty object
+// of observed's type to read into.
+//
+// It reports whether the object is gone: deleted here, not found, or judged
+// snapshotGone.
+func deleteObservedWithReread[T client.Object](
+	ctx context.Context, c client.Client, reader client.Reader, observed T,
+	newObject func() T, verdict func(snapshot T) rereadVerdict,
+) (bool, error) {
+	if reader == nil {
+		return false, errNoAPIReader
+	}
+	snapshot, reread := observed, false
+	gone := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if reread {
+			snapshot = newObject()
+			if err := reader.Get(ctx, client.ObjectKeyFromObject(observed), snapshot); err != nil {
+				gone = apierrors.IsNotFound(err)
+				return client.IgnoreNotFound(err)
+			}
+		}
+		switch verdict(snapshot) {
+		case spareSnapshot:
+			return nil
+		case snapshotGone:
+			gone = true
+			return nil
+		}
+		err := deleteObservedObject(ctx, c, snapshot)
+		reread = apierrors.IsConflict(err)
+		gone = err == nil
+		return err
+	})
+	return gone, err
 }
 
 func translatePullPolicy(policy corev1.PullPolicy) runtimev2.ImagePullPolicy {
