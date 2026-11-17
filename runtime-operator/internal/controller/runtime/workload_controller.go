@@ -848,12 +848,18 @@ func (r *WorkloadReconciler) materializeWorkload(ctx context.Context, workload *
 		}
 	}
 
+	var identity *runtimev2.WorkloadIdentity
+	if ref := workload.Spec.IdentityRef; ref != nil && ref.Name != "" {
+		identity = &runtimev2.WorkloadIdentity{IdentityRef: ref.Name}
+	}
+
 	return &runtimev2.Workload{
 		Namespace: workload.Namespace,
 		Name:      workload.Name,
 		WitWorld:  witWorld,
 		Volumes:   volumes,
 		Service:   service,
+		Identity:  identity,
 	}, nil
 }
 

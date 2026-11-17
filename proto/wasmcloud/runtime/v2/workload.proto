@@ -15,6 +15,40 @@ message Workload {
   WitWorld wit_world = 5;
 
   repeated Volume volumes = 6;
+
+  // The identity the workload runs as. Unset runs it with none.
+  WorkloadIdentity identity = 7;
+}
+
+// What the control plane grants a workload's identity. The host generates
+// every key itself and asks its issuer for SVIDs, presenting the scheduling
+// lease; nothing here is a credential the workload can use. The identity is
+// resolved in the workload's namespace.
+message WorkloadIdentity {
+  // The named WorkloadIdentity the workload runs as, if it names one.
+  string identity_ref = 1;
+  // Digests every component, and the service if any, must have to start with
+  // this identity: sha256:<lowercase hex> of the component's wasm bytes as the
+  // host compiles them. For an OCI artifact that is the digest of its
+  // uncompressed wasm layer, not of its manifest. Required.
+  repeated string approved_digests = 2;
+  // Opaque proof that this host may run the workload, passed to the issuer.
+  // Required. Replaced with WorkloadIdentityRenew before it expires.
+  bytes scheduling_lease = 3;
+  // When the scheduling lease expires, in seconds since the Unix epoch.
+  int64 scheduling_lease_expires_at = 4;
+  // Audiences the host keeps a JWT-SVID for, one SVID per audience.
+  repeated string jwt_audiences = 5;
+  // HTTPS destinations the host presents the X.509-SVID to.
+  repeated MtlsDestination mtls_destinations = 6;
+}
+
+// An exact HTTPS host and port the X.509-SVID is presented to. The server is
+// verified against the host's roots, by host name.
+message MtlsDestination {
+  string host = 1;
+  uint32 port = 2;
+  reserved 3;
 }
 
 enum WorkloadState {

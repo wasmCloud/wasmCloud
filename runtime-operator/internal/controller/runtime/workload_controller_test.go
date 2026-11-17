@@ -12,6 +12,8 @@ import (
 
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -102,6 +104,56 @@ func TestPlacementCarriesComponentInstanceLimits(t *testing.T) {
 		if limit.got != limit.want {
 			t.Errorf("%s reached the host as %d, want %d", limit.name, limit.got, limit.want)
 		}
+	}
+}
+
+// TestPlacementCarriesIdentityRef checks that a workload's identityRef reaches
+// the host, and that a workload without one is sent no identity.
+func TestPlacementCarriesIdentityRef(t *testing.T) {
+	reply, err := protojson.Marshal(&runtimev2.WorkloadStartResponse{
+		WorkloadStatus: &runtimev2.WorkloadStatus{
+			WorkloadId:    "workload-1",
+			WorkloadState: runtimev2.WorkloadState_WORKLOAD_STATE_RUNNING,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal start response: %v", err)
+	}
+	host := &runtimev1alpha1.Host{
+		ObjectMeta: metav1.ObjectMeta{Name: testHeartbeatHostID, Namespace: testNamespace},
+		HostID:     testHeartbeatHostID,
+	}
+	for _, tt := range []struct {
+		name string
+		ref  *corev1.LocalObjectReference
+		want *runtimev2.WorkloadIdentity
+	}{
+		{"named", &corev1.LocalObjectReference{Name: "reports"}, &runtimev2.WorkloadIdentity{IdentityRef: "reports"}},
+		{"unset", nil, nil},
+		{"empty", &corev1.LocalObjectReference{}, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := &mockBus{reply: &wasmbus.Message{Data: reply}}
+			r := &WorkloadReconciler{Client: newWorkloadClient(t, host), Bus: bus, OperatorNamespace: testNamespace}
+			workload := &runtimev1alpha1.Workload{
+				ObjectMeta: metav1.ObjectMeta{Name: "identity", Namespace: metav1.NamespaceDefault},
+				Spec: runtimev1alpha1.WorkloadSpec{
+					Components:  []runtimev1alpha1.WorkloadComponent{{Name: "app", Image: "example.com/app:1"}},
+					IdentityRef: tt.ref,
+				},
+				Status: runtimev1alpha1.WorkloadStatus{HostID: testHeartbeatHostID},
+			}
+			if err := r.reconcilePlacement(context.Background(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+				t.Fatalf("reconcilePlacement: %v", err)
+			}
+			var req runtimev2.WorkloadStartRequest
+			if err := protojson.Unmarshal(bus.gotData, &req); err != nil {
+				t.Fatalf("unmarshal start request: %v", err)
+			}
+			if got := req.GetWorkload().GetIdentity(); !proto.Equal(got, tt.want) {
+				t.Fatalf("identity reached the host as %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

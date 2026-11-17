@@ -1339,6 +1339,116 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
         deserializer.deserialize_struct("wasmcloud.runtime.v2.LocalResources", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for MtlsDestination {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.host.is_empty() {
+            len += 1;
+        }
+        if self.port != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.MtlsDestination", len)?;
+        if !self.host.is_empty() {
+            struct_ser.serialize_field("host", &self.host)?;
+        }
+        if self.port != 0 {
+            struct_ser.serialize_field("port", &self.port)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MtlsDestination {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "host",
+            "port",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Host,
+            Port,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "host" => Ok(GeneratedField::Host),
+                            "port" => Ok(GeneratedField::Port),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MtlsDestination;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct wasmcloud.runtime.v2.MtlsDestination")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MtlsDestination, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut host__ = None;
+                let mut port__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Host => {
+                            if host__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("host"));
+                            }
+                            host__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Port => {
+                            if port__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("port"));
+                            }
+                            port__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(MtlsDestination {
+                    host: host__.unwrap_or_default(),
+                    port: port__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("wasmcloud.runtime.v2.MtlsDestination", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for Service {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -2076,6 +2186,9 @@ impl serde::Serialize for Workload {
         if !self.volumes.is_empty() {
             len += 1;
         }
+        if self.identity.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.Workload", len)?;
         if !self.namespace.is_empty() {
             struct_ser.serialize_field("namespace", &self.namespace)?;
@@ -2095,6 +2208,9 @@ impl serde::Serialize for Workload {
         if !self.volumes.is_empty() {
             struct_ser.serialize_field("volumes", &self.volumes)?;
         }
+        if let Some(v) = self.identity.as_ref() {
+            struct_ser.serialize_field("identity", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -2112,6 +2228,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
             "wit_world",
             "witWorld",
             "volumes",
+            "identity",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -2122,6 +2239,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
             Service,
             WitWorld,
             Volumes,
+            Identity,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2149,6 +2267,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
                             "service" => Ok(GeneratedField::Service),
                             "witWorld" | "wit_world" => Ok(GeneratedField::WitWorld),
                             "volumes" => Ok(GeneratedField::Volumes),
+                            "identity" => Ok(GeneratedField::Identity),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2174,6 +2293,7 @@ impl<'de> serde::Deserialize<'de> for Workload {
                 let mut service__ = None;
                 let mut wit_world__ = None;
                 let mut volumes__ = None;
+                let mut identity__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Namespace => {
@@ -2214,6 +2334,12 @@ impl<'de> serde::Deserialize<'de> for Workload {
                             }
                             volumes__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Identity => {
+                            if identity__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("identity"));
+                            }
+                            identity__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(Workload {
@@ -2223,10 +2349,428 @@ impl<'de> serde::Deserialize<'de> for Workload {
                     service: service__,
                     wit_world: wit_world__,
                     volumes: volumes__.unwrap_or_default(),
+                    identity: identity__,
                 })
             }
         }
         deserializer.deserialize_struct("wasmcloud.runtime.v2.Workload", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for WorkloadIdentity {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.identity_ref.is_empty() {
+            len += 1;
+        }
+        if !self.approved_digests.is_empty() {
+            len += 1;
+        }
+        if !self.scheduling_lease.is_empty() {
+            len += 1;
+        }
+        if self.scheduling_lease_expires_at != 0 {
+            len += 1;
+        }
+        if !self.jwt_audiences.is_empty() {
+            len += 1;
+        }
+        if !self.mtls_destinations.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.WorkloadIdentity", len)?;
+        if !self.identity_ref.is_empty() {
+            struct_ser.serialize_field("identityRef", &self.identity_ref)?;
+        }
+        if !self.approved_digests.is_empty() {
+            struct_ser.serialize_field("approvedDigests", &self.approved_digests)?;
+        }
+        if !self.scheduling_lease.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("schedulingLease", pbjson::private::base64::encode(&self.scheduling_lease).as_str())?;
+        }
+        if self.scheduling_lease_expires_at != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("schedulingLeaseExpiresAt", ToString::to_string(&self.scheduling_lease_expires_at).as_str())?;
+        }
+        if !self.jwt_audiences.is_empty() {
+            struct_ser.serialize_field("jwtAudiences", &self.jwt_audiences)?;
+        }
+        if !self.mtls_destinations.is_empty() {
+            struct_ser.serialize_field("mtlsDestinations", &self.mtls_destinations)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkloadIdentity {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "identity_ref",
+            "identityRef",
+            "approved_digests",
+            "approvedDigests",
+            "scheduling_lease",
+            "schedulingLease",
+            "scheduling_lease_expires_at",
+            "schedulingLeaseExpiresAt",
+            "jwt_audiences",
+            "jwtAudiences",
+            "mtls_destinations",
+            "mtlsDestinations",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            IdentityRef,
+            ApprovedDigests,
+            SchedulingLease,
+            SchedulingLeaseExpiresAt,
+            JwtAudiences,
+            MtlsDestinations,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "identityRef" | "identity_ref" => Ok(GeneratedField::IdentityRef),
+                            "approvedDigests" | "approved_digests" => Ok(GeneratedField::ApprovedDigests),
+                            "schedulingLease" | "scheduling_lease" => Ok(GeneratedField::SchedulingLease),
+                            "schedulingLeaseExpiresAt" | "scheduling_lease_expires_at" => Ok(GeneratedField::SchedulingLeaseExpiresAt),
+                            "jwtAudiences" | "jwt_audiences" => Ok(GeneratedField::JwtAudiences),
+                            "mtlsDestinations" | "mtls_destinations" => Ok(GeneratedField::MtlsDestinations),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WorkloadIdentity;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct wasmcloud.runtime.v2.WorkloadIdentity")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WorkloadIdentity, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut identity_ref__ = None;
+                let mut approved_digests__ = None;
+                let mut scheduling_lease__ = None;
+                let mut scheduling_lease_expires_at__ = None;
+                let mut jwt_audiences__ = None;
+                let mut mtls_destinations__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::IdentityRef => {
+                            if identity_ref__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("identityRef"));
+                            }
+                            identity_ref__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ApprovedDigests => {
+                            if approved_digests__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("approvedDigests"));
+                            }
+                            approved_digests__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::SchedulingLease => {
+                            if scheduling_lease__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schedulingLease"));
+                            }
+                            scheduling_lease__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::SchedulingLeaseExpiresAt => {
+                            if scheduling_lease_expires_at__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schedulingLeaseExpiresAt"));
+                            }
+                            scheduling_lease_expires_at__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::JwtAudiences => {
+                            if jwt_audiences__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("jwtAudiences"));
+                            }
+                            jwt_audiences__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MtlsDestinations => {
+                            if mtls_destinations__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mtlsDestinations"));
+                            }
+                            mtls_destinations__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(WorkloadIdentity {
+                    identity_ref: identity_ref__.unwrap_or_default(),
+                    approved_digests: approved_digests__.unwrap_or_default(),
+                    scheduling_lease: scheduling_lease__.unwrap_or_default(),
+                    scheduling_lease_expires_at: scheduling_lease_expires_at__.unwrap_or_default(),
+                    jwt_audiences: jwt_audiences__.unwrap_or_default(),
+                    mtls_destinations: mtls_destinations__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("wasmcloud.runtime.v2.WorkloadIdentity", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for WorkloadIdentityRenewRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.workload_id.is_empty() {
+            len += 1;
+        }
+        if !self.scheduling_lease.is_empty() {
+            len += 1;
+        }
+        if self.scheduling_lease_expires_at != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.WorkloadIdentityRenewRequest", len)?;
+        if !self.workload_id.is_empty() {
+            struct_ser.serialize_field("workloadId", &self.workload_id)?;
+        }
+        if !self.scheduling_lease.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("schedulingLease", pbjson::private::base64::encode(&self.scheduling_lease).as_str())?;
+        }
+        if self.scheduling_lease_expires_at != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("schedulingLeaseExpiresAt", ToString::to_string(&self.scheduling_lease_expires_at).as_str())?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkloadIdentityRenewRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "workload_id",
+            "workloadId",
+            "scheduling_lease",
+            "schedulingLease",
+            "scheduling_lease_expires_at",
+            "schedulingLeaseExpiresAt",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            WorkloadId,
+            SchedulingLease,
+            SchedulingLeaseExpiresAt,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "workloadId" | "workload_id" => Ok(GeneratedField::WorkloadId),
+                            "schedulingLease" | "scheduling_lease" => Ok(GeneratedField::SchedulingLease),
+                            "schedulingLeaseExpiresAt" | "scheduling_lease_expires_at" => Ok(GeneratedField::SchedulingLeaseExpiresAt),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WorkloadIdentityRenewRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct wasmcloud.runtime.v2.WorkloadIdentityRenewRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WorkloadIdentityRenewRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut workload_id__ = None;
+                let mut scheduling_lease__ = None;
+                let mut scheduling_lease_expires_at__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::WorkloadId => {
+                            if workload_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("workloadId"));
+                            }
+                            workload_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::SchedulingLease => {
+                            if scheduling_lease__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schedulingLease"));
+                            }
+                            scheduling_lease__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::SchedulingLeaseExpiresAt => {
+                            if scheduling_lease_expires_at__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("schedulingLeaseExpiresAt"));
+                            }
+                            scheduling_lease_expires_at__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(WorkloadIdentityRenewRequest {
+                    workload_id: workload_id__.unwrap_or_default(),
+                    scheduling_lease: scheduling_lease__.unwrap_or_default(),
+                    scheduling_lease_expires_at: scheduling_lease_expires_at__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("wasmcloud.runtime.v2.WorkloadIdentityRenewRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for WorkloadIdentityRenewResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.error.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.WorkloadIdentityRenewResponse", len)?;
+        if !self.error.is_empty() {
+            struct_ser.serialize_field("error", &self.error)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkloadIdentityRenewResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "error",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Error,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "error" => Ok(GeneratedField::Error),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WorkloadIdentityRenewResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct wasmcloud.runtime.v2.WorkloadIdentityRenewResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WorkloadIdentityRenewResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut error__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Error => {
+                            if error__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("error"));
+                            }
+                            error__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(WorkloadIdentityRenewResponse {
+                    error: error__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("wasmcloud.runtime.v2.WorkloadIdentityRenewResponse", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for WorkloadStartRequest {

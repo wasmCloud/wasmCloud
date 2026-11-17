@@ -356,6 +356,14 @@ type WorkloadSpec struct {
 	// +kubebuilder:validation:Optional
 	Volumes []Volume `json:"volumes,omitempty"`
 
+	// IdentityRef names the WorkloadIdentity the workload runs as, in the
+	// workload's namespace. The operator passes only the name: the host also
+	// needs a scheduling lease and the approved component digests, which a
+	// control plane that defines WorkloadIdentity supplies, and refuses the
+	// workload without them or without an identity issuer.
+	// +kubebuilder:validation:Optional
+	IdentityRef *corev1.LocalObjectReference `json:"identityRef,omitempty"`
+
 	// Kubernetes groups Kubernetes-specific configuration such as Service
 	// references and endpoint management.
 	// +kubebuilder:validation:Optional
