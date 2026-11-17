@@ -5,8 +5,11 @@
 //! RFC 7523 §2.1 with it as the authorization grant, and RFC 7523 §2.2 with it
 //! as the client's own authentication. The issued token is checked before it
 //! is served, and leased only until it expires, counted from just before the
-//! request that obtained it. Dropping a [`TokenRefresh`] revokes it.
+//! request that obtained it. Dropping a [`TokenRefresh`] forgets the token
+//! locally. The endpoint is not told (no RFC 7009 revocation), so the token
+//! stays valid upstream until it expires.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -69,6 +72,7 @@ pub struct TokenExchange {
     tls: Arc<rustls::ClientConfig>,
     held: LeasedSource,
     token_type: Mutex<Option<TokenType>>,
+    refreshing: AtomicBool,
 }
 
 /// A token as the endpoint issued it, after every check passed.
@@ -86,6 +90,13 @@ struct TokenResponse {
     issued_token_type: Option<String>,
     scope: Option<String>,
     error: Option<String>,
+}
+
+impl Drop for TokenResponse {
+    fn drop(&mut self) {
+        use zeroize::Zeroize as _;
+        self.access_token.zeroize();
+    }
 }
 
 impl TokenExchange {
@@ -118,6 +129,7 @@ impl TokenExchange {
             tls,
             held: LeasedSource::default(),
             token_type: Mutex::default(),
+            refreshing: AtomicBool::new(false),
         })
     }
 
@@ -242,13 +254,13 @@ impl TokenExchange {
             .current()
             .map_err(|e| anyhow::anyhow!("no workload identity to exchange: {e}"))?;
         let svid = std::str::from_utf8(&svid)?;
-        let body = Zeroizing::new(self.form(svid));
+        let body = self.form(svid);
         tokio::time::timeout(TIMEOUT, self.post(&body))
             .await
             .map_err(|_| anyhow::anyhow!("the token endpoint did not answer in time"))?
     }
 
-    fn form(&self, svid: &str) -> String {
+    fn form(&self, svid: &str) -> Zeroizing<String> {
         let mut pairs: Vec<(&str, &str)> = Vec::new();
         match self.grant {
             Grant::TokenExchange => {
@@ -277,11 +289,16 @@ impl TokenExchange {
         if let Some(details) = &self.authorization_details {
             pairs.push(("authorization_details", details));
         }
-        pairs
-            .iter()
-            .map(|(k, v)| format!("{}={}", form_encode(k), form_encode(v)))
-            .collect::<Vec<_>>()
-            .join("&")
+        let mut form = Zeroizing::new(String::new());
+        for (i, (k, v)) in pairs.iter().enumerate() {
+            if i > 0 {
+                form.push('&');
+            }
+            form_encode(&mut form, k);
+            form.push('=');
+            form_encode(&mut form, v);
+        }
+        form
     }
 
     async fn post(
@@ -329,15 +346,16 @@ impl TokenExchange {
     fn check(
         &self,
         status: http::StatusCode,
-        response: TokenResponse,
+        mut response: TokenResponse,
     ) -> anyhow::Result<IssuedToken> {
         if !status.is_success() {
-            let error = response.error.unwrap_or_default();
+            let error = response.error.take().unwrap_or_default();
             anyhow::bail!("the token endpoint refused the exchange ({status}, {error})");
         }
         let access_token = Zeroizing::new(
             response
                 .access_token
+                .take()
                 .filter(|t| !t.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("the token response has no access_token"))?,
         );
@@ -452,8 +470,9 @@ impl EgressCredentialSource for TokenExchange {
 }
 
 /// Keeps a [`TokenExchange`] holding a current token until dropped, which
-/// stops the refresh and revokes the token it holds.
-#[must_use = "the refresh stops and the token is revoked when this is dropped"]
+/// stops the refresh and closes the exchange for good. The token is forgotten
+/// locally, not revoked at the endpoint.
+#[must_use = "the refresh stops and the token is forgotten when this is dropped"]
 pub struct TokenRefresh {
     task: tokio::task::JoinHandle<()>,
     exchange: Arc<TokenExchange>,
@@ -462,14 +481,19 @@ pub struct TokenRefresh {
 impl Drop for TokenRefresh {
     fn drop(&mut self) {
         self.task.abort();
-        self.exchange.held.revoke();
+        self.exchange.held.close();
     }
 }
 
 /// Keep `exchange` holding a current token until the returned guard is
 /// dropped. Each token is renewed well before it expires; failures back off
-/// exponentially with jitter.
-pub fn spawn_token_refresh(exchange: Arc<TokenExchange>) -> TokenRefresh {
+/// exponentially with jitter. An exchange is refreshed at most once in its
+/// life, so a second call is refused.
+pub fn spawn_token_refresh(exchange: Arc<TokenExchange>) -> anyhow::Result<TokenRefresh> {
+    anyhow::ensure!(
+        !exchange.refreshing.swap(true, Ordering::AcqRel),
+        "this token exchange is already refreshed"
+    );
     let held = Arc::clone(&exchange);
     let task = tokio::spawn(async move {
         let mut failures: u32 = 0;
@@ -496,10 +520,10 @@ pub fn spawn_token_refresh(exchange: Arc<TokenExchange>) -> TokenRefresh {
             tokio::time::sleep(wait).await;
         }
     });
-    TokenRefresh {
+    Ok(TokenRefresh {
         task,
         exchange: held,
-    }
+    })
 }
 
 /// Clear a chunk the response was read into, when nothing else shares it.
@@ -517,7 +541,7 @@ fn refresh_after(lifetime: Duration) -> Duration {
     lifetime.saturating_sub(skew).max(Duration::from_secs(1))
 }
 
-/// Full jitter over an exponential ceiling, so many workloads failing
+/// Equal jitter, half to all of an exponential ceiling, so many workloads failing
 /// against one endpoint do not retry in step.
 fn backoff(failures: u32) -> Duration {
     let ceiling = RETRY
@@ -557,17 +581,18 @@ fn jwt_claims(token: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&B64.decode(payload).ok()?).ok()
 }
 
-fn form_encode(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
+fn form_encode(out: &mut String, value: &str) {
+    use std::fmt::Write as _;
     for byte in value.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(char::from(byte))
             }
-            _ => out.push_str(&format!("%{byte:02X}")),
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
         }
     }
-    out
 }
 
 #[cfg(test)]

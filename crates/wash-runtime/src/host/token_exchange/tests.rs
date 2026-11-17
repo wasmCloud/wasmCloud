@@ -390,7 +390,11 @@ async fn the_refresh_task_leases_the_token_it_was_issued() {
     let (uri, _) = endpoint(|_, _| ok("Bearer")).await;
     let exchange = Arc::new(exchange(Grant::TokenExchange, uri));
     assert!(exchange.current().is_err());
-    let task = spawn_token_refresh(Arc::clone(&exchange));
+    let task = spawn_token_refresh(Arc::clone(&exchange)).unwrap();
+    assert!(
+        spawn_token_refresh(Arc::clone(&exchange)).is_err(),
+        "an exchange is refreshed once"
+    );
     for _ in 0..100 {
         if exchange.current().is_ok() {
             break;
@@ -402,8 +406,16 @@ async fn the_refresh_task_leases_the_token_it_was_issued() {
     drop(task);
     assert!(
         exchange.current().is_err(),
-        "dropping the refresh revokes the token"
+        "dropping the refresh forgets the token"
     );
+    exchange
+        .held
+        .renew(Zeroizing::new(b"late".to_vec()), Duration::from_secs(60));
+    assert!(
+        exchange.current().is_err(),
+        "a renewal racing the drop stores nothing"
+    );
+    assert!(spawn_token_refresh(Arc::clone(&exchange)).is_err());
 }
 
 #[tokio::test]

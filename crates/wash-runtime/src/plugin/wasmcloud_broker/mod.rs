@@ -1,17 +1,20 @@
 //! # `wasmcloud:broker@0.1.0`
 //!
-//! Effects performed with a credential the guest never holds. A component
+//! Effects performed with a credential the guest is never handed. A component
 //! imports `client`, `signer` or `verifier` once per credential, under a label
 //! (`import github: wasmcloud:broker/client@0.1.0;`), and a [`BrokerPolicy`]
 //! decides at bind which credential, if any, stands behind each label. A label
 //! with nothing behind it fails the bind, so there is no name a guest can
 //! forge at run time.
 //!
-//! This is the managed class: a component that imports the broker gets no
-//! `wasi:http` client, no sockets, no `wasi:tls` and no `reveal`, so the only
-//! way out with a credential is an operation the binding allows. The check is
-//! per component: a sibling in the same workload is not covered, so a managed
-//! component linked to one that has a network import can reach out through it.
+//! This is the managed class: a component that imports the broker has no
+//! network of its own. Its `wasi:http` requests are all refused and its
+//! sockets get a policy that allows nothing, so a library that imports either
+//! still links. `wasi:tls` and `reveal` are refused at bind, since neither has
+//! a useful deny-all form. The only way out with a credential is an operation
+//! the binding allows. All of this is per component: a sibling in the same
+//! workload is not covered, so a managed component linked to one that has
+//! network access can reach out through it.
 
 mod client;
 mod keys;
@@ -83,7 +86,8 @@ pub trait BrokerPolicy: Send + Sync + 'static {
     }
 
     /// Every operation, completed or not, for audit. Never carries a
-    /// credential, a message or a body.
+    /// credential, a message or a body. A send is recorded once its request
+    /// body has been sent, which may be after the guest has the response.
     fn on_use(&self, _event: &BrokerUse<'_>) {}
 }
 
@@ -112,12 +116,17 @@ pub enum BrokerOperation<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub enum BrokerOutcome<'a> {
-    /// The response head arrived, or the signature or check was produced.
+    /// The signature or check was produced, or the response head arrived and
+    /// the request body was sent in full.
     Completed,
     /// Refused before anything was sent, for this reason.
     Denied(&'a str),
-    /// Sent, then failed or was canceled; whether it took effect is unknown.
+    /// Sent, then failed or was canceled, the request body included; whether
+    /// it took effect is unknown.
     Indeterminate(&'a str),
+    /// Failed with nothing sent, for a reason that is not a refusal, such as
+    /// a connection that could not be made.
+    Failed(&'a str),
 }
 
 /// What a resolved label carries into its calls.
@@ -126,6 +135,8 @@ pub struct Bound<T: ?Sized> {
     label: Arc<str>,
     inner: Arc<T>,
     policy: Arc<dyn BrokerPolicy>,
+    /// This binding's own count against the key's limits.
+    limits: keys::Limits,
 }
 
 impl<T: ?Sized> Bound<T> {
@@ -184,12 +195,10 @@ fn reason_name(reason: &DeniedReason) -> &'static str {
     }
 }
 
-/// Imports through which a managed component could reach the network or a
-/// secret without its broker binding. `None` is the whole package.
+/// Imports a managed component is refused outright, since a deny-all version
+/// would be no use to it. `None` is the whole package. Its `wasi:http` and
+/// `wasi:sockets` imports link to deny-all versions instead.
 const BYPASSES: &[(&str, &str, Option<&str>)] = &[
-    ("wasi", "http", Some("client")),
-    ("wasi", "http", Some("outgoing-handler")),
-    ("wasi", "sockets", None),
     ("wasi", "tls", None),
     ("wasmcloud", "secrets", Some("reveal")),
 ];
@@ -279,6 +288,7 @@ impl HostPlugin for WasmcloudBroker {
         let world = item.world();
         refuse_unlabeled(&world)?;
         refuse_bypasses(&world)?;
+        item.brokered_egress = true;
 
         let caller = Arc::new(BrokerCaller {
             workload_id: item.workload_id().into(),
@@ -297,6 +307,7 @@ impl HostPlugin for WasmcloudBroker {
             label: label.into(),
             inner: Arc::new(()),
             policy: Arc::clone(&self.policy),
+            limits: keys::Limits::default(),
         };
         let unbound = |label: &str| {
             wasmtime::format_err!(
@@ -330,7 +341,11 @@ impl HostPlugin for WasmcloudBroker {
                     .policy
                     .signer(&caller, label)
                     .ok_or_else(|| unbound(label))?;
-                Ok(Arc::new(with_inner(bound(label), inner)))
+                let limits = inner.limits();
+                Ok(Arc::new(Bound {
+                    limits,
+                    ..with_inner(bound(label), inner)
+                }))
             },
             extract_active_ctx,
         )?;
@@ -342,7 +357,11 @@ impl HostPlugin for WasmcloudBroker {
                     .policy
                     .verifier(&caller, label)
                     .ok_or_else(|| unbound(label))?;
-                Ok(Arc::new(with_inner(bound(label), inner)))
+                let limits = inner.limits();
+                Ok(Arc::new(Bound {
+                    limits,
+                    ..with_inner(bound(label), inner)
+                }))
             },
             extract_active_ctx,
         )?;
@@ -356,6 +375,7 @@ fn with_inner<T: ?Sized>(bound: Bound<()>, inner: Arc<T>) -> Bound<T> {
         label: bound.label,
         inner,
         policy: bound.policy,
+        limits: bound.limits,
     }
 }
 
@@ -372,7 +392,7 @@ impl bindings::named_imports::wasmcloud::broker::signer::HostWithStore<SharedCtx
     ) -> wasmtime::Result<Result<Vec<u8>, ErrorCode>> {
         let audit_id = crate::ids::now_v7().to_string();
         let audit = Audit::new(|outcome| bound.audit(&audit_id, BrokerOperation::Sign, outcome));
-        let result = keys::sign(accessor, &bound.inner, message).await?;
+        let result = keys::sign(accessor, &bound.inner, &bound.limits, message).await?;
         audit.record(match &result {
             Ok(_) => BrokerOutcome::Completed,
             Err(ErrorCode::Denied(reason)) => BrokerOutcome::Denied(reason_name(reason)),
@@ -404,7 +424,7 @@ impl bindings::named_imports::wasmcloud::broker::verifier::HostWithStore<SharedC
     ) -> wasmtime::Result<Result<bool, ErrorCode>> {
         let audit_id = crate::ids::now_v7().to_string();
         let audit = Audit::new(|outcome| bound.audit(&audit_id, BrokerOperation::Verify, outcome));
-        let result = keys::verify(accessor, &bound.inner, message, &tag).await?;
+        let result = keys::verify(accessor, &bound.inner, &bound.limits, message, &tag).await?;
         audit.record(match &result {
             Ok(_) => BrokerOutcome::Completed,
             Err(ErrorCode::Denied(reason)) => BrokerOutcome::Denied(reason_name(reason)),
@@ -435,18 +455,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_managed_component_cannot_import_a_way_around_its_binding() {
+    fn a_managed_component_is_refused_only_imports_with_no_deny_all_form() {
         let world = |iface: &str| WitWorld {
             imports: HashSet::from([WitInterface::from(iface)]),
             ..Default::default()
         };
-        assert!(refuse_bypasses(&world("wasi:http/client@0.3.0")).is_err());
-        assert!(refuse_bypasses(&world("wasi:http/outgoing-handler@0.2.0")).is_err());
         assert!(refuse_bypasses(&world("wasmcloud:secrets/reveal@2.1.0")).is_err());
-        assert!(refuse_bypasses(&world("wasi:sockets/tcp@0.2.0")).is_err());
-        assert!(refuse_bypasses(&world("wasi:sockets/types@0.3.0")).is_err());
-        assert!(refuse_bypasses(&world("wasi:sockets/ip-name-lookup@0.3.0")).is_err());
         assert!(refuse_bypasses(&world("wasi:tls/client@0.3.0-draft")).is_err());
+        assert!(refuse_bypasses(&world("wasi:http/client@0.3.0")).is_ok());
+        assert!(refuse_bypasses(&world("wasi:sockets/tcp@0.2.0")).is_ok());
         assert!(refuse_bypasses(&world("wasi:http/types@0.3.0")).is_ok());
         assert!(refuse_bypasses(&world("wasmcloud:secrets/store@2.1.0")).is_ok());
     }

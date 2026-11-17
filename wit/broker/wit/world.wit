@@ -2,8 +2,8 @@ package wasmcloud:broker@0.1.0;
 
 /// Types shared by every broker interface.
 ///
-/// A broker performs an effect with a credential the caller never holds: it
-/// sends a request, signs a message or checks a tag, and returns only the
+/// A broker performs an effect with a credential the caller is never handed:
+/// it sends a request, signs a message or checks a tag, and returns only the
 /// result. Each operation interface is imported once per credential, under a
 /// label (`import github: wasmcloud:broker/client@0.1.0;`), and the
 /// implementer binds that label to one credential before the caller is
@@ -45,7 +45,10 @@ interface types {
 }
 
 /// The caller may perform the requests this import is bound to, with the
-/// credential bound to it, and never sees that credential.
+/// credential bound to it. The implementer writes the credential in and
+/// removes it from response headers and trailers. Response bodies are passed
+/// through unread, so an upstream that echoes the credential in a body hands
+/// it to the caller.
 ///
 /// `send` takes and returns `wasi:http` requests and responses, but its error
 /// type is this interface's own, so a component exporting `wasi:http/client`
@@ -85,8 +88,9 @@ interface client {
 ///
 /// The binding fixes the algorithm, so there is none to choose and none to
 /// downgrade. While the grant holds, the caller can sign anything the binding
-/// allows, so a binding bounds message size, rate and concurrency, and may fix
-/// a context prefix that every signed message begins with.
+/// allows, so the implementer may bound message size, and bound rate and
+/// concurrency per import, so one caller's use does not spend another's. It
+/// may also fix a context that every signed message is bound to.
 @since(version = 0.1.0)
 interface signer {
   use types.{error-code};
@@ -110,10 +114,13 @@ interface signer {
     algorithm: algorithm,
     /// The identifier the implementer publishes the key under, if any.
     key-id: option<string>,
-    /// The public half as DER `SubjectPublicKeyInfo`. None for a MAC key.
+    /// The public half as DER `SubjectPublicKeyInfo`. `none` for a MAC key.
     public-key: option<list<u8>>,
-    /// Bytes the implementer signs before `message`, if the binding fixes a
-    /// context.
+    /// The context the binding fixes, if any. With one, what is signed is the
+    /// 25 bytes `wasmcloud:broker/context` followed by a zero byte, then the
+    /// context's length as a big-endian u64, then the context, then
+    /// `message`. Without one, it is `message` alone. A verifier needs this
+    /// to check a signature elsewhere.
     context: option<list<u8>>,
   }
 

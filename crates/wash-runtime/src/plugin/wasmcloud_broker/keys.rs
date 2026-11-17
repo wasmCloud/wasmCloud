@@ -8,7 +8,7 @@
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use aws_lc_rs::digest::{self, SHA256};
 use aws_lc_rs::encoding::AsDer;
@@ -26,6 +26,13 @@ use super::bindings::wasmcloud::broker::types::{DeniedReason, ErrorCode};
 /// Default bound on one signed or verified message.
 pub const DEFAULT_MAX_MESSAGE: usize = 16 * 1024 * 1024;
 
+/// How long a message stream may go without a chunk before the call fails.
+pub const ABSORB_IDLE: Duration = Duration::from_secs(30);
+
+/// Hashed ahead of a context's length, so a contextual message can never be
+/// mistaken for a plain one.
+const CONTEXT_LABEL: &[u8] = b"wasmcloud:broker/context\0";
+
 enum SigningKey {
     Hmac(Box<hmac::Key>),
     Ecdsa(Box<EcdsaKeyPair>),
@@ -34,30 +41,54 @@ enum SigningKey {
 /// A key a component may sign with and never read.
 pub struct SignerKey {
     key: SigningKey,
-    limits: Limits,
+    limits: LimitConfig,
     context: Option<Vec<u8>>,
     key_id: Option<String>,
 }
 
-/// What one key may be asked to do: message size, operations in flight and
-/// rate. Signer and verifier enforce the same ones.
-struct Limits {
+/// What one binding may ask of a key: message size, operations in flight and
+/// rate. Signer and verifier take the same ones.
+#[derive(Clone, Copy)]
+struct LimitConfig {
     max_message: usize,
-    in_flight: Option<Arc<Semaphore>>,
-    rate: Option<Mutex<Bucket>>,
+    concurrency: Option<usize>,
+    rate: Option<(f64, u32)>,
 }
 
-impl Default for Limits {
+impl Default for LimitConfig {
     fn default() -> Self {
         Self {
             max_message: DEFAULT_MAX_MESSAGE,
-            in_flight: None,
+            concurrency: None,
             rate: None,
         }
     }
 }
 
+/// One binding's count against a key's [`LimitConfig`], so components that
+/// share a key do not share a budget.
+#[derive(Default)]
+pub(super) struct Limits {
+    in_flight: Option<Arc<Semaphore>>,
+    rate: Option<Mutex<Bucket>>,
+}
+
 impl Limits {
+    fn new(config: &LimitConfig) -> Self {
+        Self {
+            in_flight: config.concurrency.map(|n| Arc::new(Semaphore::new(n))),
+            rate: config.rate.map(|(per_second, burst)| {
+                let burst = f64::from(burst.max(1));
+                Mutex::new(Bucket {
+                    per_second,
+                    burst,
+                    tokens: burst,
+                    at: Instant::now(),
+                })
+            }),
+        }
+    }
+
     /// A slot to work in, or why there is none.
     fn admit(&self) -> Result<Option<OwnedSemaphorePermit>, ErrorCode> {
         let budget = || ErrorCode::Denied(DeniedReason::BudgetExceeded);
@@ -86,30 +117,32 @@ macro_rules! key_options {
             self
         }
 
-        /// Hash `context` ahead of every message, so a signature or tag made
-        /// for one purpose cannot be passed off as one for another with the
-        /// same key. Signer and verifier must agree on it.
+        /// Bind every message to `context`, so a signature or tag made for
+        /// one purpose cannot be passed off as one for another with the same
+        /// key. What is hashed is [`CONTEXT_LABEL`], the context's length as a
+        /// big-endian u64, the context, then the message. Signer and verifier
+        /// must agree on it.
         pub fn with_context(mut self, context: &[u8]) -> Self {
             self.context = Some(context.to_vec());
             self
         }
 
-        /// At most `limit` operations in progress at once.
+        /// At most `limit` operations in progress at once per binding.
         pub fn with_concurrency(mut self, limit: usize) -> Self {
-            self.limits.in_flight = Some(Arc::new(Semaphore::new(limit)));
+            self.limits.concurrency = Some(limit);
             self
         }
 
-        /// At most `burst` operations at once, refilled at `per_second`.
+        /// A token bucket per binding: up to `burst` operations back to back,
+        /// then `per_second` more each second.
         pub fn with_rate(mut self, per_second: f64, burst: u32) -> Self {
-            let burst = f64::from(burst.max(1));
-            self.limits.rate = Some(Mutex::new(Bucket {
-                per_second,
-                burst,
-                tokens: burst,
-                at: Instant::now(),
-            }));
+            self.limits.rate = Some((per_second, burst));
             self
+        }
+
+        /// A fresh count against this key's limits, for one binding.
+        pub(super) fn limits(&self) -> Limits {
+            Limits::new(&self.limits)
         }
     };
 }
@@ -140,7 +173,7 @@ impl SignerKey {
     fn with_key(key: SigningKey) -> Self {
         Self {
             key,
-            limits: Limits::default(),
+            limits: LimitConfig::default(),
             context: None,
             key_id: None,
         }
@@ -233,7 +266,7 @@ enum CheckingKey {
 /// A key a component may check tags or signatures against.
 pub struct VerifierKey {
     key: CheckingKey,
-    limits: Limits,
+    limits: LimitConfig,
     context: Option<Vec<u8>>,
 }
 
@@ -241,7 +274,7 @@ impl VerifierKey {
     fn with_key(key: CheckingKey) -> Self {
         Self {
             key,
-            limits: Limits::default(),
+            limits: LimitConfig::default(),
             context: None,
         }
     }
@@ -293,6 +326,9 @@ enum Hasher {
 impl Hasher {
     fn prefixed(mut self, context: Option<&[u8]>) -> Self {
         if let Some(context) = context {
+            let len = u64::try_from(context.len()).unwrap_or(u64::MAX);
+            self.update(CONTEXT_LABEL);
+            self.update(&len.to_be_bytes());
             self.update(context);
         }
         self
@@ -309,9 +345,10 @@ impl Hasher {
 pub(super) async fn sign<T: 'static, D: HasData>(
     accessor: &Accessor<T, D>,
     key: &SignerKey,
+    limits: &Limits,
     message: StreamReader<u8>,
 ) -> wasmtime::Result<Result<Vec<u8>, ErrorCode>> {
-    let _permit = match key.limits.admit() {
+    let _permit = match limits.admit() {
         Ok(permit) => permit,
         Err(e) => return Ok(Err(e)),
     };
@@ -326,10 +363,11 @@ pub(super) async fn sign<T: 'static, D: HasData>(
 pub(super) async fn verify<T: 'static, D: HasData>(
     accessor: &Accessor<T, D>,
     key: &VerifierKey,
+    limits: &Limits,
     message: StreamReader<u8>,
     tag: &[u8],
 ) -> wasmtime::Result<Result<bool, ErrorCode>> {
-    let _permit = match key.limits.admit() {
+    let _permit = match limits.admit() {
         Ok(permit) => permit,
         Err(e) => return Ok(Err(e)),
     };
@@ -346,7 +384,8 @@ async fn absorb<T: 'static, D: HasData>(
     limit: usize,
     message: StreamReader<u8>,
 ) -> wasmtime::Result<Result<Hasher, ErrorCode>> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    let progress = Arc::new(tokio::sync::Notify::new());
     accessor.with(|mut a| {
         message.pipe(
             &mut a,
@@ -355,22 +394,35 @@ async fn absorb<T: 'static, D: HasData>(
                 seen: 0,
                 limit,
                 done: Some(tx),
+                progress: Arc::clone(&progress),
             },
         )
     })?;
-    Ok(rx.await.unwrap_or(Err(ErrorCode::Other(Some(
-        "message stream abandoned".into(),
-    )))))
+    loop {
+        tokio::select! {
+            result = &mut rx => {
+                return Ok(result.unwrap_or(Err(ErrorCode::Other(Some(
+                    "message stream abandoned".into(),
+                )))));
+            }
+            idle = tokio::time::timeout(ABSORB_IDLE, progress.notified()) => {
+                if idle.is_err() {
+                    return Ok(Err(ErrorCode::Other(Some("message stream went idle".into()))));
+                }
+            }
+        }
+    }
 }
 
 /// Feeds each chunk into the hasher as it arrives, so a message is never held
-/// whole. The runtime drops it at end of stream, which reports the result. It
-/// stops reading once the call that wanted the result is gone.
+/// whole. The runtime drops it at end of stream, which reports the result.
+/// Once the call that wanted the result is gone, it stops at the next chunk.
 struct Absorb {
     hasher: Option<Hasher>,
     seen: usize,
     limit: usize,
     done: Option<tokio::sync::oneshot::Sender<Result<Hasher, ErrorCode>>>,
+    progress: Arc<tokio::sync::Notify>,
 }
 
 impl Drop for Absorb {
@@ -406,6 +458,7 @@ impl<D> StreamConsumer<D> for Absorb {
             }));
         }
         let n = bytes.len();
+        this.progress.notify_one();
         this.seen = this.seen.saturating_add(n);
         if this.seen > this.limit {
             this.hasher.take();
@@ -473,10 +526,23 @@ mod tests {
     }
 
     #[test]
-    fn a_context_is_signed_ahead_of_every_message() {
-        let plain = run(&SignerKey::hmac_sha256(b"k"), b"ctx:msg");
+    fn a_context_is_length_prefixed_ahead_of_every_message() {
+        let mut framed = CONTEXT_LABEL.to_vec();
+        framed.extend_from_slice(&4u64.to_be_bytes());
+        framed.extend_from_slice(b"ctx:msg");
+        let plain = run(&SignerKey::hmac_sha256(b"k"), &framed);
         let prefixed = run(&SignerKey::hmac_sha256(b"k").with_context(b"ctx:"), b"msg");
         assert_eq!(plain, prefixed);
+
+        let ab_c = run(&SignerKey::hmac_sha256(b"k").with_context(b"ab"), b"c");
+        let a_bc = run(&SignerKey::hmac_sha256(b"k").with_context(b"a"), b"bc");
+        assert_ne!(
+            ab_c, a_bc,
+            "moving bytes across the boundary changes the tag"
+        );
+        let no_context = run(&SignerKey::hmac_sha256(b"k"), b"abc");
+        assert_ne!(ab_c, no_context);
+
         let info = SignerKey::hmac_sha256(b"k")
             .with_context(b"ctx:")
             .with_key_id("k1")
@@ -487,26 +553,34 @@ mod tests {
     }
 
     #[test]
-    fn signing_beyond_the_rate_or_concurrency_is_refused() {
+    fn each_binding_has_its_own_rate_and_concurrency() {
         let limited = SignerKey::hmac_sha256(b"k").with_rate(0.0, 2);
-        assert!(limited.limits.admit().is_ok());
-        assert!(limited.limits.admit().is_ok());
+        let binding = limited.limits();
+        assert!(binding.admit().is_ok());
+        assert!(binding.admit().is_ok());
         assert!(matches!(
-            limited.limits.admit(),
+            binding.admit(),
             Err(ErrorCode::Denied(DeniedReason::BudgetExceeded))
         ));
+        assert!(
+            limited.limits().admit().is_ok(),
+            "another binding is unspent"
+        );
 
         let single = SignerKey::hmac_sha256(b"k").with_concurrency(1);
-        let held = single.limits.admit().unwrap();
-        assert!(single.limits.admit().is_err());
+        let binding = single.limits();
+        let held = binding.admit().unwrap();
+        assert!(binding.admit().is_err());
+        assert!(single.limits().admit().is_ok());
         drop(held);
-        assert!(single.limits.admit().is_ok());
+        assert!(binding.admit().is_ok());
 
         let verifier = VerifierKey::hmac_sha256(b"k").with_concurrency(1);
-        let held = verifier.limits.admit().unwrap();
-        assert!(verifier.limits.admit().is_err());
+        let binding = verifier.limits();
+        let held = binding.admit().unwrap();
+        assert!(binding.admit().is_err());
         drop(held);
-        assert!(verifier.limits.admit().is_ok());
+        assert!(binding.admit().is_ok());
     }
 
     #[test]

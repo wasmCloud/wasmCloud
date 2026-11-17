@@ -172,29 +172,50 @@ pub trait EgressCredentialSource: Send + Sync + 'static {
 /// bounds how long a revoked secret can outlive its revocation.
 #[derive(Default)]
 pub struct LeasedSource {
-    held: Mutex<Option<(Zeroizing<Vec<u8>>, Instant)>>,
+    held: Mutex<Lease>,
+}
+
+#[derive(Default)]
+struct Lease {
+    value: Option<(Zeroizing<Vec<u8>>, Instant)>,
+    closed: bool,
 }
 
 impl LeasedSource {
-    /// `valid_for` is capped at [`MAX_LEASE`].
+    /// `valid_for` is capped at [`MAX_LEASE`]. A no-op once closed.
     pub fn renew(&self, value: Zeroizing<Vec<u8>>, valid_for: Duration) {
         let now = Instant::now();
         let until = now.checked_add(valid_for.min(MAX_LEASE)).unwrap_or(now);
-        *self.held.lock().unwrap_or_else(|e| e.into_inner()) = Some((value, until));
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        if !held.closed {
+            held.value = Some((value, until));
+        }
     }
 
     pub fn revoke(&self) {
-        self.held.lock().unwrap_or_else(|e| e.into_inner()).take();
+        self.held
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .value
+            .take();
+    }
+
+    /// Revoke for good: a later [`Self::renew`], such as one from a refresh
+    /// that was mid-flight, serves nothing.
+    pub fn close(&self) {
+        let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
+        held.value.take();
+        held.closed = true;
     }
 }
 
 impl EgressCredentialSource for LeasedSource {
     fn current(&self) -> Result<Zeroizing<Vec<u8>>, CredentialError> {
         let mut held = self.held.lock().unwrap_or_else(|e| e.into_inner());
-        match &*held {
+        match &held.value {
             Some((value, until)) if Instant::now() < *until => Ok(value.clone()),
             _ => {
-                held.take();
+                held.value.take();
                 Err(CredentialError::Unavailable)
             }
         }
@@ -614,6 +635,21 @@ impl std::fmt::Debug for Substituted {
 }
 
 impl Substituted {
+    /// For a credential written in directly rather than by placeholder, so
+    /// [`Self::revert`] swaps each spelling of one of `presented` for
+    /// `redacted`, or drops the header.
+    pub(crate) fn presented(presented: &[&[u8]], redacted: &[u8]) -> Self {
+        let mut done = Self::default();
+        for value in presented.iter().filter(|v| !v.is_empty()) {
+            done.values.push(Zeroizing::new(value.to_vec()));
+            done.sent
+                .push((Zeroizing::new(value.to_vec()), redacted.to_vec()));
+        }
+        done.sent
+            .sort_by_key(|(sent, _)| std::cmp::Reverse(sent.len()));
+        done
+    }
+
     fn note_value(&mut self, secret: &EgressSecret, value: &[u8]) {
         if !self.values.iter().any(|v| **v == *value) {
             self.values.push(Zeroizing::new(value.to_vec()));

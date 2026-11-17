@@ -20,11 +20,13 @@ use wash_runtime::{
     host::{
         HostApi, HostBuilder,
         allowed_hosts::AllowedHost,
+        dpop::DpopKey,
         egress_credential::{EgressCaller, EgressCredentialSource, LeasedSource, SecretRoute},
         http::{
             DevRouter, HostHandler, Ingress, IngressRoute, OutgoingHandler, RequestIoFuture,
             RouteError, Router, SendFuture,
         },
+        token_exchange::{Grant, TokenExchange, TokenRefresh, spawn_token_refresh},
     },
     plugin::wasmcloud_broker::{
         BrokerCaller, BrokerOutcome, BrokerPolicy, BrokerUse, ClientBinding, Presenter, SignerKey,
@@ -43,13 +45,21 @@ const WEBHOOK_SECRET: &[u8] = b"whsec_test";
 /// A request URI and one header of it.
 type Sent = (String, Option<String>);
 
-/// Answers every request with its own body, recording what was sent.
+/// Answers every request with its own body, recording what was sent and
+/// echoing the credential back in response headers. Each pending challenge
+/// answers one request with a DPoP nonce challenge instead.
 #[derive(Clone, Default)]
 struct Echo {
     sent: Arc<Mutex<Vec<Sent>>>,
+    proofs: Arc<Mutex<Vec<Option<String>>>>,
+    challenges: Arc<AtomicUsize>,
 }
 
 impl OutgoingHandler for Echo {
+    fn accepts_secrets(&self) -> bool {
+        true
+    }
+
     fn send_request(
         &self,
         _workload_id: &str,
@@ -57,14 +67,22 @@ impl OutgoingHandler for Echo {
         _options: Option<RequestOptions>,
         _fut: RequestIoFuture,
     ) -> SendFuture {
-        let authorization = request
-            .headers()
-            .get(hyper::header::AUTHORIZATION)
-            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
+        let header = |name: &str| {
+            request
+                .headers()
+                .get(name)
+                .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+        };
+        let authorization = header("authorization");
+        self.proofs.lock().unwrap().push(header("dpop"));
         self.sent
             .lock()
             .unwrap()
-            .push((request.uri().to_string(), authorization));
+            .push((request.uri().to_string(), authorization.clone()));
+        let challenged = self
+            .challenges
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
         Box::new(async move {
             let body = request
                 .into_body()
@@ -75,13 +93,41 @@ impl OutgoingHandler for Echo {
             let body: WasiBody = Full::new(body)
                 .map_err(|never| match never {})
                 .boxed_unsync();
-            let response = hyper::Response::builder()
-                .status(201)
-                .body(body)
-                .expect("static response is well-formed");
+            let mut response = hyper::Response::builder().status(201);
+            if challenged {
+                response = response
+                    .status(401)
+                    .header("www-authenticate", r#"DPoP error="use_dpop_nonce""#)
+                    .header("dpop-nonce", "n1");
+            }
+            if let Some(authorization) = &authorization {
+                let token = authorization.split_once(' ').map_or("", |(_, t)| t);
+                let escaped: String = token.bytes().map(|b| format!("%{b:02X}")).collect();
+                response = response
+                    .header("x-echo-authorization", authorization.as_str())
+                    .header("x-echo-token", token)
+                    .header("x-echo-escaped", escaped);
+            }
+            let response = response.body(body).expect("static response is well-formed");
             let io: RequestIoFuture = Box::new(async { Ok(()) });
             Ok((response, io))
         })
+    }
+}
+
+/// An upstream that never said it handles secrets.
+#[derive(Clone, Default)]
+struct Naive(Echo);
+
+impl OutgoingHandler for Naive {
+    fn send_request(
+        &self,
+        workload_id: &str,
+        request: hyper::Request<WasiBody>,
+        options: Option<RequestOptions>,
+        fut: RequestIoFuture,
+    ) -> SendFuture {
+        self.0.send_request(workload_id, request, options, fut)
     }
 }
 
@@ -90,6 +136,7 @@ struct Gate {
     inner: DevRouter,
     veto: bool,
     brokered: Arc<Mutex<Vec<Sent>>>,
+    saw_credential: Arc<AtomicUsize>,
 }
 
 #[async_trait::async_trait]
@@ -134,6 +181,9 @@ impl Router for Gate {
         caller: EgressCaller<'_>,
         request: &hyper::Request<WasiBody>,
     ) -> anyhow::Result<()> {
+        if request.headers().contains_key(hyper::header::AUTHORIZATION) {
+            self.saw_credential.fetch_add(1, Ordering::SeqCst);
+        }
         self.brokered.lock().unwrap().push((
             request.uri().to_string(),
             caller.component_id.map(str::to_string),
@@ -154,6 +204,7 @@ struct Policy {
     bind_github: bool,
     destination: (String, u16),
     signer: Arc<SignerKey>,
+    token: Option<Arc<TokenExchange>>,
     uses: Mutex<Vec<String>>,
     callers: Mutex<Vec<BrokerCaller>>,
 }
@@ -164,6 +215,7 @@ impl Policy {
             bind_github,
             destination: ("api.example.com".to_string(), 443),
             signer: Arc::new(SignerKey::generate_ecdsa_p256().unwrap()),
+            token: None,
             uses: Mutex::default(),
             callers: Mutex::default(),
         }
@@ -184,9 +236,13 @@ impl BrokerPolicy for Policy {
             Duration::from_secs(300),
         );
         let token: Arc<dyn EgressCredentialSource> = Arc::new(token);
+        let presenter = match &self.token {
+            Some(exchange) => Presenter::Token(Arc::clone(exchange)),
+            None => Presenter::Bearer(token),
+        };
         (self.bind_github && label == "github").then(|| {
             Arc::new(
-                ClientBinding::new(Presenter::Bearer(token))
+                ClientBinding::new(presenter)
                     .to(&self.destination.0, self.destination.1)
                     .on(SecretRoute::new(None, "/v1").unwrap()),
             )
@@ -205,6 +261,7 @@ impl BrokerPolicy for Policy {
         let outcome = match &event.outcome {
             BrokerOutcome::Completed => "completed".to_string(),
             BrokerOutcome::Denied(reason) => format!("denied {reason}"),
+            BrokerOutcome::Failed(detail) => format!("failed {detail}"),
             BrokerOutcome::Indeterminate(detail) => format!("indeterminate {detail}"),
         };
         self.uses
@@ -258,32 +315,53 @@ struct Running {
     addr: std::net::SocketAddr,
     echo: Echo,
     brokered: Arc<Mutex<Vec<Sent>>>,
+    saw_credential: Arc<AtomicUsize>,
     policy: Arc<Policy>,
     state: WorkloadState,
     message: String,
     _host: Arc<wash_runtime::host::Host>,
 }
 
-async fn start(policy: Policy) -> Result<Running> {
-    start_with(policy, false, true).await
+/// Where brokered requests go.
+enum Upstream {
+    Echo,
+    /// An [`Echo`] that never said it handles secrets.
+    Naive,
+    /// The real network path, address gate included.
+    Network,
 }
 
-/// `echo` false sends over the real network path, address gate included.
-async fn start_with(policy: Policy, veto: bool, echo_upstream: bool) -> Result<Running> {
+async fn start(policy: Policy) -> Result<Running> {
+    start_with(policy, false, Upstream::Echo).await
+}
+
+async fn start_with(policy: Policy, veto: bool, upstream: Upstream) -> Result<Running> {
     let echo = Echo::default();
     let brokered = Arc::default();
+    let saw_credential = Arc::default();
     let gate = Gate {
         inner: DevRouter::default(),
         veto,
         brokered: Arc::clone(&brokered),
+        saw_credential: Arc::clone(&saw_credential),
     };
     let builder = Ingress::builder(gate, "127.0.0.1:0".parse()?);
-    let (addr, ingress): (_, Arc<dyn HostHandler>) = if echo_upstream {
-        let ingress = builder.outgoing_handler(echo.clone()).build().await?;
-        (ingress.addr(), Arc::new(ingress))
-    } else {
-        let ingress = builder.build().await?;
-        (ingress.addr(), Arc::new(ingress))
+    let (addr, ingress): (_, Arc<dyn HostHandler>) = match upstream {
+        Upstream::Echo => {
+            let ingress = builder.outgoing_handler(echo.clone()).build().await?;
+            (ingress.addr(), Arc::new(ingress))
+        }
+        Upstream::Naive => {
+            let ingress = builder
+                .outgoing_handler(Naive(echo.clone()))
+                .build()
+                .await?;
+            (ingress.addr(), Arc::new(ingress))
+        }
+        Upstream::Network => {
+            let ingress = builder.build().await?;
+            (ingress.addr(), Arc::new(ingress))
+        }
     };
     let policy = Arc::new(policy);
     let host = HostBuilder::new()
@@ -301,6 +379,7 @@ async fn start_with(policy: Policy, veto: bool, echo_upstream: bool) -> Result<R
         addr,
         echo,
         brokered,
+        saw_credential,
         policy,
         state: response.workload_status.workload_state,
         message: response.workload_status.message,
@@ -349,10 +428,18 @@ async fn a_guest_sends_with_a_credential_it_never_holds() -> Result<()> {
     let to = [("x-to", "https://api.example.com/v1/repos")];
     let (status, body) = call(running.addr, "/send", &to, large.clone()).await?;
     assert_eq!(status, 200, "{body}");
-    let mut parts = body.splitn(3, ' ');
+    let mut parts = body.splitn(4, ' ');
     assert_eq!(parts.next(), Some("201"));
     let audit = parts.next().unwrap();
     assert!(uuid::Uuid::parse_str(audit).is_ok(), "audit id {audit:?}");
+    let echoed = parts.next().unwrap();
+    assert!(!echoed.contains("gh-token"), "{echoed}");
+    assert!(
+        echoed.contains("x-echo-authorization=[redacted]")
+            && echoed.contains("x-echo-token=[redacted]")
+            && !echoed.contains("x-echo-escaped"),
+        "the credential is scrubbed from the response in every spelling: {echoed}"
+    );
     assert_eq!(parts.next().map(str::len), Some(large.len()));
 
     let sent = running.echo.sent.lock().unwrap().clone();
@@ -382,13 +469,184 @@ async fn a_guest_sends_with_a_credential_it_never_holds() -> Result<()> {
         brokered[0].1.is_some(),
         "the router sees the calling component"
     );
+    assert_eq!(
+        running.saw_credential.load(Ordering::SeqCst),
+        0,
+        "the router is asked before the credential is written in"
+    );
+    Ok(())
+}
+
+/// An upstream that never said it handles secrets is never handed one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handler_that_does_not_accept_secrets_is_not_supported() -> Result<()> {
+    let running = start_with(Policy::new(true), false, Upstream::Naive).await?;
+    assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
+
+    let to = [("x-to", "https://api.example.com/v1/repos")];
+    let (status, body) = call(running.addr, "/send", &to, "hello").await?;
+    assert_eq!(status, 502, "{body}");
+    assert!(body.contains("NotSupported"), "{body}");
+    assert!(running.echo.sent.lock().unwrap().is_empty());
+    assert_eq!(
+        running.policy.uses.lock().unwrap().clone(),
+        ["github denied not-supported"]
+    );
+    Ok(())
+}
+
+/// A managed component's own `wasi:http` import links, and refuses every
+/// request before it reaches the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_managed_component_cannot_send_without_the_broker() -> Result<()> {
+    let running = start(Policy::new(true)).await?;
+    assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
+
+    let to = [("x-to", "https://api.example.com/v1/repos")];
+    let (status, body) = call(running.addr, "/direct", &to, "hello").await?;
+    assert_eq!(status, 502, "{body}");
+    assert!(body.contains("HttpRequestDenied"), "{body}");
+    assert!(running.echo.sent.lock().unwrap().is_empty());
+    assert!(running.policy.uses.lock().unwrap().is_empty());
+    Ok(())
+}
+
+/// An HTTPS token endpoint on loopback that issues one DPoP-bound token.
+async fn dpop_token_endpoint() -> Result<(String, Arc<rustls::ClientConfig>)> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])?;
+    let cert = rustls::pki_types::CertificateDer::from(certified.cert.der().to_vec());
+    let key = rustls::pki_types::PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+        certified.signing_key.serialize_der(),
+    ));
+    let server = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.clone()], key)?;
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let Ok(stream) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let service = hyper::service::service_fn(|_request| async {
+                    let body = serde_json::json!({
+                        "access_token": "dpop-token",
+                        "token_type": "DPoP",
+                        "expires_in": 300,
+                    });
+                    hyper::Response::builder()
+                        .header("content-type", "application/json")
+                        .body(Full::new(Bytes::from(body.to_string())))
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(hyper_util::rt::TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(cert)?;
+    let client = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok((format!("https://localhost:{port}/token"), Arc::new(client)))
+}
+
+fn proof_nonce(proof: &str) -> Option<String> {
+    use base64::Engine as _;
+    let payload = proof.split('.').nth(1)?;
+    let claims: serde_json::Value = serde_json::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .ok()?,
+    )
+    .ok()?;
+    claims.get("nonce")?.as_str().map(str::to_string)
+}
+
+async fn refreshed_dpop_exchange() -> Result<(Arc<TokenExchange>, TokenRefresh)> {
+    let (endpoint, tls) = dpop_token_endpoint().await?;
+    let svid = LeasedSource::default();
+    svid.renew(
+        Zeroizing::new(b"svid.jwt.sig".to_vec()),
+        Duration::from_secs(300),
+    );
+    let exchange = Arc::new(
+        TokenExchange::new(&endpoint, Grant::ClientAssertion, Arc::new(svid), tls)?
+            .with_dpop(Arc::new(DpopKey::generate()?)),
+    );
+    let refresh = spawn_token_refresh(Arc::clone(&exchange))?;
+    for _ in 0..250 {
+        if exchange.current().is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    exchange.current().context("no DPoP token was issued")?;
+    Ok((exchange, refresh))
+}
+
+/// A resource server's nonce challenge is answered once with a fresh proof
+/// when the request can be sent again, and handed to the guest when it
+/// cannot, with the nonce kept for the next request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resource_server_nonce_challenge_is_answered_once() -> Result<()> {
+    let (exchange, _refresh) = refreshed_dpop_exchange().await?;
+    let mut policy = Policy::new(true);
+    policy.token = Some(exchange);
+    let running = start(policy).await?;
+    assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
+    let to = [("x-to", "https://api.example.com/v1/repos")];
+
+    running.echo.challenges.store(1, Ordering::SeqCst);
+    let (status, body) = call(running.addr, "/send", &to, "").await?;
+    assert_eq!(status, 200, "{body}");
+    assert!(body.starts_with("201 "), "the replay succeeds: {body}");
+    assert!(!body.contains("dpop-token"), "{body}");
+    let proofs = running.echo.proofs.lock().unwrap().clone();
+    assert_eq!(proofs.len(), 2, "one challenge, one replay");
+    assert_eq!(proof_nonce(proofs[0].as_deref().unwrap()), None);
+    assert_eq!(
+        proof_nonce(proofs[1].as_deref().unwrap()).as_deref(),
+        Some("n1")
+    );
+    let sent = running.echo.sent.lock().unwrap().clone();
+    assert!(
+        sent.iter()
+            .all(|(_, auth)| auth.as_deref() == Some("DPoP dpop-token")),
+        "{sent:?}"
+    );
+
+    running.echo.challenges.store(1, Ordering::SeqCst);
+    let (status, body) = call(running.addr, "/send", &to, "a body").await?;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body.starts_with("401 "),
+        "a request with a body is not replayed: {body}"
+    );
+    let proofs = running.echo.proofs.lock().unwrap().clone();
+    assert_eq!(proofs.len(), 3);
+    assert_eq!(
+        proof_nonce(proofs[2].as_deref().unwrap()).as_deref(),
+        Some("n1"),
+        "the cached nonce is used"
+    );
+    assert_eq!(
+        running.policy.uses.lock().unwrap().clone(),
+        ["github completed", "github completed"]
+    );
+    assert_eq!(running.brokered.lock().unwrap().len(), 3);
     Ok(())
 }
 
 /// The router has the last word on a brokered request, after the broker's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_router_can_refuse_a_brokered_request() -> Result<()> {
-    let running = start_with(Policy::new(true), true, true).await?;
+    let running = start_with(Policy::new(true), true, Upstream::Echo).await?;
     assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
 
     let to = [("x-to", "https://api.example.com/v1/repos")];
@@ -413,7 +671,12 @@ async fn a_granted_hostname_that_resolves_to_loopback_is_refused() -> Result<()>
             counter.fetch_add(1, Ordering::SeqCst);
         }
     });
-    let running = start_with(Policy::new(true).to("localhost", port), false, false).await?;
+    let running = start_with(
+        Policy::new(true).to("localhost", port),
+        false,
+        Upstream::Network,
+    )
+    .await?;
     assert_eq!(running.state, WorkloadState::Running, "{}", running.message);
 
     let to = format!("https://localhost:{port}/v1/repos");

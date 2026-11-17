@@ -2,7 +2,9 @@
 //!
 //! - `POST /send` sends the request body to `x-to` through `github`, adding
 //!   `x-authorization` as `authorization` when given. 200 carries the upstream
-//!   status, audit id and body; 502 carries the broker error.
+//!   status, audit id, `x-echo-*` response headers and body; 502 carries the
+//!   broker error.
+//! - `POST /direct` sends the same request through `wasi:http/client`.
 //! - `POST /sign` signs the body with `release`, in hex. `GET /key-info`
 //!   returns its algorithm and hex public key.
 //! - `POST /verify` checks the body against the hex `x-tag` with `webhook`.
@@ -33,10 +35,21 @@ impl Handler for Component {
         let (body, trailers) = Request::consume_body(request, consumed);
 
         Ok(match path.as_str() {
-            "/send" => match send(to.unwrap_or_default(), authorization, body, trailers).await {
-                Ok(text) => respond(200, text),
-                Err(e) => respond(502, e),
-            },
+            "/send" | "/direct" => {
+                let direct = path == "/direct";
+                match send(
+                    direct,
+                    to.unwrap_or_default(),
+                    authorization,
+                    body,
+                    trailers,
+                )
+                .await
+                {
+                    Ok(text) => respond(200, text),
+                    Err(e) => respond(502, e),
+                }
+            }
             "/sign" => match release::sign(body).await {
                 Ok(signature) => respond(200, hex(&signature)),
                 Err(e) => respond(502, format!("{e:?}")),
@@ -56,6 +69,7 @@ impl Handler for Component {
 }
 
 async fn send(
+    direct: bool,
     to: String,
     authorization: Option<String>,
     body: wit_bindgen::StreamReader<u8>,
@@ -82,15 +96,37 @@ async fn send(
     set(request.set_authority(Some(authority)))?;
     set(request.set_path_with_query(Some(if path.is_empty() { "/" } else { path })))?;
 
-    let response = github::send(request).await.map_err(|e| format!("{e:?}"))?;
+    let response = if direct {
+        bindings::wasi::http::client::send(request)
+            .await
+            .map_err(|e| format!("{e:?}"))?
+    } else {
+        github::send(request).await.map_err(|e| format!("{e:?}"))?
+    };
     let status = response.get_status_code();
-    let audit = response
-        .get_headers()
+    let headers = response.get_headers();
+    let audit = headers
         .get("wasmcloud-audit-id")
         .into_iter()
         .next()
         .map(|v| String::from_utf8_lossy(&v).into_owned())
         .unwrap_or_default();
+    let echoed: Vec<String> = headers
+        .copy_all()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("x-echo-"))
+        .map(|(name, value)| {
+            format!(
+                "{name}={}",
+                String::from_utf8_lossy(&value).replace(' ', "+")
+            )
+        })
+        .collect();
+    let echoed = if echoed.is_empty() {
+        "-".to_string()
+    } else {
+        echoed.join(",")
+    };
     let (_, consumed) = bindings::wit_future::new(|| Ok(()));
     let (mut stream, _trailers) = Response::consume_body(response, consumed);
     let mut received = Vec::new();
@@ -102,7 +138,7 @@ async fn send(
         }
     }
     Ok(format!(
-        "{status} {audit} {}",
+        "{status} {audit} {echoed} {}",
         String::from_utf8_lossy(&received)
     ))
 }

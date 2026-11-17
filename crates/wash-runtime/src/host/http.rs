@@ -467,9 +467,10 @@ pub trait Router: Send + Sync + 'static {
     ) -> anyhow::Result<()>;
 
     /// Asked before a [`BrokeredRequest`] leaves, in place of
-    /// [`Self::allow_outgoing_request`]: the broker already checked the
-    /// request against its binding and wrote the credential in. An error
-    /// refuses it. Default: allow.
+    /// [`Self::allow_outgoing_request`]. The broker has checked the request
+    /// against its binding and canonicalized its destination, and asks before
+    /// it writes the credential in, so the router never sees the credential.
+    /// An error refuses it. Default: allow.
     fn allow_brokered_request(
         &self,
         _caller: EgressCaller<'_>,
@@ -1831,10 +1832,23 @@ pub trait HostHandler: Send + Sync + 'static {
     ) -> SendFuture;
 
     /// Whether a request marked [`BrokeredRequest`] is sent as it stands,
-    /// without the allowlist, substitution or local routing. A handler that
-    /// wraps another forwards this. Default: no, and the broker refuses.
+    /// without the allowlist, substitution or local routing, by a transport
+    /// fit to carry a credential. A handler that wraps another forwards this
+    /// and [`Self::allow_brokered_request`]. Default: no, and the broker
+    /// refuses.
     fn sends_brokered_requests(&self) -> bool {
         false
+    }
+
+    /// Asked by the broker before it writes the credential into `request`.
+    /// An error refuses it. Default: refuse, so a wrapper that forwards
+    /// [`Self::sends_brokered_requests`] but not this fails closed.
+    fn allow_brokered_request(
+        &self,
+        _caller: EgressCaller<'_>,
+        _request: &hyper::Request<WasiBody>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this handler does not decide brokered requests")
     }
 
     /// [`Self::outgoing_request`] with the caller attested, so a handler can
@@ -3061,7 +3075,15 @@ async fn dispatch_local(
 #[async_trait::async_trait]
 impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
     fn sends_brokered_requests(&self) -> bool {
-        true
+        self.outgoing_handler.accepts_secrets()
+    }
+
+    fn allow_brokered_request(
+        &self,
+        caller: EgressCaller<'_>,
+        request: &hyper::Request<WasiBody>,
+    ) -> anyhow::Result<()> {
+        self.router.allow_brokered_request(caller, request)
     }
 
     async fn inject_meters(&self, meters: &crate::observability::Meters) {
@@ -3396,12 +3418,15 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         let component_id = caller.component_id.unwrap_or_default();
         let span = outbound_client_span(request.method(), request.uri());
         let inner: SendFuture = if request.extensions().get::<BrokeredRequest>().is_some() {
-            match self.router.allow_brokered_request(caller, &request) {
-                Ok(()) => self.send_over_network(workload_id, request, options, fut),
-                Err(e) => {
-                    warn!(workload_id, component_id, err = %e, "brokered request refused by the router");
-                    deny_request(request)
-                }
+            if self.outgoing_handler.accepts_secrets() {
+                self.send_over_network(workload_id, request, options, fut)
+            } else {
+                warn!(
+                    workload_id,
+                    component_id,
+                    "brokered request refused: the outgoing handler does not accept secrets"
+                );
+                deny_request(request)
             }
         } else if let Err(e) =
             self.router
@@ -4754,7 +4779,7 @@ async fn drain_denied_body(mut body: WasiBody, timeout: Duration) {
 }
 
 /// Refuse an outgoing request while briefly draining its body.
-fn deny_request(request: hyper::Request<WasiBody>) -> SendFuture {
+pub(crate) fn deny_request(request: hyper::Request<WasiBody>) -> SendFuture {
     static DRAINS: std::sync::LazyLock<Arc<Semaphore>> =
         std::sync::LazyLock::new(|| Arc::new(Semaphore::new(MAX_DENIED_BODY_DRAINS)));
     if let Ok(permit) = Arc::clone(&DRAINS).try_acquire_owned() {

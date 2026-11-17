@@ -1,21 +1,26 @@
 //! `client.send`: the managed-class pipeline.
 //!
-//! The request is checked against the binding, the credential is written in
-//! here, and the request leaves through the host's network path with the
-//! allowlist, substitution and local routes skipped, since the binding already
-//! decided all three. The router still sees it and may refuse it, and the
-//! post-DNS address gate still applies. Bodies stream in both directions.
+//! The request is checked against the binding, the router is asked, and only
+//! then is the credential written in. It leaves through the host's network
+//! path with the allowlist, substitution and local routes skipped, since the
+//! binding already decided all three, and the post-DNS address gate still
+//! applies. Bodies stream in both directions.
+//!
+//! The credential is scrubbed from the response head and trailers in every
+//! spelling, percent-encoded ones included, as egress secrets are. Other
+//! encodings such as base64 are not recognized. Bodies are not scanned,
+//! so an upstream that echoes the credential in a body hands it to the guest.
 
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker, ready};
 
 use bytes::Bytes;
 use http::uri::Scheme;
 use http::{HeaderName, HeaderValue, header};
 use http_body_util::BodyExt as _;
-use hyper::body::{Body as _, Frame, SizeHint};
+use hyper::body::{Frame, SizeHint};
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, Resource};
 use wasmtime_wasi_http::p3::bindings::http::types::{
@@ -31,10 +36,16 @@ use crate::engine::ctx::SharedCtx;
 use crate::host::dpop::{DPOP, wants_nonce};
 use crate::host::egress_credential::{
     CarriesSecret, EgressCaller, EgressCredentialSource, OVERRIDE_HEADERS, PLACEHOLDER_MARKER,
-    SecretRoute, is_ambiguous,
+    SecretRoute, Substituted, is_ambiguous,
 };
-use crate::host::http::{BrokeredRequest, RequestIoFuture, SendFuture};
+use crate::host::http::{BrokeredRequest, HostHandler, RequestIoFuture, SendFuture};
 use crate::host::token_exchange::{TokenExchange, TokenType};
+
+/// Headers proxies take as the client's address.
+const CLIENT_ADDRESS_HEADERS: &[&str] = &["x-real-ip", "true-client-ip", "client-ip"];
+
+/// What a presented credential is replaced with in a response.
+const REDACTED: &[u8] = b"[redacted]";
 
 fn carries_placeholder(bytes: &[u8]) -> bool {
     bytes
@@ -94,10 +105,8 @@ impl ClientBinding {
     /// Check `request` against the binding and rewrite its destination to the
     /// one form the credential and any proof are bound to.
     fn authorize<B>(&self, request: &mut http::Request<B>) -> Result<(), DeniedReason> {
-        if matches!(
-            *request.method(),
-            http::Method::TRACE | http::Method::CONNECT
-        ) {
+        let method = request.method().as_str();
+        if method.eq_ignore_ascii_case("TRACE") || method.eq_ignore_ascii_case("CONNECT") {
             return Err(DeniedReason::OperationNotAllowed);
         }
         let uri = request.uri();
@@ -171,20 +180,25 @@ impl ClientBinding {
             || name == self.presenter.header()
             || name == header::FORWARDED
             || name == header::MAX_FORWARDS
+            || name == header::VIA
+            || CLIENT_ADDRESS_HEADERS.contains(&name.as_str())
             || name.as_str().starts_with("x-forwarded-")
             || OVERRIDE_HEADERS.contains(&name.as_str())
     }
 
-    fn present<B>(&self, request: &mut http::Request<B>) -> Result<(), DeniedReason> {
+    /// Write the credential in, returning what scrubs it from the response.
+    fn present<B>(&self, request: &mut http::Request<B>) -> Result<Substituted, DeniedReason> {
         let unavailable = |_| DeniedReason::CredentialUnavailable;
-        let (name, value, proof) = match &self.presenter {
+        let (name, secret, value, proof) = match &self.presenter {
             Presenter::Bearer(source) => {
-                let value = source.current().map_err(unavailable)?;
-                (header::AUTHORIZATION, prefixed(b"Bearer ", &value), None)
+                let secret = source.current().map_err(unavailable)?;
+                let value = prefixed(b"Bearer ", &secret);
+                (header::AUTHORIZATION, secret, value, None)
             }
             Presenter::Header(name, source) => {
-                let value = source.current().map_err(unavailable)?;
-                (name.clone(), HeaderValue::from_bytes(&value).ok(), None)
+                let secret = source.current().map_err(unavailable)?;
+                let value = HeaderValue::from_bytes(&secret).ok();
+                (name.clone(), secret, value, None)
             }
             Presenter::Token(exchange) => {
                 let token = exchange.current().map_err(unavailable)?;
@@ -193,20 +207,19 @@ impl ClientBinding {
                         let proof = key
                             .proof(request.method(), request.uri(), Some(&token))
                             .map_err(|_| DeniedReason::CredentialUnavailable)?;
-                        (
-                            header::AUTHORIZATION,
-                            prefixed(b"DPoP ", &token),
-                            Some(proof),
-                        )
+                        let value = prefixed(b"DPoP ", &token);
+                        (header::AUTHORIZATION, token, value, Some(proof))
                     }
                     (Some(TokenType::Bearer), None) => {
-                        (header::AUTHORIZATION, prefixed(b"Bearer ", &token), None)
+                        let value = prefixed(b"Bearer ", &token);
+                        (header::AUTHORIZATION, token, value, None)
                     }
                     _ => return Err(DeniedReason::CredentialUnavailable),
                 }
             }
         };
         let mut value = value.ok_or(DeniedReason::CredentialUnavailable)?;
+        let scrub = Substituted::presented(&[value.as_bytes(), &secret], REDACTED);
         value.set_sensitive(true);
         let headers = request.headers_mut();
         headers.insert(name, value);
@@ -216,7 +229,7 @@ impl ClientBinding {
         }
         request.extensions_mut().insert(CarriesSecret);
         request.extensions_mut().insert(BrokeredRequest);
-        Ok(())
+        Ok(scrub)
     }
 
     fn dpop_key(&self) -> Option<&Arc<crate::host::dpop::DpopKey>> {
@@ -245,9 +258,11 @@ impl Drop for AbortOnDrop {
 }
 
 /// The response body. It owns the I/O task and the upload's lifeline, so
-/// dropping the response ends the exchange, upload included.
+/// dropping the response ends the exchange, upload included, and it scrubs
+/// the credential from trailers.
 struct Held {
     body: WasiBody,
+    scrub: Arc<Substituted>,
     _task: Option<AbortOnDrop>,
     _upload: oneshot::Sender<()>,
 }
@@ -260,7 +275,16 @@ impl hyper::body::Body for Held {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
-        Pin::new(&mut self.body).poll_frame(cx)
+        let this = &mut *self;
+        Pin::new(&mut this.body)
+            .poll_frame(cx)
+            .map_ok(|frame| match frame.into_trailers() {
+                Ok(mut trailers) => {
+                    this.scrub.revert(&mut trailers);
+                    Frame::trailers(trailers)
+                }
+                Err(frame) => frame,
+            })
     }
 
     fn is_end_stream(&self) -> bool {
@@ -280,6 +304,21 @@ const BODY_OPEN: u8 = 0;
 const BODY_CLEAN: u8 = 1;
 const BODY_TRAILERS: u8 = 2;
 
+/// What [`Upload`] saw of the request body, read after the response head.
+#[derive(Default)]
+struct BodyState {
+    ended: AtomicU8,
+    bytes: AtomicU64,
+}
+
+impl BodyState {
+    /// Ended with no data and no trailers, so the request can be sent again
+    /// as it stands.
+    fn replayable(&self) -> bool {
+        self.ended.load(Ordering::Acquire) == BODY_CLEAN && self.bytes.load(Ordering::Acquire) == 0
+    }
+}
+
 /// The request body as it leaves: trailers the broker owns are removed, a
 /// guest's error becomes the broker's own so a code the guest picked is never
 /// taken as the host's verdict, and the upload fails once the response is
@@ -288,7 +327,7 @@ struct Upload {
     body: WasiBody,
     binding: Arc<ClientBinding>,
     response: Option<oneshot::Receiver<()>>,
-    ended: Arc<AtomicU8>,
+    state: Arc<BodyState>,
 }
 
 impl Upload {
@@ -297,7 +336,7 @@ impl Upload {
             body,
             binding,
             response: Some(response),
-            ended: Arc::new(AtomicU8::new(BODY_OPEN)),
+            state: Arc::default(),
         }
     }
 }
@@ -311,20 +350,21 @@ impl hyper::body::Body for Upload {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         let this = &mut *self;
-        let Some(response) = &mut this.response else {
-            return Poll::Ready(Some(Err(HttpError::InternalError(Some(
+        let dropped = || {
+            Poll::Ready(Some(Err(HttpError::InternalError(Some(
                 RESPONSE_DROPPED.into(),
-            )))));
+            )))))
+        };
+        let Some(response) = &mut this.response else {
+            return dropped();
         };
         if Pin::new(response).poll(cx).is_ready() {
             this.response = None;
-            return Poll::Ready(Some(Err(HttpError::InternalError(Some(
-                RESPONSE_DROPPED.into(),
-            )))));
+            return dropped();
         }
         let frame = match ready!(Pin::new(&mut this.body).poll_frame(cx)) {
             None => {
-                let _ = this.ended.compare_exchange(
+                let _ = this.state.ended.compare_exchange(
                     BODY_OPEN,
                     BODY_CLEAN,
                     Ordering::AcqRel,
@@ -341,9 +381,15 @@ impl hyper::body::Body for Upload {
         };
         let mut trailers = match frame.into_trailers() {
             Ok(trailers) => trailers,
-            Err(frame) => return Poll::Ready(Some(Ok(frame))),
+            Err(frame) => {
+                if let Some(data) = frame.data_ref() {
+                    let n = u64::try_from(data.len()).unwrap_or(u64::MAX);
+                    this.state.bytes.fetch_add(n, Ordering::AcqRel);
+                }
+                return Poll::Ready(Some(Ok(frame)));
+            }
         };
-        this.ended.store(BODY_TRAILERS, Ordering::Release);
+        this.state.ended.store(BODY_TRAILERS, Ordering::Release);
         let owned: Vec<HeaderName> = trailers
             .iter()
             .filter(|(name, value)| {
@@ -403,9 +449,90 @@ struct Attempt {
     response_tx: oneshot::Sender<ResponseIo>,
 }
 
-/// The head of an empty-bodied request, to send again with a fresh DPoP
-/// nonce.
+/// The request's head, to send again with a fresh DPoP nonce if its body
+/// turns out to have been empty.
 struct Replay(http::request::Parts);
+
+/// Who sends the request and on whose behalf.
+struct Issuer {
+    handler: Arc<dyn HostHandler>,
+    workload_id: Arc<str>,
+    namespace: Arc<str>,
+    name: Arc<str>,
+    component_id: Arc<str>,
+    options: Option<wasmtime_wasi_http::RequestOptions>,
+}
+
+impl Issuer {
+    fn caller(&self) -> EgressCaller<'_> {
+        EgressCaller {
+            workload_id: &self.workload_id,
+            namespace: &self.namespace,
+            name: &self.name,
+            component_id: Some(&*self.component_id).filter(|id| !id.is_empty()),
+        }
+    }
+
+    /// The router's say, asked before the credential is written in.
+    fn allow(&self, request: &http::Request<WasiBody>) -> Result<(), DeniedReason> {
+        self.handler
+            .allow_brokered_request(self.caller(), request)
+            .map_err(|e| {
+                tracing::warn!(workload_id = %self.workload_id, err = %e, "brokered request refused by the router");
+                DeniedReason::NotEntitled
+            })
+    }
+
+    fn issue(&self, request: http::Request<WasiBody>) -> Attempt {
+        let (response_tx, response_rx) = oneshot::channel();
+        Attempt {
+            send: self.handler.outgoing_request_from(
+                self.caller(),
+                request,
+                self.options,
+                response_io(response_rx),
+                &[],
+            ),
+            response_tx,
+        }
+    }
+}
+
+/// The guest's request-body outcome. Once the request is issued, dropping
+/// this unsettled, as a canceled `send` does, reports a cancel.
+struct Settle(Option<oneshot::Sender<Transmit>>);
+
+impl Settle {
+    fn send(mut self, transmit: Transmit) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(transmit);
+        }
+    }
+}
+
+impl Drop for Settle {
+    fn drop(&mut self) {
+        if let Some(tx) = self.0.take() {
+            let _ = tx.send(Transmit::Settled(Err(HttpError::InternalError(Some(
+                "canceled".into(),
+            )))));
+        }
+    }
+}
+
+/// Why nothing was sent.
+enum Unsent {
+    Denied(DeniedReason),
+    Trap(wasmtime::Error),
+}
+
+struct Ready {
+    first: Attempt,
+    replay: Option<Replay>,
+    issuer: Issuer,
+    state: Arc<BodyState>,
+    scrub: Substituted,
+}
 
 fn denied(reason: DeniedReason) -> SendError {
     SendError::Denied(reason)
@@ -426,16 +553,6 @@ fn named_uri(request: &Request) -> http::Uri {
         .unwrap_or_default()
 }
 
-/// Settle the guest's request body and audit an outcome the request may have
-/// taken effect under.
-fn indeterminate(audit: Audit<'_>, transmit: oneshot::Sender<Transmit>, detail: &str) -> SendError {
-    let _ = transmit.send(Transmit::Settled(Err(HttpError::InternalError(Some(
-        detail.into(),
-    )))));
-    audit.record(BrokerOutcome::Indeterminate(detail));
-    SendError::Indeterminate(Some(detail.into()))
-}
-
 pub(super) async fn send(
     accessor: &Accessor<SharedCtx, SharedCtx>,
     bound: &BoundClient,
@@ -452,108 +569,121 @@ pub(super) async fn send(
         let (request, options) = match request.into_http(&mut store, transmit_result(transmit_rx)) {
             Ok(converted) => converted,
             Err(e) => {
-                let code = e.downcast()?;
-                let reason = DeniedReason::Other(Some(format!("invalid request: {code:?}")));
-                return Ok((op, Err(reason)));
+                let unsent = match e.downcast() {
+                    Ok(code) => Unsent::Denied(DeniedReason::Other(Some(format!(
+                        "invalid request: {code:?}"
+                    )))),
+                    Err(trap) => Unsent::Trap(trap),
+                };
+                return Ok((op, Err(unsent)));
             }
         };
         let (parts, body) = request.into_parts();
         let upload = Upload::new(body, Arc::clone(binding), upload_rx);
-        let ended = Arc::clone(&upload.ended);
+        let state = Arc::clone(&upload.state);
         let mut request = http::Request::from_parts(parts, upload.boxed_unsync());
         let ctx = &store.get().ctx;
-        let handler = ctx
+        let Some(handler) = ctx
             .egress_handler()
             .ok()
-            .filter(|h| h.sends_brokered_requests());
-        let workload_id = ctx.workload_id.clone();
+            .filter(|h| h.sends_brokered_requests())
+        else {
+            return Ok((op, Err(Unsent::Denied(DeniedReason::NotSupported))));
+        };
         let (namespace, name) = ctx.egress_names();
-        let component_id = Arc::clone(&bound.caller.component_id);
-        let Some(handler) = handler else {
-            return Ok((op, Err(DeniedReason::NotSupported)));
+        let issuer = Issuer {
+            handler,
+            workload_id: ctx.workload_id.clone(),
+            namespace,
+            name,
+            component_id: Arc::clone(&bound.caller.component_id),
+            options: options.as_deref().copied(),
         };
-        if let Err(reason) = binding
+        let checked = binding
             .authorize(&mut request)
-            .and_then(|()| binding.present(&mut request))
-        {
-            return Ok((op, Err(reason)));
-        }
-        let op = (request.method().clone(), request.uri().clone());
-        let options = options.as_deref().copied();
-        let replay = binding
-            .dpop_key()
-            .filter(|_| request.body().size_hint().exact() == Some(0))
-            .map(|_| {
-                let (mut parts, ()) = http::Request::new(()).into_parts();
-                parts.method = request.method().clone();
-                parts.uri = request.uri().clone();
-                parts.headers = request.headers().clone();
-                Replay(parts)
-            });
-        let issue = move |request: http::Request<WasiBody>| {
-            let (response_tx, response_rx) = oneshot::channel();
-            let caller = EgressCaller {
-                workload_id: &workload_id,
-                namespace: &namespace,
-                name: &name,
-                component_id: Some(&*component_id).filter(|id| !id.is_empty()),
-            };
-            Attempt {
-                send: handler.outgoing_request_from(
-                    caller,
-                    request,
-                    options,
-                    response_io(response_rx),
-                    &[],
-                ),
-                response_tx,
-            }
+            .and_then(|()| issuer.allow(&request))
+            .and_then(|()| binding.present(&mut request));
+        let scrub = match checked {
+            Ok(scrub) => scrub,
+            Err(reason) => return Ok((op, Err(Unsent::Denied(reason)))),
         };
-        let first = issue(request);
-        Ok((op, Ok((first, replay, issue, ended))))
+        let op = (request.method().clone(), request.uri().clone());
+        let replay = binding.dpop_key().map(|_| {
+            let (mut parts, ()) = http::Request::new(()).into_parts();
+            parts.method = request.method().clone();
+            parts.uri = request.uri().clone();
+            parts.headers = request.headers().clone();
+            Replay(parts)
+        });
+        let first = issuer.issue(request);
+        Ok((
+            op,
+            Ok(Ready {
+                first,
+                replay,
+                issuer,
+                state,
+                scrub,
+            }),
+        ))
     })?;
 
     let ((method, uri), ready) = prepared;
-    let operation = || BrokerOperation::Send {
-        method: &method,
-        authority: uri.authority().map_or("", |a| a.as_str()),
-        path: uri.path(),
+    let audit = {
+        let (bound, audit_id, method, uri) =
+            (Arc::clone(bound), audit_id.clone(), method, uri.clone());
+        Audit::new(move |outcome| {
+            let operation = BrokerOperation::Send {
+                method: &method,
+                authority: uri.authority().map_or("", |a| a.as_str()),
+                path: uri.path(),
+            };
+            bound.audit(&audit_id, operation, outcome);
+        })
     };
-    let audit = Audit::new(|outcome| bound.audit(&audit_id, operation(), outcome));
-    let (mut attempt, replay, issue, ended) = match ready {
+    let Ready {
+        first: mut attempt,
+        replay,
+        issuer,
+        state,
+        mut scrub,
+    } = match ready {
         Ok(ready) => ready,
-        Err(reason) => {
+        Err(Unsent::Denied(reason)) => {
             audit.record(BrokerOutcome::Denied(reason_name(&reason)));
             return Ok(Err(denied(reason)));
         }
+        Err(Unsent::Trap(trap)) => {
+            audit.record(BrokerOutcome::Failed("the request could not be read"));
+            return Err(trap);
+        }
     };
+    let settle = Settle(Some(transmit_tx));
 
     let mut outcome = Box::into_pin(attempt.send).await;
     let mut retried = false;
-    if let (Some(key), Ok((response, _))) = (binding.dpop_key(), &outcome) {
-        key.observe(&uri, response.headers());
-        if let Some(replay) = replay.filter(|_| wants_nonce(response.status(), response.headers()))
+    let challenged = match (binding.dpop_key(), &outcome) {
+        (Some(key), Ok((response, _))) => {
+            key.observe(&uri, response.headers());
+            wants_nonce(response.status(), response.headers())
+        }
+        _ => false,
+    };
+    if let Some(replay) = replay.filter(|_| challenged && state.replayable()) {
+        let mut request = http::Request::from_parts(
+            replay.0,
+            http_body_util::Empty::new()
+                .map_err(|never: std::convert::Infallible| match never {})
+                .boxed_unsync(),
+        );
+        request.headers_mut().remove(header::AUTHORIZATION);
+        request.headers_mut().remove(DPOP);
+        if let Ok(presented) = issuer
+            .allow(&request)
+            .and_then(|()| binding.present(&mut request))
         {
-            if ended.load(Ordering::Acquire) != BODY_CLEAN {
-                let detail = "the request cannot be replayed with a fresh DPoP nonce";
-                return Ok(Err(indeterminate(audit, transmit_tx, detail)));
-            }
-            let mut request = http::Request::from_parts(
-                replay.0,
-                http_body_util::Empty::new()
-                    .map_err(|never: std::convert::Infallible| match never {})
-                    .boxed_unsync(),
-            );
-            request.headers_mut().remove(header::AUTHORIZATION);
-            request.headers_mut().remove(DPOP);
-            if let Err(reason) = binding.present(&mut request) {
-                let detail = format!(
-                    "no credential for the DPoP nonce retry: {}",
-                    reason_name(&reason)
-                );
-                return Ok(Err(indeterminate(audit, transmit_tx, &detail)));
-            }
-            attempt = issue(request);
+            scrub = presented;
+            attempt = issuer.issue(request);
             retried = true;
             outcome = Box::into_pin(attempt.send).await;
         }
@@ -568,43 +698,60 @@ pub(super) async fn send(
                     audit.record(BrokerOutcome::Denied(reason_name(&reason)));
                     SendError::Denied(reason)
                 }
-                SendError::Denied(_) => {
-                    return Ok(Err(indeterminate(audit, transmit_tx, &detail)));
+                SendError::Transport(code) if !retried => {
+                    audit.record(BrokerOutcome::Failed(&detail));
+                    SendError::Transport(code)
+                }
+                SendError::Denied(_) | SendError::Transport(_) => {
+                    audit.record(BrokerOutcome::Indeterminate(&detail));
+                    SendError::Indeterminate(Some(detail.clone()))
                 }
                 code => {
                     audit.record(BrokerOutcome::Indeterminate(&detail));
                     code
                 }
             };
-            let _ = transmit_tx.send(Transmit::Settled(Err(HttpError::InternalError(Some(
+            settle.send(Transmit::Settled(Err(HttpError::InternalError(Some(
                 detail,
             )))));
             return Ok(Err(code));
         }
     };
+    scrub.revert(response.headers_mut());
     if let Ok(value) = HeaderValue::try_from(audit_id.as_str()) {
         response.headers_mut().insert(AUDIT_ID_HEADER, value);
     }
 
     let mut io = Box::into_pin(io);
-    let (task, failed) = match io.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
-        Poll::Ready(result) => {
+    let finished = match io.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(result) => Some(result),
+        Poll::Pending => None,
+    };
+    let (task, settled) = match finished {
+        Some(result) => {
             let failed = result.as_ref().err().map(ToString::to_string);
-            let _ = transmit_tx.send(Transmit::Settled(result));
-            (None, failed)
+            settle.send(Transmit::Settled(result));
+            (None, Some((audit, failed)))
         }
-        Poll::Pending => {
+        None => {
             let (tx, rx) = oneshot::channel();
+            settle.send(Transmit::Running(rx));
             let task = tokio::spawn(async move {
-                let _ = tx.send(io.await);
+                let result = io.await;
+                match &result {
+                    Ok(()) => audit.record(BrokerOutcome::Completed),
+                    Err(e) => audit.record(BrokerOutcome::Indeterminate(&e.to_string())),
+                }
+                let _ = tx.send(result);
             });
-            let _ = transmit_tx.send(Transmit::Running(rx));
             (Some(AbortOnDrop(task)), None)
         }
     };
+    let scrub = Arc::new(scrub);
     let response = response.map(|body| {
         Held {
             body,
+            scrub,
             _task: task,
             _upload: upload_tx,
         }
@@ -617,10 +764,12 @@ pub(super) async fn send(
         let _ = response_tx.send(Box::new(response_io));
         store.get().table.push(response)
     })?;
-    audit.record(match &failed {
-        Some(detail) => BrokerOutcome::Indeterminate(detail),
-        None => BrokerOutcome::Completed,
-    });
+    if let Some((audit, failed)) = settled {
+        audit.record(match &failed {
+            Some(detail) => BrokerOutcome::Indeterminate(detail),
+            None => BrokerOutcome::Completed,
+        });
+    }
     Ok(Ok(resource))
 }
 
@@ -711,7 +860,13 @@ mod tests {
             named(b.authorize(&mut request("https://api.example.com/v1/repos/../admin"))),
             Err("operation-not-allowed")
         );
-        for method in [http::Method::TRACE, http::Method::CONNECT] {
+        let lowercase = |m: &[u8]| http::Method::from_bytes(m).unwrap();
+        for method in [
+            http::Method::TRACE,
+            http::Method::CONNECT,
+            lowercase(b"trace"),
+            lowercase(b"Connect"),
+        ] {
             let mut req = request("https://api.example.com/v1/repos");
             *req.method_mut() = method;
             assert_eq!(named(b.authorize(&mut req)), Err("operation-not-allowed"));
@@ -783,14 +938,16 @@ mod tests {
         .boxed_unsync();
         let (_response, response) = oneshot::channel();
         let guarded = Upload::new(body, Arc::new(binding()), response);
-        let ended = Arc::clone(&guarded.ended);
+        let state = Arc::clone(&guarded.state);
         let collected = futures::executor::block_on(guarded.collect()).unwrap();
         let trailers = collected.trailers().cloned().unwrap();
         assert_eq!(collected.to_bytes(), "hi");
         assert!(trailers.get(header::AUTHORIZATION).is_none());
         assert!(trailers.get("x-http-method").is_none());
         assert_eq!(trailers["x-checksum"], "abc");
-        assert_eq!(ended.load(Ordering::Acquire), BODY_TRAILERS);
+        assert_eq!(state.ended.load(Ordering::Acquire), BODY_TRAILERS);
+        assert_eq!(state.bytes.load(Ordering::Acquire), 2);
+        assert!(!state.replayable());
     }
 
     fn guest_body(
@@ -818,21 +975,27 @@ mod tests {
     #[test]
     fn dropping_the_response_fails_the_upload() {
         let (upload, response) = guest_body(vec![Ok(Frame::data(Bytes::from_static(b"hi")))]);
-        let ended = Arc::clone(&upload.ended);
+        let state = Arc::clone(&upload.state);
         drop(response);
         let err = futures::executor::block_on(upload.collect()).unwrap_err();
         assert!(matches!(&err, HttpError::InternalError(Some(m)) if m == RESPONSE_DROPPED));
-        assert_eq!(ended.load(Ordering::Acquire), BODY_OPEN);
+        assert_eq!(state.ended.load(Ordering::Acquire), BODY_OPEN);
 
         let (upload, _response) = guest_body(vec![Ok(Frame::data(Bytes::from_static(b"hi")))]);
-        let ended = Arc::clone(&upload.ended);
+        let state = Arc::clone(&upload.state);
         assert_eq!(
             futures::executor::block_on(upload.collect())
                 .unwrap()
                 .to_bytes(),
             "hi"
         );
-        assert_eq!(ended.load(Ordering::Acquire), BODY_CLEAN);
+        assert_eq!(state.ended.load(Ordering::Acquire), BODY_CLEAN);
+        assert!(!state.replayable(), "two bytes were sent");
+
+        let (upload, _response) = guest_body(vec![]);
+        let state = Arc::clone(&upload.state);
+        futures::executor::block_on(upload.collect()).unwrap();
+        assert!(state.replayable(), "an empty body that ended cleanly");
     }
 
     #[test]
@@ -844,6 +1007,10 @@ mod tests {
             ("dpop", "x"),
             ("host", "evil.example.com"),
             ("x-forwarded", "wash_ph_abc"),
+            ("x-real-ip", "10.0.0.1"),
+            ("true-client-ip", "10.0.0.1"),
+            ("client-ip", "10.0.0.1"),
+            ("via", "1.1 proxy"),
         ] {
             let mut req = request("https://api.example.com/v1/repos");
             req.headers_mut().insert(
@@ -885,9 +1052,44 @@ mod tests {
         let lapsed = ClientBinding::new(Presenter::Bearer(Arc::new(LeasedSource::default())));
         let mut req = request("https://api.example.com/");
         assert_eq!(
-            named(lapsed.present(&mut req)),
+            named(lapsed.present(&mut req).map(drop)),
             Err("credential-unavailable")
         );
+    }
+
+    #[test]
+    fn the_credential_is_scrubbed_from_the_response_head_and_trailers() {
+        let mut req = request("https://api.example.com/v1/repos");
+        let scrub = Arc::new(binding().present(&mut req).unwrap());
+
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-full", HeaderValue::from_static("Bearer tok"));
+        headers.insert("x-bare", HeaderValue::from_static("id=tok;"));
+        headers.insert("x-encoded", HeaderValue::from_static("%74%6F%6B"));
+        headers.insert("x-other", HeaderValue::from_static("fine"));
+        scrub.revert(&mut headers);
+        assert_eq!(headers["x-full"], "[redacted]");
+        assert_eq!(headers["x-bare"], "id=[redacted];");
+        assert!(!headers.contains_key("x-encoded"));
+        assert_eq!(headers["x-other"], "fine");
+
+        let mut trailers = http::HeaderMap::new();
+        trailers.insert("x-echo", HeaderValue::from_static("Bearer tok"));
+        let frames: Vec<Result<_, HttpError>> = vec![
+            Ok(Frame::data(Bytes::from_static(b"tok stays in the body"))),
+            Ok(Frame::trailers(trailers)),
+        ];
+        let (_lifeline, upload) = oneshot::channel();
+        let held = Held {
+            body: http_body_util::StreamBody::new(futures::stream::iter(frames)).boxed_unsync(),
+            scrub,
+            _task: None,
+            _upload: _lifeline,
+        };
+        drop(upload);
+        let collected = futures::executor::block_on(held.collect()).unwrap();
+        assert_eq!(collected.trailers().unwrap()["x-echo"], "[redacted]");
+        assert_eq!(collected.to_bytes(), "tok stays in the body");
     }
 
     #[test]

@@ -637,6 +637,8 @@ struct CtxHttpHooks {
     /// [`SharedCtx::caller_is_attested`]).
     caller_attested: bool,
     allowed_hosts: Arc<[AllowedHost]>,
+    /// Every request is refused: the guest's egress goes through the broker.
+    http_denied: bool,
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
     warned_unserved: bool,
@@ -649,6 +651,9 @@ impl WasiHttpHooks for CtxHttpHooks {
         options: Option<wasmtime_wasi_http::RequestOptions>,
         fut: crate::host::http::RequestIoFuture,
     ) -> crate::host::http::SendFuture {
+        if self.http_denied {
+            return crate::host::http::deny_request(request);
+        }
         match self.host.handler() {
             Ok(handler) => handler.outgoing_request_from(
                 crate::host::egress_credential::EgressCaller {
@@ -702,6 +707,7 @@ pub struct CtxBuilder {
     store_plugins: Option<Arc<StorePlugins>>,
     http_handler: Option<crate::host::HostRef>,
     allowed_hosts: Arc<[AllowedHost]>,
+    http_denied: bool,
     /// TLS provider override for `wasi:tls` client connections.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -722,6 +728,7 @@ impl CtxBuilder {
             plugins: HashMap::new(),
             store_plugins: None,
             allowed_hosts: Default::default(),
+            http_denied: false,
             #[cfg(feature = "wasi-tls")]
             tls_provider: None,
         }
@@ -791,6 +798,13 @@ impl CtxBuilder {
         self
     }
 
+    /// Refuse every `wasi:http` request this store's guest sends itself,
+    /// whatever the router would allow.
+    pub(crate) fn denying_http(mut self) -> Self {
+        self.http_denied = true;
+        self
+    }
+
     /// The namespace and name of the workload, reported with its egress.
     pub fn with_workload_names(mut self, namespace: Arc<str>, name: Arc<str>) -> Self {
         self.workload_namespace = namespace;
@@ -821,6 +835,7 @@ impl CtxBuilder {
             workload_name: self.workload_name,
             caller_attested: true,
             allowed_hosts: self.allowed_hosts,
+            http_denied: self.http_denied,
             warned_unserved: false,
         };
 
