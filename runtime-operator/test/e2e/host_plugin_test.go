@@ -232,13 +232,15 @@ spec:
 // converge. --reset-values renders purely from buildBaseHelmSets (plus what's
 // passed), discarding any prior spec's upgrade --sets — so loading and then
 // dropping the `--host-plugin` arg on the default hostGroup is independent of
-// test ordering.
-func helmUpgradeWait(sets []string) error {
-	helmArgs := make([]string, 0, 6+2*len(sets)+3)
+// test ordering. extraArgs go before the release name, for values `--set`
+// cannot spell, such as a list of maps through `--set-json`.
+func helmUpgradeWait(sets []string, extraArgs ...string) error {
+	helmArgs := make([]string, 0, 6+2*len(sets)+len(extraArgs)+3)
 	helmArgs = append(helmArgs, "upgrade", "--install", "--reset-values", "-n", namespace)
 	for _, s := range sets {
 		helmArgs = append(helmArgs, "--set", s)
 	}
+	helmArgs = append(helmArgs, extraArgs...)
 	helmArgs = append(helmArgs, "--wait", "--timeout=5m", "operator-e2e", helmChartPath)
 	_, err := utils.Run(exec.Command("helm", helmArgs...))
 	return err

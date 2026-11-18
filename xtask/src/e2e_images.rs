@@ -54,6 +54,10 @@ const FIXTURES: &[(&str, FixtureKind)] = &[
     // from its own supervised store; kv-plugin-caller imports it over HTTP.
     ("kv-plugin", FixtureKind::P3),
     ("kv-plugin-caller", FixtureKind::P3),
+    // volume-plugin serves acme:volume/files from the directories mounted into
+    // it; volume-plugin-caller reads and writes them over HTTP.
+    ("volume-plugin", FixtureKind::P3),
+    ("volume-plugin-caller", FixtureKind::P3),
     // Reports, per instance, the peak calls it had in flight and how many it
     // has served — which is what makes poolSize/maxConcurrency/maxInvocations
     // observable from outside the cluster.
