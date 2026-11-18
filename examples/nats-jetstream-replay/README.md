@@ -134,9 +134,10 @@ deny and a workload may only narrow an operator's declared ceiling.
 
 `bucket-create-allow` and `bucket-delete-allow` gate the `kv-admin` interface's
 `create-bucket` and `delete-bucket`, on top of `bucket-allow`.
-`bucket-max-bytes` caps how large each bucket a workload creates may be, and
-`bucket-max-count` (one when unset) caps how many buckets its create grant may
-hold.
+`bucket-create-allow` lists bucket names, not patterns, and needs
+`bucket-max-bytes` (a size in bytes, or `unlimited`) to cap each bucket.
+`bucket-storage-allow` decides whether those buckets may use memory; unset is
+file only.
 
 Credentials never appear in `config`. The host merges
 `config` → `configFrom` → `secretFrom` (later wins) before the plugin sees them,

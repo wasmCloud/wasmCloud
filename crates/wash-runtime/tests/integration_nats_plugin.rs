@@ -2357,6 +2357,7 @@ async fn kv_admin_bucket_lifecycle_from_a_guest() -> Result<()> {
                 ("bucket-create-allow", "guest-made,guest-kept"),
                 ("bucket-delete-allow", "guest-made"),
                 ("bucket-max-bytes", "1048576"),
+                ("bucket-storage-allow", "memory"),
             ])),
     )
     .await?;
@@ -2427,23 +2428,7 @@ async fn kv_admin_bucket_lifecycle_from_a_guest() -> Result<()> {
         "conflict:history=3,max-bytes=1048576,marker=2000,storage=memory"
     );
 
-    // `bucket-max-count` is unset, so the grant holds one bucket at a time.
-    let full = api_probe(&h, "kv-admin:create:guest-kept:4096:-").await?;
-    assert!(
-        full.starts_with("limit-exceeded:") && full.contains("bucket-max-count"),
-        "{full}"
-    );
-    assert!(h.js.get_key_value("guest-kept").await.is_err());
-
-    assert_eq!(api_probe(&h, "kv-admin:delete:guest-made").await?, "ok");
-    assert!(h.js.get_key_value("guest-made").await.is_err());
-    assert!(
-        api_probe(&h, "kv-admin:delete:guest-made")
-            .await?
-            .starts_with("not-found:")
-    );
-
-    // The delete freed the slot. Create without delete: `guest-kept` stays.
+    // Create without delete: `guest-kept` stays.
     assert_eq!(
         api_probe(&h, "kv-admin:create:guest-kept:4096:-").await?,
         "created"
@@ -2453,6 +2438,14 @@ async fn kv_admin_bucket_lifecycle_from_a_guest() -> Result<()> {
         "denied:not-granted:bucket:guest-kept"
     );
     assert!(h.js.get_key_value("guest-kept").await.is_ok());
+
+    assert_eq!(api_probe(&h, "kv-admin:delete:guest-made").await?, "ok");
+    assert!(h.js.get_key_value("guest-made").await.is_err());
+    assert!(
+        api_probe(&h, "kv-admin:delete:guest-made")
+            .await?
+            .starts_with("not-found:")
+    );
     host.workload_stop(wash_runtime::types::WorkloadStopRequest {
         workload_id: "wl-kv-admin".into(),
     })
@@ -2540,6 +2533,8 @@ async fn kv_admin_buckets_take_the_hosts_replica_count() -> Result<()> {
                         ("subject-allow", "test.>"),
                         ("bucket-allow", "replicated"),
                         ("bucket-create-allow", "replicated"),
+                        ("bucket-max-bytes", "unlimited"),
+                        ("bucket-storage-allow", "memory"),
                         ("bucket-replicas", replicas),
                     ])),
             )
@@ -2614,6 +2609,8 @@ async fn kv_admin_under_a_label_creates_and_writes_without_a_plain_binding() -> 
                 ("subject-allow", "tenant.create"),
                 ("bucket-allow", "tenant-made"),
                 ("bucket-create-allow", "tenant-made"),
+                ("bucket-max-bytes", "1048576"),
+                ("bucket-storage-allow", "memory"),
                 ("core-subscriptions", "tenant.create"),
             ],
         )],
@@ -2820,6 +2817,8 @@ async fn kv_admin_create_refuses_servers_without_support() -> Result<()> {
                 ("subject-allow", "test.>"),
                 ("bucket-allow", "old-ttl,old-plain"),
                 ("bucket-create-allow", "old-ttl,old-plain"),
+                ("bucket-max-bytes", "1048576"),
+                ("bucket-storage-allow", "memory"),
                 ("core-subscriptions", "test.api"),
             ]),
         ))

@@ -29,9 +29,6 @@ pub struct Key {
     pub ownership: KeyOwnership,
     /// Whether it names who a connection is.
     pub identity: Identity,
-    /// For a ceiling, what it stands for when the host leaves it unset. See
-    /// [`crate::plugin::BindingSchema::and_implicit_ceilings`].
-    pub implicit_ceiling: Option<&'static str>,
 }
 
 /// What a key says about who a connection is.
@@ -58,7 +55,6 @@ const fn host(canonical: &'static str) -> Key {
         aliases: &[],
         ownership: KeyOwnership::Host,
         identity: Identity::None,
-        implicit_ceiling: None,
     }
 }
 
@@ -68,7 +64,6 @@ const fn credential(canonical: &'static str, aliases: &'static [&'static str]) -
         aliases,
         ownership: KeyOwnership::Host,
         identity: Identity::Credential,
-        implicit_ceiling: None,
     }
 }
 
@@ -78,7 +73,6 @@ const fn client_cert(canonical: &'static str) -> Key {
         aliases: &[],
         ownership: KeyOwnership::Host,
         identity: Identity::ClientCert,
-        implicit_ceiling: None,
     }
 }
 
@@ -89,25 +83,8 @@ const fn ceiling(canonical: &'static str) -> Key {
         aliases: &[],
         ownership: KeyOwnership::HostCeiling,
         identity: Identity::None,
-        implicit_ceiling: None,
     }
 }
-
-/// A limit whose unset value is not "nothing granted": `implicit` is what the
-/// host's silence means, and a workload may still narrow it.
-const fn limit(canonical: &'static str, implicit: &'static str) -> Key {
-    Key {
-        implicit_ceiling: Some(implicit),
-        ..ceiling(canonical)
-    }
-}
-
-/// `bucket-max-bytes` when unset: unlimited, as large as the reader accepts.
-pub const UNLIMITED_BUCKET_BYTES: &str = "9223372036854775807";
-
-/// `bucket-max-count` when unset; matches
-/// [`super::config::DEFAULT_BUCKET_MAX_COUNT`].
-pub const DEFAULT_BUCKET_COUNT: &str = "1";
 
 const fn workload(canonical: &'static str) -> Key {
     Key {
@@ -115,7 +92,6 @@ const fn workload(canonical: &'static str) -> Key {
         aliases: &[],
         ownership: KeyOwnership::Workload,
         identity: Identity::None,
-        implicit_ceiling: None,
     }
 }
 
@@ -156,8 +132,8 @@ pub const KEYS: &[Key] = &[
     ceiling("bucket-allow"),
     ceiling("bucket-create-allow"),
     ceiling("bucket-delete-allow"),
-    limit("bucket-max-bytes", UNLIMITED_BUCKET_BYTES),
-    limit("bucket-max-count", DEFAULT_BUCKET_COUNT),
+    ceiling("bucket-max-bytes"),
+    ceiling("bucket-storage-allow"),
     // The workload's own behaviour within that grant.
     workload("ack-mode"),
     workload("request-timeout-ms"),
@@ -271,15 +247,6 @@ pub fn host_ceiling() -> impl Iterator<Item = &'static str> {
         .flat_map(Key::spellings)
 }
 
-/// Each limit's every spelling, with what it stands for when unset.
-pub fn implicit_ceilings() -> impl Iterator<Item = (&'static str, &'static str)> {
-    KEYS.iter().flat_map(|key| {
-        key.implicit_ceiling
-            .into_iter()
-            .flat_map(move |implicit| key.spellings().map(move |s| (s, implicit)))
-    })
-}
-
 /// The keys a workload writes freely, every spelling.
 pub fn workload_owned() -> impl Iterator<Item = &'static str> {
     KEYS.iter()
@@ -316,27 +283,6 @@ mod tests {
             paths,
             ["/s/creds", "/s/key", "/s/seed", "/s/token"].map(std::path::PathBuf::from)
         );
-    }
-
-    /// The implicit ceilings are what the reader does when the key is unset.
-    #[test]
-    fn implicit_ceilings_match_the_readers_defaults() {
-        assert_eq!(UNLIMITED_BUCKET_BYTES, i64::MAX.to_string());
-        assert_eq!(
-            DEFAULT_BUCKET_COUNT,
-            super::super::config::DEFAULT_BUCKET_MAX_COUNT.to_string()
-        );
-        let schema = super::super::binding_schema();
-        assert_eq!(
-            schema.implicit_ceiling("bucket-max-bytes"),
-            Some(UNLIMITED_BUCKET_BYTES)
-        );
-        assert_eq!(schema.implicit_ceiling("bucket-max-count"), Some("1"));
-        // Unset allowlists grant nothing, so they stay without one.
-        assert_eq!(schema.implicit_ceiling("bucket-create-allow"), None);
-        for (key, _) in implicit_ceilings() {
-            assert_eq!(find(key).unwrap().ownership, KeyOwnership::HostCeiling);
-        }
     }
 
     #[test]

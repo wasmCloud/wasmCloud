@@ -1015,8 +1015,22 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
         ("bucket-create-allow", name.clone()),
         ("bucket-delete-allow", name.clone()),
         ("bucket-max-bytes", "1048576".into()),
+        ("bucket-storage-allow", "file,memory".into()),
     ]))?;
     let admin = acquire(&fx.plugin, "workload", "admin", &admin_config).await?;
+    // The same grant without memory storage, which is opt-in.
+    let file_only = acquire(
+        &fx.plugin,
+        "workload",
+        "file-only",
+        &NatsConfig::from_map(&crate::wit::Config::from([
+            ("servers", fx.server.url.clone()),
+            ("bucket-allow", name.clone()),
+            ("bucket-create-allow", name.clone()),
+            ("bucket-max-bytes", "1048576".into()),
+        ]))?,
+    )
+    .await?;
     // `bucket-create-allow` without `bucket-allow` grants nothing.
     let create_only = acquire(
         &fx.plugin,
@@ -1025,6 +1039,7 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
         &NatsConfig::from_map(&crate::wit::Config::from([
             ("servers", fx.server.url.clone()),
             ("bucket-create-allow", name.clone()),
+            ("bucket-max-bytes", "1048576".into()),
         ]))?,
     )
     .await?;
@@ -1035,6 +1050,7 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
             ("bucket-allow", name.clone()),
             ("bucket-create-allow", name.clone()),
             ("bucket-max-bytes", bytes.into()),
+            ("bucket-storage-allow", "memory".into()),
         ]));
         let plugin = fx.plugin.clone();
         async move { acquire(&plugin, "workload", id, &config?).await }
@@ -1078,6 +1094,15 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
                     .await?,
                 Err(CreateErr::Nats(types::NatsError::LimitExceeded(_)))
             ));
+            match create_err(
+                <SharedCtx as Admin<_>>::create_bucket(accessor, file_only.clone(), config(0))
+                    .await?,
+            ) {
+                Err(types::NatsError::LimitExceeded(m)) => {
+                    assert!(m.contains("bucket-storage-allow"), "{m}")
+                }
+                other => panic!("expected memory storage to be refused, got {other:?}"),
+            }
 
             let bucket = <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
                 .await?
@@ -1182,103 +1207,6 @@ async fn kv_admin_creates_reads_and_deletes_buckets_under_their_grants() -> anyh
     Ok(())
 }
 
-/// `bucket-max-count` counts the buckets the create grant holds on the server:
-/// one by default, an existing bucket never counts, and a delete frees a slot.
-#[tokio::test]
-#[ignore = "requires Docker (NATS) or NATS_URL"]
-async fn kv_admin_counts_buckets_toward_bucket_max_count() -> anyhow::Result<()> {
-    use kv_admin::CreateBucketError as CreateErr;
-    use labeled_kv::HostBucket as BucketDrop;
-    use labeled_kv_admin::HostWithStore as Admin;
-    let fx = fixture().await?;
-    let [first, second, third] = ["a", "b", "c"].map(|n| format!("{}-{n}", fx.scope.bucket));
-    let names = [first.clone(), second.clone(), third.clone()].join(",");
-    let grant = |count: Option<&'static str>| {
-        let mut map = crate::wit::Config::from([
-            ("servers", fx.server.url.clone()),
-            ("bucket-allow", names.clone()),
-            ("bucket-create-allow", names.clone()),
-            ("bucket-delete-allow", names.clone()),
-        ]);
-        if let Some(count) = count {
-            map.insert("bucket-max-count".to_string(), count.to_string());
-        }
-        NatsConfig::from_map(&map)
-    };
-    let one = acquire(&fx.plugin, "workload", "one", &grant(None)?).await?;
-    let two = acquire(&fx.plugin, "workload", "two", &grant(Some("2"))?).await?;
-    // A bucket outside the create grant is not this binding's to count.
-    let js = async_nats::jetstream::new(fx.server.client().await?);
-    let unrelated = format!("{}-unrelated", fx.scope.bucket);
-    js.create_key_value(async_nats::jetstream::kv::Config {
-        bucket: unrelated.clone(),
-        ..Default::default()
-    })
-    .await?;
-    let request = |bucket: &str| kv_admin::BucketConfig {
-        bucket: bucket.to_string(),
-        history: 1,
-        max_age_ms: 0,
-        max_bytes: 0,
-        max_value_size: 0,
-        storage: kv_admin::StorageType::Memory,
-        limit_marker_ttl_ms: None,
-    };
-    let mut store = new_store("workload", Some(&fx.plugin))?;
-    let ran = tokio::time::timeout(
-        Duration::from_secs(60),
-        store.run_concurrent(async |store_accessor| {
-            let host_accessor = store_accessor.with_getter::<SharedCtx>(extract_active_ctx);
-            let accessor = &host_accessor;
-            let create = async |conn: &Arc<ConnHandle>, bucket: &str| {
-                <SharedCtx as Admin<_>>::create_bucket(accessor, conn.clone(), request(bucket))
-                    .await
-            };
-            let mut handles = Vec::new();
-            let full = |r: Result<_, CreateErr>, held: &str| match r {
-                Err(CreateErr::Nats(types::NatsError::LimitExceeded(m))) => {
-                    assert!(m.contains("bucket-max-count"), "{m}");
-                    assert!(m.contains(held), "{m}");
-                }
-                Err(e) => panic!("expected bucket-max-count to refuse it, got {e:?}"),
-                Ok(_) => panic!("expected bucket-max-count to refuse it"),
-            };
-
-            // The default allows one.
-            handles.push((one.clone(), create(&one, &first).await?.unwrap()));
-            full(create(&one, &second).await?, &first);
-            // Opening the one it has is not another.
-            handles.push((one.clone(), create(&one, &first).await?.unwrap()));
-
-            // Two allows a second; the third is over.
-            handles.push((two.clone(), create(&two, &second).await?.unwrap()));
-            full(create(&two, &third).await?, &second);
-
-            // Deleting one frees its slot.
-            <SharedCtx as Admin<_>>::delete_bucket(accessor, two.clone(), first.clone())
-                .await?
-                .unwrap();
-            handles.push((two.clone(), create(&two, &third).await?.unwrap()));
-
-            for (conn, handle) in handles {
-                sync_call!(store_accessor, |active| BucketDrop::drop(
-                    &mut active,
-                    conn,
-                    handle
-                ))?;
-            }
-            Ok::<_, wasmtime::Error>(())
-        }),
-    )
-    .await?;
-    finished(ran)?;
-    for bucket in [second, third, unrelated] {
-        let _ = js.delete_key_value(&bucket).await;
-    }
-    fx.plugin.connections.shutdown().await;
-    Ok(())
-}
-
 /// No size ceiling, file storage, and every limit a guest can set, read back
 /// from the server; then the inputs only the server refuses.
 #[tokio::test]
@@ -1294,10 +1222,12 @@ async fn kv_admin_applies_every_requested_limit() -> anyhow::Result<()> {
         let mut map = crate::wit::Config::from([
             ("servers", fx.server.url.clone()),
             ("bucket-allow", ">".to_string()),
-            ("bucket-create-allow", ">".to_string()),
+            (
+                "bucket-create-allow",
+                format!("{file},{replicated},not.valid"),
+            ),
             ("bucket-delete-allow", ">".to_string()),
-            // `>` counts every bucket, and a `NATS_URL` server is shared.
-            ("bucket-max-count", "1000".to_string()),
+            ("bucket-max-bytes", "unlimited".to_string()),
         ]);
         for (k, v) in extra {
             map.insert(k.to_string(), v.clone());
@@ -1356,7 +1286,7 @@ async fn kv_admin_applies_every_requested_limit() -> anyhow::Result<()> {
                 .await?
                 .unwrap();
 
-            // Granted (`>` matches it) but not a name a bucket can have.
+            // Granted, but not a name a bucket can have.
             match <SharedCtx as Admin<_>>::create_bucket(
                 accessor,
                 unbounded.clone(),

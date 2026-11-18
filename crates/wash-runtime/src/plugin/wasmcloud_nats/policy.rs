@@ -4,7 +4,7 @@
 //! this, importing `wasmcloud:nats/core` would reach every subject the
 //! connection can see.
 
-use super::config::PolicySpec;
+use super::config::{BucketStorage, PolicySpec};
 
 /// Subject prefixes denied regardless of grant.
 ///
@@ -47,7 +47,7 @@ pub struct PolicyEngine {
     bucket_delete_allow: Vec<NatsSubjectPattern>,
     bucket_max_bytes: Option<u64>,
     bucket_replicas: Option<usize>,
-    bucket_max_count: u32,
+    bucket_storage_allow: Vec<BucketStorage>,
     /// Lattice subjects to deny when the host is lattice-connected.
     lattice_prefixes: Vec<String>,
 }
@@ -277,9 +277,7 @@ impl PolicyEngine {
                 .collect(),
             bucket_max_bytes: spec.bucket_max_bytes,
             bucket_replicas: spec.bucket_replicas,
-            bucket_max_count: spec
-                .bucket_max_count
-                .unwrap_or(super::config::DEFAULT_BUCKET_MAX_COUNT),
+            bucket_storage_allow: spec.bucket_storage_allow.clone(),
             lattice_prefixes,
         }
     }
@@ -512,10 +510,18 @@ impl PolicyEngine {
         self.bucket_replicas
     }
 
-    /// How many buckets within the create grant may exist before a create of
-    /// a new one is refused.
-    pub fn bucket_max_count(&self) -> u32 {
-        self.bucket_max_count
+    /// Whether a new bucket may keep its data in `storage`. `Err` carries the
+    /// storage types this binding allows.
+    pub fn check_bucket_storage(&self, storage: BucketStorage) -> Result<(), String> {
+        if self.bucket_storage_allow.contains(&storage) {
+            return Ok(());
+        }
+        Err(self
+            .bucket_storage_allow
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(","))
     }
 }
 
@@ -655,16 +661,27 @@ mod tests {
     }
 
     #[test]
-    fn bucket_max_count_defaults_to_one() {
-        assert_eq!(engine(&[], &[], &[]).bucket_max_count(), 1);
-        let five = PolicyEngine::new(
+    fn bucket_storage_is_file_unless_the_host_allows_memory() {
+        let default = PolicyEngine::new(
             &PolicySpec {
-                bucket_max_count: Some(5),
+                bucket_storage_allow: vec![BucketStorage::File],
                 ..Default::default()
             },
             Vec::new(),
         );
-        assert_eq!(five.bucket_max_count(), 5);
+        assert!(default.check_bucket_storage(BucketStorage::File).is_ok());
+        assert_eq!(
+            default.check_bucket_storage(BucketStorage::Memory),
+            Err("file".to_string())
+        );
+        let both = PolicyEngine::new(
+            &PolicySpec {
+                bucket_storage_allow: vec![BucketStorage::File, BucketStorage::Memory],
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+        assert!(both.check_bucket_storage(BucketStorage::Memory).is_ok());
     }
 
     #[test]
