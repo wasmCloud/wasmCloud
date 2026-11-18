@@ -1486,7 +1486,11 @@ impl CliCommand for HostCommand {
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel())
             .with_reserved_host_paths(self.reserved_paths(&config, ctx, &plugin_bindings)?)
-            .with_allowed_host_paths(self.allowed_host_paths.iter().cloned());
+            .with_allowed_host_paths(self.allowed_host_paths.iter().cloned())
+            // Loading a plugin closes its volume directories to workloads only
+            // while it runs. Reserving them here keeps them closed for the
+            // host's life, whatever `--allowed-host-path` permits.
+            .with_plugin_volume_host_paths(config.host().plugin_volume_host_paths()?);
         if let Some(root) = &self.scratch_root {
             engine_builder = engine_builder.with_scratch_root(root);
         }
