@@ -114,9 +114,10 @@ interface types {
     ///   does not release it.
     ///
     /// `kv-admin.create-bucket` also returns it, as
-    /// `create-bucket-error.nats`, when the requested `max-bytes` is over the
-    /// host's `bucket-max-bytes` or the requested storage is not in its
-    /// `bucket-storage-allow`.
+    /// `create-bucket-error.nats`, when the requested storage is not in the
+    /// host's `bucket-storage-allow`, or when the requested `max-bytes` is
+    /// over its `bucket-max-bytes` and no such bucket exists (an existing one
+    /// is `config-conflict`).
     ///
     /// Either way nothing was delivered, and retrying unchanged fails the
     /// same way.
@@ -593,8 +594,10 @@ interface kv-admin {
 
   /// Why `create-bucket` failed.
   variant create-bucket-error {
-    /// The bucket exists with a different configuration and was left
-    /// unchanged. Carries the configuration it has, to compare or adopt.
+    /// The bucket exists, and its configuration differs from the request or
+    /// is outside this binding's limits (a size over a lowered
+    /// `bucket-max-bytes`). It was left unchanged. Carries the configuration
+    /// it has, to compare or adopt.
     config-conflict(bucket-config),
     /// Any other failure, as every other call reports it.
     nats(nats-error),
