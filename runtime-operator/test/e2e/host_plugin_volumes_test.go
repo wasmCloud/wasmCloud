@@ -22,8 +22,10 @@ import (
 //   - host: `wash host` opens the directories at plugin load and preopens them
 //     in the plugin's store at each `mountPath`; and
 //   - plugin: a workload calling the plugin reads a ConfigMap key through a
-//     read-only mount, is refused a write there, and round-trips a write
-//     through a writable emptyDir.
+//     read-only mount, and round-trips a write through a writable emptyDir.
+//     The same emptyDir is also mounted read-only at a second path, where the
+//     write is refused. The volume itself is writable there, so only the
+//     plugin mount's `readOnly` can refuse it.
 //
 // The runtime's own volume rules (reserved paths, escape attempts, a plugin
 // with no volumes) are covered in-process by
@@ -89,7 +91,8 @@ var _ = Describe("Host Component Plugin Volumes", Ordered, func() {
 		volumes := fmt.Sprintf(`[{"name":"data","configMap":{"name":%q}},`+
 			`{"name":"scratch","emptyDir":{}}]`, configMapName)
 		mounts := `[{"name":"data","mountPath":"/data","readOnly":true},` +
-			`{"name":"scratch","mountPath":"/scratch"}]`
+			`{"name":"scratch","mountPath":"/scratch"},` +
+			`{"name":"scratch","mountPath":"/scratch-ro","readOnly":true}]`
 		Expect(helmUpgradeWait(sets,
 			"--set-json", "runtime.hostGroups[0].plugins[0].volumes="+volumes,
 			"--set-json", "runtime.hostGroups[0].plugins[0].volumeMounts="+mounts,
@@ -203,12 +206,6 @@ spec:
 			Should(Equal("ok:" + fileContents))
 	})
 
-	It("refuses a write to the read-only mount", func() {
-		Eventually(get("/write?path=/data/new.txt&contents=x")).
-			WithTimeout(1 * time.Minute).
-			Should(HavePrefix("error"))
-	})
-
 	It("round-trips a write through a writable emptyDir mount", func() {
 		Eventually(get("/write?path=/scratch/out.txt&contents=written")).
 			WithTimeout(1 * time.Minute).
@@ -216,5 +213,23 @@ spec:
 		Eventually(get("/read?path=/scratch/out.txt")).
 			WithTimeout(1 * time.Minute).
 			Should(Equal("ok:written"))
+	})
+
+	It("refuses a write through a read-only mount of a writable volume", func() {
+		By("seeing the writable mount's file through the read-only mount")
+		Eventually(get("/write?path=/scratch/shared.txt&contents=shared")).
+			WithTimeout(1 * time.Minute).
+			Should(Equal("ok"))
+		Eventually(get("/read?path=/scratch-ro/shared.txt")).
+			WithTimeout(1 * time.Minute).
+			Should(Equal("ok:shared"))
+
+		By("being refused a write there")
+		Eventually(get("/write?path=/scratch-ro/new.txt&contents=x")).
+			WithTimeout(1 * time.Minute).
+			Should(HavePrefix("error"))
+		Eventually(get("/read?path=/scratch/new.txt")).
+			WithTimeout(1*time.Minute).
+			Should(HavePrefix("error"), "a refused write must leave no file in the volume")
 	})
 })
