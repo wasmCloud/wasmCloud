@@ -22,7 +22,8 @@ import (
 //   - host: `wash host` opens the directories at plugin load and preopens them
 //     in the plugin's store at each `mountPath`; and
 //   - plugin: a workload calling the plugin reads a ConfigMap key through a
-//     read-only mount, and round-trips a write through a writable emptyDir.
+//     read-only mount, is refused a write there, and round-trips a write
+//     through a writable emptyDir.
 //     The same emptyDir is also mounted read-only at a second path, where the
 //     write is refused. The volume itself is writable there, so only the
 //     plugin mount's `readOnly` can refuse it.
@@ -45,10 +46,25 @@ var _ = Describe("Host Component Plugin Volumes", Ordered, func() {
 		fileContents  = "hello from a configmap"
 	)
 
+	// How the plugin reports a write a read-only mount refused, and a read of
+	// a file that does not exist. Matched rather than any "error", so an
+	// unrelated failure cannot pass for either.
+	var (
+		writeRefused = MatchRegexp(`(?i)^error: .*(not permitted|permission denied|read-only)`)
+		noSuchFile   = MatchRegexp(`(?i)^error: .*no such file`)
+	)
+
 	var pluginImage, callerImage string
 
-	// get asks the caller to run one file operation through the plugin and
-	// returns the plugin's outcome: "ok", "ok:<contents>" or "error...".
+	// call asks the caller to run one file operation through the plugin and
+	// returns the plugin's outcome: "ok", "ok:<contents>" or "error: ...".
+	call := func(path string) string {
+		out, err := utils.Run(exec.Command("curl", "-s", "-H", "Host: "+workloadHost,
+			gatewayURL(path)))
+		Expect(err).NotTo(HaveOccurred())
+		return strings.TrimSpace(out)
+	}
+	// get is call for Eventually, while the route to the caller comes up.
 	get := func(path string) func(g Gomega) string {
 		return func(g Gomega) string {
 			out, err := utils.Run(exec.Command("curl", "-s", "-H", "Host: "+workloadHost,
@@ -206,6 +222,10 @@ spec:
 			Should(Equal("ok:" + fileContents))
 	})
 
+	It("refuses a write to the read-only ConfigMap mount", func() {
+		Expect(call("/write?path=/data/new.txt&contents=x")).To(writeRefused)
+	})
+
 	It("round-trips a write through a writable emptyDir mount", func() {
 		Eventually(get("/write?path=/scratch/out.txt&contents=written")).
 			WithTimeout(1 * time.Minute).
@@ -224,12 +244,11 @@ spec:
 			WithTimeout(1 * time.Minute).
 			Should(Equal("ok:shared"))
 
-		By("being refused a write there")
-		Eventually(get("/write?path=/scratch-ro/new.txt&contents=x")).
-			WithTimeout(1 * time.Minute).
-			Should(HavePrefix("error"))
-		Eventually(get("/read?path=/scratch/new.txt")).
-			WithTimeout(1*time.Minute).
-			Should(HavePrefix("error"), "a refused write must leave no file in the volume")
+		By("being refused a write there, which leaves no file in the volume")
+		// The plugin and its route are up, and the preopen exists, since the
+		// read above went through it. The volume is writable through /scratch,
+		// so only the mount's `readOnly` can refuse this.
+		Expect(call("/write?path=/scratch-ro/new.txt&contents=x")).To(writeRefused)
+		Expect(call("/read?path=/scratch/new.txt")).To(noSuchFile)
 	})
 })
