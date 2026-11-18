@@ -229,9 +229,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           MERGE_SHA: ${{ steps.ver.outputs.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           echo "STAGE=security-scans" >> "${GITHUB_ENV}"
-          node .github/scripts/release-security.mjs
+          # Recovery may target a commit from before the gate script existed.
+          # Run the policy from this workflow's pinned revision instead.
+          git show "${WORKFLOW_SHA}:.github/scripts/release-security.mjs" > "${RUNNER_TEMP}/release-security.mjs"
+          node "${RUNNER_TEMP}/release-security.mjs"
 
       - name: Login to ghcr.io
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0

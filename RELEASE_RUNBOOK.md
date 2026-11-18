@@ -55,8 +55,12 @@ Wed–Thu as a buffer for any same-week follow-up patch.
      the merge commit to all conclude `success` — the artifact pipeline has built and tested
      this exact commit.
    - Requires `audit` and all three CodeQL jobs to succeed on the pinned release
-     commit, and refuses open high/critical or error-level CodeQL alerts on `main`.
-     This gate also applies to manual recovery dispatches. Missing scans wait up to
+     commit, checks that commit's CodeQL results for high/critical or error-level
+     findings (honoring explicit alert dismissals), and refuses open blocking
+     CodeQL alerts on `main`. A later fix on `main` cannot clear a release finding.
+     The latest scan attempt includes retries of earlier runs. Manual recovery
+     loads the gate from the workflow revision even when the release commit
+     predates the script. Missing scans or analysis results wait up to
      30 minutes and fail promotion if they remain unavailable.
    - **Promotes** each canary container image: retags
      `ghcr.io/wasmcloud/{wash,runtime-gateway,runtime-operator}:sha-<merge-sha>` as `X.Y.Z`
