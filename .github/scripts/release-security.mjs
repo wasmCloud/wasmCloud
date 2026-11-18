@@ -93,12 +93,20 @@ export async function checkSecurity({ repo, sha, api }) {
       continue;
     }
     assert.equal(run.conclusion, 'success', `${workflow} run ${run.id} must succeed for ${sha}`);
-    // filter=latest excludes jobs left over from earlier, failed attempts.
-    const jobPages = await api(`repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`);
-    const actual = jobPages.flatMap((page) => page.jobs);
-    if (workflow === 'codeql') codeqlJobs = actual;
+    // Selective retries omit untouched successful jobs from filter=latest.
+    // Keep each required job's newest execution across the full run history.
+    const jobPages = await api(`repos/${repo}/actions/runs/${run.id}/jobs?filter=all&per_page=100`);
+    const actual = new Map();
+    for (const job of jobPages.flatMap((page) => page.jobs)) {
+      if (!jobs.includes(job.name)) continue;
+      assert.ok(Number.isSafeInteger(job.run_attempt) && job.run_attempt > 0,
+        `missing or invalid attempt for ${workflow} job ${job.name}`);
+      const previous = actual.get(job.name);
+      if (!previous || job.run_attempt > previous.run_attempt) actual.set(job.name, job);
+    }
+    if (workflow === 'codeql') codeqlJobs = [...actual.values()];
     for (const name of jobs) {
-      const job = actual.find((job) => job.name === name);
+      const job = actual.get(name);
       assert.equal(job?.conclusion, 'success', `${workflow} must complete ${name} successfully for ${sha}`);
     }
   }

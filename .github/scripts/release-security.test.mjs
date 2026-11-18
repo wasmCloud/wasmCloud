@@ -17,8 +17,8 @@ function fixture() {
     created_at: started, run_started_at: started, updated_at: completed,
   }]]));
   const jobs = {
-    1: ['cargo-audit', 'cargo-deny-licenses', 'osv-scanner', 'gate-audit'].map((name) => ({ name, conclusion: 'success' })),
-    2: ['CodeQL (Rust)', 'CodeQL (Go - runtime-gateway)', 'CodeQL (Go - runtime-operator)'].map((name) => ({ name, conclusion: 'success', started_at: started, completed_at: completed })),
+    1: ['cargo-audit', 'cargo-deny-licenses', 'osv-scanner', 'gate-audit'].map((name) => ({ name, run_attempt: 1, conclusion: 'success' })),
+    2: ['CodeQL (Rust)', 'CodeQL (Go - runtime-gateway)', 'CodeQL (Go - runtime-operator)'].map((name) => ({ name, run_attempt: 1, conclusion: 'success', started_at: started, completed_at: completed })),
   };
   const analyses = ['rust', 'go-runtime-gateway', 'go-runtime-operator'].map((language, i) => ({
     id: 10 + i, commit_sha: sha, ref: 'refs/heads/main', tool: { name: 'CodeQL' },
@@ -35,7 +35,11 @@ function fixture() {
       const workflow = endpoint.split('/workflows/')[1].split('.yml')[0];
       return [{ workflow_runs: runs[workflow] }];
     }
-    if (endpoint.includes('/jobs?')) return [{ jobs: jobs[endpoint.split('/runs/')[1].split('/')[0]] }];
+    if (endpoint.includes('/jobs?')) {
+      const all = jobs[endpoint.split('/runs/')[1].split('/')[0]];
+      const latest = Math.max(...all.map((job) => job.run_attempt));
+      return [{ jobs: endpoint.includes('filter=all') ? all : all.filter((job) => job.run_attempt === latest) }];
+    }
     if (endpoint.includes('/code-scanning/analyses?')) return [analyses];
     if (endpoint.includes('/code-scanning/analyses/')) {
       assert.equal(format.accept, 'application/sarif+json');
@@ -72,6 +76,80 @@ for (const workflow of ['audit', 'codeql']) {
     });
   }
 }
+
+for (const [workflow, id, name, category] of [
+  ['audit', 1, 'cargo-audit'],
+  ['codeql', 2, 'CodeQL (Rust)', '/language:rust'],
+  ['codeql', 2, 'CodeQL (Go - runtime-gateway)', '/language:go-runtime-gateway'],
+  ['codeql', 2, 'CodeQL (Go - runtime-operator)', '/language:go-runtime-operator'],
+]) {
+  test(`a successful selective ${name} retry preserves the other successful jobs`, async () => {
+    const f = fixture();
+    f.runs[workflow][0].run_attempt = 2;
+    const original = f.jobs[id].find((job) => job.name === name);
+    original.conclusion = 'failure';
+    f.jobs[id].push({ ...original, run_attempt: 2, conclusion: 'success',
+      started_at: '2026-11-17T11:00:00Z', completed_at: '2026-11-17T11:30:00Z' });
+    if (category) {
+      const analysis = f.analyses.find((analysis) => analysis.category === category);
+      // Failed attempts can still upload findings. Only the retried job's
+      // analysis should be checked; untouched jobs retain their original times.
+      f.sarif[analysis.id].runs[0].results = [{ properties: { 'github/alertNumber': 99 } }];
+      f.releaseAlerts[99] = { state: 'fixed', rule: { severity: 'error' } };
+      f.analyses.push({ ...analysis, id: 20, created_at: '2026-11-17T11:20:00Z' });
+      f.sarif[20] = { runs: [{ results: [] }] };
+    }
+    assert.equal((await checkSecurity(f.options)).ready, true);
+    assert.ok(f.requests.some((request) => request.includes(`/runs/${id}/jobs?filter=all`)));
+  });
+}
+
+for (const [id, name] of [[1, 'cargo-audit'], [2, 'CodeQL (Rust)']]) {
+  for (const conclusion of ['failure', 'skipped', null]) {
+    for (const reversed of [false, true]) {
+      test(`latest ${name} ${conclusion} cannot inherit an earlier success (reversed=${reversed})`, async () => {
+        const f = fixture();
+        const original = f.jobs[id].find((job) => job.name === name);
+        f.jobs[id].push({ ...original, run_attempt: 2, conclusion });
+        if (reversed) f.jobs[id].reverse();
+        await assert.rejects(checkSecurity(f.options), /must complete/);
+      });
+    }
+  }
+}
+
+test('selective retries are resolved across job-history pages', async () => {
+  const f = fixture();
+  const api = f.options.api;
+  const original = f.jobs[1].find((job) => job.name === 'cargo-audit');
+  original.conclusion = 'failure';
+  f.options.api = async (endpoint, format) => {
+    if (endpoint.includes('/runs/1/jobs?')) {
+      assert.match(endpoint, /filter=all/);
+      return [{ jobs: [{ ...original, run_attempt: 2, conclusion: 'success' }] }, { jobs: f.jobs[1] }];
+    }
+    return api(endpoint, format);
+  };
+  assert.equal((await checkSecurity(f.options)).ready, true);
+});
+
+for (const attempt of [undefined, 0]) {
+  test(`job history with an invalid attempt (${attempt}) fails closed`, async () => {
+    const f = fixture();
+    f.jobs[1][0].run_attempt = attempt;
+    await assert.rejects(checkSecurity(f.options), /missing or invalid attempt/);
+  });
+}
+
+test('a retried CodeQL job cannot use its earlier clean analysis', async () => {
+  const f = fixture();
+  f.jobs[2].push({ ...f.jobs[2][0], run_attempt: 2,
+    started_at: '2026-11-17T11:00:00Z', completed_at: '2026-11-17T11:30:00Z' });
+  f.analyses.push({ ...f.analyses[0], id: 20, created_at: '2026-11-17T11:20:00Z' });
+  f.sarif[20] = { runs: [{ results: [{ properties: { 'github/alertNumber': 99 } }] }] };
+  f.releaseAlerts[99] = { state: 'fixed', rule: { severity: 'error' } };
+  await assert.rejects(checkSecurity(f.options), /blocking CodeQL alert 99/);
+});
 
 for (const conclusion of ['failure', 'cancelled', 'skipped', 'neutral', 'timed_out']) {
   test(`a newer ${conclusion} run cannot inherit an older success`, async () => {
