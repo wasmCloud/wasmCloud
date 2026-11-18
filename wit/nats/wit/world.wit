@@ -603,6 +603,11 @@ interface kv-admin {
   /// Ensure a bucket exists with a compatible configuration, and open it.
   /// Requires NATS 2.10+. Safe to call on every start.
   ///
+  /// The grant is checked first. A bucket outside `bucket-create-allow`, or
+  /// storage outside `bucket-storage-allow`, is refused even when the bucket
+  /// exists. A size over `bucket-max-bytes` is `limit-exceeded` when there is
+  /// no bucket, and `config-conflict` when there is one.
+  ///
   /// - No bucket: it is created as asked, with the host's choices applied:
   ///   `max-bytes: 0` takes the host's `bucket-max-bytes`, and the replica
   ///   count is the host's `bucket-replicas`.
