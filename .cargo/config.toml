@@ -5,6 +5,9 @@ xtask = "run --package xtask --"
 
 # Give transient registry/DNS failures time to recover, including in nested
 # fixture builds. Downloads still fail once this bounded retry budget is spent.
+# This is the only cover for CI jobs that run cargo without the setup-rust
+# action, which exports the same two values for the commands that never read
+# this file: keep them equal to .github/actions/setup-rust/action.yml.
 [net]
 retry = 10
 

@@ -55,6 +55,7 @@ runs:
       run: |
         # cargo install does not read the repository's .cargo/config.toml.
         # Also cover tool installs and Cargo commands run outside the checkout.
+        # Keep both values equal to [net] and [http] in /.cargo/config.toml.
         if [ -z "${CARGO_NET_RETRY:-}" ]; then
           echo "CARGO_NET_RETRY=10" >> "$GITHUB_ENV"
         fi
