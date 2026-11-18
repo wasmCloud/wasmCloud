@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -104,7 +106,7 @@ func (r *WorkloadDeploymentReconciler) reconcileSync(ctx context.Context, deploy
 		templateCopy.Spec.Kubernetes = deployment.Spec.Kubernetes.DeepCopy()
 	}
 
-	if want, got := currentReplica.Spec.Template.Hash(), templateCopy.Hash(); want != got {
+	if want, got := deploymentTemplateHash(&currentReplica.Spec.Template), deploymentTemplateHash(templateCopy); want != got {
 		return fmt.Errorf("template hash mismatch: want %s, got %s", want, got)
 	}
 
@@ -143,7 +145,7 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 	// One name per template, so the second of two passes on the same template,
 	// such as one that read status before the first's write reached the cache,
 	// finds the first's ReplicaSet rather than creating another.
-	templateHash := replicaSetTemplate.Template.Hash()
+	templateHash := deploymentTemplateHash(&replicaSetTemplate.Template)
 	replicaSetName := deploymentReplicaSetName(deployment, templateHash)
 
 	// Copy the deployment's labels and stamp the managed selector label so the
@@ -196,6 +198,14 @@ func (r *WorkloadDeploymentReconciler) reconcileDeploy(ctx context.Context, depl
 	return condition.ErrSkipReconciliation()
 }
 
+// deploymentTemplateHash includes the labels and annotations copied onto each
+// Workload. WorkloadReplicaTemplate.Hash retains its historical spec-only hash
+// for the ReplicaSet controller's revision tracking.
+func deploymentTemplateHash(template *runtimev1alpha1.WorkloadReplicaTemplate) string {
+	raw, _ := json.Marshal(template)
+	return fmt.Sprintf("%x", sha256.Sum256(raw))
+}
+
 // deploymentReplicaSetName names deployment's ReplicaSet for a template. The UID
 // keeps it from colliding with a ReplicaSet orphaned by an earlier Deployment of
 // the same name.
@@ -227,7 +237,7 @@ func (r *WorkloadDeploymentReconciler) checkExistingReplicaSet(
 	if !metav1.IsControlledBy(existing, deployment) {
 		return fmt.Errorf("WorkloadReplicaSet %s exists and is not controlled by this deployment", name)
 	}
-	if existing.Spec.Template.Hash() != template.Hash() ||
+	if deploymentTemplateHash(&existing.Spec.Template) != deploymentTemplateHash(template) ||
 		!apiequality.Semantic.DeepDerivative(template.Spec, existing.Spec.Template.Spec) {
 		return fmt.Errorf("WorkloadReplicaSet %s exists with a different template", name)
 	}
