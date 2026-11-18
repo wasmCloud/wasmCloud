@@ -90,7 +90,10 @@
 {{- $needsConfigFile := $partition.needsConfigFile }}
 {{- $configFromNames := $partition.configFromNames }}
 {{- $secretFromNames := $partition.secretFromNames }}
-{{- $pluginVolumes := $partition.pluginVolumes }}
+{{- $pluginVolumes := list }}
+{{- range $partition.pluginVolumesById }}
+{{- $pluginVolumes = concat $pluginVolumes . }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
