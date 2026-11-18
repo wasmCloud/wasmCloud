@@ -165,31 +165,42 @@ pub struct PolicySpec {
     pub bucket_allow: Vec<String>,
     pub bucket_create_allow: Vec<String>,
     pub bucket_delete_allow: Vec<String>,
-    /// Largest bucket a workload may create, in bytes. `None` is unlimited.
+    /// Largest bucket a workload may create, in bytes. `None` is unlimited,
+    /// which a binding that may create buckets must say as `unlimited`.
     pub bucket_max_bytes: Option<u64>,
     /// Replicas for a bucket a workload creates. `None` is the server's
     /// default, a single replica.
     pub bucket_replicas: Option<usize>,
-    /// How many buckets within the create grant may exist before a create of
-    /// a new one is refused. `None` is [`DEFAULT_BUCKET_MAX_COUNT`].
-    pub bucket_max_count: Option<u32>,
+    /// Storage types a workload may create a bucket with.
+    pub bucket_storage_allow: Vec<BucketStorage>,
 }
 
 /// JetStream's cap on replicas per stream.
 pub const MAX_BUCKET_REPLICAS: usize = 5;
 
-/// Buckets a workload may create when the host sets no `bucket-max-count`:
-/// the one it makes at startup.
-pub const DEFAULT_BUCKET_MAX_COUNT: u32 = 1;
+/// Where a workload-created bucket may keep its data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BucketStorage {
+    File,
+    Memory,
+}
 
-impl PolicySpec {
-    /// Whether a workload may create buckets with no host size limit, leaving
-    /// only the JetStream account limits (and, for memory storage, server RAM).
+impl BucketStorage {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "file" => Some(Self::File),
+            "memory" => Some(Self::Memory),
+            _ => None,
+        }
+    }
+
+    /// The spelling `bucket-storage-allow` takes.
     #[must_use]
-    pub fn creates_unbounded_buckets(&self) -> bool {
-        !self.bucket_allow.is_empty()
-            && !self.bucket_create_allow.is_empty()
-            && self.bucket_max_bytes.is_none()
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Memory => "memory",
+        }
     }
 }
 
@@ -615,17 +626,53 @@ fn read<A>(
         None => None,
     };
 
+    let bucket_create_allow = r.list("bucket-create-allow");
+    // Explicit names keep the number of buckets a workload can make finite.
+    if let Some(pattern) = bucket_create_allow
+        .iter()
+        .find(|name| name.contains(['*', '>']))
+    {
+        bail!(
+            "`bucket-create-allow` must list bucket names, got the wildcard `{pattern}`; a \
+             wildcard would let a workload create any number of buckets"
+        );
+    }
+    // Creating storage needs a declared size, so leaving it out never grants
+    // unlimited storage.
+    if !bucket_create_allow.is_empty() && !r.is_set("bucket-max-bytes") {
+        bail!(
+            "`bucket-create-allow` needs `bucket-max-bytes`: the largest bucket a workload may \
+             create, in bytes, or `unlimited` to leave it to the JetStream account limits"
+        );
+    }
     let bucket_max_bytes = match r.get("bucket-max-bytes") {
+        Some(raw) if raw.expose() == "unlimited" => None,
         Some(raw) => Some(
             raw.expose()
                 .parse::<u64>()
                 .ok()
                 .filter(|n| *n > 0 && *n <= i64::MAX as u64)
                 .with_context(|| {
-                    format!("`bucket-max-bytes` must be a positive integer, got `{raw}`")
+                    format!(
+                        "`bucket-max-bytes` must be a positive integer or `unlimited`, got `{raw}`"
+                    )
                 })?,
         ),
         None => None,
+    };
+
+    // Memory buckets take server RAM, so they are opt-in.
+    let bucket_storage_allow = match r.get("bucket-storage-allow") {
+        None => vec![BucketStorage::File],
+        Some(_) => r
+            .list("bucket-storage-allow")
+            .iter()
+            .map(|raw| {
+                BucketStorage::parse(raw).with_context(|| {
+                    format!("`bucket-storage-allow` takes `file` and `memory`, got `{raw}`")
+                })
+            })
+            .collect::<anyhow::Result<_>>()?,
     };
 
     let bucket_replicas = match r.get("bucket-replicas") {
@@ -639,19 +686,6 @@ fn read<A>(
                         "`bucket-replicas` must be an integer from 1 to {MAX_BUCKET_REPLICAS}, \
                          got `{raw}`"
                     )
-                })?,
-        ),
-        None => None,
-    };
-
-    let bucket_max_count = match r.get("bucket-max-count") {
-        Some(raw) => Some(
-            raw.expose()
-                .parse::<u32>()
-                .ok()
-                .filter(|n| *n > 0)
-                .with_context(|| {
-                    format!("`bucket-max-count` must be a positive integer, got `{raw}`")
                 })?,
         ),
         None => None,
@@ -734,11 +768,11 @@ fn read<A>(
             stream_allow: r.list("stream-allow"),
             stream_delete_allow: r.list("stream-delete-allow"),
             bucket_allow: r.list("bucket-allow"),
-            bucket_create_allow: r.list("bucket-create-allow"),
+            bucket_create_allow,
             bucket_delete_allow: r.list("bucket-delete-allow"),
             bucket_max_bytes,
             bucket_replicas,
-            bucket_max_count,
+            bucket_storage_allow,
         },
         limits,
         ack_mode,
@@ -844,7 +878,7 @@ impl NatsConfig {
         }
         self.policy.bucket_max_bytes.hash(&mut hasher);
         self.policy.bucket_replicas.hash(&mut hasher);
-        self.policy.bucket_max_count.hash(&mut hasher);
+        self.policy.bucket_storage_allow.hash(&mut hasher);
         self.ack_mode.hash(&mut hasher);
         self.limits.max_in_flight.hash(&mut hasher);
         self.limits.subscription_capacity.hash(&mut hasher);
@@ -1299,16 +1333,21 @@ mod tests {
         assert!(base.policy.bucket_delete_allow.is_empty());
         assert_eq!(base.policy.bucket_max_bytes, None);
         assert_eq!(base.policy.bucket_replicas, None);
-        for (key, value) in [
-            ("bucket-create-allow", "cache"),
-            ("bucket-delete-allow", "cache"),
-            ("bucket-max-bytes", "1048576"),
-            ("bucket-replicas", "3"),
+        assert_eq!(base.policy.bucket_storage_allow, [BucketStorage::File]);
+        for pairs in [
+            &[
+                ("bucket-create-allow", "cache"),
+                ("bucket-max-bytes", "unlimited"),
+            ][..],
+            &[("bucket-delete-allow", "cache")],
+            &[("bucket-max-bytes", "1048576")],
+            &[("bucket-replicas", "3")],
+            &[("bucket-storage-allow", "file,memory")],
         ] {
-            let grant =
-                NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222"), (key, value)]))
-                    .unwrap();
-            assert_ne!(base.connection_key(), grant.connection_key(), "{key}");
+            let mut config = vec![("servers", "nats://localhost:4222")];
+            config.extend_from_slice(pairs);
+            let grant = NatsConfig::from_map(&map(&config)).unwrap();
+            assert_ne!(base.connection_key(), grant.connection_key(), "{pairs:?}");
         }
         let grant = NatsConfig::from_map(&map(&[
             ("servers", "nats://localhost:4222"),
@@ -1322,6 +1361,12 @@ mod tests {
 
     #[test]
     fn bucket_max_bytes_must_be_a_positive_integer() {
+        let unlimited = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("bucket-max-bytes", "unlimited"),
+        ]))
+        .unwrap();
+        assert_eq!(unlimited.policy.bucket_max_bytes, None);
         for bad in ["0", "-1", "lots", "9223372036854775808"] {
             let err = NatsConfig::from_map(&map(&[
                 ("servers", "nats://localhost:4222"),
@@ -1359,42 +1404,72 @@ mod tests {
     }
 
     #[test]
-    fn a_create_grant_without_a_size_ceiling_is_unbounded() {
-        let spec = |allow: &[&str], create: &[&str], max_bytes| PolicySpec {
-            bucket_allow: allow.iter().map(|s| s.to_string()).collect(),
-            bucket_create_allow: create.iter().map(|s| s.to_string()).collect(),
-            bucket_max_bytes: max_bytes,
-            ..Default::default()
-        };
-        assert!(spec(&["cache"], &["cache"], None).creates_unbounded_buckets());
-        assert!(!spec(&["cache"], &["cache"], Some(1024)).creates_unbounded_buckets());
-        // Nothing to bound when the workload may not create at all.
-        assert!(!spec(&["cache"], &[], None).creates_unbounded_buckets());
-        assert!(!spec(&[], &["cache"], None).creates_unbounded_buckets());
+    fn a_create_grant_needs_a_declared_size() {
+        let err = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("bucket-create-allow", "cache"),
+        ]))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("needs `bucket-max-bytes`"),
+            "{err:#}"
+        );
+        // A size a plugin secret supplies at bind counts as declared.
+        let layer = map(&[
+            ("servers", "nats://localhost:4222"),
+            ("bucket-create-allow", "cache"),
+        ]);
+        assert!(read_pending(&layer, &pending(&["bucket-max-bytes"])).is_ok());
+        // `unlimited` is the explicit way to say no ceiling.
+        let unlimited = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("bucket-create-allow", "cache"),
+            ("bucket-max-bytes", "unlimited"),
+        ]))
+        .unwrap();
+        assert_eq!(unlimited.policy.bucket_max_bytes, None);
     }
 
     #[test]
-    fn bucket_max_count_must_be_a_positive_integer() {
-        let base = NatsConfig::from_map(&map(&[("servers", "nats://localhost:4222")])).unwrap();
-        assert_eq!(base.policy.bucket_max_count, None);
-        let three = NatsConfig::from_map(&map(&[
-            ("servers", "nats://localhost:4222"),
-            ("bucket-max-count", "3"),
-        ]))
-        .unwrap();
-        assert_eq!(three.policy.bucket_max_count, Some(3));
-        assert_ne!(base.connection_key(), three.connection_key());
-        for bad in ["0", "-1", "many", "4294967296"] {
+    fn a_create_grant_lists_bucket_names() {
+        for wildcard in [">", "*", "cache,>", "tenant-*"] {
             let err = NatsConfig::from_map(&map(&[
                 ("servers", "nats://localhost:4222"),
-                ("bucket-max-count", bad),
+                ("bucket-create-allow", wildcard),
+                ("bucket-max-bytes", "1024"),
             ]))
             .unwrap_err();
-            assert!(
-                err.to_string().contains("bucket-max-count"),
-                "{bad}: {err:#}"
-            );
+            assert!(err.to_string().contains("wildcard"), "{wildcard}: {err:#}");
         }
+        // Reading and deleting may still use patterns.
+        assert!(
+            NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("bucket-allow", ">"),
+                ("bucket-delete-allow", ">"),
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn bucket_storage_allow_defaults_to_file() {
+        let read = |value: &str| {
+            NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("bucket-storage-allow", value),
+            ]))
+        };
+        assert_eq!(
+            read("memory").unwrap().policy.bucket_storage_allow,
+            [BucketStorage::Memory]
+        );
+        assert_eq!(
+            read("file, memory").unwrap().policy.bucket_storage_allow,
+            [BucketStorage::File, BucketStorage::Memory]
+        );
+        let err = read("ram").unwrap_err();
+        assert!(err.to_string().contains("bucket-storage-allow"), "{err:#}");
     }
 
     #[test]

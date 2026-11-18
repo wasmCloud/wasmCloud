@@ -731,7 +731,7 @@ runtime:
       #
       # Keys are `wasmcloud:nats` config keys — `servers`, `subject-allow`,
       # `stream-allow`, `stream-delete-allow`, `bucket-allow`, `bucket-create-allow`,
-      # `bucket-delete-allow`, `bucket-max-bytes`, `bucket-max-count`,
+      # `bucket-delete-allow`, `bucket-max-bytes`, `bucket-storage-allow`,
       # `bucket-replicas`, `creds`,
       # `jwt`/`nkey-seed`, `username`/`password`, `token`, `tls-*`,
       # `jetstream-domain`. The
@@ -757,13 +757,15 @@ runtime:
       # checks its stored subject. All grants are host-owned ceilings.
       # Creating or deleting a KV bucket (`kv-admin`) needs the bucket in
       # `bucket-allow` and in `bucket-create-allow` or `bucket-delete-allow`.
-      # `bucket-max-bytes` caps the size of each bucket a workload creates;
-      # unset leaves it to the JetStream account limits, and the host warns at
-      # bind. `bucket-max-count` caps how many buckets the create grant may
-      # hold, counted on the server whoever made them; unset is one, and a
-      # delete frees a place. A workload may ask for less of either, even
-      # when they are unset. The most a binding can hold is `bucket-max-bytes`
-      # times `bucket-max-count`, times `bucket-replicas` on disk.
+      # `bucket-create-allow` lists bucket names, not patterns, so the
+      # buckets a workload can create are exactly the ones named. A binding
+      # with it must set `bucket-max-bytes`: each bucket's largest size, or
+      # `unlimited` to leave it to the JetStream account limits.
+      # `bucket-storage-allow` (`file`, `memory`, or both) is the storage
+      # those buckets may use; unset is `file`, so a bucket only takes server
+      # RAM when the operator allows memory. The most a binding can create is
+      # one bucket per name, each up to `bucket-max-bytes`, times
+      # `bucket-replicas` copies.
       # `bucket-replicas` (1-5, operator-only) sets how many copies such a
       # bucket keeps; unset is one. Changing any of these later leaves
       # existing buckets as they are, and a workload's repeat create still

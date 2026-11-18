@@ -2,7 +2,7 @@
 //!
 //! Gated by `bucket-allow` plus `bucket-create-allow` or `bucket-delete-allow`.
 //! A create is further limited by `bucket-max-bytes` (each bucket's size) and
-//! `bucket-max-count` (how many buckets the create grant may hold).
+//! `bucket-storage-allow` (file, memory, or both).
 
 use std::time::Duration;
 
@@ -11,12 +11,12 @@ use async_nats::jetstream::context::{
     CreateKeyValueError, CreateKeyValueErrorKind, CreateStreamError, CreateStreamErrorKind,
     GetStreamError, GetStreamErrorKind, KeyValueError, KeyValueErrorKind,
 };
-use futures::TryStreamExt as _;
 use wasmtime::component::{Accessor, Resource};
 
 use crate::engine::ctx::SharedCtx;
 
 use super::kv::message_ttl_seconds;
+use crate::plugin::wasmcloud_nats::config::BucketStorage;
 use crate::plugin::wasmcloud_nats::conn::{ConnHandle, server_at_least};
 use crate::plugin::wasmcloud_nats::interfaces::{
     NatsId, bucket_lookup_err, chain_timed_out, denied, kv_admin, kv_err, labeled_kv_admin, types,
@@ -61,14 +61,13 @@ impl<T: 'static + Send> labeled_kv_admin::HostWithStore<T> for SharedCtx {
             Ok(c) => c,
             // Over `bucket-max-bytes`. The bucket may exist from before the
             // ceiling was lowered, which makes it a conflict.
-            Err(types::NatsError::LimitExceeded(m)) => {
+            Err(types::NatsError::LimitExceeded(m))
+                if conn.policy.bucket_max_bytes(requested.max_bytes).is_err() =>
+            {
                 return Ok(Err(over_ceiling(&conn, &bucket, m).await));
             }
             Err(e) => return Ok(Err(CreateBucketError::Nats(e))),
         };
-        if let Err(e) = check_bucket_count(&conn, &bucket).await {
-            return Ok(Err(CreateBucketError::Nats(e)));
-        }
         let store = match conn.jetstream.create_key_value(kv_config).await {
             Ok(store) => {
                 tracing::info!(bucket, "wasmcloud:nats created KV bucket");
@@ -187,50 +186,6 @@ async fn over_ceiling(conn: &ConnHandle, bucket: &str, limit: String) -> CreateB
     }
 }
 
-/// Refuses a new bucket once the create grant already holds
-/// `bucket-max-count` of them. Counts what is on the server, whoever made it,
-/// so a restart or a second host shares the count and a delete frees a slot.
-/// Two concurrent creates of different names can both pass.
-async fn check_bucket_count(conn: &ConnHandle, bucket: &str) -> Result<(), types::NatsError> {
-    let max = conn.policy.bucket_max_count() as usize;
-    let mut held = Vec::new();
-    let mut names = conn.jetstream.stream_names();
-    loop {
-        let name = match names.try_next().await {
-            Ok(Some(name)) => name,
-            Ok(None) => break,
-            Err(e) => {
-                let timed_out = chain_timed_out(&e);
-                return Err(kv_err(
-                    format!("create bucket '{bucket}': listing buckets"),
-                    timed_out,
-                    e,
-                ));
-            }
-        };
-        let Some(existing) = name.strip_prefix("KV_") else {
-            continue;
-        };
-        // An existing bucket is opened, not created, so it never counts.
-        if existing == bucket {
-            return Ok(());
-        }
-        if conn.policy.check_bucket_create(existing).is_ok() {
-            held.push(existing.to_string());
-        }
-    }
-    if held.len() < max {
-        return Ok(());
-    }
-    held.sort();
-    Err(types::NatsError::LimitExceeded(format!(
-        "create bucket '{bucket}': this binding's bucket-max-count is {max} and its create \
-         grant already holds {}: {}",
-        held.len(),
-        held.join(", ")
-    )))
-}
-
 /// Whether an existing bucket is what `requested` asks for.
 ///
 /// Every field the guest set must match. `max-bytes: 0` asks for the host's
@@ -298,6 +253,18 @@ fn to_kv_config(
             )));
         }
     };
+    let storage = match config.storage {
+        kv_admin::StorageType::File => BucketStorage::File,
+        kv_admin::StorageType::Memory => BucketStorage::Memory,
+    };
+    if let Err(allowed) = policy.check_bucket_storage(storage) {
+        return Err(types::NatsError::LimitExceeded(format!(
+            "create bucket '{}': {} storage is not in this binding's bucket-storage-allow \
+             ({allowed})",
+            config.bucket,
+            storage.as_str()
+        )));
+    }
     let limit_markers = match config.limit_marker_ttl_ms {
         None => None,
         Some(_) if !server_at_least(server, (2, 11, 0)) => {
@@ -315,9 +282,9 @@ fn to_kv_config(
         max_age: Duration::from_millis(config.max_age_ms),
         max_bytes,
         max_value_size,
-        storage: match config.storage {
-            kv_admin::StorageType::File => jetstream::stream::StorageType::File,
-            kv_admin::StorageType::Memory => jetstream::stream::StorageType::Memory,
+        storage: match storage {
+            BucketStorage::File => jetstream::stream::StorageType::File,
+            BucketStorage::Memory => jetstream::stream::StorageType::Memory,
         },
         limit_markers,
         // 0 lets async-nats ask for the server's default of one.
@@ -445,6 +412,7 @@ mod tests {
             &PolicySpec {
                 bucket_max_bytes: max_bytes,
                 bucket_replicas: replicas,
+                bucket_storage_allow: vec![BucketStorage::File, BucketStorage::Memory],
                 ..Default::default()
             },
             Vec::new(),
@@ -554,6 +522,28 @@ mod tests {
             }
             other => panic!("expected limit-exceeded, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn storage_must_be_one_the_host_allows() {
+        let file_only = PolicyEngine::new(
+            &PolicySpec {
+                bucket_storage_allow: vec![BucketStorage::File],
+                ..Default::default()
+            },
+            Vec::new(),
+        );
+        let mut request = request();
+        request.storage = kv_admin::StorageType::Memory;
+        match to_kv_config(&file_only, MODERN, request.clone()) {
+            Err(types::NatsError::LimitExceeded(m)) => {
+                assert!(m.contains("memory storage") && m.contains("(file)"), "{m}")
+            }
+            other => panic!("expected memory to be refused, got {other:?}"),
+        }
+        request.storage = kv_admin::StorageType::File;
+        let config = to_kv_config(&file_only, MODERN, request).unwrap();
+        assert_eq!(config.storage, jetstream::stream::StorageType::File);
     }
 
     #[test]

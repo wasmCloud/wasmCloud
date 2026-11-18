@@ -296,25 +296,10 @@ impl WasmcloudNats {
                 bucket_delete_allow = ?super::keys::get(&merged, "bucket-delete-allow"),
                 bucket_max_bytes = ?super::keys::get(&merged, "bucket-max-bytes"),
                 bucket_replicas = ?super::keys::get(&merged, "bucket-replicas"),
-                bucket_max_count = config.policy.bucket_max_count
-                    .unwrap_or(super::config::DEFAULT_BUCKET_MAX_COUNT),
+                bucket_storage_allow = ?super::keys::get(&merged, "bucket-storage-allow"),
                 inbox_prefix = ?super::keys::get(&merged, "inbox-prefix"),
                 "wasmcloud:nats binding grant"
             );
-            if config.policy.creates_unbounded_buckets() {
-                tracing::warn!(
-                    workload_id,
-                    binding = describe_binding(binding),
-                    bucket_create_allow = ?config.policy.bucket_create_allow,
-                    bucket_max_count = config.policy.bucket_max_count
-                        .unwrap_or(super::config::DEFAULT_BUCKET_MAX_COUNT),
-                    "wasmcloud:nats: this binding may create KV buckets with no \
-                     `bucket-max-bytes`, so each bucket it asks to be unlimited is bounded only by \
-                     the JetStream account limits; a memory bucket can take the server's RAM. Set \
-                     `bucket-max-bytes` to cap each bucket's size; the most a workload can hold \
-                     is that times `bucket-max-count`, times `bucket-replicas` on disk."
-                );
-            }
         }
 
         Ok(())
@@ -752,17 +737,21 @@ impl HostPlugin for WasmcloudNats {
             | "stream-delete-allow"
             | "bucket-allow"
             | "bucket-create-allow"
-            | "bucket-delete-allow" => {
+            | "bucket-delete-allow"
+            | "bucket-storage-allow" => {
                 let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
                 split(value).all(|v| ceiling.contains(v))
             }
-            // A size or a count: a smaller positive number narrows.
-            "bucket-max-bytes" | "bucket-max-count" => {
-                match (ceiling.trim().parse::<u64>(), value.trim().parse::<u64>()) {
-                    (Ok(ceiling), Ok(value)) => value > 0 && value <= ceiling,
-                    _ => false,
-                }
-            }
+            // A size: a smaller positive number narrows, and anything narrows
+            // `unlimited`.
+            "bucket-max-bytes" => match (ceiling.trim(), value.trim().parse::<u64>()) {
+                ("unlimited", _) if value.trim() == "unlimited" => true,
+                ("unlimited", Ok(value)) => value > 0,
+                (ceiling, Ok(value)) => ceiling
+                    .parse::<u64>()
+                    .is_ok_and(|c| value > 0 && value <= c),
+                _ => false,
+            },
             // An empty workload list trivially narrows — deny-all is the
             // narrowest thing there is — and falls out of `all()` above with no
             // special case.
@@ -1316,10 +1305,12 @@ mod tests {
         assert!(!plugin.narrows("bucket-max-bytes", "1048576", "1048577"));
         assert!(!plugin.narrows("bucket-max-bytes", "1048576", "0"));
         assert!(!plugin.narrows("bucket-max-bytes", "1048576", "lots"));
-        assert!(plugin.narrows("bucket-max-count", "3", "2"));
-        assert!(plugin.narrows("bucket-max-count", "1", "1"));
-        assert!(!plugin.narrows("bucket-max-count", "1", "2"));
-        assert!(!plugin.narrows("bucket-max-count", "3", "0"));
+        assert!(!plugin.narrows("bucket-max-bytes", "1048576", "unlimited"));
+        assert!(plugin.narrows("bucket-max-bytes", "unlimited", "unlimited"));
+        assert!(plugin.narrows("bucket-max-bytes", "unlimited", "1024"));
+        assert!(!plugin.narrows("bucket-max-bytes", "unlimited", "0"));
+        assert!(plugin.narrows("bucket-storage-allow", "file,memory", "file"));
+        assert!(!plugin.narrows("bucket-storage-allow", "file", "memory"));
     }
 
     #[test]
@@ -1887,63 +1878,6 @@ mod tests {
             .expect_err("a manifest may not set the replica count")
             .to_string();
         assert!(err.contains("`bucket-replicas`"), "{err}");
-    }
-
-    /// An unset `bucket-max-bytes` is unlimited and an unset `bucket-max-count`
-    /// is one, so a manifest may still ask for less of either.
-    #[test]
-    fn a_workload_may_narrow_bucket_limits_the_operator_left_unset() {
-        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
-            .with_workload_config(WorkloadConfigPolicy::Deny)
-            .with_base(Config::from_iter([(
-                "servers".to_string(),
-                "nats://host:4222".to_string(),
-            )]));
-        let plugin = WasmcloudNats::new();
-        let schema = super::super::binding_schema();
-        let narrows = |key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload);
-        let manifest = |pairs: &[(&str, &str)]| {
-            Config::from_iter(pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())))
-        };
-
-        let resolved = declared
-            .resolve(
-                "",
-                &manifest(&[("bucket-max-bytes", "1048576"), ("bucket-max-count", "1")]),
-                &schema,
-                &narrows,
-            )
-            .expect("asking for less than an unset limit narrows it");
-        let config = NatsConfig::from_map(&resolved).unwrap();
-        assert_eq!(config.policy.bucket_max_bytes, Some(1_048_576));
-        assert_eq!(config.policy.bucket_max_count, Some(1));
-
-        let err = declared
-            .resolve(
-                "",
-                &manifest(&[("bucket-max-count", "2")]),
-                &schema,
-                &narrows,
-            )
-            .expect_err("more buckets than the default is a widening")
-            .to_string();
-        assert!(err.contains("`bucket-max-count: 2` is not within"), "{err}");
-
-        // An operator who raised the count lets a manifest take part of it.
-        let raised = declared.clone().with_base(Config::from_iter([
-            ("servers".to_string(), "nats://host:4222".to_string()),
-            ("bucket-max-count".to_string(), "4".to_string()),
-        ]));
-        assert!(
-            raised
-                .resolve(
-                    "",
-                    &manifest(&[("bucket-max-count", "2")]),
-                    &schema,
-                    &narrows
-                )
-                .is_ok()
-        );
     }
 
     /// A grant the operator never declared cannot be narrowed into: an

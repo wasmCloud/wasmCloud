@@ -115,8 +115,8 @@ interface types {
     ///
     /// `kv-admin.create-bucket` also returns it, as
     /// `create-bucket-error.nats`, when the requested `max-bytes` is over the
-    /// host's `bucket-max-bytes`, or when a new bucket would be more than the
-    /// host's `bucket-max-count`.
+    /// host's `bucket-max-bytes` or the requested storage is not in its
+    /// `bucket-storage-allow`.
     ///
     /// Either way nothing was delivered, and retrying unchanged fails the
     /// same way.
@@ -552,10 +552,10 @@ interface kv {
 /// `bucket-create-allow`, and deleting needs `bucket-delete-allow`. Both are
 /// deny-by-default and host-owned.
 ///
-/// The host also limits creation: `bucket-max-bytes` caps each bucket's size,
-/// and `bucket-max-count` (1 unless the host sets it) caps how many buckets
-/// the create grant may hold, counted on the server whoever made them.
-/// Deleting one frees its place.
+/// The host also bounds what is created. `bucket-create-allow` lists bucket
+/// names, never patterns, so a workload can create only those buckets.
+/// `bucket-max-bytes` caps each one's size, and `bucket-storage-allow` decides
+/// whether it may use memory (file only unless the host allows memory).
 ///
 /// Replicas, placement, mirrors, and sources are not exposed: they are
 /// cluster decisions. The host's `bucket-replicas` sets the replica count;
@@ -579,7 +579,7 @@ interface kv-admin {
     /// How long a value lives, in milliseconds. 0 keeps values forever.
     max-age-ms: u64,
     /// Total size limit in bytes. 0 on create takes the host's
-    /// `bucket-max-bytes`, or unlimited when the host sets none.
+    /// `bucket-max-bytes`, or unlimited when the host's is `unlimited`.
     max-bytes: u64,
     /// Largest single value in bytes. 0 is unlimited. At most 2^31 - 1.
     max-value-size: u32,
@@ -600,15 +600,19 @@ interface kv-admin {
     nats(nats-error),
   }
 
-  /// Create a bucket and open it. Requires NATS 2.10+.
+  /// Ensure a bucket exists with a compatible configuration, and open it.
+  /// Requires NATS 2.10+. Safe to call on every start.
   ///
-  /// Idempotent: an existing bucket that matches every field set here is
-  /// opened, and does not count toward `bucket-max-count`. `max-bytes: 0`
-  /// matches any size within the host's `bucket-max-bytes` (any size when it
-  /// has none), and the replica count is never compared, so a startup create
-  /// survives the host changing either. Any other difference, or an existing
-  /// bucket over a lowered `bucket-max-bytes`, leaves the bucket unchanged and
-  /// fails with `config-conflict`.
+  /// - No bucket: it is created as asked, with the host's choices applied:
+  ///   `max-bytes: 0` takes the host's `bucket-max-bytes`, and the replica
+  ///   count is the host's `bucket-replicas`.
+  /// - A bucket that matches every field set here: it is opened unchanged.
+  ///   `max-bytes: 0` matches any size within the host's `bucket-max-bytes`,
+  ///   and replicas are never compared, so a startup call survives the host
+  ///   changing either.
+  /// - Any other bucket, including one over a lowered `bucket-max-bytes`: it
+  ///   is left unchanged and the call fails with `config-conflict`, carrying
+  ///   the configuration it has.
   create-bucket: async func(config: bucket-config) -> result<bucket, create-bucket-error>;
 
   /// Read a bucket's configuration. Needs only `bucket-allow`.

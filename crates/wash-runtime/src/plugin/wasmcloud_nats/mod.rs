@@ -50,7 +50,6 @@ pub fn binding_schema() -> crate::plugin::BindingSchema {
             crate::plugin::BindingSchema::with_host_owned_keys(keys::host_owned())
                 .and_host_ceiling_keys(keys::host_ceiling())
                 .and_workload_owned_keys(keys::workload_owned())
-                .and_implicit_ceilings(keys::implicit_ceilings())
         });
     SCHEMA.clone()
 }
