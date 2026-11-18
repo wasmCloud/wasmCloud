@@ -223,7 +223,7 @@ func ownedReplicaSetFor(t *testing.T, d *runtimev1alpha1.WorkloadDeployment) *ru
 	rs := &runtimev1alpha1.WorkloadReplicaSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: d.Namespace,
-			Name:      deploymentReplicaSetName(d, d.Spec.Template.Hash()),
+			Name:      deploymentReplicaSetName(d, deploymentTemplateHash(&d.Spec.Template)),
 		},
 		Spec: d.Spec.WorkloadReplicaSetSpec,
 	}
@@ -258,7 +258,11 @@ func referencedName(ref *corev1.LocalObjectReference) string {
 func TestDeploymentStaleReadCreatesOneReplicaSet(t *testing.T) {
 	r := newScaleReconciler(t)
 	d := undeployedDeployment()
+	d.Spec.Template.Labels = map[string]string{"labels.example/one": "label-one", "labels.example/two": "label-two"}
+	d.Spec.Template.Annotations = map[string]string{"annotations.example/one": "annotation-one", "annotations.example/two": "annotation-two"}
 	stale := d.DeepCopy()
+	stale.Spec.Template.Labels = map[string]string{"labels.example/two": "label-two", "labels.example/one": "label-one"}
+	stale.Spec.Template.Annotations = map[string]string{"annotations.example/two": "annotation-two", "annotations.example/one": "annotation-one"}
 
 	if err := r.reconcileDeploy(t.Context(), d); !errors.Is(err, condition.ErrSkipReconciliation()) {
 		t.Fatalf("first pass = %v", err)
@@ -381,6 +385,7 @@ func TestDeploymentRollbackAdoptsExistingReplicaSet(t *testing.T) {
 
 // A name that cannot be rolled out to leaves the rollout where it was.
 func TestDeploymentNameTakenLeavesStatus(t *testing.T) {
+	const differentTemplateMessage = "different template"
 	cause := errors.New("API unavailable")
 	for _, tc := range []struct {
 		name        string
@@ -409,7 +414,21 @@ func TestDeploymentNameTakenLeavesStatus(t *testing.T) {
 			occupant: func(rs *runtimev1alpha1.WorkloadReplicaSet) {
 				rs.Spec.Template.Spec.HostID = "template-mismatch-host"
 			},
-			wantMessage: "different template",
+			wantMessage: differentTemplateMessage,
+		},
+		{
+			name: "different template labels",
+			occupant: func(rs *runtimev1alpha1.WorkloadReplicaSet) {
+				rs.Spec.Template.Labels = map[string]string{"unexpected": "label"}
+			},
+			wantMessage: differentTemplateMessage,
+		},
+		{
+			name: "different template annotations",
+			occupant: func(rs *runtimev1alpha1.WorkloadReplicaSet) {
+				rs.Spec.Template.Annotations = map[string]string{"unexpected": "annotation"}
+			},
+			wantMessage: differentTemplateMessage,
 		},
 		{
 			name: "not in the cache yet",
