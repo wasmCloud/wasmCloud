@@ -117,6 +117,12 @@ fn bench_scale(workspace: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Read and parse a TOML file, naming it in either error.
+pub(crate) fn read_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let contents = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    toml::from_str(&contents).with_context(|| format!("parse {}", path.display()))
+}
+
 /// Walk up from this crate's manifest dir to the workspace root (the
 /// directory holding `Cargo.lock`). Works regardless of the directory
 /// `cargo xtask` was invoked from.

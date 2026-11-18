@@ -154,16 +154,16 @@ fn check_fixture(fixture: &Path, wit_dir: &Path, scratch: &Path) -> Result<()> {
 
 fn stage_fixture(fixture: &Path, wit_dir: &Path, scratch: &Path) -> Result<PathBuf> {
     let wit = scratch.join(fixture.file_name().context("fixture has no name")?);
-    // An old fetch must not hide an incomplete local override manifest.
-    copy_tree(wit_dir, &wit, true)?;
+    // Leaving `deps` behind keeps an old fetch from hiding an incomplete local
+    // override manifest.
+    copy_wit_files(wit_dir, &wit)?;
     let deps = wit.join("deps");
     fs::create_dir_all(&deps)?;
     // Without a manifest there are no overrides, so any package the WIT names
     // outside itself would come from a registry.
     let config = fixture.join("wkg.toml");
     let manifest: Manifest = if config.is_file() {
-        toml::from_str(&fs::read_to_string(&config)?)
-            .with_context(|| format!("parse {}", config.display()))?
+        crate::read_toml(&config)?
     } else {
         Manifest::default()
     };
@@ -177,7 +177,7 @@ fn stage_fixture(fixture: &Path, wit_dir: &Path, scratch: &Path) -> Result<PathB
         let source = fixture.join(path);
         let target = deps.join(package.replace(':', "-"));
         if source.is_dir() {
-            copy_tree(&source, &target, false)?;
+            copy_wit_files(&source, &target)?;
         } else {
             fs::create_dir_all(&target)?;
             fs::copy(
@@ -190,17 +190,15 @@ fn stage_fixture(fixture: &Path, wit_dir: &Path, scratch: &Path) -> Result<PathB
     Ok(wit)
 }
 
-fn copy_tree(source: &Path, target: &Path, skip_deps: bool) -> Result<()> {
+/// Copy the `.wit` files of one package directory. Those are all a WIT parser
+/// reads of it: nested directories, a `deps` among them, are not part of the
+/// package.
+fn copy_wit_files(source: &Path, target: &Path) -> Result<()> {
     fs::create_dir_all(target)?;
     for entry in fs::read_dir(source).with_context(|| format!("read {}", source.display()))? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
-            if skip_deps && entry.file_name() == "deps" {
-                continue;
-            }
-            copy_tree(&path, &target.join(entry.file_name()), skip_deps)?;
-        } else {
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "wit") {
             fs::copy(&path, target.join(entry.file_name()))
                 .with_context(|| format!("copy {}", path.display()))?;
         }
