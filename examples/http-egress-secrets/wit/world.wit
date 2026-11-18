@@ -1,0 +1,5 @@
+package wasmcloud:egress-secrets;
+
+world egress-secrets {
+   export wasi:http/incoming-handler@0.2.2;
+}
