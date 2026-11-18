@@ -449,7 +449,7 @@ To run the tests locally, see [Running Tests](#running-tests).
 
 - [Rust Style Guide](https://doc.rust-lang.org/style-guide/) - Official Rust coding standards
 - [WebAssembly Component Model](https://component-model.bytecodealliance.org/) - Learn about the component model
-- [WASI Preview 2](https://github.com/WebAssembly/WASI/tree/main/preview2) - WebAssembly System Interface
+- [WASI Preview 2](https://github.com/WebAssembly/WASI/blob/wasi-0.2/docs/Preview2.md) - WebAssembly System Interface
 
 [0]: https://github.com/wasmcloud/wasmCloud/issues/new/choose
 [1]: https://github.com/wasmcloud/wasmCloud/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22

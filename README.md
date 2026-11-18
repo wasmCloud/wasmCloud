@@ -289,7 +289,7 @@ Releases ship every two weeks: each Tuesday at 16:00 UTC on the train's cycle, t
 ## Further reading
 
 - [WebAssembly Component Model](https://component-model.bytecodealliance.org/)
-- [WASI Preview 2](https://github.com/WebAssembly/WASI/blob/main/docs/Preview2.md)
+- [WASI Preview 2](https://github.com/WebAssembly/WASI/blob/wasi-0.2/docs/Preview2.md)
 - [Wasmtime](https://wasmtime.dev/)
 - [NATS](https://nats.io/)
 
