@@ -46,6 +46,9 @@ const NATS_BRIDGE_WASM: &[u8] = include_bytes!("wasm/nats_implements_p3.wasm");
 /// Imports `wasmcloud:nats/kv-admin@0.1.4` under `tenant`, and nothing plainly
 /// but the `kv` its `bucket` resource comes from.
 const NATS_KV_ADMIN_LABELED_WASM: &[u8] = include_bytes!("wasm/nats_kv_admin_labeled_p3.wasm");
+/// Built against the published `wasmcloud:nats@0.1.3`: opens a granted bucket
+/// and records a `key-not-found` and a `denied` error in it.
+const NATS_LEGACY_V013_WASM: &[u8] = include_bytes!("wasm/nats_legacy_v013_p3.wasm");
 
 const STREAM: &str = "TESTS";
 const COUNTS_BUCKET: &str = "test-counts";
@@ -2628,27 +2631,182 @@ async fn kv_admin_under_a_label_creates_and_writes_without_a_plain_binding() -> 
         response.workload_status.message
     );
 
-    // Re-trigger until it lands: core NATS drops a message published before
-    // the subscription attaches.
+    assert_eq!(
+        trigger_until_status(&h, "tenant.create", "tenant-made", "tenant-made").await?,
+        Some(bytes::Bytes::from_static(b"created"))
+    );
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-tenant".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+/// Publishes `body` to `subject` until `bucket` holds a `status` key, since
+/// core NATS drops a message published before the subscription attaches.
+async fn trigger_until_status(
+    h: &Harness,
+    subject: &str,
+    body: &str,
+    bucket: &str,
+) -> Result<Option<bytes::Bytes>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    let status = loop {
+    loop {
         h.client
-            .publish("tenant.create", "tenant-made".into())
+            .publish(subject.to_string(), body.to_string().into())
             .await?;
         h.client.flush().await?;
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if let Ok(kv) = h.js.get_key_value("tenant-made").await
+        if let Ok(kv) = h.js.get_key_value(bucket).await
             && let Some(status) = kv.get("status").await?
         {
-            break Some(status);
+            return Ok(Some(status));
         }
         if tokio::time::Instant::now() > deadline {
-            break None;
+            return Ok(None);
         }
+    }
+}
+
+/// Labeled kv-admin under `workloadConfig: deny`: the label gets the grant the
+/// operator declared for it, a manifest may only narrow it, and the narrowed
+/// size is what a create takes.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_under_a_label_is_held_to_the_labels_declared_grant() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host_with(
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_binding(
+                "tenant",
+                declared(&[
+                    ("servers", &h.nats_url),
+                    ("subject-allow", "tenant.create"),
+                    ("bucket-allow", "tenant-made,tenant-other"),
+                    ("bucket-create-allow", "tenant-made"),
+                    ("bucket-max-bytes", "1048576"),
+                    ("bucket-storage-allow", "memory"),
+                ]),
+            ),
+    )
+    .await?;
+    let request = |id: &str, config: &[(&str, &str)]| -> Result<WorkloadStartRequest> {
+        let mut request = bridge_workload_request(
+            id,
+            vec![named_nats_interface(
+                "tenant",
+                &["types", "kv-admin", "core-handler"],
+                config,
+            )],
+        );
+        request
+            .workload
+            .components
+            .first_mut()
+            .context("the request has a component")?
+            .bytes = bytes::Bytes::from_static(NATS_KV_ADMIN_LABELED_WASM);
+        Ok(request)
     };
-    assert_eq!(status, Some(bytes::Bytes::from_static(b"created")));
+
+    // The label's create grant may not be widened from the manifest.
+    let message = expect_refused(
+        &host,
+        request(
+            "wl-tenant-widen",
+            &[
+                ("bucket-create-allow", "tenant-made,tenant-other"),
+                ("core-subscriptions", "tenant.create"),
+            ],
+        )?,
+    )
+    .await?;
+    assert!(
+        message.contains("`bucket-create-allow: tenant-made,tenant-other` is not within"),
+        "{message}"
+    );
+
+    // Narrowing the size is allowed, and a `max-bytes: 0` create takes it.
+    let response = host
+        .workload_start(request(
+            "wl-tenant",
+            &[
+                ("bucket-max-bytes", "524288"),
+                ("core-subscriptions", "tenant.create"),
+            ],
+        )?)
+        .await?;
+    anyhow::ensure!(
+        response.workload_status.workload_state != WorkloadState::Error,
+        "the labeled kv-admin workload failed to start: {}",
+        response.workload_status.message
+    );
+
+    // `tenant-other` is readable but not creatable under this label.
+    h.client
+        .publish("tenant.create", "tenant-other".into())
+        .await?;
+    assert_eq!(
+        trigger_until_status(&h, "tenant.create", "tenant-made", "tenant-made").await?,
+        Some(bytes::Bytes::from_static(b"created"))
+    );
+    assert!(h.js.get_key_value("tenant-other").await.is_err());
+    let made = h.js.get_key_value("tenant-made").await?;
+    assert_eq!(made.stream.cached_info().config.max_bytes, 524_288);
+
     host.workload_stop(wash_runtime::types::WorkloadStopRequest {
         workload_id: "wl-tenant".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+/// A component built against the published `wasmcloud:nats@0.1.3` still links
+/// and runs on this host, and its errors (`key-not-found`, `denied`) arrive as
+/// the cases it was compiled with.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn a_component_built_against_0_1_3_still_runs() -> Result<()> {
+    let h = start_nats().await?;
+    let host = start_host().await?;
+    h.js.create_key_value(async_nats::jetstream::kv::Config {
+        bucket: "legacy".into(),
+        ..Default::default()
+    })
+    .await?;
+    let mut interface = nats_interface(&[
+        ("servers", &h.nats_url),
+        ("subject-allow", "legacy.check"),
+        ("bucket-allow", "legacy"),
+        ("core-subscriptions", "legacy.check"),
+    ]);
+    interface.interfaces = ["types", "kv", "core-handler"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    interface.version = Some(semver::Version::new(0, 1, 3));
+    let mut request = bridge_workload_request("wl-legacy", vec![interface]);
+    request
+        .workload
+        .components
+        .first_mut()
+        .context("the request has a component")?
+        .bytes = bytes::Bytes::from_static(NATS_LEGACY_V013_WASM);
+    let response = host.workload_start(request).await?;
+    anyhow::ensure!(
+        response.workload_status.workload_state != WorkloadState::Error,
+        "the 0.1.3 component failed to start: {}",
+        response.workload_status.message
+    );
+
+    assert_eq!(
+        trigger_until_status(&h, "legacy.check", "legacy", "legacy").await?,
+        Some(bytes::Bytes::from_static(
+            b"key-not-found|denied:legacy-denied"
+        ))
+    );
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-legacy".into(),
     })
     .await?;
     Ok(())

@@ -1,0 +1,11 @@
+[package]
+name = "nats-legacy-v013-p3"
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true, features = ["async-spawn", "inter-task-wakeup"] }

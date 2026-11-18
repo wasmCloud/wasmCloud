@@ -6,7 +6,7 @@ package wasmcloud:nats-kv-admin-labeled-p3;
 // link it even though nothing routes to an unnamed binding.
 world nats-kv-admin-labeled-p3 {
     import tenant: wasmcloud:nats/kv-admin@0.1.4;
-    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.2;
 
     export wasmcloud:nats/core-handler@0.1.4;
 }
