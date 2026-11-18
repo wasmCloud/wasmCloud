@@ -41,11 +41,7 @@ pub(crate) mod test_support;
 pub mod update;
 pub mod wit;
 
-pub const CONFIG_FILE_NAME: &str = "config.yaml";
-pub const CONFIG_DIR_NAME: &str = ".wash";
-
-pub const VALID_CONFIG_FILES: [&str; 4] =
-    ["config.yaml", "config.yml", "config.json", "config.toml"];
+pub use crate::project_paths::{CONFIG_DIR_NAME, CONFIG_FILE_NAME, VALID_CONFIG_FILES};
 
 /// A trait that defines the interface for all CLI commands
 pub trait CliCommand {

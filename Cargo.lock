@@ -7957,6 +7957,8 @@ dependencies = [
  "tempfile",
  "toml 0.8.23",
  "tonic-prost-build",
+ "wasm-pkg-common",
+ "wit-parser 0.254.2",
 ]
 
 [[package]]
