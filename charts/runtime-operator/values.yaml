@@ -768,9 +768,11 @@ runtime:
       # `bucket-replicas` copies.
       # `bucket-replicas` (1-5, operator-only) sets how many copies such a
       # bucket keeps; unset is one. Changing any of these later leaves
-      # existing buckets as they are, and a workload's repeat create still
-      # opens them (a bucket over a lowered `bucket-max-bytes` is reported as
-      # a conflict, whatever size the create asked for).
+      # existing buckets as they are. A workload's repeat create still opens
+      # them after a replica change or a raised `bucket-max-bytes`; a bucket
+      # over a lowered `bucket-max-bytes` is reported as a conflict, and one
+      # whose storage `bucket-storage-allow` no longer lists is refused with
+      # `limit-exceeded`.
       #
       # `inbox-prefix` is refused on the entry's own `config`: it would give
       # every workload on the group the same inbox, and two workloads sharing

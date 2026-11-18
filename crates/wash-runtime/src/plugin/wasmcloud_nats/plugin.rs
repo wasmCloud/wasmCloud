@@ -737,10 +737,15 @@ impl HostPlugin for WasmcloudNats {
             | "stream-delete-allow"
             | "bucket-allow"
             | "bucket-create-allow"
-            | "bucket-delete-allow"
-            | "bucket-storage-allow" => {
+            | "bucket-delete-allow" => {
                 let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
                 split(value).all(|v| ceiling.contains(v))
+            }
+            // A subset too, but never empty: a blank value reads as unset,
+            // which is `file`, whatever the host allowed.
+            "bucket-storage-allow" => {
+                let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
+                split(value).next().is_some() && split(value).all(|v| ceiling.contains(v))
             }
             // A size: a smaller positive number narrows, and anything narrows
             // `unlimited`.
@@ -1311,6 +1316,8 @@ mod tests {
         assert!(!plugin.narrows("bucket-max-bytes", "unlimited", "0"));
         assert!(plugin.narrows("bucket-storage-allow", "file,memory", "file"));
         assert!(!plugin.narrows("bucket-storage-allow", "file", "memory"));
+        assert!(!plugin.narrows("bucket-storage-allow", "memory", ""));
+        assert!(!plugin.narrows("bucket-storage-allow", "memory", " , "));
     }
 
     #[test]
@@ -1878,6 +1885,39 @@ mod tests {
             .expect_err("a manifest may not set the replica count")
             .to_string();
         assert!(err.contains("`bucket-replicas`"), "{err}");
+    }
+
+    /// A blank storage list reads as unset, which is `file`, so accepting it
+    /// would hand a memory-only grant file storage.
+    #[test]
+    fn a_blank_storage_list_cannot_widen_the_operators() {
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(Config::from_iter([
+                ("servers".to_string(), "nats://host:4222".to_string()),
+                ("bucket-storage-allow".to_string(), "memory".to_string()),
+            ]));
+        let plugin = WasmcloudNats::new();
+        let schema = super::super::binding_schema();
+        let narrows = |key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload);
+        let manifest = |value: &str| {
+            Config::from_iter([("bucket-storage-allow".to_string(), value.to_string())])
+        };
+
+        let err = declared
+            .resolve("", &manifest(""), &schema, &narrows)
+            .expect_err("a blank list would fall back to file")
+            .to_string();
+        assert!(err.contains("`bucket-storage-allow"), "{err}");
+
+        let resolved = declared
+            .resolve("", &Config::new(), &schema, &narrows)
+            .expect("the operator's own grant resolves");
+        let config = NatsConfig::from_map(&resolved).unwrap();
+        assert_eq!(
+            config.policy.bucket_storage_allow,
+            [super::super::config::BucketStorage::Memory]
+        );
     }
 
     /// A grant the operator never declared cannot be narrowed into: an
