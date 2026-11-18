@@ -19,10 +19,7 @@ use wasm_pkg_client::{
     caching::{CachingClient, FileCache},
     oci::{BasicCredentials, OciRegistryConfig},
 };
-use wasm_pkg_core::{
-    lock::LockFile,
-    wit::{OutputType, WIT_DEPS_DIR},
-};
+use wasm_pkg_core::{lock::LockFile, wit::OutputType};
 
 mod errors;
 mod retry;
@@ -1084,22 +1081,8 @@ fn named_packages(path: &Path) -> Result<Vec<PackageRef>> {
 /// the packages it depends on. The first place found wins. Only directories and `.wit` files are
 /// parsed, so other files in the source are never read.
 fn namespace_source_packages(source: &Path, namespace: &str) -> BTreeMap<PackageRef, PathBuf> {
-    let mut candidates = vec![source.to_path_buf()];
-    for dir in [source.to_path_buf(), source.join(WIT_DEPS_DIR)] {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut paths: Vec<PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir() || path.extension().is_some_and(|ext| ext == "wit"))
-            .collect();
-        paths.sort();
-        candidates.extend(paths);
-    }
-
     let mut packages = BTreeMap::new();
-    for candidate in candidates {
+    for candidate in crate::project_paths::namespace_candidates(source) {
         match wasm_pkg_core::wit::get_packages(&candidate) {
             Ok((spec, _)) if spec.package.namespace().to_string() == namespace => {
                 packages.entry(spec.package).or_insert(candidate);

@@ -14,6 +14,7 @@ pub mod config;
 pub mod inspect;
 /// Create new wash projects
 pub mod new;
+mod project_paths;
 /// Manage WebAssembly Interface Types (WIT) for wash components
 pub(crate) mod wit;
 /// Resolve workload-level env, secrets, and config from project configuration

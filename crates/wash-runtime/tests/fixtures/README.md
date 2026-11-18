@@ -39,10 +39,11 @@ cargo xtask check-fixture-wit
 
 This resolves the WIT of every fixture `wash build` fetches for, using only
 the local `path` overrides in its `wkg.toml`, so a dependency that would
-silently come from a registry fails here instead. It needs
-[`wasm-tools`](https://github.com/bytecodealliance/wasm-tools) on `PATH`.
-Fixtures that set `wit.skip_fetch` in `.wash/config.yaml` are left out, and
-`wit.sources` is refused: keep local overrides in `wkg.toml`.
+silently come from a registry fails here instead. The checker reads WIT
+in memory and honors both package and namespace overrides. It uses the
+same project config filename precedence as wash and skips fixtures with
+`wit.skip_fetch`. For fixtures that fetch dependencies, put local overrides in
+`wkg.toml`. The checker rejects `wit.sources` for those fixtures.
 
 ## Adding a fixture
 
