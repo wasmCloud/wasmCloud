@@ -9,28 +9,27 @@
 // Invoked by .github/workflows/charts.yml. Needs `helm` and `yq` on PATH.
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 
-import { yamlToDocs } from './lib/helm.mjs';
+import { helmTemplate, yamlToDocs } from './lib/helm.mjs';
 
 const CHART_DIR = 'charts/runtime-operator';
 const ROOT = '/var/lib/wasmcloud/host-plugin-volumes';
 
-// Renders the chart with `group` as its only host group. JSON is YAML, so the
-// values go to helm on stdin as JSON.
+// Renders the chart with `group` as its only host group. Returns the
+// manifests, or the error helm failed with.
 function render(group) {
   const values = { runtime: { hostGroups: [{ name: 'default', ...group }] } };
-  return spawnSync('helm', ['template', 'x', CHART_DIR, '-f', '-'], {
-    input: JSON.stringify(values),
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  try {
+    return { stdout: helmTemplate(CHART_DIR, 'x', [], { values }) };
+  } catch (err) {
+    return { error: err, stderr: String(err.stderr ?? err.message) };
+  }
 }
 
 function renderDocs(group) {
   const r = render(group);
-  assert.equal(r.status, 0, `helm template failed: ${r.stderr}`);
+  assert.ifError(r.error);
   const docs = yamlToDocs(r.stdout);
   const deployment = docs.find(
     (d) => d.kind === 'Deployment' && d.metadata.name === 'hostgroup-default',
@@ -46,7 +45,7 @@ function renderDocs(group) {
 
 function assertRefused(group, pattern) {
   const r = render(group);
-  assert.notEqual(r.status, 0, 'the chart rendered values it must refuse');
+  assert.ok(r.error, 'the chart rendered values it must refuse');
   assert.match(r.stderr, pattern);
 }
 
@@ -90,6 +89,19 @@ describe('host plugin volumes render', () => {
     assert.deepEqual(podVolume(`${ROOT}/q/data`).volume.emptyDir, {});
   });
 
+  it('lists pod volumes in plugin declaration order, not id order', () => {
+    const { pod: zfirst } = renderDocs({
+      plugins: [
+        plugin([{ name: 'a', emptyDir: {} }], [{ name: 'a', mountPath: '/a' }], { id: 'z' }),
+        plugin([{ name: 'a', emptyDir: {} }], [{ name: 'a', mountPath: '/a' }], { id: 'b' }),
+      ],
+    });
+    const dirs = zfirst.containers[0].volumeMounts
+      .map((m) => m.mountPath)
+      .filter((p) => p.startsWith(ROOT));
+    assert.deepEqual(dirs, [`${ROOT}/z/a`, `${ROOT}/b/a`]);
+  });
+
   it('gives two plugins a volume of one name without a clash', () => {
     assert.notEqual(podVolume(`${ROOT}/p/data`).mount.name, podVolume(`${ROOT}/q/data`).mount.name);
   });
@@ -129,6 +141,7 @@ describe('host plugin volumes the chart refuses', () => {
   const mount = [{ name: 'm', mountPath: '/m' }];
   const cases = [
     ['an entry with no id', { plugins: [{ image: 'a' }, { image: 'b' }] }, /needs an `id`/],
+    ['an entry given as a string', { plugins: ['wasmcloud-nats'] }, /must be a map with an `id`/],
     [
       'a repeated id across plugins and hostPlugins',
       {
@@ -246,21 +259,29 @@ describe('host plugin volumes the chart refuses', () => {
       { plugins: [plugin([{ name: 'm', emptyDir: {} }], mount, { id: '../evil' })] },
       /needs an `id` of letters, digits/,
     ],
-    ...['/', '/var/lib', `${ROOT}`, `${ROOT}/p`].map((allowed) => [
-      `a workload hostPaths.allowed of ${allowed}`,
-      { hostPaths: { allowed: [allowed] }, plugins: [plugin([{ name: 'm', emptyDir: {} }], mount)] },
-      /`hostPaths.allowed` entry .* reaches/,
+    ...['/', '/var/lib', `${ROOT}`, `${ROOT}/p/m`].map((scratchRoot) => [
+      `a scratchRoot of ${scratchRoot}`,
+      { scratchRoot, plugins: [plugin([{ name: 'm', emptyDir: {} }], mount)] },
+      /`scratchRoot` .* overlaps/,
     ]),
   ];
   for (const [what, group, pattern] of cases) {
     it(`refuses ${what}`, () => assertRefused(group, pattern));
   }
 
-  it('keeps a workload hostPaths.allowed beside the plugin volumes', () => {
+  // The host reserves plugin volume directories itself, so a broad workload
+  // allowlist renders, as does a scratch root beside the volumes.
+  it('renders a broad hostPaths.allowed and a separate scratchRoot', () => {
     const r = render({
-      hostPaths: { allowed: ['/var/lib/wasmcloud/data', '/srv'] },
+      hostPaths: { allowed: ['/'] },
+      scratchRoot: '/var/lib/wasmcloud/scratch',
       plugins: [plugin([{ name: 'm', emptyDir: {} }], [{ name: 'm', mountPath: '/m' }])],
     });
-    assert.equal(r.status, 0, r.stderr);
+    assert.ifError(r.error);
+  });
+
+  it('accepts a numeric plugin id', () => {
+    const r = render({ plugins: [{ id: 0, image: 'example.com/p:1', config: { k: 'v' } }] });
+    assert.ifError(r.error);
   });
 });

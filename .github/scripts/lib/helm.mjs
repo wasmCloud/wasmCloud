@@ -7,13 +7,22 @@ import { execFileSync, spawnSync } from 'node:child_process';
 
 const MAX_OUTPUT = 64 * 1024 * 1024;
 
-// Renders a chart, optionally with `--set` overrides (`key=value` strings).
-export function helmTemplate(chartDir, releaseName, sets = []) {
+// Renders a chart, optionally with `--set` overrides (`key=value` strings)
+// and a `values` object, passed to helm on stdin as JSON (which is YAML).
+// A failed render throws, with helm's `stderr` and `status` on the error.
+export function helmTemplate(chartDir, releaseName, sets = [], { values } = {}) {
   const args = ['template', releaseName, chartDir];
   for (const s of sets) {
     args.push('--set', s);
   }
-  return execFileSync('helm', args, { encoding: 'utf8', maxBuffer: MAX_OUTPUT });
+  const options = { encoding: 'utf8', maxBuffer: MAX_OUTPUT };
+  if (values !== undefined) {
+    args.push('-f', '-');
+    options.input = JSON.stringify(values);
+    // Keep stderr on the thrown error rather than the console.
+    options.stdio = ['pipe', 'pipe', 'pipe'];
+  }
+  return execFileSync('helm', args, options);
 }
 
 // Parses a multi-doc YAML stream into objects.
