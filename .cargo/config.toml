@@ -3,6 +3,14 @@
 [alias]
 xtask = "run --package xtask --"
 
+# Give transient registry/DNS failures time to recover, including in nested
+# fixture builds. Downloads still fail once this bounded retry budget is spent.
+[net]
+retry = 10
+
+[http]
+timeout = 60
+
 # jemalloc (the opt-in `jemalloc` feature on wash) fixes its page size at
 # build time and aborts on a kernel with larger pages. 2^16 = 64 KiB runs on
 # 4K, 16K and 64K arm64 kernels (Asahi, Raspberry Pi 5, RHEL/Ampere 64K), for
