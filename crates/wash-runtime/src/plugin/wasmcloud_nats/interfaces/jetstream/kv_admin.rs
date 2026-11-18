@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use async_nats::jetstream;
 use async_nats::jetstream::context::{
-    CreateKeyValueError, CreateKeyValueErrorKind, CreateStreamError, CreateStreamErrorKind,
-    GetStreamError, GetStreamErrorKind, KeyValueError, KeyValueErrorKind,
+    AccountError, AccountErrorKind, CreateKeyValueError, CreateKeyValueErrorKind,
+    CreateStreamError, CreateStreamErrorKind, GetStreamError, GetStreamErrorKind, KeyValueError,
+    KeyValueErrorKind,
 };
 use wasmtime::component::{Accessor, Resource};
 
@@ -354,9 +355,24 @@ fn classify_create_err(bucket: &str, e: CreateKeyValueError) -> CreateFailure {
                 _ => kv_err(&what, chain_timed_out(&e), &e),
             }
         }
-        CreateKeyValueErrorKind::InvalidStoreName
-        | CreateKeyValueErrorKind::TooLongHistory
-        | CreateKeyValueErrorKind::JetStream => kv_err(&what, chain_timed_out(&e), &e),
+        // Create reads the account first; its timeout carries no source, so
+        // `chain_timed_out` cannot see it.
+        CreateKeyValueErrorKind::JetStream => {
+            match find_in_chain::<AccountError>(&e).map(|a| a.kind()) {
+                Some(AccountErrorKind::TimedOut) => {
+                    types::NatsError::Timeout(format!("{what}: {e}"))
+                }
+                Some(AccountErrorKind::JetStreamUnavailable) => {
+                    types::NatsError::Connection(format!(
+                        "{what}: JetStream API unavailable (JetStream disabled or not responding)"
+                    ))
+                }
+                _ => kv_err(&what, chain_timed_out(&e), &e),
+            }
+        }
+        CreateKeyValueErrorKind::InvalidStoreName | CreateKeyValueErrorKind::TooLongHistory => {
+            kv_err(&what, chain_timed_out(&e), &e)
+        }
     })
 }
 
@@ -745,6 +761,26 @@ mod tests {
                 CreateKeyValueError::new(CreateKeyValueErrorKind::LimitMarkersNotSupported)
             ),
             CreateFailure::Other(types::NatsError::UnsupportedByServer(_))
+        ));
+
+        // The account lookup create starts with.
+        let account = |kind| {
+            CreateKeyValueError::with_source(
+                CreateKeyValueErrorKind::JetStream,
+                AccountError::new(kind),
+            )
+        };
+        assert!(matches!(
+            classify_create_err("cache", account(AccountErrorKind::TimedOut)),
+            CreateFailure::Other(types::NatsError::Timeout(_))
+        ));
+        assert!(matches!(
+            classify_create_err("cache", account(AccountErrorKind::JetStreamUnavailable)),
+            CreateFailure::Other(types::NatsError::Connection(_))
+        ));
+        assert!(matches!(
+            classify_create_err("cache", account(AccountErrorKind::Other)),
+            CreateFailure::Other(types::NatsError::Jetstream(_))
         ));
 
         for kind in [
