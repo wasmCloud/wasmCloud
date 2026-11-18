@@ -993,10 +993,14 @@ runtime:
       #                   /var/lib/wasmcloud/host-plugin-volumes/<id>/<name>,
       #                   and hands that directory to the plugin as a
       #                   `hostPath` volume. Names are DNS-1123 labels. Only
-      #                   component plugins (an `image` or `file`) take them.
-      #                   `hostPaths.allowed` does not apply, and no workload
-      #                   volume may expose these directories. A node
-      #                   `hostPath` source must lie within
+      #                   component plugins (an `image` or `file`) take them,
+      #                   and every volume needs a `volumeMounts` entry.
+      #                   `hostPaths.allowed` does not limit them. The host
+      #                   closes these directories to workload volumes only
+      #                   while the plugin is loaded, so the chart refuses a
+      #                   `hostPaths.allowed` entry that reaches
+      #                   /var/lib/wasmcloud/host-plugin-volumes. A node
+      #                   `hostPath` source must be a directory within
       #                   `pluginHostPaths.allowed` below.
       #                   Every replica of the host group mounts the volume,
       #                   and a rollout starts the new pod before the old one
@@ -1009,7 +1013,10 @@ runtime:
       #   volumeMounts    where the plugin sees each volume: `name`,
       #                   an absolute `mountPath`, and `readOnly`. The host
       #                   container's own mount is read-only unless some
-      #                   mount of that volume is writable.
+      #                   mount of that volume is writable. A source
+      #                   Kubernetes mounts read-only (`configMap`, `secret`,
+      #                   `downwardAPI`, `projected`, `image`, or one that sets
+      #                   its own `readOnly: true`) needs `readOnly: true`.
       #
       # Examples:
       #

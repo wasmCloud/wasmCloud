@@ -208,10 +208,12 @@ a host plugin at bind, not by a Kubernetes Secret: it goes to
 
 Takes the host group dict directly (e.g. `.` inside
 `range .Values.runtime.hostGroups`). Returns a JSON object
-`{fileBacked, cli, configFromNames, secretFromNames, pluginSecrets, pluginVolumes, pluginVolumesById, needsConfigFile}`,
-which callers parse with `fromJson`. `pluginVolumes` concatenates every
-entry's `runtime-operator.hostPluginVolumes`, and `pluginVolumesById` holds
-the same volumes keyed by plugin id.
+`{fileBacked, cli, configFromNames, secretFromNames, pluginSecrets, pluginVolumesById, needsConfigFile}`,
+which callers parse with `fromJson`. `pluginVolumesById` maps each plugin id
+with volumes to its `runtime-operator.hostPluginVolumes`.
+
+Refuses an entry with no `id` or a repeated one, and, when any plugin has
+volumes, a `hostPaths.allowed` entry that reaches their directory.
 */}}
 {{- define "runtime-operator.hostPluginPartition" -}}
 {{- /* Removed keys, refused rather than ignored. Helm drops values nothing
@@ -227,10 +229,12 @@ the same volumes keyed by plugin id.
 {{- $group := . }}
 {{- $fileBacked := list }}
 {{- $cli := list }}
-{{- $pluginVolumes := list }}
 {{- $pluginVolumesById := dict }}
 {{- $seenIds := dict }}
 {{- range concat (default list .plugins) (default list .hostPlugins) }}
+{{- if not .id }}
+{{- fail (printf "host plugin entry needs an `id`: %s" (toJson .)) }}
+{{- end }}
 {{- /* The host refuses a repeated id anyway. Refusing it here names the
        entry before any pod rolls, and keeps each id's volume directories
        and pod volume names its own. */}}
@@ -240,13 +244,25 @@ the same volumes keyed by plugin id.
 {{- $_ := set $seenIds (toString .id) true }}
 {{- $volumes := include "runtime-operator.hostPluginVolumes" (dict "entry" . "group" $group) | fromJsonArray }}
 {{- if $volumes }}
-{{- $pluginVolumes = concat $pluginVolumes $volumes }}
 {{- $_ := set $pluginVolumesById (toString .id) $volumes }}
 {{- end }}
 {{- if or .config .configFrom .secretFrom .allowedHosts .allowedIpNameLookups .allowedHostLoopbackPorts .ports .workloadConfig .hostOwnedKeys .bindings .volumes .volumeMounts (not (or .image .file)) }}
 {{- $fileBacked = append $fileBacked . }}
 {{- else }}
 {{- $cli = append $cli . }}
+{{- end }}
+{{- end }}
+{{- /* The host closes a plugin's mounted volume directories to workloads only
+       while that plugin is loaded: one that fails to load or exhausts its
+       restarts leaves its Pod volumes mounted and open. So a workload
+       `hostPath` allowlist must not reach them at all. */}}
+{{- if $pluginVolumesById }}
+{{- $root := "/var/lib/wasmcloud/host-plugin-volumes" }}
+{{- range (default dict .hostPaths).allowed }}
+{{- $allowed := clean (toString .) }}
+{{- if or (eq $allowed $root) (hasPrefix (printf "%s/" (trimSuffix "/" $allowed)) $root) (hasPrefix (printf "%s/" $root) $allowed) }}
+{{- fail (printf "hostGroup %s: `hostPaths.allowed` entry %s reaches %s, where this host group's plugin volumes are mounted; allow narrower directories so no workload can open a plugin's volume" $group.name $allowed $root) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- $configFromNames := list }}
@@ -277,22 +293,23 @@ the same volumes keyed by plugin id.
 {{- $mountedSecretNames = append $mountedSecretNames . }}
 {{- end }}
 {{- end }}
-{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" $mountedSecretNames "pluginSecrets" $pluginSecrets "pluginVolumes" $pluginVolumes "pluginVolumesById" $pluginVolumesById "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
+{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" $mountedSecretNames "pluginSecrets" $pluginSecrets "pluginVolumesById" $pluginVolumesById "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
 {{- end }}
 
 {{/*
 One host component plugin entry's `volumes`, checked and resolved into the
 Pod volumes deployment.yaml renders and the `hostPath` directories the
 `wash host` config file names. Returns a JSON array of
-`{plugin, name, volume, mountPath, readOnly}`:
+`{name, volume, mountPath, readOnly}`:
 
 - `volume` is the Pod volume: the entry's source under a pod-unique name.
 - `mountPath` is where the host container sees it, and so the plugin
   volume's `hostPath`: /var/lib/wasmcloud/host-plugin-volumes/<id>/<name>.
   That lies outside every directory the host reserves (the OCI cache,
-  emptyDir scratch, its config, certificate and credential mounts), and the
-  host keeps workload `hostPath` volumes out of it whatever
-  `hostPaths.allowed` says.
+  emptyDir scratch, its config, certificate and credential mounts). The
+  host closes a mounted volume's directory to workloads while the plugin
+  is loaded, and runtime-operator.hostPluginPartition keeps
+  `hostPaths.allowed` away from it for when the plugin is not.
 - `readOnly` is true unless a `volumeMounts` entry mounts the volume
   writable, so the host container gets no more access than the plugin.
 - A `hostPath` source's `path` is written cleaned, as the allowlist judged
@@ -307,9 +324,13 @@ Refused here rather than at host start, naming the plugin:
 - a volume without exactly one Pod volume source, such as `readOnly` set
   on the volume instead of its mount, or a misspelled source;
 - a Kubernetes `hostPath` source outside the host group's
-  `pluginHostPaths.allowed`, which is empty by default;
-- a writable mount of a source kubelet always mounts read-only
-  (`configMap`, `secret`, `downwardAPI`, `projected`, `image`);
+  `pluginHostPaths.allowed`, which is empty by default, or of a `type`
+  that is not a directory, since the host opens every volume as one;
+- a volume no `volumeMounts` entry uses, which would sit in the host
+  container with nothing closing it to workloads;
+- a writable mount of a source kubelet mounts read-only: `configMap`,
+  `secret`, `downwardAPI`, `projected` and `image` always, and any
+  source that sets `readOnly: true` itself;
 - a mount naming an undeclared volume or missing `mountPath`, with a
   `readOnly` that is not a boolean, or with a key the host config does not
   take (such as `subPath`), which the host would refuse as unknown.
@@ -369,6 +390,9 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- if not (kindIs "map" .hostPath) }}
 {{- fail (printf "host plugin %s: volume %q needs `hostPath` to be a map with a `path`, as a Pod volume's is" $id $name) }}
 {{- end }}
+{{- if not (has (toString (default "" .hostPath.type)) (list "" "Directory" "DirectoryOrCreate")) }}
+{{- fail (printf "host plugin %s: volume %q has `hostPath.type: %s`; the host opens a plugin volume as a directory, so use `Directory`, `DirectoryOrCreate` or no type" $id $name .hostPath.type) }}
+{{- end }}
 {{- $path := toString .hostPath.path }}
 {{- if not (hasPrefix "/" $path) }}
 {{- fail (printf "host plugin %s: volume %q needs an absolute `hostPath.path`" $id $name) }}
@@ -405,7 +429,20 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- if has $source $readOnlySources }}
 {{- fail (printf "host plugin %s: volumeMount %q is writable, but its volume is a `%s`, which Kubernetes always mounts read-only; set `readOnly: true`" $id $name $source) }}
 {{- end }}
+{{- $sourceSpec := index (index $declared $name) $source }}
+{{- if and (kindIs "map" $sourceSpec) (eq (index $sourceSpec "readOnly") true) }}
+{{- fail (printf "host plugin %s: volumeMount %q is writable, but its `%s` source sets `readOnly: true`; set `readOnly: true` on the mount too" $id $name $source) }}
+{{- end }}
 {{- $_ := set $writable $name true }}
+{{- end }}
+{{- end }}
+{{- $mounted := dict }}
+{{- range $entry.volumeMounts }}
+{{- $_ := set $mounted (toString .name) true }}
+{{- end }}
+{{- range $entry.volumes }}
+{{- if not (hasKey $mounted (toString .name)) }}
+{{- fail (printf "host plugin %s: volume %q is declared but no `volumeMounts` entry uses it; the host would not close an unmounted volume to workloads, so mount it or remove it" $id (toString .name)) }}
 {{- end }}
 {{- end }}
 {{- range $entry.volumes }}
@@ -418,7 +455,7 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- $_ := set $volume "hostPath" (merge (dict "path" (clean (toString .hostPath.path))) (omit .hostPath "path")) }}
 {{- end }}
 {{- $dir := printf "/var/lib/wasmcloud/host-plugin-volumes/%s/%s" $id $name }}
-{{- $resolved = append $resolved (dict "plugin" $id "name" $name "volume" $volume "mountPath" $dir "readOnly" (not (hasKey $writable $name))) }}
+{{- $resolved = append $resolved (dict "name" $name "volume" $volume "mountPath" $dir "readOnly" (not (hasKey $writable $name))) }}
 {{- end }}
 {{- end }}
 {{- $resolved | toJson }}

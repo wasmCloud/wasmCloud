@@ -35,6 +35,8 @@ jobs:
               - 'runtime-operator/config/crd/bases/**'
               - '.github/workflows/charts.yml'
               - '.github/scripts/check-termination-grace.mjs'
+              - '.github/scripts/chart-plugin-volumes.test.mjs'
+              - '.github/scripts/lib/helm.mjs'
               - 'crates/wash-runtime/src/washlet/mod.rs'
               - 'runtime-gateway/proxy.go'
               - 'Makefile'
@@ -57,6 +59,8 @@ jobs:
         run: make helm-render
       - name: Verify every pod outlives its own shutdown
         run: node .github/scripts/check-termination-grace.mjs
+      - name: Check host plugin volume rendering and refusals
+        run: node --test .github/scripts/chart-plugin-volumes.test.mjs
 
   # Runs `helm lint` + yamllint on the chart. The chart `version` is
   # release-driven (see .github/ct.yaml), so this does not enforce a version bump.
