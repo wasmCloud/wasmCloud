@@ -508,7 +508,8 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     ///
     /// Called only for keys [`HostPlugin::binding_schema`] marks
     /// [`KeyOwnership::HostCeiling`], only under
-    /// [`WorkloadConfigPolicy::Deny`], and only when both sides set the key.
+    /// [`WorkloadConfigPolicy::Deny`], and only when the workload sets the key
+    /// and the host supplies a ceiling, including a schema default.
     /// Returning `false` refuses the bind. The generic layer has no opinion
     /// about what containment means for any key.
     ///
