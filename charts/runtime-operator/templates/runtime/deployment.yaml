@@ -24,7 +24,7 @@
 {{- $imgTag := $hi.tag | default $top.Values.runtime.image.tag | default $top.Chart.AppVersion }}
 {{- /* hostPlugins entries needing a `wash host` config file (--config) —
        config/configFrom/secretFrom/allowedHosts/allowedIpNameLookups/
-       allowedHostLoopbackPorts/ports have no
+       allowedHostLoopbackPorts/ports/volumes/volumeMounts have no
        `--host-plugin` CLI-arg equivalent (deliberately: a secret must never
        land on the command line). See host-plugin-config.yaml, which renders
        the ConfigMap this deployment mounts. */}}
@@ -90,6 +90,7 @@
 {{- $needsConfigFile := $partition.needsConfigFile }}
 {{- $configFromNames := $partition.configFromNames }}
 {{- $secretFromNames := $partition.secretFromNames }}
+{{- $pluginVolumes := $partition.pluginVolumes }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -178,6 +179,13 @@ spec:
                so they survive a TLS-off install. */}}
         {{- with .volumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- /* Host component plugin volumes, each a Kubernetes volume source the
+               host container mounts and the config file names as the plugin's
+               `hostPath`. runtime-operator.hostPluginVolumes resolves them. */}}
+        {{- range $pluginVolumes }}
+        - name: {{ .volume.name }}
+          {{- toYaml (omit .volume "name") | nindent 10 }}
         {{- end }}
         {{- if $needsConfigFile }}
         - name: host-plugin-config
@@ -498,6 +506,13 @@ spec:
                    mounts user volumes. */}}
             {{- with .volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- range $pluginVolumes }}
+            - name: {{ .volume.name }}
+              mountPath: {{ .mountPath }}
+              {{- if .readOnly }}
+              readOnly: true
+              {{- end }}
             {{- end }}
             {{- if $needsConfigFile }}
             - name: host-plugin-config
