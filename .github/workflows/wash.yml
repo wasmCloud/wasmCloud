@@ -58,7 +58,6 @@ jobs:
               - '.github/actions/setup-rust/**'
               - '.github/tool-versions.env'
               - '.github/scripts/wasmtime-features.mjs'
-              - '.github/scripts/check-fixture-wit.py'
               - '.github/actions/setup-syft/**'
               - '.github/scripts/release-sboms.mjs'
               - '.cargo/**'
@@ -129,7 +128,7 @@ jobs:
         uses: $/.github/actions/setup-rust
       - name: Validate fixture WIT without registry access
         if: matrix.os == 'ubuntu-latest'
-        run: python3 .github/scripts/check-fixture-wit.py
+        run: cargo xtask check-fixture-wit
       # Compile the wash-runtime wasm test fixtures. The test/bench targets
       # `include_bytes!` these, so they must exist before the `cargo test`
       # steps below. Targets wasm32-wasip2/wasip1 come from setup-rust.
