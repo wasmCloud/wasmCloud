@@ -17,6 +17,7 @@ use clap::{Parser, Subcommand};
 
 mod coverage;
 mod e2e_images;
+mod fixture_wit;
 mod fixtures;
 mod fuzz;
 #[cfg(test)]
@@ -52,6 +53,11 @@ enum Task {
         /// Build only these fixtures (by directory name); all of them if none.
         names: Vec<String>,
     },
+    /// Resolve fixture WIT using local overrides without registry access.
+    CheckFixtureWit {
+        /// Fixture root; defaults to crates/wash-runtime/tests/fixtures.
+        fixtures: Option<PathBuf>,
+    },
     /// Regenerate the committed protobuf bindings in
     /// `crates/wash-runtime/src/washlet/generated/` from
     /// `/proto/wasmcloud/runtime/v2`. CI fails if they drift.
@@ -84,6 +90,9 @@ fn main() -> Result<()> {
         Task::Fuzz { task } => fuzz::run(&workspace, task),
         Task::Coverage { task } => coverage::run(&workspace, task),
         Task::BuildFixtures { names } => build_fixtures(&workspace, &names),
+        Task::CheckFixtureWit { fixtures } => fixture_wit::run(
+            &fixtures.unwrap_or_else(|| workspace.join("crates/wash-runtime/tests/fixtures")),
+        ),
         Task::E2eImages => e2e_images::run(&workspace),
         Task::GenerateProtos => protos::run(&workspace),
         Task::BenchScale { args } => bench_scale(&workspace, &args),
