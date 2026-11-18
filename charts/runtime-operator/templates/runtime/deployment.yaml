@@ -90,9 +90,11 @@
 {{- $needsConfigFile := $partition.needsConfigFile }}
 {{- $configFromNames := $partition.configFromNames }}
 {{- $secretFromNames := $partition.secretFromNames }}
+{{- /* In declaration order, so reordering ids never changes the pod spec.
+       Every entry with volumes is file-backed. */}}
 {{- $pluginVolumes := list }}
-{{- range $partition.pluginVolumesById }}
-{{- $pluginVolumes = concat $pluginVolumes . }}
+{{- range $partition.fileBacked }}
+{{- $pluginVolumes = concat $pluginVolumes (default list (index $partition.pluginVolumesById (toString .id))) }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment

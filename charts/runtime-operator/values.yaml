@@ -995,12 +995,11 @@ runtime:
       #                   `hostPath` volume. Names are DNS-1123 labels. Only
       #                   component plugins (an `image` or `file`) take them,
       #                   and every volume needs a `volumeMounts` entry.
-      #                   `hostPaths.allowed` does not limit them. The host
-      #                   closes these directories to workload volumes only
-      #                   while the plugin is loaded, so the chart refuses a
-      #                   `hostPaths.allowed` entry that reaches
-      #                   /var/lib/wasmcloud/host-plugin-volumes. A node
-      #                   `hostPath` source must be a directory within
+      #                   `hostPaths.allowed` does not limit them, and the
+      #                   host reserves these directories for its whole life,
+      #                   so no workload volume can open one whatever
+      #                   `hostPaths.allowed` permits. A node `hostPath`
+      #                   source must be a directory within
       #                   `pluginHostPaths.allowed` below.
       #                   Every replica of the host group mounts the volume,
       #                   and a rollout starts the new pod before the old one
