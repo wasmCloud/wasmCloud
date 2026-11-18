@@ -223,6 +223,8 @@ fn stricter_ownership(left: KeyOwnership, right: KeyOwnership) -> KeyOwnership {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BindingSchema {
     ownership: BTreeMap<String, KeyOwnership>,
+    /// Host ceilings used when the operator leaves a key unset.
+    ceiling_defaults: Config,
     /// Every non-representative spelling mapped to the one it stands for, both
     /// already folded by [`canonical_key`]. See
     /// [`BindingSchema::and_aliases`].
@@ -262,6 +264,26 @@ impl BindingSchema {
         S: AsRef<str>,
     {
         self.classify(keys, KeyOwnership::HostCeiling)
+    }
+
+    /// Declare narrowable keys whose unset value grants a default ceiling.
+    ///
+    /// Defaults form the lowest host layer, before operator config and the
+    /// workload's narrowing check. Use only values the plugin already uses
+    /// when a key is unset; ordinary allowlists should keep granting nothing.
+    #[must_use]
+    pub fn and_host_ceiling_defaults<I, K, V>(mut self, defaults: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: Into<String>,
+    {
+        for (key, value) in defaults {
+            let key = self.canonical(key.as_ref());
+            self = self.classify([&key], KeyOwnership::HostCeiling);
+            self.ceiling_defaults.insert(key, value.into());
+        }
+        self
     }
 
     /// Name the remaining keys this plugin reads, closing the schema: from here
@@ -859,7 +881,8 @@ impl PluginBindingSet {
         self.host_layer_with(binding, &BindingSchema::empty())
     }
 
-    /// [`Self::host_layer`], collapsing two spellings of one key.
+    /// [`Self::host_layer`], over schema defaults and collapsing spellings of
+    /// one key.
     ///
     /// The operator's own layers need this as much as the workload's: a base
     /// that writes `Subject_Allow` and a binding that writes `subject-allow`
@@ -873,6 +896,7 @@ impl PluginBindingSet {
         // without first running the conflict validation performed at startup
         // and by `resolve`.
         let mut layer = Config::new();
+        extend_layer(&mut layer, &schema.ceiling_defaults, schema);
         extend_layer(&mut layer, &self.base, schema);
         if let Some(named) = self.bindings.get(binding) {
             extend_layer(&mut layer, named, schema);
@@ -2319,6 +2343,49 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("declares no ceiling"), "got: {err}");
+    }
+
+    #[test]
+    fn default_ceilings_are_checked_before_workload_narrowing() {
+        let schema = BindingSchema::empty()
+            .and_host_ceiling_defaults([("storage", "file")])
+            .and_aliases([("storage", "storage-kind")]);
+        let set = PluginBindingSet::new("example").with_workload_config(WorkloadConfigPolicy::Deny);
+        let equal: NarrowsFn<'_> = &|_, host, workload| host == workload;
+
+        let inherited = set.resolve("", &Config::new(), &schema, equal).unwrap();
+        assert_eq!(inherited["storage"], "file");
+        let explicit = set
+            .resolve("", &map(&[("STORAGE_KIND", "file")]), &schema, equal)
+            .unwrap();
+        assert_eq!(
+            lookup(&explicit, "storage", &schema).unwrap().expose(),
+            "file"
+        );
+        assert!(
+            set.resolve("", &map(&[("storage", "memory")]), &schema, equal)
+                .is_err()
+        );
+
+        let declared = set
+            .with_base(map(&[("storage-kind", "memory")]))
+            .with_binding("disk", map(&[("STORAGE", "file")]));
+        let base = declared
+            .resolve("", &Config::new(), &schema, equal)
+            .unwrap();
+        assert_eq!(
+            lookup(&base, "storage", &schema).unwrap().expose(),
+            "memory"
+        );
+        assert!(
+            declared
+                .resolve("", &map(&[("storage", "file")]), &schema, equal)
+                .is_err()
+        );
+        let named = declared
+            .resolve("disk", &Config::new(), &schema, equal)
+            .unwrap();
+        assert_eq!(lookup(&named, "storage", &schema).unwrap().expose(), "file");
     }
 
     #[test]

@@ -1887,6 +1887,41 @@ mod tests {
         assert!(err.contains("`bucket-replicas`"), "{err}");
     }
 
+    #[test]
+    fn explicit_file_storage_fits_the_hosts_default_under_deny() {
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(Config::from_iter([
+                ("servers".to_string(), "nats://host:4222".to_string()),
+                ("bucket-allow".to_string(), "cache".to_string()),
+                ("bucket-create-allow".to_string(), "cache".to_string()),
+                ("bucket-max-bytes".to_string(), "1048576".to_string()),
+            ]));
+        let plugin = WasmcloudNats::new();
+        let schema = super::super::binding_schema();
+        let narrows = |key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload);
+
+        for spelling in ["bucket-storage-allow", "BUCKET_STORAGE_ALLOW"] {
+            let manifest =
+                |value: &str| Config::from_iter([(spelling.to_string(), value.to_string())]);
+            let resolved = declared
+                .resolve("", &manifest("file"), &schema, &narrows)
+                .expect("explicit file storage fits the host's file-only default");
+            assert_eq!(
+                NatsConfig::from_map(&resolved)
+                    .unwrap()
+                    .policy
+                    .bucket_storage_allow,
+                [super::super::config::BucketStorage::File]
+            );
+            assert!(
+                declared
+                    .resolve("", &manifest("memory"), &schema, &narrows)
+                    .is_err()
+            );
+        }
+    }
+
     /// A blank storage list reads as unset, which is `file`, so accepting it
     /// would hand a memory-only grant file storage.
     #[test]
@@ -1904,11 +1939,13 @@ mod tests {
             Config::from_iter([("bucket-storage-allow".to_string(), value.to_string())])
         };
 
-        let err = declared
-            .resolve("", &manifest(""), &schema, &narrows)
-            .expect_err("a blank list would fall back to file")
-            .to_string();
-        assert!(err.contains("`bucket-storage-allow"), "{err}");
+        for value in ["", " , ", "file"] {
+            let err = declared
+                .resolve("", &manifest(value), &schema, &narrows)
+                .expect_err("a workload cannot widen a memory-only grant to file")
+                .to_string();
+            assert!(err.contains("`bucket-storage-allow"), "{err}");
+        }
 
         let resolved = declared
             .resolve("", &Config::new(), &schema, &narrows)

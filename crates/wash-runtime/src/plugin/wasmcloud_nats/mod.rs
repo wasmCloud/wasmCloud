@@ -49,6 +49,10 @@ pub fn binding_schema() -> crate::plugin::BindingSchema {
         std::sync::LazyLock::new(|| {
             crate::plugin::BindingSchema::with_host_owned_keys(keys::host_owned())
                 .and_host_ceiling_keys(keys::host_ceiling())
+                .and_host_ceiling_defaults([(
+                    "bucket-storage-allow",
+                    config::BucketStorage::File.as_str(),
+                )])
                 .and_workload_owned_keys(keys::workload_owned())
         });
     SCHEMA.clone()
