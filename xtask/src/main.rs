@@ -53,7 +53,8 @@ enum Task {
         /// Build only these fixtures (by directory name); all of them if none.
         names: Vec<String>,
     },
-    /// Resolve fixture WIT using local overrides without registry access.
+    /// Resolve the WIT of every fixture `wash build` fetches for, using only
+    /// local overrides and no registry access. Needs `wasm-tools` on PATH.
     CheckFixtureWit {
         /// Fixture root; defaults to crates/wash-runtime/tests/fixtures.
         fixtures: Option<PathBuf>,

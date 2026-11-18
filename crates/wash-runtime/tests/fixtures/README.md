@@ -31,6 +31,19 @@ problem); the `wash-runtime` build script stays pure-Rust proto codegen. The
 build logic lives in `/xtask/src/main.rs`, and the list of fixtures in
 `/xtask/src/fixtures.rs`.
 
+## Checking WIT without a registry
+
+```bash
+cargo xtask check-fixture-wit
+```
+
+This resolves the WIT of every fixture `wash build` fetches for, using only
+the local `path` overrides in its `wkg.toml`, so a dependency that would
+silently come from a registry fails here instead. It needs
+[`wasm-tools`](https://github.com/bytecodealliance/wasm-tools) on `PATH`.
+Fixtures that set `wit.skip_fetch` in `.wash/config.yaml` are left out, and
+`wit.sources` is refused: keep local overrides in `wkg.toml`.
+
 ## Adding a fixture
 
 1. Create a new crate directory here with its `Cargo.toml`, `src/`, and (if
