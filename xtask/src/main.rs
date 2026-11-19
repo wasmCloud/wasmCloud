@@ -17,6 +17,7 @@ use clap::{Parser, Subcommand};
 
 mod coverage;
 mod e2e_images;
+mod fixture_wit;
 mod fixtures;
 mod fuzz;
 #[cfg(test)]
@@ -52,6 +53,12 @@ enum Task {
         /// Build only these fixtures (by directory name); all of them if none.
         names: Vec<String>,
     },
+    /// Resolve the WIT of every fixture `wash build` fetches for, using only
+    /// local overrides and no registry access.
+    CheckFixtureWit {
+        /// Fixture root; defaults to crates/wash-runtime/tests/fixtures.
+        fixtures: Option<PathBuf>,
+    },
     /// Regenerate the committed protobuf bindings in
     /// `crates/wash-runtime/src/washlet/generated/` from
     /// `/proto/wasmcloud/runtime/v2`. CI fails if they drift.
@@ -84,6 +91,9 @@ fn main() -> Result<()> {
         Task::Fuzz { task } => fuzz::run(&workspace, task),
         Task::Coverage { task } => coverage::run(&workspace, task),
         Task::BuildFixtures { names } => build_fixtures(&workspace, &names),
+        Task::CheckFixtureWit { fixtures } => fixture_wit::run(
+            &fixtures.unwrap_or_else(|| workspace.join("crates/wash-runtime/tests/fixtures")),
+        ),
         Task::E2eImages => e2e_images::run(&workspace),
         Task::GenerateProtos => protos::run(&workspace),
         Task::BenchScale { args } => bench_scale(&workspace, &args),
@@ -105,6 +115,12 @@ fn bench_scale(workspace: &Path, args: &[String]) -> Result<()> {
         std::process::exit(status.code().unwrap_or(1));
     }
     Ok(())
+}
+
+/// Read and parse a TOML file, naming it in either error.
+pub(crate) fn read_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let contents = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    toml::from_str(&contents).with_context(|| format!("parse {}", path.display()))
 }
 
 /// Walk up from this crate's manifest dir to the workspace root (the

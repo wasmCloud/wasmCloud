@@ -9,10 +9,10 @@ package wasmcloud:test-msg@0.1.0;
 /// The messaging handler is `@0.3.0` because trigger services are p3-only -- the
 /// sync `@0.2.0` handler is served as a per-message component instead.
 world msg-counter {
-    import wasi:clocks/types@0.3.0;
-    import wasi:clocks/monotonic-clock@0.3.0;
-    import wasi:http/types@0.3.0;
-    export wasi:cli/run@0.3.0;
-    export wasi:http/handler@0.3.0;
+    import wasi:clocks/types@0.3.2;
+    import wasi:clocks/monotonic-clock@0.3.2;
+    import wasi:http/types@0.3.2;
+    export wasi:cli/run@0.3.2;
+    export wasi:http/handler@0.3.2;
     export wasmcloud:messaging/handler@0.3.0;
 }

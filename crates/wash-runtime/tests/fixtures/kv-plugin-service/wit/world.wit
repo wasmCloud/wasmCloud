@@ -7,7 +7,7 @@ package acme:kvservice@0.1.0;
 /// exercises that: without it nothing deploys a service against a host
 /// component plugin.
 world kv-service {
-    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.2;
     import acme:kv/store@0.1.0;
-    export wasi:cli/run@0.3.0;
+    export wasi:cli/run@0.3.2;
 }

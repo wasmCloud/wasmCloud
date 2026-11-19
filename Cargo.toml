@@ -15,7 +15,7 @@ members = [
 [workspace.package]
 authors = ["The wasmCloud Team"]
 edition = "2024"
-version = "2.12.1"
+version = "2.12.2"
 rust-version = "1.95.0"
 
 [workspace.lints.rust]
@@ -125,6 +125,7 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 tar = { version = "0.4", default-features = false }
 toml = { version = "0.8", default-features = false, features = ["display"] }
 tempfile = { version = "3.15.0", default-features = false }
+time = { version = "0.3.54", default-features = false }
 testcontainers = { version = "0.27", default-features = false }
 tokio = { version = "1.45.1", default-features = false, features = ["full"] }
 tokio-util = { version = "0.7", default-features = false }
@@ -139,20 +140,20 @@ url = { version = "2.5", default-features = false, features = ["serde"] }
 uuid = { version = "1.17.0", default-features = false }
 wasm-pkg-client = { version = "0.16.1", default-features = false }
 wasm-pkg-core = { version = "0.16.1", default-features = false }
-wasm-metadata = { version = "0.259.0", default-features = false, features = ["oci"] }
+wasm-metadata = { version = "0.263.0", default-features = false, features = ["oci"] }
 wasmcloud = { path = "crates/wasmcloud", default-features = false }
-wasmtime = { version = "48.0.8", default-features = false }
-wasmtime-wasi = { version = "48.0.8", default-features = false }
-wasmtime-wasi-io = { version = "48.0.8", default-features = false }
-wasmtime-wasi-http = { version = "48.0.8", default-features = false }
-wasmtime-wasi-tls = { version = "48.0.8", default-features = false }
+wasmtime = { version = "48.0.9", default-features = false }
+wasmtime-wasi = { version = "48.0.9", default-features = false }
+wasmtime-wasi-io = { version = "48.0.9", default-features = false }
+wasmtime-wasi-http = { version = "48.0.9", default-features = false }
+wasmtime-wasi-tls = { version = "48.0.9", default-features = false }
 # The parser wasmtime-environ 48 depends on: GC admission reads components
 # with the operator set wasmtime compiles them with, so bump it with wasmtime.
 wasmparser = { version = "0.254.2", default-features = false }
 windows-sys = { version = "0.61", default-features = false }
-wit-component = { version = "0.259.0", default-features = false }
+wit-component = { version = "0.263.0", default-features = false }
 wash-runtime = { path = "crates/wash-runtime", default-features = false }
-wat = { version = "1.259.0", default-features = false }
+wat = { version = "1.263.0", default-features = false }
 zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
 
 # postgres deps

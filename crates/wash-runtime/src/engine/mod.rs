@@ -1538,6 +1538,12 @@ impl EngineBuilder {
     /// Directories host plugins mount as volumes. No workload volume may
     /// equal, contain, or lie inside one, even where
     /// [`Self::with_allowed_host_paths`] permits it. A plugin still mounts them.
+    ///
+    /// Loading a component plugin reserves its mounted directories until the
+    /// plugin and its supervisor release them. Embedders that start workloads
+    /// before loading plugins can list the plugin directories here. A workload
+    /// that already holds a directory keeps it when a plugin later mounts it.
+    /// Directories listed here stay reserved for the engine's life.
     #[must_use]
     pub fn with_plugin_volume_host_paths(
         mut self,

@@ -8,5 +8,5 @@ world keyvalue-default {
     import wasmcloud:keyvalue/store@0.2.0;
     import wasmcloud:keyvalue/atomics@0.2.0;
 
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
 }

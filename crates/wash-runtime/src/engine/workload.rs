@@ -1072,6 +1072,22 @@ fn build_trigger_ingresses(
     (ingresses, http_tx, messaging_tx)
 }
 
+/// Pause before the first retry of a restarted trigger service whose ingresses
+/// could not be re-registered. Each consecutive refusal waits one step longer,
+/// up to [`REREGISTRATION_BACKOFF_MAX`], so a host that refuses for a moment
+/// gets that moment instead of the budget being spent in a tight loop.
+const REREGISTRATION_BACKOFF_STEP: std::time::Duration = std::time::Duration::from_millis(200);
+/// Upper bound on the pause between re-registration attempts.
+const REREGISTRATION_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long to wait after the `refusals`-th consecutive refused
+/// re-registration before trying again.
+fn reregistration_backoff(refusals: u32) -> std::time::Duration {
+    REREGISTRATION_BACKOFF_STEP
+        .saturating_mul(refusals)
+        .min(REREGISTRATION_BACKOFF_MAX)
+}
+
 /// What a restart needs to register its service's ingresses again.
 struct ServiceIngressRegistration {
     http_handler: Arc<dyn crate::host::http::HostHandler>,
@@ -1083,9 +1099,27 @@ struct ServiceIngressRegistration {
     released: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// How registering a restarted service's ingresses ended.
+enum Reregistration {
+    /// Every ingress is registered: the service may run again.
+    Registered,
+    /// The host refused an ingress, so this restart cannot serve what the
+    /// service was started with. The attempt counts against the restart
+    /// budget, as a fault would.
+    Refused(anyhow::Error),
+    /// The workload began teardown meanwhile: the service must not run again.
+    Released,
+}
+
 impl ServiceIngressRegistration {
     /// Register a restarted service's ingresses, then undo that if the workload
-    /// began teardown meanwhile. Returns whether the service may run again.
+    /// began teardown meanwhile.
+    ///
+    /// Ingresses register in the order the first start registers them, and the
+    /// first one refused ends the attempt, as it ends the first start. Any that
+    /// registered before it are not unbound: their receivers are dropped with
+    /// the attempt, which closes them, and the next attempt replaces them with
+    /// fresh channels.
     ///
     /// Teardown sets `released` before it unbinds the workload. So if this reads
     /// it unset after registering, teardown's unbind comes later and removes this
@@ -1100,7 +1134,7 @@ impl ServiceIngressRegistration {
         self,
         http_tx: Option<tokio::sync::mpsc::Sender<crate::host::http::ServiceHttpJob>>,
         messaging_tx: Option<tokio::sync::mpsc::Sender<crate::host::trigger_service::MessagingJob>>,
-    ) -> bool {
+    ) -> Reregistration {
         let Self {
             http_handler,
             workload_id,
@@ -1109,34 +1143,33 @@ impl ServiceIngressRegistration {
             ingress_routes,
             released,
         } = self;
-        if let Some(http_tx) = http_tx
-            && let Err(e) = http_handler
-                .on_service_http_resolved(&workload_id, &ingress_routes, http_tx)
-                .await
-        {
-            error!(
-                workload.id = %workload_id,
-                workload.namespace = %workload_namespace,
-                workload.name = %workload_name,
-                err = %e,
-                "failed to re-register service HTTP handler on restart"
-            );
+        let registered = async {
+            if let Some(http_tx) = http_tx {
+                http_handler
+                    .on_service_http_resolved(&workload_id, &ingress_routes, http_tx)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to re-register service HTTP handler: {e:#}")
+                    })?;
+            }
+            if let Some(messaging_tx) = messaging_tx {
+                http_handler
+                    .on_trigger_service_messaging_resolved(&workload_id, messaging_tx)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to re-register trigger service messaging handler: {e:#}"
+                        )
+                    })?;
+            }
+            anyhow::Ok(())
         }
-        if let Some(messaging_tx) = messaging_tx
-            && let Err(e) = http_handler
-                .on_trigger_service_messaging_resolved(&workload_id, messaging_tx)
-                .await
-        {
-            error!(
-                workload.id = %workload_id,
-                workload.namespace = %workload_namespace,
-                workload.name = %workload_name,
-                err = %e,
-                "failed to re-register trigger service messaging handler on restart"
-            );
-        }
+        .await;
         if !released.load(std::sync::atomic::Ordering::SeqCst) {
-            return true;
+            return match registered {
+                Ok(()) => Reregistration::Registered,
+                Err(e) => Reregistration::Refused(e),
+            };
         }
         debug!(
             workload.id = %workload_id,
@@ -1151,7 +1184,7 @@ impl ServiceIngressRegistration {
                 "failed to unbind a service re-registered during teardown"
             );
         }
-        false
+        Reregistration::Released
     }
 }
 
@@ -1427,6 +1460,9 @@ impl ResolvedWorkload {
         let handle = tokio::spawn(async move {
             let mut first = Some(first);
             let mut restarts = max_restarts;
+            // Consecutive restarts the host refused to re-register, which
+            // paces the next attempt.
+            let mut refusals = 0u32;
             loop {
                 let result = match first.take() {
                     Some(first) => first.run(&mut store, cli_run_error).await,
@@ -1463,8 +1499,52 @@ impl ResolvedWorkload {
                                 .reregister(http_tx, messaging_tx),
                             )
                             .await;
-                            if !matches!(reregistered, Ok(true)) {
-                                break;
+                            match reregistered {
+                                Ok(Reregistration::Registered) => refusals = 0,
+                                // A refused ingress would leave the service
+                                // running without it, or, when it was the
+                                // only one, end the service as if it had
+                                // exited. Neither is what the restart was
+                                // for, so the attempt is spent as a failed
+                                // restart and retried while budget remains.
+                                Ok(Reregistration::Refused(e)) => {
+                                    // Dropping this attempt's receivers closes
+                                    // any ingress it did register; the next
+                                    // attempt registers fresh channels. Its
+                                    // store was never instantiated, so the
+                                    // next attempt can still use it.
+                                    drop(ingresses);
+                                    if restarts == 0 {
+                                        error!(
+                                            workload.id = %workload_id,
+                                            workload.namespace = %workload_namespace,
+                                            workload.name = %workload_name,
+                                            err = %e,
+                                            "trigger service could not re-register its \
+                                             ingresses; max restarts reached"
+                                        );
+                                        break;
+                                    }
+                                    refusals = refusals.saturating_add(1);
+                                    let backoff = reregistration_backoff(refusals);
+                                    warn!(
+                                        workload.id = %workload_id,
+                                        workload.namespace = %workload_namespace,
+                                        workload.name = %workload_name,
+                                        err = %e,
+                                        retries = restarts,
+                                        backoff_ms = backoff.as_millis() as u64,
+                                        "trigger service could not re-register its \
+                                         ingresses; retrying after backoff"
+                                    );
+                                    restarts = restarts.saturating_sub(1);
+                                    tokio::time::sleep(backoff).await;
+                                    continue;
+                                }
+                                // Teardown began, or the registration task
+                                // did not finish: there is nothing to restart
+                                // into.
+                                Ok(Reregistration::Released) | Err(_) => break,
                             }
                         }
                         crate::host::trigger_service::run_trigger_driver(

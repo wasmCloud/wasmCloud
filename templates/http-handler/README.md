@@ -65,6 +65,6 @@ This component exports the following [WIT interfaces](https://component-model.by
 
 ```wit
 world http-handler {
-  export wasi:http/incoming-handler@0.2.2;
+  export wasi:http/incoming-handler@0.2.12;
 }
 ```

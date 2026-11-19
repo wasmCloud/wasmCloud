@@ -19,7 +19,7 @@ mod bindings {
         async: [
             "import:wasmcloud:postgres/query@0.2.0#query",
             "import:wasmcloud:postgres/query@0.2.0#query-batch",
-            "export:wasi:http/handler@0.3.0#handle",
+            "export:wasi:http/handler@0.3.2#handle",
         ],
     });
 }

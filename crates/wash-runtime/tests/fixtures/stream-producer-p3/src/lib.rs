@@ -14,7 +14,7 @@ mod bindings {
         generate_all,
         async: [
             "export:wasmcloud:stream-test/producer@0.1.0#produce",
-            "import:wasi:clocks/monotonic-clock@0.3.0#wait-for",
+            "import:wasi:clocks/monotonic-clock@0.3.2#wait-for",
         ],
     });
 }

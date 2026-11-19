@@ -6,11 +6,11 @@ package wasmcloud:test-p3@0.1.0;
 /// handler interface is the ordinary proxy shape, and it is what lets the
 /// same-host tests exercise the P3 egress path rather than only the P2 one.
 world http-local-caller-p3 {
-    import wasi:http/types@0.3.0;
+    import wasi:http/types@0.3.2;
     // `client/send` is the outgoing side the host links (`wasi:http/handler` as
     // an *import* is a component-to-component link, which is a different thing
     // and not what an egress test wants).
-    import wasi:http/client@0.3.0;
+    import wasi:http/client@0.3.2;
 
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
 }

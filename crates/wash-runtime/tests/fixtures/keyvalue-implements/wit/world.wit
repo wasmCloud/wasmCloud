@@ -5,5 +5,5 @@ package wasmcloud:keyvalue-implements;
 world keyvalue-implements {
     import team-a: wasi:keyvalue/store@0.2.0-draft;
     import team-b: wasi:keyvalue/store@0.2.0-draft;
-    export wasi:http/incoming-handler@0.2.2;
+    export wasi:http/incoming-handler@0.2.12;
 }

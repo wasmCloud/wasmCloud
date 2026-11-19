@@ -1,10 +1,12 @@
 [overrides]
 "wasi:blobstore" = { path = "../p2-wit-deps/wasi-blobstore-0.2.0-draft" }
-"wasi:cli" = { path = "../p2-wit-deps/wasi-cli-0.2.2" }
-"wasi:clocks" = { path = "../p2-wit-deps/wasi-clocks-0.2.2" }
+"wasi:cli" = { path = "../p2-wit-deps/wasi-cli-0.2.12" }
+"wasi:clocks" = { path = "../p2-wit-deps/wasi-clocks-0.2.12" }
+"wasi:filesystem" = { path = "../p2-wit-deps/wasi-filesystem-0.2.12" }
 "wasi:config" = { path = "../p2-wit-deps/wasi-config-0.2.0-rc.1" }
-"wasi:http" = { path = "../p2-wit-deps/wasi-http-0.2.2" }
-"wasi:io" = { path = "../p2-wit-deps/wasi-io-0.2.2" }
+"wasi:http" = { path = "../p2-wit-deps/wasi-http-0.2.12" }
+"wasi:io" = { path = "../p2-wit-deps/wasi-io-0.2.12" }
 "wasi:keyvalue" = { path = "../p2-wit-deps/wasi-keyvalue-0.2.0-draft" }
 "wasi:logging" = { path = "../p2-wit-deps/wasi-logging-0.1.0-draft" }
-"wasi:random" = { path = "../p2-wit-deps/wasi-random-0.2.2" }
+"wasi:random" = { path = "../p2-wit-deps/wasi-random-0.2.12" }
+"wasi:sockets" = { path = "../p2-wit-deps/wasi-sockets-0.2.12" }

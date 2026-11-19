@@ -154,6 +154,6 @@ This component uses the following [WIT interfaces](https://component-model.bytec
 world http-kv-handler {
   import wasi:keyvalue/store@0.2.0-draft;
 
-  export wasi:http/incoming-handler@0.2.2;
+  export wasi:http/incoming-handler@0.2.12;
 }
 ```

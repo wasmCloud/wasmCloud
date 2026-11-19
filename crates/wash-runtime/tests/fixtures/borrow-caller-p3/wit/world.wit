@@ -29,9 +29,9 @@ interface middleware {
 world caller {
     import factory;
     import middleware;
-    import wasi:http/types@0.3.0;
-    import wasi:clocks/types@0.3.0;
-    import wasi:random/random@0.3.0;
+    import wasi:http/types@0.3.2;
+    import wasi:clocks/types@0.3.2;
+    import wasi:random/random@0.3.2;
 
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
 }

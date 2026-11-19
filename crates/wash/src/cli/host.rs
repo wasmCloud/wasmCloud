@@ -102,13 +102,14 @@ pub struct HostCommand {
     #[arg(long = "scheduler-nats-tls-first", default_value_t = false)]
     pub scheduler_nats_tls_first: bool,
 
-    /// Path to NATS TLS certificate file for NATS Scheduler connection. Setting
-    /// it makes TLS required.
-    #[arg(long = "scheduler-nats-tls-cert")]
+    /// Path to NATS TLS certificate file for NATS Scheduler connection, set
+    /// together with its key. Setting it makes TLS required.
+    #[arg(long = "scheduler-nats-tls-cert", requires = "scheduler_nats_tls_key")]
     pub scheduler_nats_tls_cert: Option<PathBuf>,
 
-    /// Path to NATS TLS private key file for NATS Scheduler connection
-    #[arg(long = "scheduler-nats-tls-key")]
+    /// Path to NATS TLS private key file for NATS Scheduler connection, set
+    /// together with its certificate
+    #[arg(long = "scheduler-nats-tls-key", requires = "scheduler_nats_tls_cert")]
     pub scheduler_nats_tls_key: Option<PathBuf>,
 
     /// NATS URL for Data Plane communications
@@ -164,13 +165,14 @@ pub struct HostCommand {
     #[arg(long = "data-nats-tls-first", default_value_t = false)]
     pub data_nats_tls_first: bool,
 
-    /// Path to NATS TLS certificate file for NATS Data connection. Setting it
-    /// makes TLS required.
-    #[arg(long = "data-nats-tls-cert")]
+    /// Path to NATS TLS certificate file for NATS Data connection, set together
+    /// with its key. Setting it makes TLS required.
+    #[arg(long = "data-nats-tls-cert", requires = "data_nats_tls_key")]
     pub data_nats_tls_cert: Option<PathBuf>,
 
-    /// Path to NATS TLS private key file for NATS Data connection
-    #[arg(long = "data-nats-tls-key")]
+    /// Path to NATS TLS private key file for NATS Data connection, set together
+    /// with its certificate
+    #[arg(long = "data-nats-tls-key", requires = "data_nats_tls_cert")]
     pub data_nats_tls_key: Option<PathBuf>,
 
     /// The host name to assign to the host
@@ -1152,7 +1154,12 @@ impl HostCommand {
 
     /// Every path this host reads credentials or configuration from, which no
     /// workload volume may expose.
-    fn reserved_paths(&self, config: &crate::config::Config, ctx: &CliContext) -> Vec<PathBuf> {
+    fn reserved_paths(
+        &self,
+        config: &crate::config::Config,
+        ctx: &CliContext,
+        bindings: &plugin::PluginBindings,
+    ) -> anyhow::Result<Vec<PathBuf>> {
         let project_dir = ctx.project_dir();
         let mut paths: Vec<PathBuf> = [
             &self.scheduler_nats_creds,
@@ -1192,8 +1199,7 @@ impl HostCommand {
         paths.extend(
             config
                 .host()
-                .all_plugins()
-                .unwrap_or_default()
+                .all_plugins()?
                 .into_iter()
                 .filter_map(|plugin| plugin.source.file.as_ref())
                 .map(|file| {
@@ -1207,20 +1213,18 @@ impl HostCommand {
         // A credential file a `wasmcloud:nats` or `wasi:blobstore` binding
         // names, so a workload cannot mount the Secret the binding
         // authenticates with.
-        if let Ok(bindings) = self.plugin_bindings(config, project_dir) {
-            for id in [
-                wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
-                wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
-            ] {
-                let declared = bindings.for_plugin(id);
-                let names: Vec<&str> = std::iter::once("")
-                    .chain(declared.binding_names())
-                    .collect();
-                for name in names {
-                    paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
-                        &declared.host_layer(name),
-                    ));
-                }
+        for id in [
+            wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID,
+            wash_runtime::plugin::wasi_blobstore::PLUGIN_BLOBSTORE_ID,
+        ] {
+            let declared = bindings.for_plugin(id);
+            let names: Vec<&str> = std::iter::once("")
+                .chain(declared.binding_names())
+                .collect();
+            for name in names {
+                paths.extend(wash_runtime::plugin::wasmcloud_nats::host_paths(
+                    &declared.host_layer(name),
+                ));
             }
         }
         paths.extend(
@@ -1233,7 +1237,7 @@ impl HostCommand {
                     _ => None,
                 }),
         );
-        paths
+        Ok(paths)
     }
 
     /// Build outbound TLS and start identity refresh when configured.
@@ -1475,10 +1479,13 @@ impl CliCommand for HostCommand {
             None => tracing::debug!("descriptor limit is not known on this platform"),
         }
 
+        // Use the same resolved bindings for path reservations and the host.
+        // File-backed config sources can change during startup.
+        let plugin_bindings = self.plugin_bindings(&config, project_dir)?;
         let mut engine_builder = Engine::builder()
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel())
-            .with_reserved_host_paths(self.reserved_paths(&config, ctx))
+            .with_reserved_host_paths(self.reserved_paths(&config, ctx, &plugin_bindings)?)
             .with_allowed_host_paths(self.allowed_host_paths.iter().cloned());
         if let Some(root) = &self.scratch_root {
             engine_builder = engine_builder.with_scratch_root(root);
@@ -1574,10 +1581,6 @@ impl CliCommand for HostCommand {
             )
         }
 
-        // Resolved before anything is built: a binding an operator declared
-        // wrong is a typo in the host's config file, and the workload that
-        // later asks for it is not the thing at fault.
-        let plugin_bindings = self.plugin_bindings(&config, project_dir)?;
         // Stated at startup because it decides what every workload on the
         // plugin can reach, and the default declines to take a manifest's word
         // for it. `warn` is called out rather than merely reported: it enforces
@@ -1745,6 +1748,7 @@ impl CliCommand for HostCommand {
                 insecure: self.allow_insecure_registries,
                 cache_dir: self.oci_cache_dir.clone(),
                 timeout: Some(self.registry_pull_timeout),
+                ..Default::default()
             };
             let native_plugins = cluster_host_builder.native_plugins();
             let host_ref = cluster_host_builder.host_ref();
@@ -2283,6 +2287,20 @@ mod nats_tests {
         assert!(host.data_nats_auth().hook.is_none());
     }
 
+    /// One alone would otherwise connect with no client certificate.
+    #[test]
+    fn host_nats_tls_cert_and_key_require_each_other() {
+        for plane in ["scheduler", "data"] {
+            let cert = format!("--{plane}-nats-tls-cert=tls.crt");
+            let key = format!("--{plane}-nats-tls-key=tls.key");
+            for lone in [&cert, &key] {
+                let argv = ["wash-host", lone.as_str()];
+                assert!(TestCli::try_parse_from(argv).is_err(), "{argv:?}");
+            }
+            assert!(TestCli::try_parse_from(["wash-host", cert.as_str(), key.as_str()]).is_ok());
+        }
+    }
+
     /// Only a credentials file carries a JWT to repeat.
     #[test]
     fn host_nats_jwt_as_token_requires_credentials() {
@@ -2314,14 +2332,16 @@ mod nats_tests {
             .keep_working_dir()
             .build()
             .await?;
-        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
+        let config = crate::config::Config::default();
+        let bindings = wash_runtime::plugin::PluginBindings::default();
+        let paths = host.reserved_paths(&config, &ctx, &bindings)?;
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.creds")));
         assert!(paths.contains(&std::path::PathBuf::from("data.password")));
         let host = parse(&[
             "--scheduler-nats-nkey=scheduler.nk",
             "--data-nats-token-file=data.token",
         ]);
-        let paths = host.reserved_paths(&crate::config::Config::default(), &ctx);
+        let paths = host.reserved_paths(&config, &ctx, &bindings)?;
         assert!(paths.contains(&std::path::PathBuf::from("scheduler.nk")));
         assert!(paths.contains(&std::path::PathBuf::from("data.token")));
         Ok(())
@@ -2331,8 +2351,14 @@ mod nats_tests {
     /// from the base config and from each named binding.
     #[tokio::test]
     async fn reserved_paths_cover_nats_binding_files() -> anyhow::Result<()> {
+        let project = tempfile::tempdir()?;
+        let binding_config = project.path().join("orders.env");
+        std::fs::write(&binding_config, "token-file=/secrets/orders.token\n")?;
         let config = config_from(
             r#"
+configs:
+  orders:
+    file: orders.env
 host:
   plugins:
     - id: wasmcloud-nats
@@ -2340,16 +2366,22 @@ host:
         creds: /secrets/base.creds
       bindings:
         orders:
+          configFrom: [orders]
           config:
-            token-file: /secrets/orders.token
             password-file: /secrets/orders.password
 "#,
         );
         let ctx = crate::cli::CliContextBuilder::default()
+            .project_dir(project.path().to_path_buf())
             .keep_working_dir()
             .build()
             .await?;
-        let paths = parse(&[]).reserved_paths(&config, &ctx);
+        let host = parse(&[]);
+        let bindings = host.plugin_bindings(&config, ctx.project_dir())?;
+        // A source can change after resolution. Reserve the paths from the
+        // bindings the host actually installs.
+        std::fs::write(&binding_config, "token-file=/secrets/rotated.token\n")?;
+        let paths = host.reserved_paths(&config, &ctx, &bindings)?;
         for path in [
             "/secrets/base.creds",
             "/secrets/orders.token",
@@ -2357,6 +2389,7 @@ host:
         ] {
             assert!(paths.contains(&std::path::PathBuf::from(path)), "{path}");
         }
+        assert!(!paths.contains(&std::path::PathBuf::from("/secrets/rotated.token")));
         Ok(())
     }
 

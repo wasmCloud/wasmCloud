@@ -11,7 +11,7 @@ mod bindings {
             "import:wasmcloud:borrow-test-p3/middleware@0.1.0#accept",
             "import:wasmcloud:borrow-test-p3/middleware@0.1.0#accept-nested",
             "import:wasmcloud:borrow-test-p3/middleware@0.1.0#adopt",
-            "export:wasi:http/handler@0.3.0#handle",
+            "export:wasi:http/handler@0.3.2#handle",
         ],
     });
 }

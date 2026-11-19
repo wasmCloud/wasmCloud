@@ -2,10 +2,10 @@
 //! worth of workloads arriving at one host at once.
 //!
 //! A scheduler placing many workloads on one host issues every
-//! `workload_start` together, and each one compiles a component, binds its
-//! plugins and registers its route before it can report `Running`. These tests
-//! pin that the host admits the whole herd rather than losing, mis-binding or
-//! serialising part of it.
+//! `workload_start` together, and each one compiles a component and registers
+//! its route before it can report `Running`. These tests pin that the host
+//! admits the whole herd rather than losing, mis-binding or serialising part
+//! of it.
 //!
 //! Driven through [`HostApi`] rather than the washlet, so the whole herd
 //! arrives at once: the washlet's `max_concurrent_starts` permit is what caps
@@ -40,22 +40,23 @@ use std::time::{Duration, Instant};
 use wash_runtime::{
     host::HostApi,
     types::{
-        WorkloadStartRequest, WorkloadStartResponse, WorkloadState, WorkloadStatusRequest,
-        WorkloadStopRequest,
+        LocalResources, WorkloadStartRequest, WorkloadStartResponse, WorkloadState,
+        WorkloadStatusRequest, WorkloadStopRequest,
     },
 };
 
 mod common;
 use common::{
-    component_workload_request, default_counter_resources, get_status,
-    http_counter_host_interfaces, start_host_with_dynamic_router,
+    component_workload_request, get_status, http_only_host_interfaces,
+    start_host_with_dynamic_router,
 };
 
-const HTTP_COUNTER_WASM: &[u8] = include_bytes!("wasm/http_counter.wasm");
+// Keep the responsiveness measurement local: http-counter calls example.com
+// on every request, so its latency and failures would measure the network too.
+const HTTP_HANDLER_WASM: &[u8] = include_bytes!("wasm/http_handler_p2.wasm");
 
 /// Enough workloads for the herd to cost something real: fifteen components to
-/// compile, fifteen plugin bindings and fifteen route registrations, all
-/// issued at once.
+/// compile and fifteen route registrations, all issued at once.
 const HERD: usize = 15;
 
 /// The least a request to an already-serving workload is allowed, however fast
@@ -77,14 +78,18 @@ fn herd_host(i: usize) -> String {
 /// compile among identical bytes, digest or not.
 fn herd_request(host_header: &str) -> WorkloadStartRequest {
     let mut request = component_workload_request(
-        "http-counter.wasm",
+        "http-handler-p2.wasm",
         "herd-workload",
-        HTTP_COUNTER_WASM,
-        default_counter_resources(),
-        http_counter_host_interfaces(host_header),
+        HTTP_HANDLER_WASM,
+        LocalResources {
+            memory_limit_mb: 256,
+            cpu_limit: 1,
+            ..Default::default()
+        },
+        http_only_host_interfaces(host_header),
     );
     for component in &mut request.workload.components {
-        component.bytes = tagged(HTTP_COUNTER_WASM, host_header).into();
+        component.bytes = tagged(HTTP_HANDLER_WASM, host_header).into();
     }
     request
 }

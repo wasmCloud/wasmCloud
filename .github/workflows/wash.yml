@@ -126,6 +126,9 @@ jobs:
           version: ${{ env.WASM_TOOLS_VERSION }}
       - name: Setup Rust
         uses: $/.github/actions/setup-rust
+      - name: Validate fixture WIT without registry access
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo xtask check-fixture-wit
       # Compile the wash-runtime wasm test fixtures. The test/bench targets
       # `include_bytes!` these, so they must exist before the `cargo test`
       # steps below. Targets wasm32-wasip2/wasip1 come from setup-rust.
@@ -1080,10 +1083,6 @@ jobs:
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
 
       - name: Build binary (${{ matrix.target }})
-        env:
-          # Retry transient crates.io download failures (e.g. SSL eof) more
-          # aggressively than cargo's default of 3.
-          CARGO_NET_RETRY: "10"
         run: |
           # Release binaries ship with default features only — no
           # `(implements ..)` multiplexing (it is exercised in the e2e host

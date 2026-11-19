@@ -11,7 +11,7 @@ mod bindings {
         async: [
             "import:wasmcloud:ephemeral-test/compute@0.1.0#run",
             "import:wasmcloud:ephemeral-test/compute@0.1.0#calls",
-            "export:wasi:http/handler@0.3.0#handle",
+            "export:wasi:http/handler@0.3.2#handle",
         ],
     });
 }
