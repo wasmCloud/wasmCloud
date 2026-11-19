@@ -2413,10 +2413,12 @@ mod tests {
                 (start_x.integer_decode(), 2.0_f64.integer_decode()),
                 (3.0_f64.integer_decode(), (-4.5_f64).integer_decode()),
             );
-            match PgValue::from_sql(&PgType::LSEG, &wire)? {
-                PgValue::Lseg(lseg) => assert_eq!(lseg, expected),
-                other => panic!("an lseg decoded as {other:?}"),
-            }
+            // Name only the variant: CodeQL treats a Debug-formatted `PgValue`
+            // in a panic as cleartext logging of its MAC/UUID cases.
+            let PgValue::Lseg(lseg) = PgValue::from_sql(&PgType::LSEG, &wire)? else {
+                panic!("an lseg decoded as another type");
+            };
+            assert_eq!(lseg, expected);
 
             // Round trip through the encoder, then as an lseg[] element.
             let mut encoded = BytesMut::new();
@@ -2425,10 +2427,10 @@ mod tests {
             let mut array = BytesMut::new();
             PgValue::LsegArray(vec![expected, expected])
                 .to_sql_checked(&PgType::LSEG_ARRAY, &mut array)?;
-            match PgValue::from_sql(&PgType::LSEG_ARRAY, &array)? {
-                PgValue::LsegArray(lsegs) => assert_eq!(lsegs, vec![expected, expected]),
-                other => panic!("an lseg[] decoded as {other:?}"),
-            }
+            let PgValue::LsegArray(lsegs) = PgValue::from_sql(&PgType::LSEG_ARRAY, &array)? else {
+                panic!("an lseg[] decoded as another type");
+            };
+            assert_eq!(lsegs, vec![expected, expected]);
 
             // A line is three float8s; refuse it rather than misread it.
             let err = PgValue::from_sql(&PgType::LINE, &wire[..24])
