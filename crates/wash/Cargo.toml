@@ -53,6 +53,7 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 anyhow = { workspace = true }
+zeroize = { workspace = true }
 async-nats = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }

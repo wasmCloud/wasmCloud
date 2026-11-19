@@ -814,8 +814,8 @@ fn check_secret_file_perms(_file: &File, path: &Path) -> Result<()> {
 /// This catches the common `.env`-in-repo footgun before a developer
 /// accidentally commits secrets. Gitignored files are skipped (that's the
 /// well-known `.env.local` dev pattern). If `repo_root` is unknown or git
-/// is unavailable, errs on the side of warning.
-fn warn_if_in_repo(path: &Path, repo_root: Option<&Path>, name: &str) {
+/// is unavailable, errs on the side of warning. `path` must be canonical.
+pub fn warn_if_in_repo(path: &Path, repo_root: Option<&Path>, name: &str) {
     let Some(root) = repo_root else {
         // Caller didn't supply a repo root, so we can't decide. Trace-only so
         // it doesn't drown the dev terminal but is still findable.
