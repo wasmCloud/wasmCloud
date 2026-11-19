@@ -2164,7 +2164,7 @@ mod tests {
             (Date::NegativeInfinity, i32::MIN, i64::MIN),
         ] {
             let timestamp = Timestamp {
-                date: date.clone(),
+                date,
                 time: native_to_time(TimeTime::MIDNIGHT),
             };
             for (value, ty, expected) in [
@@ -2174,7 +2174,7 @@ mod tests {
                     date_wire.to_be_bytes().to_vec(),
                 ),
                 (
-                    PgValue::Timestamp(timestamp.clone()),
+                    PgValue::Timestamp(timestamp),
                     PgType::TIMESTAMP,
                     timestamp_wire.to_be_bytes().to_vec(),
                 ),
@@ -2322,7 +2322,7 @@ mod tests {
             time: native_to_time(TimeTime::from_hms_micro(23, 0, 0, 123456)?),
         };
         let zoned = TimestampTz {
-            timestamp: local_timestamp.clone(),
+            timestamp: local_timestamp,
             offset: Offset::WesternHemisphereSecs(5 * 3600),
         };
         let normalized = utc_to_timestamptz(timestamptz_to_utc(&zoned)?);
@@ -2333,9 +2333,9 @@ mod tests {
                 Date::Ymd((10_000, 1, 1)),
                 Date::PositiveInfinity,
             ]),
-            PgValue::Timestamp(infinite_timestamp.clone()),
-            PgValue::TimestampArray(vec![local_timestamp, infinite_timestamp.clone()]),
-            PgValue::TimestampTz(zoned.clone()),
+            PgValue::Timestamp(infinite_timestamp),
+            PgValue::TimestampArray(vec![local_timestamp, infinite_timestamp]),
+            PgValue::TimestampTz(zoned),
             PgValue::TimestampTzArray(vec![
                 zoned,
                 TimestampTz {
@@ -2354,9 +2354,9 @@ mod tests {
         let row = client.query_one("SELECT $1::date, $2::date[], $3::timestamp, $4::timestamp[], $5::timestamptz, $6::timestamptz[], $7::time", &params).await?;
         for (index, original) in values.iter().enumerate() {
             let expected = match index {
-                4 => PgValue::TimestampTz(normalized.clone()),
+                4 => PgValue::TimestampTz(normalized),
                 5 => PgValue::TimestampTzArray(vec![
-                    normalized.clone(),
+                    normalized,
                     TimestampTz {
                         timestamp: Timestamp {
                             date: Date::PositiveInfinity,
