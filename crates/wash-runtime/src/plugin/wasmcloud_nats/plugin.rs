@@ -79,15 +79,16 @@ pub struct WasmcloudNats {
     /// See [`subscriber::HostBacklogBudget`] for why a reservation was the
     /// wrong shape.
     host_backlog: Arc<subscriber::HostBacklogBudget>,
-    /// Where the operator grants `bucket-create-allow: *`, recorded from the
-    /// declaration so a workload narrowing `*` to names is still held to the
-    /// account budget `*` needs.
-    any_bucket_grants: std::sync::Mutex<AnyBucketGrants>,
+    /// Account-budget obligations derived from operator declarations, separate
+    /// from the bucket names the workload is permitted to create. Narrowing a
+    /// grant cannot remove its budget requirement.
+    account_budget_requirements: std::sync::Mutex<AccountBudgetRequirements>,
 }
 
-/// Operator `*` create grants, accumulated across `validate_bindings` calls.
+/// Operator account-budget requirements, accumulated across validation calls.
+/// These impose constraints; they never authorize a bucket operation.
 #[derive(Debug, Default)]
-struct AnyBucketGrants {
+struct AccountBudgetRequirements {
     /// The base grants `*`, so does any binding it is not overridden for.
     base: bool,
     /// Declared binding names.
@@ -96,10 +97,10 @@ struct AnyBucketGrants {
     named: std::collections::BTreeSet<String>,
 }
 
-impl AnyBucketGrants {
+impl AccountBudgetRequirements {
     /// An undeclared label is served the base layer, so it takes the base's
     /// answer.
-    fn covers(&self, binding: &str) -> bool {
+    fn requires_budget(&self, binding: &str) -> bool {
         self.named.contains(binding) || (self.base && !self.declared.contains(binding))
     }
 }
@@ -122,7 +123,7 @@ impl WasmcloudNats {
             ignore_discovered_servers: false,
             memory_budget: None,
             host_backlog: Arc::new(subscriber::HostBacklogBudget::unbounded()),
-            any_bucket_grants: std::sync::Mutex::default(),
+            account_budget_requirements: std::sync::Mutex::default(),
         }
     }
 
@@ -178,10 +179,11 @@ impl WasmcloudNats {
         policy.check_nats_servers_resolved(servers).await
     }
 
-    /// Records the bindings the operator grants `bucket-create-allow: *`. A
-    /// grant a plugin secret supplies counts too, since its value is not known
-    /// here. Only ever adds: this also runs per bind on a subset of bindings.
-    fn record_any_bucket_grants(&self, declared: &crate::plugin::PluginBindingSet) {
+    /// Derives account-budget requirements before workload narrowing. A
+    /// secret-supplied grant conservatively requires a budget because startup
+    /// validation cannot inspect its value. Requirements only accumulate,
+    /// since per-bind validation may provide a subset of the host's bindings.
+    fn record_account_budget_requirements(&self, declared: &crate::plugin::PluginBindingSet) {
         let schema = super::binding_schema();
         let key = schema.canonical("bucket-create-allow");
         let grants_any = |layer: &Config, pending: &std::collections::BTreeSet<String>| {
@@ -197,7 +199,7 @@ impl WasmcloudNats {
             &declared.pending_secret_keys(UNNAMED_BINDING, &schema),
         );
         let mut grants = self
-            .any_bucket_grants
+            .account_budget_requirements
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         grants.base |= base;
@@ -209,12 +211,21 @@ impl WasmcloudNats {
         }
     }
 
-    /// Whether the operator granted `binding` creation of any bucket name.
-    fn operator_grants_any_bucket(&self, binding: &str) -> bool {
-        self.any_bucket_grants
+    /// Whether the operator's declaration requires an account budget, even
+    /// after the workload narrows its permitted bucket names.
+    fn operator_requires_account_budget(&self, binding: &str) -> bool {
+        self.account_budget_requirements
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .covers(binding)
+            .requires_budget(binding)
+    }
+
+    /// A binding that can create buckets must retain the operator's budget
+    /// obligation. An effective wildcard also requires a budget when workload
+    /// configuration is allowed to supply it.
+    fn requires_account_budget(&self, binding: &str, policy: &super::config::PolicySpec) -> bool {
+        !policy.bucket_create_allow.is_empty()
+            && (policy.creates_any_bucket() || self.operator_requires_account_budget(binding))
     }
 
     /// Opens one connection per binding name.
@@ -342,9 +353,7 @@ impl WasmcloudNats {
             // to bound it; NATS then refuses each create past its limits. The
             // operator's `*` counts even when the workload narrowed it to
             // names, or redeploying with new names would escape the budget.
-            if !config.policy.bucket_create_allow.is_empty()
-                && (config.policy.creates_any_bucket() || self.operator_grants_any_bucket(binding))
-            {
+            if self.requires_account_budget(binding, &config.policy) {
                 let account = handle.jetstream.query_account().await.with_context(|| {
                     format!(
                         "wasmcloud:nats binding `{}` may create buckets under the operator's \
@@ -778,7 +787,7 @@ impl HostPlugin for WasmcloudNats {
             )
         }
 
-        self.record_any_bucket_grants(declared);
+        self.record_account_budget_requirements(declared);
 
         // The base alone is not required to be complete: a host that sets only
         // grants leaves the servers to a workload under `allow`.
@@ -2147,7 +2156,7 @@ mod tests {
     /// at bind still requires the account budget. A secret-supplied grant may
     /// be `*`, so it counts too.
     #[test]
-    fn operator_any_bucket_grants_are_recorded_per_binding() {
+    fn operator_account_budget_requirements_are_recorded_per_binding() {
         let layer = |create: &str| {
             Config::from_iter([
                 ("servers".to_string(), "nats://host:4222".to_string()),
@@ -2179,12 +2188,12 @@ mod tests {
                     ),
             )
             .unwrap();
-        assert!(plugin.operator_grants_any_bucket(UNNAMED_BINDING));
-        assert!(plugin.operator_grants_any_bucket("wild"));
-        assert!(plugin.operator_grants_any_bucket("secret"));
-        assert!(!plugin.operator_grants_any_bucket("named"));
+        assert!(plugin.operator_requires_account_budget(UNNAMED_BINDING));
+        assert!(plugin.operator_requires_account_budget("wild"));
+        assert!(plugin.operator_requires_account_budget("secret"));
+        assert!(!plugin.operator_requires_account_budget("named"));
         // An undeclared label is served the base, and so its `*`.
-        assert!(plugin.operator_grants_any_bucket("undeclared"));
+        assert!(plugin.operator_requires_account_budget("undeclared"));
 
         // A later, partial validation only adds.
         plugin
@@ -2193,7 +2202,7 @@ mod tests {
                     .with_binding("named", layer("cache")),
             )
             .unwrap();
-        assert!(plugin.operator_grants_any_bucket("wild"));
+        assert!(plugin.operator_requires_account_budget("wild"));
 
         // Without a base `*`, only bindings that grant it are covered.
         let names = WasmcloudNats::new();
@@ -2204,9 +2213,9 @@ mod tests {
                     .with_binding("wild", layer("*")),
             )
             .unwrap();
-        assert!(names.operator_grants_any_bucket("wild"));
-        assert!(!names.operator_grants_any_bucket(UNNAMED_BINDING));
-        assert!(!names.operator_grants_any_bucket("undeclared"));
+        assert!(names.operator_requires_account_budget("wild"));
+        assert!(!names.operator_requires_account_budget(UNNAMED_BINDING));
+        assert!(!names.operator_requires_account_budget("undeclared"));
 
         // An entry-level secret grant reaches the base and every binding.
         let entry_secret = WasmcloudNats::new();
@@ -2228,9 +2237,57 @@ mod tests {
                     .with_binding("inherits", Config::new()),
             )
             .unwrap();
-        assert!(entry_secret.operator_grants_any_bucket(UNNAMED_BINDING));
-        assert!(entry_secret.operator_grants_any_bucket("inherits"));
-        assert!(entry_secret.operator_grants_any_bucket("undeclared"));
+        assert!(entry_secret.operator_requires_account_budget(UNNAMED_BINDING));
+        assert!(entry_secret.operator_requires_account_budget("inherits"));
+        assert!(entry_secret.operator_requires_account_budget("undeclared"));
+    }
+
+    #[test]
+    fn bucket_creation_narrowing_preserves_account_budget_requirements() -> anyhow::Result<()> {
+        for (operator, workload, allowed, requires_budget) in [
+            ("*", None, true, true),
+            ("*", Some("cache"), true, true),
+            ("*", Some(""), true, false),
+            ("cache", None, true, false),
+            ("cache", Some("cache"), true, false),
+            ("cache", Some("*"), false, false),
+        ] {
+            let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+                .with_workload_config(WorkloadConfigPolicy::Deny)
+                .with_base(binding(&[
+                    ("servers", "nats://host:4222"),
+                    ("bucket-allow", "*"),
+                    ("bucket-create-allow", operator),
+                    ("bucket-max-bytes", "1048576"),
+                ]));
+            let plugin = WasmcloudNats::new();
+            plugin.validate_bindings(&declared)?;
+            let manifest = workload
+                .map(|value| binding(&[("bucket-create-allow", value)]))
+                .unwrap_or_default();
+            let resolved = declared.resolve(
+                UNNAMED_BINDING,
+                &manifest,
+                &super::super::binding_schema(),
+                &|key, host, workload| plugin.narrows(key, host, workload),
+            );
+            assert_eq!(resolved.is_ok(), allowed, "{operator} -> {workload:?}");
+            if !allowed {
+                continue;
+            }
+            let config = NatsConfig::from_map(&resolved?)?;
+            assert_eq!(
+                plugin.requires_account_budget(UNNAMED_BINDING, &config.policy),
+                requires_budget,
+                "{operator} -> {workload:?}"
+            );
+            assert_eq!(config.policy.bucket_max_bytes, Some(1048576));
+            assert_eq!(
+                config.policy.bucket_storage_allow,
+                [super::super::config::BucketStorage::File]
+            );
+        }
+        Ok(())
     }
 
     /// A grant the operator never declared cannot be narrowed into: an

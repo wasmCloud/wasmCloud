@@ -767,14 +767,25 @@ mod tests {
             CreateFailure::Conflict
         ));
 
-        for code in ACCOUNT_LIMIT_CODES {
-            let quota = bucket_create(CreateStreamErrorKind::JetStream(api_error(code.0)));
+        // Keep the expected server codes independent of the classifier's list,
+        // so removing an account refusal from that list fails this contract.
+        for (name, code) in [
+            ("account resources", 10002),
+            ("server resources", 10023),
+            ("stream count", 10027),
+            ("memory storage", 10028),
+            ("file storage", 10047),
+            ("required max bytes", 10113),
+            ("replica tier", 10120),
+            ("per-stream bytes", 10122),
+        ] {
+            let quota = bucket_create(CreateStreamErrorKind::JetStream(api_error(code)));
             assert!(
                 matches!(
                     classify_create_err("cache", quota),
                     CreateFailure::Other(types::NatsError::LimitExceeded(_))
                 ),
-                "{code:?}"
+                "{name} ({code})"
             );
         }
 

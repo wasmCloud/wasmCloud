@@ -1128,11 +1128,16 @@ impl PluginBindingSet {
     /// Merge the operator's declaration for `binding` with what a workload
     /// wrote, refusing under [`WorkloadConfigPolicy::Deny`] what the host owns.
     ///
-    /// Precedence is host layer, then workload config — last wins — compared by
-    /// canonical key, so a workload's `subject_allow` replaces the operator's
-    /// `subject-allow` rather than sitting beside it. Under `Deny` no key the
-    /// host owns survives the check, so that ordering only ever applies to keys
-    /// the workload is entitled to write.
+    /// Precedence, lowest first: schema defaults, applicable default bundles,
+    /// operator base, named binding, then accepted workload config. Bundles
+    /// fill only missing keys and are suppressed by explicit anchors or
+    /// exclusions, including workload values. Pending and withheld secret keys
+    /// count as set. The effective host layer is the narrowing ceiling.
+    ///
+    /// Values are compared by canonical key, so a workload's `subject_allow`
+    /// replaces the operator's `subject-allow` rather than sitting beside it.
+    /// Under `Deny` no key the host owns survives the check, so that ordering
+    /// only ever applies to keys the workload is entitled to write.
     ///
     /// # Errors
     ///

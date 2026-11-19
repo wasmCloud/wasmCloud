@@ -553,6 +553,9 @@ interface kv {
 /// Every call needs the bucket in `bucket-allow`. Creating also needs
 /// `bucket-create-allow`, and deleting needs `bucket-delete-allow`. Both are
 /// deny-by-default and host-owned.
+/// `bucket-allow` permits reads, writes and key deletion; it is not read-only.
+/// Create and whole-bucket delete grants are independent. Authorization is
+/// checked before bucket existence, including when ensuring an existing one.
 ///
 /// The host also bounds what is created. `bucket-create-allow` lists bucket
 /// names, or is `*` for any name. Under `*` the JetStream account's stream
@@ -560,6 +563,11 @@ interface kv {
 /// refuse is `limit-exceeded`. Either way `bucket-max-bytes` caps each
 /// bucket's size, and `bucket-storage-allow` decides whether it may use
 /// memory (file only unless the host allows memory).
+/// Narrowing an operator's `*` to names does not remove its account-budget
+/// requirement. Budgets are shared by all streams and workloads in a NATS
+/// account, not allocated separately to each binding or host.
+/// Quota admission has the broker's concurrency guarantees; the host does not
+/// reserve capacity or provide an atomic cross-host bucket-count limit.
 ///
 /// Replicas, placement, mirrors, and sources are not exposed: they are
 /// cluster decisions. The host's `bucket-replicas` sets the replica count;
@@ -621,6 +629,8 @@ interface kv-admin {
   ///   `max-bytes: 0` matches any size within the host's `bucket-max-bytes`,
   ///   and replicas are never compared, so a startup call survives the host
   ///   changing either.
+  ///   Ensuring it consumes no additional stream slot, even at a full stream
+  ///   quota. Its data and configuration are never updated by this call.
   /// - Any other bucket, including one over a lowered `bucket-max-bytes`: it
   ///   is left unchanged and the call fails with `config-conflict`, carrying
   ///   the configuration it has.
