@@ -2322,6 +2322,11 @@ async fn resolve_plugin_volumes(
         }
     }
 
+    // Reserved for the host's life, not only while this plugin holds them, so
+    // no workload can open one after the plugin fails or stops restarting.
+    // Every embedder that loads a plugin gets this, not just one CLI.
+    host_paths.reserve_plugin_volumes(to_open.iter().map(|(_, path)| path.clone()));
+
     let policy = host_paths.clone();
     let open_owner = owner.clone();
     let (opened, registration) =
@@ -3651,14 +3656,17 @@ mod tests {
             .open(unrelated.path())
             .expect("a directory apart from the plugin's is still permitted");
 
+        // A plugin that fails or stops restarting drops its registration; its
+        // directories stay closed for the host's life all the same.
         drop(resolved);
-        workloads
-            .open(data.path())
-            .expect("an unloaded plugin's directories are released");
+        assert!(
+            workloads.open(data.path()).is_err(),
+            "an unloaded plugin's directories stay closed to workloads"
+        );
     }
 
     #[tokio::test]
-    async fn a_directory_two_plugins_mount_stays_closed_until_both_unload() {
+    async fn a_directory_two_plugins_mount_stays_closed_after_both_unload() {
         let data = tempfile::tempdir().unwrap();
         let policy = HostPathPolicy::new([], [data.path().to_path_buf()], None, None);
         let volumes = [host_path("data", data.path())];
@@ -3676,9 +3684,10 @@ mod tests {
             "the second plugin still mounts it"
         );
         drop(second);
-        policy
-            .open(data.path())
-            .expect("released once neither plugin mounts it");
+        assert!(
+            policy.open(data.path()).is_err(),
+            "reserved for the host's life once any plugin has mounted it"
+        );
     }
 
     #[tokio::test]

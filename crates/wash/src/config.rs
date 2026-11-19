@@ -1015,28 +1015,6 @@ fn plugin_bindings_from(
 }
 
 impl HostConfig {
-    /// The `hostPath` of every volume a component plugin entry declares, as
-    /// written. Relative paths resolve against the directory `wash` runs in,
-    /// as the plugin loader resolves them.
-    ///
-    /// A host reserves these for its whole life, so no workload volume can
-    /// open one even while its plugin is not loaded: before it loads, after it
-    /// fails to, or once its supervisor gives up restarting it.
-    ///
-    /// # Errors
-    ///
-    /// Same as [`HostConfig::all_plugins`].
-    pub fn plugin_volume_host_paths(&self) -> Result<Vec<PathBuf>> {
-        Ok(self
-            .all_plugins()?
-            .into_iter()
-            .filter(|entry| entry.is_component())
-            .flat_map(|entry| &entry.volumes)
-            .filter_map(|volume| volume.host_path.as_ref())
-            .map(|host_path| host_path.path.clone())
-            .collect())
-    }
-
     /// Every declared plugin, `plugins` before the deprecated `hostPlugins`.
     ///
     /// # Errors
@@ -2973,49 +2951,6 @@ dev:
                 .for_plugin(wash_runtime::plugin::wasmcloud_nats::PLUGIN_NATS_ID)
                 .workload_config(),
             wash_runtime::plugin::WorkloadConfigPolicy::Deny,
-        );
-    }
-
-    /// Every component plugin's volume directories are listed for the host
-    /// to reserve, across both plugin lists, as written.
-    #[test]
-    fn plugin_volume_host_paths_lists_every_component_plugin_volume() {
-        let yaml = r#"
-host:
-  plugins:
-    - id: model-server
-      file: ./build/model_server.wasm
-      volumes:
-        - name: models
-          hostPath:
-            path: ./models
-        - name: cache
-          hostPath:
-            path: /var/cache/models
-      volumeMounts:
-        - name: models
-          mountPath: /models
-        - name: cache
-          mountPath: /cache
-  hostPlugins:
-    - id: other
-      file: ./build/other.wasm
-      volumes:
-        - name: data
-          hostPath:
-            path: /srv/data
-      volumeMounts:
-        - name: data
-          mountPath: /data
-"#;
-        let config: Config = serde_saphyr::from_str(yaml).unwrap();
-        assert_eq!(
-            config.host().plugin_volume_host_paths().unwrap(),
-            [
-                PathBuf::from("./models"),
-                PathBuf::from("/var/cache/models"),
-                PathBuf::from("/srv/data"),
-            ]
         );
     }
 
