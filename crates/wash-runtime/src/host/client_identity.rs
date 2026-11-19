@@ -10,7 +10,7 @@ use anyhow::{Context as _, Result};
 use arc_swap::ArcSwapOption;
 use rustls::SignatureScheme;
 use rustls::client::ResolvesClientCert;
-use rustls::pki_types::CertificateDer;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
 use tracing::{debug, error, warn};
 
@@ -85,24 +85,83 @@ impl RotatingClientIdentity {
         }))
     }
 
+    /// Hold no credential until [`Self::install`] gives it one.
+    pub fn empty() -> Arc<Self> {
+        Arc::new(Self {
+            current: ArcSwapOption::empty(),
+            last_report: Mutex::new(None),
+            last_refusal: Mutex::new(None),
+        })
+    }
+
+    /// Replace the held credential with `certs` and `key`.
+    ///
+    /// Refused, keeping the current credential, when the chain is expired, not
+    /// yet valid, or not for `key`. Returns the chain's `notAfter`.
+    ///
+    /// `key` is borrowed so the caller can zeroize the only copy of it.
+    pub fn install(
+        &self,
+        certs: Vec<CertificateDer<'static>>,
+        key: &PrivateKeyDer<'_>,
+    ) -> Result<SystemTime> {
+        crate::init_crypto();
+        let signing = rustls::crypto::aws_lc_rs::sign::any_supported_type(key)
+            .context("the issued credential's key is not usable")?;
+        let loaded = Self::parts(certs, signing, &"the issued credential")?;
+        let not_after = loaded.not_after;
+        self.current.store(Some(Arc::new(loaded)));
+        Ok(not_after)
+    }
+
+    /// The held credential, whether or not it has expired.
+    pub fn certified(&self) -> Option<Arc<CertifiedKey>> {
+        self.current
+            .load()
+            .as_ref()
+            .map(|loaded| Arc::clone(&loaded.key))
+    }
+
+    /// Drop the held credential, so none is presented.
+    pub fn clear(&self) {
+        self.current.store(None);
+    }
+
     fn read(identity: &ClientIdentity) -> Result<Loaded> {
         // CertifiedKey requires the process crypto provider.
         crate::init_crypto();
-
         let (certs, key) = identity.load()?;
-        let (not_before, not_after) = validity(&certs)
-            .with_context(|| format!("failed to read the validity period of {identity}"))?;
-        let now = SystemTime::now();
-        anyhow::ensure!(not_after > now, "{identity} has expired");
-        anyhow::ensure!(
-            not_before <= now + CLOCK_SKEW_TOLERANCE,
-            "{identity} is not valid yet"
-        );
-
         let provider = rustls::crypto::CryptoProvider::get_default()
             .context("no rustls crypto provider installed")?;
-        let certified = CertifiedKey::from_der(certs, key, provider)
+        let signing = provider
+            .key_provider
+            .load_private_key(key)
             .with_context(|| format!("{identity} is not a usable client identity"))?;
+        Self::parts(certs, signing, identity)
+    }
+
+    fn parts(
+        certs: Vec<CertificateDer<'static>>,
+        signing: Arc<dyn rustls::sign::SigningKey>,
+        label: &dyn std::fmt::Display,
+    ) -> Result<Loaded> {
+        let (not_before, not_after) = validity(&certs)
+            .with_context(|| format!("failed to read the validity period of {label}"))?;
+        let now = SystemTime::now();
+        anyhow::ensure!(not_after > now, "{label} has expired");
+        anyhow::ensure!(
+            not_before <= now + CLOCK_SKEW_TOLERANCE,
+            "{label} is not valid yet"
+        );
+
+        let certified = CertifiedKey::new(certs, signing);
+        match certified.keys_match() {
+            Ok(()) | Err(rustls::Error::InconsistentKeys(rustls::InconsistentKeys::Unknown)) => {}
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("{label} is not a usable client identity"));
+            }
+        }
         Ok(Loaded {
             key: Arc::new(certified),
             not_before,

@@ -412,6 +412,47 @@ pub struct Workload {
     pub wit_world: ::core::option::Option<WitWorld>,
     #[prost(message, repeated, tag = "6")]
     pub volumes: ::prost::alloc::vec::Vec<Volume>,
+    /// The identity the workload runs as. Unset runs it with none.
+    #[prost(message, optional, tag = "7")]
+    pub identity: ::core::option::Option<WorkloadIdentity>,
+}
+/// What the control plane grants a workload's identity. The host generates
+/// every key itself and asks its issuer for SVIDs, presenting the scheduling
+/// lease; nothing here is a credential the workload can use. The identity is
+/// resolved in the workload's namespace.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkloadIdentity {
+    /// The named WorkloadIdentity the workload runs as, if it names one.
+    #[prost(string, tag = "1")]
+    pub identity_ref: ::prost::alloc::string::String,
+    /// Digests every component, and the service if any, must have to start with
+    /// this identity: sha256:<lowercase hex> of the component's wasm bytes as the
+    /// host compiles them. For an OCI artifact that is the digest of its
+    /// uncompressed wasm layer, not of its manifest. Required.
+    #[prost(string, repeated, tag = "2")]
+    pub approved_digests: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Opaque proof that this host may run the workload, passed to the issuer.
+    /// Required. Replaced with WorkloadIdentityRenew before it expires.
+    #[prost(bytes = "vec", tag = "3")]
+    pub scheduling_lease: ::prost::alloc::vec::Vec<u8>,
+    /// When the scheduling lease expires, in seconds since the Unix epoch.
+    #[prost(int64, tag = "4")]
+    pub scheduling_lease_expires_at: i64,
+    /// Audiences the host keeps a JWT-SVID for, one SVID per audience.
+    #[prost(string, repeated, tag = "5")]
+    pub jwt_audiences: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// HTTPS destinations the host presents the X.509-SVID to.
+    #[prost(message, repeated, tag = "6")]
+    pub mtls_destinations: ::prost::alloc::vec::Vec<MtlsDestination>,
+}
+/// An exact HTTPS host and port the X.509-SVID is presented to. The server is
+/// verified against the host's roots, by host name.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MtlsDestination {
+    #[prost(string, tag = "1")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub port: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Service {
@@ -731,6 +772,27 @@ pub struct WorkloadStopResponse {
     #[prost(message, optional, tag = "1")]
     pub workload_status: ::core::option::Option<WorkloadStatus>,
 }
+/// Replace a running workload's scheduling lease, so the host keeps asking its
+/// issuer for the workload's SVIDs. Refused when the lease is empty, already
+/// expired, or expires before the one it replaces. Whoever may send
+/// WorkloadStart and WorkloadStop to the host may send this; the issuer is what
+/// checks the lease itself.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WorkloadIdentityRenewRequest {
+    #[prost(string, tag = "1")]
+    pub workload_id: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub scheduling_lease: ::prost::alloc::vec::Vec<u8>,
+    /// In seconds since the Unix epoch.
+    #[prost(int64, tag = "3")]
+    pub scheduling_lease_expires_at: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WorkloadIdentityRenewResponse {
+    /// Empty when the lease was replaced; otherwise why it was not.
+    #[prost(string, tag = "1")]
+    pub error: ::prost::alloc::string::String,
+}
 /// Generated client implementations.
 pub mod workload_service_client {
     #![allow(
@@ -910,6 +972,35 @@ pub mod workload_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn workload_identity_renew(
+            &mut self,
+            request: impl tonic::IntoRequest<super::WorkloadIdentityRenewRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::WorkloadIdentityRenewResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/wasmcloud.runtime.v2.WorkloadService/WorkloadIdentityRenew",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "wasmcloud.runtime.v2.WorkloadService",
+                        "WorkloadIdentityRenew",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -944,6 +1035,13 @@ pub mod workload_service_server {
             request: tonic::Request<super::WorkloadStopRequest>,
         ) -> std::result::Result<
             tonic::Response<super::WorkloadStopResponse>,
+            tonic::Status,
+        >;
+        async fn workload_identity_renew(
+            &self,
+            request: tonic::Request<super::WorkloadIdentityRenewRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::WorkloadIdentityRenewResponse>,
             tonic::Status,
         >;
     }
@@ -1146,6 +1244,55 @@ pub mod workload_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = WorkloadStopSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/wasmcloud.runtime.v2.WorkloadService/WorkloadIdentityRenew" => {
+                    #[allow(non_camel_case_types)]
+                    struct WorkloadIdentityRenewSvc<T: WorkloadService>(pub Arc<T>);
+                    impl<
+                        T: WorkloadService,
+                    > tonic::server::UnaryService<super::WorkloadIdentityRenewRequest>
+                    for WorkloadIdentityRenewSvc<T> {
+                        type Response = super::WorkloadIdentityRenewResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::WorkloadIdentityRenewRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as WorkloadService>::workload_identity_renew(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = WorkloadIdentityRenewSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

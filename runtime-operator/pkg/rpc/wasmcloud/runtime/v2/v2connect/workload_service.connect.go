@@ -42,6 +42,9 @@ const (
 	// WorkloadServiceWorkloadStopProcedure is the fully-qualified name of the WorkloadService's
 	// WorkloadStop RPC.
 	WorkloadServiceWorkloadStopProcedure = "/wasmcloud.runtime.v2.WorkloadService/WorkloadStop"
+	// WorkloadServiceWorkloadIdentityRenewProcedure is the fully-qualified name of the
+	// WorkloadService's WorkloadIdentityRenew RPC.
+	WorkloadServiceWorkloadIdentityRenewProcedure = "/wasmcloud.runtime.v2.WorkloadService/WorkloadIdentityRenew"
 )
 
 // WorkloadServiceClient is a client for the wasmcloud.runtime.v2.WorkloadService service.
@@ -49,6 +52,7 @@ type WorkloadServiceClient interface {
 	WorkloadStart(context.Context, *connect.Request[v2.WorkloadStartRequest]) (*connect.Response[v2.WorkloadStartResponse], error)
 	WorkloadStatus(context.Context, *connect.Request[v2.WorkloadStatusRequest]) (*connect.Response[v2.WorkloadStatusResponse], error)
 	WorkloadStop(context.Context, *connect.Request[v2.WorkloadStopRequest]) (*connect.Response[v2.WorkloadStopResponse], error)
+	WorkloadIdentityRenew(context.Context, *connect.Request[v2.WorkloadIdentityRenewRequest]) (*connect.Response[v2.WorkloadIdentityRenewResponse], error)
 }
 
 // NewWorkloadServiceClient constructs a client for the wasmcloud.runtime.v2.WorkloadService
@@ -80,14 +84,21 @@ func NewWorkloadServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(workloadServiceMethods.ByName("WorkloadStop")),
 			connect.WithClientOptions(opts...),
 		),
+		workloadIdentityRenew: connect.NewClient[v2.WorkloadIdentityRenewRequest, v2.WorkloadIdentityRenewResponse](
+			httpClient,
+			baseURL+WorkloadServiceWorkloadIdentityRenewProcedure,
+			connect.WithSchema(workloadServiceMethods.ByName("WorkloadIdentityRenew")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // workloadServiceClient implements WorkloadServiceClient.
 type workloadServiceClient struct {
-	workloadStart  *connect.Client[v2.WorkloadStartRequest, v2.WorkloadStartResponse]
-	workloadStatus *connect.Client[v2.WorkloadStatusRequest, v2.WorkloadStatusResponse]
-	workloadStop   *connect.Client[v2.WorkloadStopRequest, v2.WorkloadStopResponse]
+	workloadStart         *connect.Client[v2.WorkloadStartRequest, v2.WorkloadStartResponse]
+	workloadStatus        *connect.Client[v2.WorkloadStatusRequest, v2.WorkloadStatusResponse]
+	workloadStop          *connect.Client[v2.WorkloadStopRequest, v2.WorkloadStopResponse]
+	workloadIdentityRenew *connect.Client[v2.WorkloadIdentityRenewRequest, v2.WorkloadIdentityRenewResponse]
 }
 
 // WorkloadStart calls wasmcloud.runtime.v2.WorkloadService.WorkloadStart.
@@ -105,11 +116,17 @@ func (c *workloadServiceClient) WorkloadStop(ctx context.Context, req *connect.R
 	return c.workloadStop.CallUnary(ctx, req)
 }
 
+// WorkloadIdentityRenew calls wasmcloud.runtime.v2.WorkloadService.WorkloadIdentityRenew.
+func (c *workloadServiceClient) WorkloadIdentityRenew(ctx context.Context, req *connect.Request[v2.WorkloadIdentityRenewRequest]) (*connect.Response[v2.WorkloadIdentityRenewResponse], error) {
+	return c.workloadIdentityRenew.CallUnary(ctx, req)
+}
+
 // WorkloadServiceHandler is an implementation of the wasmcloud.runtime.v2.WorkloadService service.
 type WorkloadServiceHandler interface {
 	WorkloadStart(context.Context, *connect.Request[v2.WorkloadStartRequest]) (*connect.Response[v2.WorkloadStartResponse], error)
 	WorkloadStatus(context.Context, *connect.Request[v2.WorkloadStatusRequest]) (*connect.Response[v2.WorkloadStatusResponse], error)
 	WorkloadStop(context.Context, *connect.Request[v2.WorkloadStopRequest]) (*connect.Response[v2.WorkloadStopResponse], error)
+	WorkloadIdentityRenew(context.Context, *connect.Request[v2.WorkloadIdentityRenewRequest]) (*connect.Response[v2.WorkloadIdentityRenewResponse], error)
 }
 
 // NewWorkloadServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -137,6 +154,12 @@ func NewWorkloadServiceHandler(svc WorkloadServiceHandler, opts ...connect.Handl
 		connect.WithSchema(workloadServiceMethods.ByName("WorkloadStop")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workloadServiceWorkloadIdentityRenewHandler := connect.NewUnaryHandler(
+		WorkloadServiceWorkloadIdentityRenewProcedure,
+		svc.WorkloadIdentityRenew,
+		connect.WithSchema(workloadServiceMethods.ByName("WorkloadIdentityRenew")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/wasmcloud.runtime.v2.WorkloadService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkloadServiceWorkloadStartProcedure:
@@ -145,6 +168,8 @@ func NewWorkloadServiceHandler(svc WorkloadServiceHandler, opts ...connect.Handl
 			workloadServiceWorkloadStatusHandler.ServeHTTP(w, r)
 		case WorkloadServiceWorkloadStopProcedure:
 			workloadServiceWorkloadStopHandler.ServeHTTP(w, r)
+		case WorkloadServiceWorkloadIdentityRenewProcedure:
+			workloadServiceWorkloadIdentityRenewHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -164,4 +189,8 @@ func (UnimplementedWorkloadServiceHandler) WorkloadStatus(context.Context, *conn
 
 func (UnimplementedWorkloadServiceHandler) WorkloadStop(context.Context, *connect.Request[v2.WorkloadStopRequest]) (*connect.Response[v2.WorkloadStopResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("wasmcloud.runtime.v2.WorkloadService.WorkloadStop is not implemented"))
+}
+
+func (UnimplementedWorkloadServiceHandler) WorkloadIdentityRenew(context.Context, *connect.Request[v2.WorkloadIdentityRenewRequest]) (*connect.Response[v2.WorkloadIdentityRenewResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("wasmcloud.runtime.v2.WorkloadService.WorkloadIdentityRenew is not implemented"))
 }

@@ -264,6 +264,10 @@
                 </li>
               
                 <li>
+                  <a href="#wasmcloud.runtime.v2.MtlsDestination"><span class="badge">M</span>MtlsDestination</a>
+                </li>
+              
+                <li>
                   <a href="#wasmcloud.runtime.v2.Service"><span class="badge">M</span>Service</a>
                 </li>
               
@@ -287,6 +291,10 @@
                   <a href="#wasmcloud.runtime.v2.Workload.AnnotationsEntry"><span class="badge">M</span>Workload.AnnotationsEntry</a>
                 </li>
               
+                <li>
+                  <a href="#wasmcloud.runtime.v2.WorkloadIdentity"><span class="badge">M</span>WorkloadIdentity</a>
+                </li>
+              
               
                 <li>
                   <a href="#wasmcloud.runtime.v2.ImagePullPolicy"><span class="badge">E</span>ImagePullPolicy</a>
@@ -305,6 +313,14 @@
           <li>
             <a href="#wasmcloud%2fruntime%2fv2%2fworkload_service.proto">wasmcloud/runtime/v2/workload_service.proto</a>
             <ul>
+              
+                <li>
+                  <a href="#wasmcloud.runtime.v2.WorkloadIdentityRenewRequest"><span class="badge">M</span>WorkloadIdentityRenewRequest</a>
+                </li>
+              
+                <li>
+                  <a href="#wasmcloud.runtime.v2.WorkloadIdentityRenewResponse"><span class="badge">M</span>WorkloadIdentityRenewResponse</a>
+                </li>
               
                 <li>
                   <a href="#wasmcloud.runtime.v2.WorkloadStartRequest"><span class="badge">M</span>WorkloadStartRequest</a>
@@ -1046,6 +1062,37 @@ open this door alone. </p></td>
 
         
       
+        <h3 id="wasmcloud.runtime.v2.MtlsDestination">MtlsDestination</h3>
+        <p>An exact HTTPS host and port the X.509-SVID is presented to. The server is</p><p>verified against the host's roots, by host name.</p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>host</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>port</td>
+                  <td><a href="#uint32">uint32</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
         <h3 id="wasmcloud.runtime.v2.Service">Service</h3>
         <p></p>
 
@@ -1258,6 +1305,13 @@ The &#39;config&#39; on each host_interface may carry Workload Specific configur
                   <td><p> </p></td>
                 </tr>
               
+                <tr>
+                  <td>identity</td>
+                  <td><a href="#wasmcloud.runtime.v2.WorkloadIdentity">WorkloadIdentity</a></td>
+                  <td></td>
+                  <td><p>The identity the workload runs as. Unset runs it with none. </p></td>
+                </tr>
+              
             </tbody>
           </table>
 
@@ -1287,6 +1341,69 @@ The &#39;config&#39; on each host_interface may carry Workload Specific configur
                   <td><a href="#string">string</a></td>
                   <td></td>
                   <td><p> </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
+        <h3 id="wasmcloud.runtime.v2.WorkloadIdentity">WorkloadIdentity</h3>
+        <p>What the control plane grants a workload's identity. The host generates</p><p>every key itself and asks its issuer for SVIDs, presenting the scheduling</p><p>lease; nothing here is a credential the workload can use. The identity is</p><p>resolved in the workload's namespace.</p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>identity_ref</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>The named WorkloadIdentity the workload runs as, if it names one. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>approved_digests</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Digests every component, and the service if any, must have to start with
+this identity: sha256:&lt;lowercase hex&gt; of the component&#39;s wasm bytes as the
+host compiles them. For an OCI artifact that is the digest of its
+uncompressed wasm layer, not of its manifest. Required. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>scheduling_lease</td>
+                  <td><a href="#bytes">bytes</a></td>
+                  <td></td>
+                  <td><p>Opaque proof that this host may run the workload, passed to the issuer.
+Required. Replaced with WorkloadIdentityRenew before it expires. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>scheduling_lease_expires_at</td>
+                  <td><a href="#int64">int64</a></td>
+                  <td></td>
+                  <td><p>When the scheduling lease expires, in seconds since the Unix epoch. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>jwt_audiences</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Audiences the host keeps a JWT-SVID for, one SVID per audience. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>mtls_destinations</td>
+                  <td><a href="#wasmcloud.runtime.v2.MtlsDestination">MtlsDestination</a></td>
+                  <td>repeated</td>
+                  <td><p>HTTPS destinations the host presents the X.509-SVID to. </p></td>
                 </tr>
               
             </tbody>
@@ -1405,6 +1522,68 @@ Then the host removes the workload from its internal state.</p></td>
       </div>
       <p></p>
 
+      
+        <h3 id="wasmcloud.runtime.v2.WorkloadIdentityRenewRequest">WorkloadIdentityRenewRequest</h3>
+        <p>Replace a running workload's scheduling lease, so the host keeps asking its</p><p>issuer for the workload's SVIDs. Refused when the lease is empty, already</p><p>expired, or expires before the one it replaces. Whoever may send</p><p>WorkloadStart and WorkloadStop to the host may send this; the issuer is what</p><p>checks the lease itself.</p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>workload_id</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>scheduling_lease</td>
+                  <td><a href="#bytes">bytes</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>scheduling_lease_expires_at</td>
+                  <td><a href="#int64">int64</a></td>
+                  <td></td>
+                  <td><p>In seconds since the Unix epoch. </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
+        <h3 id="wasmcloud.runtime.v2.WorkloadIdentityRenewResponse">WorkloadIdentityRenewResponse</h3>
+        <p></p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>error</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>Empty when the lease was replaced; otherwise why it was not. </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
       
         <h3 id="wasmcloud.runtime.v2.WorkloadStartRequest">WorkloadStartRequest</h3>
         <p></p>
@@ -1627,6 +1806,13 @@ Then the host removes the workload from its internal state.</p></td>
                 <td>WorkloadStop</td>
                 <td><a href="#wasmcloud.runtime.v2.WorkloadStopRequest">WorkloadStopRequest</a></td>
                 <td><a href="#wasmcloud.runtime.v2.WorkloadStopResponse">WorkloadStopResponse</a></td>
+                <td><p></p></td>
+              </tr>
+            
+              <tr>
+                <td>WorkloadIdentityRenew</td>
+                <td><a href="#wasmcloud.runtime.v2.WorkloadIdentityRenewRequest">WorkloadIdentityRenewRequest</a></td>
+                <td><a href="#wasmcloud.runtime.v2.WorkloadIdentityRenewResponse">WorkloadIdentityRenewResponse</a></td>
                 <td><p></p></td>
               </tr>
             

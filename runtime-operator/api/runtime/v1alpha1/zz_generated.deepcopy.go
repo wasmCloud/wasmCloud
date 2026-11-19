@@ -959,6 +959,11 @@ func (in *WorkloadSpec) DeepCopyInto(out *WorkloadSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.IdentityRef != nil {
+		in, out := &in.IdentityRef, &out.IdentityRef
+		*out = new(v1.LocalObjectReference)
+		**out = **in
+	}
 	if in.Kubernetes != nil {
 		in, out := &in.Kubernetes, &out.Kubernetes
 		*out = new(KubernetesSpec)

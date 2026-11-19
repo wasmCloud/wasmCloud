@@ -9,6 +9,7 @@ service WorkloadService {
   rpc WorkloadStart(WorkloadStartRequest) returns (WorkloadStartResponse);
   rpc WorkloadStatus(WorkloadStatusRequest) returns (WorkloadStatusResponse);
   rpc WorkloadStop(WorkloadStopRequest) returns (WorkloadStopResponse);
+  rpc WorkloadIdentityRenew(WorkloadIdentityRenewRequest) returns (WorkloadIdentityRenewResponse);
 }
 
 message WorkloadStartRequest {
@@ -40,4 +41,21 @@ message WorkloadStopRequest {
 
 message WorkloadStopResponse {
   WorkloadStatus workload_status = 1;
+}
+
+// Replace a running workload's scheduling lease, so the host keeps asking its
+// issuer for the workload's SVIDs. Refused when the lease is empty, already
+// expired, or expires before the one it replaces. Whoever may send
+// WorkloadStart and WorkloadStop to the host may send this; the issuer is what
+// checks the lease itself.
+message WorkloadIdentityRenewRequest {
+  string workload_id = 1;
+  bytes scheduling_lease = 2;
+  // In seconds since the Unix epoch.
+  int64 scheduling_lease_expires_at = 3;
+}
+
+message WorkloadIdentityRenewResponse {
+  // Empty when the lease was replaced; otherwise why it was not.
+  string error = 1;
 }

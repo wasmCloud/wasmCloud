@@ -744,8 +744,7 @@ impl PooledClient {
                 quota,
                 permit_wait: crate::host::quota::DEFAULT_HTTP_WAIT,
                 idle_per_authority: MIN_IDLE_PER_AUTHORITY,
-                gate: Arc::default(),
-                host_loopback: HostLoopbackGrants::default(),
+                policy: ConnectPolicy::default(),
             },
         )
     }
@@ -758,8 +757,7 @@ impl PooledClient {
             quota,
             permit_wait,
             idle_per_authority,
-            gate,
-            host_loopback,
+            policy,
         } = bounds;
         crate::init_crypto();
         // Both protocols use the current identity on every new connection.
@@ -767,8 +765,8 @@ impl PooledClient {
         let last_permit_warning = Arc::new(std::sync::Mutex::new(None));
         let connector = |alpn: Alpn| BoundedConnector {
             tls: with_alpn(&tls_config, alpn),
-            gate: Arc::clone(&gate),
-            host_loopback: host_loopback.clone(),
+            alpn,
+            policy: policy.clone(),
             workload: workload.clone(),
             quota: quota.clone(),
             permit_wait,
@@ -914,6 +912,52 @@ pub trait ClientTlsConfigResolver: Send + Sync + 'static {
     /// [`OutgoingHandler::client_tls_config`]: crate::host::http::OutgoingHandler::client_tls_config
     /// [`DefaultOutgoingHandler`]: crate::host::http::DefaultOutgoingHandler
     fn host_config(&self) -> Arc<rustls::ClientConfig>;
+
+    /// The configuration `workload_id`'s HTTPS connections to `host:port` use
+    /// when it differs from [`Self::config_for`], with when a connection made
+    /// with it must close. `None` uses [`Self::config_for`].
+    ///
+    /// Asked once per new connection, so it must be as cheap as
+    /// [`Self::config_for`], and the configuration and its end always describe
+    /// the same credential. Connections are pooled per destination, so every
+    /// connection a workload holds to one destination was made with the same
+    /// answer for as long as the answer stays the same.
+    ///
+    /// A resolver that wraps another must forward this, `closes` included, or
+    /// the identity the inner one presents is either lost or kept open past
+    /// its expiry and revocation.
+    fn destination_tls(&self, workload_id: &str, host: &str, port: u16) -> Option<DestinationTls>;
+
+    /// The configuration part of [`Self::destination_tls`].
+    fn config_for_destination(
+        &self,
+        workload_id: &str,
+        host: &str,
+        port: u16,
+    ) -> Option<Arc<rustls::ClientConfig>> {
+        self.destination_tls(workload_id, host, port)
+            .map(|tls| tls.config)
+    }
+}
+
+/// A destination's own TLS configuration, and when connections made with
+/// it must close.
+pub struct DestinationTls {
+    pub config: Arc<rustls::ClientConfig>,
+    /// Resolves when a connection made with `config` must close, for example
+    /// when the credential it presents expires or is revoked. The pool closes
+    /// the connection then, idle or not.
+    pub closes: Option<std::pin::Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
+}
+
+impl DestinationTls {
+    /// A configuration whose connections stay valid while the pool keeps them.
+    pub fn new(config: Arc<rustls::ClientConfig>) -> Self {
+        Self {
+            config,
+            closes: None,
+        }
+    }
 }
 
 /// One configuration for every workload, which is what a host without
@@ -925,6 +969,10 @@ impl ClientTlsConfigResolver for Arc<rustls::ClientConfig> {
 
     fn host_config(&self) -> Arc<rustls::ClientConfig> {
         Arc::clone(self)
+    }
+
+    fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+        None
     }
 }
 
@@ -962,6 +1010,10 @@ pub struct WorkloadClients {
     /// The address check every client's new connections pass; see
     /// [`Self::install_egress_gate`].
     egress: Arc<OnceLock<EgressAddressGate>>,
+    /// The host's workload identities; see [`Self::install_workload_credentials`].
+    identity: Arc<OnceLock<crate::host::workload_identity::WorkloadCredentials>>,
+    /// `tls` wrapped to present `identity`, built on first use after install.
+    identified: Arc<OnceLock<Arc<dyn ClientTlsConfigResolver>>>,
     /// Unbinds whose invalidated clients have not been dropped yet. Non-zero
     /// while a task is dropping them, so a burst of unbinds runs one task
     /// rather than one each.
@@ -1058,6 +1110,8 @@ impl WorkloadClients {
                 .time_to_idle(WORKLOAD_CLIENT_IDLE)
                 .build(),
             egress: Arc::default(),
+            identity: Arc::default(),
+            identified: Arc::default(),
             host_loopback: HostLoopbackGrants::default(),
         }
     }
@@ -1085,6 +1139,38 @@ impl WorkloadClients {
     pub(crate) fn with_egress_gate_cell(mut self, cell: Arc<OnceLock<EgressAddressGate>>) -> Self {
         self.egress = cell;
         self
+    }
+
+    /// Present the X.509-SVIDs `credentials` holds to each workload's granted
+    /// mTLS destinations. Install before any client is built; the first
+    /// installed stays. Returns whether this call installed it.
+    pub fn install_workload_credentials(
+        &self,
+        credentials: crate::host::workload_identity::WorkloadCredentials,
+    ) -> bool {
+        self.identity.set(credentials).is_ok()
+    }
+
+    /// Share `cell` as this cache's identities, as [`Self::with_egress_gate_cell`].
+    pub(crate) fn with_identity_cell(
+        mut self,
+        cell: Arc<OnceLock<crate::host::workload_identity::WorkloadCredentials>>,
+    ) -> Self {
+        self.identity = cell;
+        self.identified = Arc::default();
+        self
+    }
+
+    /// The resolver connections use: [`Self::tls_config_resolver`], wrapped
+    /// to present workload identity once that is installed.
+    pub(crate) fn resolver(&self) -> Arc<dyn ClientTlsConfigResolver> {
+        match self.identity.get() {
+            Some(credentials) => Arc::clone(
+                self.identified
+                    .get_or_init(|| credentials.tls_resolver(Arc::clone(&self.tls))),
+            ),
+            None => Arc::clone(&self.tls),
+        }
     }
 
     /// Record how many guest calls `workload_id` may run at once — call when
@@ -1119,7 +1205,7 @@ impl WorkloadClients {
     /// ID share keep-alive connections (see [`crate::host::http::OutgoingHandler`]).
     pub fn client(&self, workload_id: &str) -> PooledClient {
         self.cached(workload_id, workload_id, || {
-            self.tls.config_for(workload_id)
+            self.resolver().config_for(workload_id)
         })
     }
 
@@ -1137,7 +1223,7 @@ impl WorkloadClients {
         if let Some(client) = self.clients.get(&secret_key(workload_id)) {
             return client;
         }
-        let host = self.tls.host_config();
+        let host = self.resolver().host_config();
         let client = self.client(workload_id);
         // The cached client may predate the resolver's current answer, so
         // compare what it was actually built with.
@@ -1173,8 +1259,11 @@ impl WorkloadClients {
                         calls,
                         self.quotas.limits().outbound_http,
                     ),
-                    gate: Arc::clone(&self.egress),
-                    host_loopback: self.host_loopback.clone(),
+                    policy: ConnectPolicy {
+                        gate: Arc::clone(&self.egress),
+                        host_loopback: self.host_loopback.clone(),
+                        destination_tls: Some(self.resolver()),
+                    },
                 },
             )
         })
@@ -1259,8 +1348,7 @@ struct ClientBounds {
     quota: crate::host::quota::GuestConnectionQuota,
     permit_wait: Duration,
     idle_per_authority: usize,
-    gate: Arc<OnceLock<EgressAddressGate>>,
-    host_loopback: HostLoopbackGrants,
+    policy: ConnectPolicy,
 }
 
 /// Connector that gates every *new* connection on the host's
@@ -1275,12 +1363,8 @@ struct ClientBounds {
 struct BoundedConnector {
     /// Offers the pool's ALPN; see [`with_alpn`].
     tls: Arc<rustls::ClientConfig>,
-    /// Installed by the host once it is built; read on every connect, so a
-    /// client built before that still applies it. Empty checks nothing.
-    gate: Arc<OnceLock<EgressAddressGate>>,
-    /// Read on every connect, so a port granted after this client was built
-    /// still applies.
-    host_loopback: HostLoopbackGrants,
+    alpn: Alpn,
+    policy: ConnectPolicy,
     /// The workload this connector belongs to, named in the exhaustion
     /// warning. `None` for a standalone [`PooledClient::new`] client.
     workload: Option<Arc<str>>,
@@ -1290,6 +1374,45 @@ struct BoundedConnector {
     /// [`warn_permits_exhausted`].
     last_permit_warning: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
+
+/// What every new connection a client makes is checked or configured by.
+#[derive(Clone, Default)]
+struct ConnectPolicy {
+    /// Installed by the host once it is built; read on every connect, so a
+    /// client built before that still applies it. Empty checks nothing.
+    gate: Arc<OnceLock<EgressAddressGate>>,
+    /// Read on every connect, so a port granted after this client was built
+    /// still applies.
+    host_loopback: HostLoopbackGrants,
+    /// Asked on every HTTPS connect for a configuration of its own for the
+    /// destination; see [`ClientTlsConfigResolver::destination_tls`].
+    destination_tls: Option<Arc<dyn ClientTlsConfigResolver>>,
+}
+
+impl BoundedConnector {
+    /// The TLS configuration for a new connection to `uri`, and when the
+    /// connection must close.
+    fn tls_for(&self, uri: &hyper::Uri, port: u16) -> (Arc<rustls::ClientConfig>, Option<Closes>) {
+        let chosen = match (&self.policy.destination_tls, self.workload.as_deref()) {
+            (Some(resolver), Some(workload))
+                if uri.scheme() == Some(&hyper::http::uri::Scheme::HTTPS) =>
+            {
+                uri.host()
+                    .and_then(|host| resolver.destination_tls(workload, host, port))
+            }
+            _ => None,
+        };
+        match chosen {
+            Some(tls) => (
+                with_alpn(&without_resumption(&tls.config), self.alpn),
+                tls.closes,
+            ),
+            None => (Arc::clone(&self.tls), None),
+        }
+    }
+}
+
+type Closes = std::pin::Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
 
 impl tower_service::Service<hyper::Uri> for BoundedConnector {
     type Response = PermittedStream;
@@ -1305,7 +1428,7 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
     }
 
     fn call(&mut self, uri: hyper::Uri) -> Self::Future {
-        let gate = self.gate.get().cloned();
+        let gate = self.policy.gate.get().cloned();
         let port = uri.port_u16().unwrap_or(
             match uri.scheme() == Some(&hyper::http::uri::Scheme::HTTPS) {
                 true => 443,
@@ -1317,7 +1440,7 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         let granted = self
             .workload
             .as_deref()
-            .map(|workload| self.host_loopback.granted(workload))
+            .map(|workload| self.policy.host_loopback.granted(workload))
             .unwrap_or_default();
         let mut http = HttpConnector::new_with_resolver(GatedResolver {
             gate: gate.clone(),
@@ -1329,7 +1452,8 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         // to the wrapping HttpsConnector.
         http.enforce_http(false);
         http.set_nodelay(true);
-        let mut inner = hyper_rustls::HttpsConnector::from((http, Arc::clone(&self.tls)));
+        let (tls, closes) = self.tls_for(&uri, port);
+        let mut inner = hyper_rustls::HttpsConnector::from((http, tls));
         let workload = self.workload.clone();
         let quota = self.quota.clone();
         let permit_wait = self.permit_wait;
@@ -1354,6 +1478,7 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
             let stream = tower_service::Service::call(&mut inner, uri).await?;
             Ok(PermittedStream {
                 inner: stream,
+                closes,
                 _slot: slot,
             })
         })
@@ -1508,7 +1633,23 @@ fn warn_permits_exhausted(
 /// the stream (connection close) releases them.
 struct PermittedStream {
     inner: hyper_rustls::MaybeHttpsStream<TokioIo<TcpStream>>,
+    /// When the credential the handshake presented stops being valid.
+    /// Polling it from the I/O paths wakes an idle pooled connection so hyper
+    /// drops it.
+    closes: Option<Closes>,
     _slot: crate::host::quota::ConnectionSlot,
+}
+
+impl PermittedStream {
+    fn expired(&mut self, cx: &mut std::task::Context<'_>) -> Option<std::io::Error> {
+        let closes = self.closes.as_mut()?;
+        closes.as_mut().poll(cx).is_ready().then(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "the credential this connection presented is no longer valid",
+            )
+        })
+    }
 }
 
 impl hyper::rt::Read for PermittedStream {
@@ -1517,6 +1658,9 @@ impl hyper::rt::Read for PermittedStream {
         cx: &mut std::task::Context<'_>,
         buf: hyper::rt::ReadBufCursor<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
+        if let Some(err) = self.expired(cx) {
+            return std::task::Poll::Ready(Err(err));
+        }
         std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
     }
 }
@@ -1527,6 +1671,9 @@ impl hyper::rt::Write for PermittedStream {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        if let Some(err) = self.expired(cx) {
+            return std::task::Poll::Ready(Err(err));
+        }
         std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
     }
 
@@ -1553,6 +1700,9 @@ impl hyper::rt::Write for PermittedStream {
         cx: &mut std::task::Context<'_>,
         bufs: &[std::io::IoSlice<'_>],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        if let Some(err) = self.expired(cx) {
+            return std::task::Poll::Ready(Err(err));
+        }
         std::pin::Pin::new(&mut self.inner).poll_write_vectored(cx, bufs)
     }
 }
@@ -2046,6 +2196,10 @@ pub(crate) mod tests {
 
         fn host_config(&self) -> Arc<rustls::ClientConfig> {
             Arc::clone(&self.host)
+        }
+
+        fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+            None
         }
     }
 
@@ -3271,6 +3425,130 @@ pub(crate) mod tests {
         }
     }
 
+    /// A resolver's per-destination configuration is what connections to
+    /// that destination negotiate with, and no other destination's.
+    #[tokio::test]
+    async fn a_destination_configuration_applies_to_its_destination_only() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        crate::init_crypto();
+        let dir = tempfile::tempdir().unwrap();
+        let (certs, key) = write_identity(dir.path(), "svid").load().unwrap();
+        let identity = Arc::new(
+            rustls::sign::CertifiedKey::from_der(
+                certs,
+                key,
+                rustls::crypto::CryptoProvider::get_default().unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(identity.cert[0].clone()).unwrap();
+        let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(roots))
+            .allow_unauthenticated()
+            .build()
+            .unwrap();
+        let server = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let ca_path = dir.path().join("server.pem");
+        std::fs::write(&ca_path, server.cert.pem()).unwrap();
+        let key =
+            rustls::pki_types::PrivateKeyDer::try_from(server.signing_key.serialize_der()).unwrap();
+        let config = rustls::ServerConfig::builder()
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(vec![server.cert.der().clone()], key)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+
+        let mut ports = Vec::new();
+        let (observed, mut observations) = tokio::sync::mpsc::channel(4);
+        for _ in 0..2 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            ports.push(port);
+            let acceptor = acceptor.clone();
+            let observed = observed.clone();
+            tokio::spawn(async move {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let mut tls = acceptor.accept(tcp).await.unwrap();
+                let peer = tls
+                    .get_ref()
+                    .1
+                    .peer_certificates()
+                    .and_then(|certs| certs.first())
+                    .cloned();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(tls.read_u8().await.unwrap());
+                }
+                tls.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok",
+                )
+                .await
+                .unwrap();
+                tls.shutdown().await.unwrap();
+                observed.send((port, peer)).await.unwrap();
+            });
+        }
+
+        let options = ClientTlsOptions {
+            roots: TrustRoots::ExtraOnly,
+            extra_ca_paths: vec![ca_path],
+            ..Default::default()
+        };
+        let plain = options.build().unwrap();
+        let presenting = Arc::new(SwappableIdentity::default());
+        *presenting.0.write().unwrap() = Some(Arc::clone(&identity));
+        let with_identity = options.build_with_resolver(presenting as _).unwrap();
+
+        struct OneDestination {
+            plain: Arc<rustls::ClientConfig>,
+            with_identity: Arc<rustls::ClientConfig>,
+            port: u16,
+        }
+        impl ClientTlsConfigResolver for OneDestination {
+            fn config_for(&self, _: &str) -> Arc<rustls::ClientConfig> {
+                Arc::clone(&self.plain)
+            }
+            fn host_config(&self) -> Arc<rustls::ClientConfig> {
+                Arc::clone(&self.plain)
+            }
+            fn destination_tls(
+                &self,
+                workload_id: &str,
+                host: &str,
+                port: u16,
+            ) -> Option<DestinationTls> {
+                (workload_id == "w1" && host == "127.0.0.1" && port == self.port)
+                    .then(|| DestinationTls::new(Arc::clone(&self.with_identity)))
+            }
+        }
+        let clients = WorkloadClients::with_tls_config_resolver(
+            Arc::new(OneDestination {
+                plain,
+                with_identity,
+                port: ports[0],
+            }),
+            crate::host::quota::QuotaRegistry::new(Default::default(), None),
+        );
+        for port in &ports {
+            let (response, _io) = timeout(
+                Duration::from_secs(5),
+                clients.client("w1").send_request(
+                    request(&format!("https://127.0.0.1:{port}/")),
+                    test_options(),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            response.into_body().collect().await.unwrap();
+            let (seen, peer) = observations.recv().await.unwrap();
+            assert_eq!(seen, *port);
+            let expected = (*port == ports[0]).then(|| identity.cert[0].clone());
+            assert_eq!(peer, expected, "port {port}");
+        }
+    }
+
     /// HTTPS to a server behind a private CA must work once that CA is added
     /// via `extra_ca_paths`, and must keep failing with a TLS error without it.
     #[tokio::test]
@@ -3335,6 +3613,9 @@ pub(crate) mod tests {
             fn host_config(&self) -> Arc<rustls::ClientConfig> {
                 Arc::clone(&self.host)
             }
+            fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+                None
+            }
         }
 
         let (port, ca_pem) = private_ca_tls_server().await;
@@ -3391,6 +3672,9 @@ pub(crate) mod tests {
             }
             fn host_config(&self) -> Arc<rustls::ClientConfig> {
                 Arc::clone(&self.host)
+            }
+            fn destination_tls(&self, _: &str, _: &str, _: u16) -> Option<DestinationTls> {
+                None
             }
         }
 

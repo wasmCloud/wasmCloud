@@ -453,6 +453,25 @@ spec:
                 additionalProperties:
                   type: string
                 type: object
+              identityRef:
+                description: |-
+                  IdentityRef names the WorkloadIdentity the workload runs as, in the
+                  workload's namespace. The operator passes only the name: the host also
+                  needs a scheduling lease and the approved component digests, which a
+                  control plane that defines WorkloadIdentity supplies, and refuses the
+                  workload without them or without an identity issuer.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
               kubernetes:
                 description: |-
                   Kubernetes groups Kubernetes-specific configuration such as Service
@@ -763,6 +782,17 @@ spec:
                   running, regardless of whether Spec.Environment was explicitly set.
                 type: string
               hostId:
+                type: string
+              stableName:
+                description: |-
+                  StableName is the name the host gives this Workload's replicas, as
+                  computed from what it was sent when first placed. It comes from names
+                  in the Workload's own namespace, chosen by whoever created it or its
+                  owners, so it is unique only within that namespace. It is fixed once
+                  placed: a later placement that would change it is refused with reason
+                  StableNameChanged, and the remedy is to recreate the Workload. Workloads
+                  placed before this field existed do not have it until they are
+                  recreated.
                 type: string
               workloadId:
                 type: string

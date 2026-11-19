@@ -72,14 +72,17 @@ use sysinfo::SystemMonitor;
 
 pub mod allowed_hosts;
 pub mod allowed_ip_name;
+pub mod aws_sts;
 pub mod client_identity;
 pub mod egress_credential;
+pub mod egress_sigv4;
 pub mod http;
 pub mod http_client;
 pub mod http_p3;
 #[cfg(feature = "host-component-plugins")]
 pub(crate) mod job_registry;
 pub mod trigger_service;
+pub mod workload_identity;
 
 /// The API for interacting with a wasmcloud host.
 ///
@@ -218,6 +221,21 @@ pub(crate) trait WorkloadReservation {
 /// and a teardown marks the id while it releases. Every write back into the map
 /// is conditional on the slot still holding the writer's own reservation.
 pub type Reservation = u64;
+
+fn refused_start(workload_id: String, message: String) -> WorkloadStartResponse {
+    WorkloadStartResponse {
+        workload_status: WorkloadStatus {
+            workload_id,
+            workload_state: WorkloadState::Error,
+            message,
+        },
+    }
+}
+
+/// Prefix of the compile-cache keys the host computes from a component's own
+/// bytes. Requests may not name one, so no workload can plant a compile under
+/// another's hash.
+const CONTENT_DIGEST_PREFIX: &str = "content:";
 
 /// Internal representation of a workload's state within the host.
 ///
@@ -375,6 +393,9 @@ pub struct Host {
     lifetime: Arc<HostLifetime>,
     config: HostConfig,
     meters: Meters,
+    /// Identity material held for workloads; see
+    /// [`HostBuilder::with_workload_credentials`].
+    workload_credentials: Option<crate::host::workload_identity::WorkloadCredentials>,
 }
 
 /// A token whose lifetime is a [`Host`]'s.
@@ -682,6 +703,7 @@ impl Host {
             }
             _ => return,
         };
+        self.release_identity(workload_id);
         match reason.or(failure) {
             Some(reason) => {
                 workloads.insert(workload_id.to_string(), HostWorkload::Error(reason));
@@ -689,6 +711,23 @@ impl Host {
             None => {
                 workloads.remove(workload_id);
             }
+        }
+    }
+
+    /// Drop `workload_id`'s identity. Only for the holder of the id's
+    /// reservation, under the workload map's lock, so it is never another
+    /// workload's.
+    fn release_identity(&self, workload_id: &str) {
+        if let Some(credentials) = &self.workload_credentials {
+            credentials.release(workload_id);
+        }
+    }
+
+    /// Stop presenting `workload_id`'s identity as it starts to stop. Same
+    /// ownership rule as [`Self::release_identity`].
+    fn revoke_identity(&self, workload_id: &str) {
+        if let Some(credentials) = &self.workload_credentials {
+            credentials.revoke(workload_id);
         }
     }
 
@@ -712,6 +751,7 @@ impl Host {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             match workloads.get_mut(workload_id) {
                 Some(slot @ HostWorkload::Running(_)) => {
+                    self.revoke_identity(workload_id);
                     match std::mem::replace(slot, HostWorkload::Stopping(reservation)) {
                         HostWorkload::Running(rw) => Some(*rw),
                         // Just matched on it.
@@ -727,6 +767,7 @@ impl Host {
                     if let HostWorkload::Starting(held) = *slot {
                         *slot = HostWorkload::Failing(held, reason.clone());
                     }
+                    self.revoke_identity(workload_id);
                     None
                 }
                 // Already being torn down, already failed, or gone: the workload
@@ -829,6 +870,9 @@ impl Host {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        if let Some(credentials) = &self.workload_credentials {
+            credentials.release_all();
+        }
         Ok(())
     }
 
@@ -873,6 +917,57 @@ impl Host {
     /// The host's version string.
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    /// The identity material this host holds for workloads, if any.
+    pub fn workload_credentials(
+        &self,
+    ) -> Option<&crate::host::workload_identity::WorkloadCredentials> {
+        self.workload_credentials.as_ref()
+    }
+
+    /// Start a workload that runs as `grant`'s identity, binding it only once
+    /// the id is reserved, so it can never replace an identity another start
+    /// of the same id is using.
+    pub async fn workload_start_with_identity(
+        &self,
+        request: WorkloadStartRequest,
+        grant: crate::host::workload_identity::IdentityGrant,
+    ) -> anyhow::Result<WorkloadStartResponse> {
+        let workload_id = request.workload_id.clone();
+        let Some(credentials) = &self.workload_credentials else {
+            return Ok(refused_start(
+                workload_id,
+                "the workload names an identity, but this host has no identity issuer".into(),
+            ));
+        };
+        let reservation = match self.workload_reserve(&workload_id).await {
+            Ok(reservation) => reservation,
+            Err(message) => return Ok(refused_start(workload_id, message)),
+        };
+        if let Err(err) = credentials.bind(&workload_id, grant) {
+            self.workload_release(&workload_id, reservation).await;
+            return Ok(refused_start(workload_id, format!("{err:#}")));
+        }
+        self.workload_start_reserved(reservation, request).await
+    }
+
+    /// Drop an identity bound for a start that was refused before it reserved
+    /// the id. Kept while a start holds the id, or once one admitted it.
+    fn release_orphaned_identity(&self, workload_id: &str) {
+        let Some(credentials) = &self.workload_credentials else {
+            return;
+        };
+        let workloads = self
+            .workloads
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !matches!(
+            workloads.get(workload_id),
+            Some(HostWorkload::Starting(_) | HostWorkload::Stopping(_) | HostWorkload::Failing(..))
+        ) {
+            credentials.release_unadmitted(workload_id);
+        }
     }
 
     /// Get host config
@@ -1010,14 +1105,72 @@ impl Host {
             .map_or(Ok(()), |guard| guard.admit_start())
     }
 
+    /// Hash what is about to load and check it against the workload's
+    /// identity grant, starting renewal if it passes. The hash is of the bytes
+    /// that compile, never a digest the request names.
+    ///
+    /// The engine shares compiles by each component's digest, so an
+    /// identity-bound workload's digests are replaced by these hashes, in a
+    /// `content:` namespace no request may name: what runs is what was hashed,
+    /// whatever digest the source or another workload reported.
+    async fn admit_identity(&self, request: &mut WorkloadStartRequest) -> anyhow::Result<()> {
+        let Some(credentials) = &self.workload_credentials else {
+            return Ok(());
+        };
+        if !credentials.is_bound(&request.workload_id) {
+            return Ok(());
+        }
+        let mut pieces: Vec<(String, bytes::Bytes)> = request
+            .workload
+            .components
+            .iter()
+            .map(|c| (c.name.clone(), c.bytes.clone()))
+            .collect();
+        if let Some(service) = &request.workload.service {
+            pieces.push(("service".to_string(), service.bytes.clone()));
+        }
+        let loaded = tokio::task::spawn_blocking(move || {
+            pieces
+                .into_iter()
+                .map(|(name, bytes)| (name, crate::host::workload_identity::sha256_digest(&bytes)))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .context("hashing the workload's components failed")?;
+        credentials.admit(&request.workload_id, &loaded)?;
+        let mut digests = loaded
+            .into_iter()
+            .map(|(_, digest)| Some(format!("{CONTENT_DIGEST_PREFIX}{digest}")));
+        for component in &mut request.workload.components {
+            component.digest = digests.next().flatten();
+        }
+        if let Some(service) = &mut request.workload.service {
+            service.digest = digests.next().flatten();
+        }
+        Ok(())
+    }
+
     async fn workload_start_inner(
         &self,
-        request: WorkloadStartRequest,
+        mut request: WorkloadStartRequest,
         cleanup: &crate::engine::workload::WorkloadResources,
     ) -> anyhow::Result<ResolvedWorkload> {
         self.check_start_memory().map_err(anyhow::Error::msg)?;
         let service_present = request.workload.service.is_some();
         let workload_id = request.workload_id.clone();
+        let named = request
+            .workload
+            .components
+            .iter()
+            .map(|c| &c.digest)
+            .chain(request.workload.service.as_ref().map(|s| &s.digest));
+        for digest in named.flatten() {
+            anyhow::ensure!(
+                !digest.starts_with(CONTENT_DIGEST_PREFIX),
+                "component digest {digest:?} uses the host's reserved `{CONTENT_DIGEST_PREFIX}` namespace"
+            );
+        }
+        self.admit_identity(&mut request).await?;
 
         // Initialize the workload using the engine, receiving the unresolved workload.
         //
@@ -1186,13 +1339,10 @@ impl HostApi for Host {
         let workload_id = request.workload_id.clone();
         match self.workload_reserve(&workload_id).await {
             Ok(reservation) => self.workload_start_reserved(reservation, request).await,
-            Err(message) => Ok(WorkloadStartResponse {
-                workload_status: WorkloadStatus {
-                    workload_id,
-                    workload_state: WorkloadState::Error,
-                    message,
-                },
-            }),
+            Err(message) => {
+                self.release_orphaned_identity(&workload_id);
+                Ok(refused_start(workload_id, message))
+            }
         }
     }
 
@@ -1358,6 +1508,7 @@ impl HostApi for Host {
                 };
                 match outcome {
                     StopAction::Mark(held) => {
+                        self.revoke_identity(&request.workload_id);
                         match workloads
                             .insert(request.workload_id.clone(), HostWorkload::Stopping(held))
                         {
@@ -1527,10 +1678,12 @@ impl WorkloadReservation for Host {
             Some(HostWorkload::Starting(held) | HostWorkload::Stopping(held))
                 if *held == reservation =>
             {
+                self.release_identity(workload_id);
                 workloads.remove(workload_id);
             }
             Some(HostWorkload::Failing(held, reason)) if *held == reservation => {
                 let reason = reason.clone();
+                self.release_identity(workload_id);
                 workloads.insert(workload_id.to_string(), HostWorkload::Error(reason));
             }
             _ => {}
@@ -1606,6 +1759,7 @@ impl WorkloadReservation for Host {
                     // image for component 'x'") never names the cause.
                     let message = format!("{err:#}");
                     if mine {
+                        self.revoke_identity(&workload_id);
                         workloads.insert(
                             workload_id.clone(),
                             HostWorkload::Failing(reservation, message.clone()),
@@ -1738,6 +1892,7 @@ pub struct HostBuilder {
     http_handler: Option<Arc<dyn crate::host::http::HostHandler>>,
     lifetime: Arc<HostLifetime>,
     config: Option<HostConfig>,
+    workload_credentials: Option<crate::host::workload_identity::WorkloadCredentials>,
     /// Unset until [`HostBuilder::with_meters`], resolved in
     /// [`HostBuilder::build`]. An option because [`Meters::new`] binds its
     /// instruments to the OTel provider global *at that moment*, and one built
@@ -1759,6 +1914,7 @@ impl Default for HostBuilder {
             http_handler: Default::default(),
             lifetime: Arc::new(HostLifetime(())),
             config: Default::default(),
+            workload_credentials: Default::default(),
             meters: Default::default(),
         }
     }
@@ -1796,6 +1952,23 @@ impl HostBuilder {
 
     pub fn with_engine(mut self, engine: Engine) -> Self {
         self.engine = Some(engine);
+        self
+    }
+
+    /// Hold workload identity in `credentials`.
+    ///
+    /// A workload bound in it starts only if every component's loaded digest
+    /// is approved for its identity, and its material is dropped when it
+    /// stops. The HTTP handler is given `credentials` when the host is built,
+    /// so the default outgoing handler presents each X.509-SVID to its granted
+    /// mTLS destinations (see [`HostHandler::install_workload_credentials`]).
+    ///
+    /// [`HostHandler::install_workload_credentials`]: crate::host::http::HostHandler::install_workload_credentials
+    pub fn with_workload_credentials(
+        mut self,
+        credentials: crate::host::workload_identity::WorkloadCredentials,
+    ) -> Self {
+        self.workload_credentials = Some(credentials);
         self
     }
 
@@ -2051,6 +2224,9 @@ impl HostBuilder {
                 &engine.socket_policy,
             ),
         );
+        if let Some(credentials) = &self.workload_credentials {
+            http_handler.install_workload_credentials(credentials.clone());
+        }
 
         // Every plugin is registered by now, so a binding declaration naming an
         // id this host does not have is a typo — and an inert one, which is the
@@ -2125,6 +2301,7 @@ impl HostBuilder {
             lifetime: self.lifetime,
             config,
             meters,
+            workload_credentials: self.workload_credentials,
         })
     }
 }
@@ -2866,6 +3043,291 @@ mod tests {
             .expect("failed to register plugin")
             .build()
             .expect("failed to build host")
+    }
+
+    struct NoIssuer;
+
+    #[async_trait::async_trait]
+    impl crate::host::workload_identity::IdentityIssuer for NoIssuer {
+        async fn issue_x509(
+            &self,
+            _: &crate::host::workload_identity::IssueRequest<'_>,
+            _: &[u8],
+        ) -> Result<
+            crate::host::workload_identity::X509Svid,
+            crate::host::workload_identity::IssuerError,
+        > {
+            Err(crate::host::workload_identity::IssuerError::Unavailable(
+                "test".into(),
+            ))
+        }
+        async fn issue_jwt(
+            &self,
+            _: &crate::host::workload_identity::IssueRequest<'_>,
+            _: &str,
+        ) -> Result<
+            crate::host::workload_identity::JwtSvid,
+            crate::host::workload_identity::IssuerError,
+        > {
+            Err(crate::host::workload_identity::IssuerError::Unavailable(
+                "test".into(),
+            ))
+        }
+    }
+
+    /// The host hashes what it is about to run and refuses a workload whose
+    /// component is not approved for the identity it was bound to, then drops
+    /// the identity when the workload is gone.
+    #[tokio::test]
+    async fn a_workload_starts_with_identity_only_with_approved_code() -> anyhow::Result<()> {
+        use crate::host::workload_identity::{
+            IdentityGrant, SchedulingLease, WorkloadCredentials, sha256_digest,
+        };
+        let credentials = WorkloadCredentials::new(
+            Arc::new(NoIssuer),
+            crate::host::http_client::default_client_tls_config(),
+        );
+        let host = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))?
+            .with_workload_credentials(credentials.clone())
+            .build()?
+            .start()
+            .await?;
+        let grant = |digest: String| IdentityGrant {
+            namespace: None,
+            identity_ref: None,
+            approved_digests: vec![digest],
+            scheduling_lease: SchedulingLease::new(
+                b"lease".to_vec(),
+                std::time::SystemTime::now() + Duration::from_secs(60),
+            ),
+            mtls_destinations: Vec::new(),
+            jwt_audiences: vec!["aud".into()],
+        };
+
+        credentials.bind("unapproved", grant(sha256_digest(b"other code")))?;
+        let refused = host.workload_start(marker_request("unapproved")).await?;
+        assert_eq!(refused.workload_status.workload_state, WorkloadState::Error);
+        assert!(
+            refused.workload_status.message.contains("not approved"),
+            "{}",
+            refused.workload_status.message
+        );
+        assert!(!credentials.is_bound("unapproved"));
+
+        credentials.bind("approved", grant(sha256_digest(&marker_component_wasm())))?;
+        let started = host.workload_start(marker_request("approved")).await?;
+        assert_eq!(
+            started.workload_status.workload_state,
+            WorkloadState::Running,
+            "{}",
+            started.workload_status.message
+        );
+        assert!(credentials.is_bound("approved"));
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "approved".into(),
+        })
+        .await?;
+        assert!(!credentials.is_bound("approved"));
+        Ok(())
+    }
+
+    fn identity_grant(digest: String) -> crate::host::workload_identity::IdentityGrant {
+        crate::host::workload_identity::IdentityGrant {
+            namespace: None,
+            identity_ref: None,
+            approved_digests: vec![digest],
+            scheduling_lease: crate::host::workload_identity::SchedulingLease::new(
+                b"lease".to_vec(),
+                std::time::SystemTime::now() + Duration::from_secs(60),
+            ),
+            mtls_destinations: Vec::new(),
+            jwt_audiences: vec!["aud".into()],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_start_with_identity_binds_under_its_reservation() -> anyhow::Result<()> {
+        use crate::host::workload_identity::{WorkloadCredentials, sha256_digest};
+        let credentials = WorkloadCredentials::new(
+            Arc::new(NoIssuer),
+            crate::host::http_client::default_client_tls_config(),
+        );
+        let host = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))?
+            .with_workload_credentials(credentials.clone())
+            .build()?
+            .start()
+            .await?;
+        let approved = || identity_grant(sha256_digest(&marker_component_wasm()));
+        let started = host
+            .workload_start_with_identity(marker_request("w"), approved())
+            .await?;
+        assert_eq!(
+            started.workload_status.workload_state,
+            WorkloadState::Running,
+            "{}",
+            started.workload_status.message
+        );
+        let source = credentials.jwt_source("w", "aud").unwrap();
+
+        let duplicate = host
+            .workload_start_with_identity(marker_request("w"), identity_grant(sha256_digest(b"x")))
+            .await?;
+        assert_eq!(
+            duplicate.workload_status.workload_state,
+            WorkloadState::Error
+        );
+        assert!(
+            Arc::ptr_eq(&source, &credentials.jwt_source("w", "aud").unwrap()),
+            "the running workload keeps its identity"
+        );
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "w".into(),
+        })
+        .await?;
+        assert!(!credentials.is_bound("w"));
+        host.stop().await
+    }
+
+    /// A caller that binds before starting leaves no identity behind when
+    /// the start is refused.
+    #[tokio::test]
+    async fn a_refused_start_drops_the_identity_bound_for_it() -> anyhow::Result<()> {
+        use crate::host::workload_identity::{WorkloadCredentials, sha256_digest};
+        let credentials = WorkloadCredentials::new(
+            Arc::new(NoIssuer),
+            crate::host::http_client::default_client_tls_config(),
+        );
+        let host = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))?
+            .with_workload_credentials(credentials.clone())
+            .build()?
+            .start()
+            .await?;
+        let running = host.workload_start(marker_request("busy")).await?;
+        assert_eq!(
+            running.workload_status.workload_state,
+            WorkloadState::Running
+        );
+
+        credentials.bind(
+            "busy",
+            identity_grant(sha256_digest(&marker_component_wasm())),
+        )?;
+        let refused = host.workload_start(marker_request("busy")).await?;
+        assert_eq!(refused.workload_status.workload_state, WorkloadState::Error);
+        assert!(!credentials.is_bound("busy"));
+        host.stop().await
+    }
+
+    /// The host's own content hashes key compiles apart from any digest a
+    /// request names, so no workload can plant a compile under another's hash.
+    #[tokio::test]
+    async fn a_request_may_not_name_a_host_content_digest() -> anyhow::Result<()> {
+        let host = Host::builder()
+            .with_plugin(Arc::new(BindRecordingPlugin::default()))?
+            .build()?
+            .start()
+            .await?;
+        let mut request = marker_request("planted");
+        request.workload.components[0].digest = Some(format!(
+            "{CONTENT_DIGEST_PREFIX}{}",
+            crate::host::workload_identity::sha256_digest(&marker_component_wasm())
+        ));
+        let refused = host.workload_start(request).await?;
+        assert_eq!(refused.workload_status.workload_state, WorkloadState::Error);
+        assert!(
+            refused.workload_status.message.contains("reserved"),
+            "{}",
+            refused.workload_status.message
+        );
+        host.stop().await
+    }
+
+    #[tokio::test]
+    async fn stopping_the_host_releases_every_identity() -> anyhow::Result<()> {
+        use crate::host::workload_identity::{IdentityGrant, SchedulingLease, WorkloadCredentials};
+        let credentials = WorkloadCredentials::new(
+            Arc::new(NoIssuer),
+            crate::host::http_client::default_client_tls_config(),
+        );
+        let host = Host::builder()
+            .with_workload_credentials(credentials.clone())
+            .build()?
+            .start()
+            .await?;
+        credentials.bind(
+            "bound",
+            IdentityGrant {
+                namespace: None,
+                identity_ref: None,
+                approved_digests: vec![crate::host::workload_identity::sha256_digest(b"code")],
+                scheduling_lease: SchedulingLease::new(
+                    b"lease".to_vec(),
+                    std::time::SystemTime::now() + Duration::from_secs(60),
+                ),
+                mtls_destinations: Vec::new(),
+                jwt_audiences: vec!["aud".into()],
+            },
+        )?;
+        host.stop().await?;
+        assert!(!credentials.is_bound("bound"));
+        Ok(())
+    }
+
+    /// A start cancelled after its identity was admitted gives the identity
+    /// up with the rest of its teardown, so the id can be bound again.
+    #[tokio::test]
+    async fn a_cancelled_start_releases_its_identity() -> anyhow::Result<()> {
+        use crate::host::workload_identity::{
+            IdentityGrant, SchedulingLease, WorkloadCredentials, sha256_digest,
+        };
+        let credentials = WorkloadCredentials::new(
+            Arc::new(NoIssuer),
+            crate::host::http_client::default_client_tls_config(),
+        );
+        let plugin = Arc::new(CancelledBindingPlugin {
+            cancel_at: CancelAt::WorkloadBind,
+            entered: tokio::sync::Notify::new(),
+            cleanup_entered: tokio::sync::Notify::new(),
+            cleanup_gate: tokio::sync::Semaphore::new(1),
+            live: std::sync::atomic::AtomicBool::new(false),
+            fail_cleanup: std::sync::atomic::AtomicBool::new(false),
+        });
+        let host = Host::builder()
+            .with_plugin(plugin.clone())?
+            .with_workload_credentials(credentials.clone())
+            .build()?
+            .start()
+            .await?;
+        let grant = || IdentityGrant {
+            namespace: None,
+            identity_ref: None,
+            approved_digests: vec![sha256_digest(&marker_component_wasm())],
+            scheduling_lease: SchedulingLease::new(
+                b"lease".to_vec(),
+                std::time::SystemTime::now() + Duration::from_secs(60),
+            ),
+            mtls_destinations: Vec::new(),
+            jwt_audiences: vec!["aud".into()],
+        };
+        credentials.bind("cancelled", grant())?;
+        let task = tokio::spawn({
+            let host = host.clone();
+            async move { host.workload_start(marker_request("cancelled")).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), plugin.entered.notified()).await?;
+        assert!(
+            credentials.bind("cancelled", grant()).is_err(),
+            "admitted before the plugin bound"
+        );
+        task.abort();
+        assert!(task.await.is_err());
+        tokio::time::timeout(Duration::from_secs(5), host.wait_for_workload_cleanup()).await??;
+        assert!(!credentials.is_bound("cancelled"));
+        credentials.bind("cancelled", grant())?;
+        host.stop().await
     }
 
     #[derive(Clone, Copy)]

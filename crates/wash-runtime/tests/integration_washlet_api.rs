@@ -127,6 +127,7 @@ struct TestHarnessBuilder {
     ingress: bool,
     #[cfg_attr(not(feature = "wasi-config"), allow(dead_code))]
     config_plugin: bool,
+    handler: Option<Arc<dyn HostCommandHandler>>,
 }
 
 impl TestHarnessBuilder {
@@ -137,6 +138,11 @@ impl TestHarnessBuilder {
 
     fn with_max_concurrent_starts(mut self, starts: usize) -> Self {
         self.max_concurrent_starts = Some(starts);
+        self
+    }
+
+    fn with_handler(mut self, handler: Arc<dyn HostCommandHandler>) -> Self {
+        self.handler = Some(handler);
         self
     }
 
@@ -172,6 +178,9 @@ impl TestHarnessBuilder {
         }
         if let Some(starts) = self.max_concurrent_starts {
             builder = builder.with_max_concurrent_starts(starts);
+        }
+        if let Some(handler) = self.handler {
+            builder = builder.with_handler(handler);
         }
         #[cfg(feature = "wasi-config")]
         if self.config_plugin {
@@ -411,6 +420,7 @@ fn empty_start_request(workload_id: &str) -> v2::WorkloadStartRequest {
             service: None,
             wit_world: None,
             volumes: vec![],
+            identity: None,
         }),
     }
 }
@@ -1782,4 +1792,23 @@ async fn a_handler_panic_during_the_real_drain_is_reported() -> Result<()> {
     assert!(error.to_string().contains("command task failed"));
     assert_eq!(host.heartbeat().await?.id, host.id());
     host.stop().await
+}
+
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn a_cluster_host_routes_commands_through_its_handler() -> Result<()> {
+    let harness = TestHarness::builder()
+        .with_handler(Arc::new(AttachedPolicy))
+        .start()
+        .await?;
+    let denied = harness.start(&empty_start_request("denied")).await?;
+    assert_eq!(denied.message, "admission denied");
+    let started = harness.start(&empty_start_request("owned-1")).await?;
+    assert_eq!(
+        started.workload_state(),
+        v2::WorkloadState::Running,
+        "{}",
+        started.message
+    );
+    harness.shutdown().await
 }

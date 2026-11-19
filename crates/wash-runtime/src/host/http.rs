@@ -31,8 +31,9 @@ use crate::engine::abandon::{AbandonFlag, AbandonOnDrop, DispatchedCall};
 use crate::host::allowed_hosts::AllowedHost;
 use crate::host::egress_credential::{
     CarriesSecret, CredentialError, EgressCaller, EgressSecret, Refused, SecretUse, Substituted,
-    carries_placeholder, substitute,
+    carries_placeholder,
 };
+use crate::host::egress_sigv4::{SigV4Secret, scrub_signed_response, substitute_and_sign};
 use crate::host::trigger_service::{BrokerMessage, MessagingJob};
 use crate::observability::rate_limit::RateLimitedWarn;
 use crate::{
@@ -473,6 +474,14 @@ pub trait Router: Send + Sync + 'static {
     /// a placeholder substituted always egresses over the network, never to a
     /// co-located workload. Default: none.
     fn egress_secrets(&self, _caller: EgressCaller<'_>) -> anyhow::Result<Arc<[EgressSecret]>> {
+        Ok(Arc::from([]))
+    }
+
+    /// The placeholder AWS access key IDs a caller's requests are re-signed
+    /// for, asked alongside [`Self::egress_secrets`] with the same rules. The
+    /// host substitutes the request's other placeholders first, then re-signs,
+    /// so the signature covers what is sent. Default: none.
+    fn egress_signers(&self, _caller: EgressCaller<'_>) -> anyhow::Result<Arc<[SigV4Secret]>> {
         Ok(Arc::from([]))
     }
 
@@ -1280,6 +1289,14 @@ pub trait OutgoingHandler: Send + Sync + 'static {
         false
     }
 
+    /// Whether `workload_id`'s request to `uri` must go out over the network
+    /// even when a co-located workload could serve it, because this handler
+    /// would connect to it with TLS specific to that destination (an mTLS
+    /// identity a local dispatch cannot present). Default: `false`.
+    fn network_only(&self, _workload_id: &str, _uri: &hyper::Uri) -> bool {
+        false
+    }
+
     /// Called when a workload binds, before it serves anything, with the
     /// guest calls it may run at once (`pool_size` × `max_concurrency` for a
     /// component keeping instances warm, one otherwise).
@@ -1326,6 +1343,20 @@ pub trait OutgoingHandler: Send + Sync + 'static {
     ///
     /// [`EgressAddressGate::filter`]: crate::host::egress_policy::EgressAddressGate::filter
     fn install_egress_gate(&self, _gate: crate::host::egress_policy::EgressAddressGate) {}
+
+    /// Called once, when the host is built with
+    /// [`HostBuilder::with_workload_credentials`]. A handler that makes its
+    /// own TLS connections presents each workload's X.509-SVID to its granted
+    /// mTLS destinations by resolving through
+    /// [`WorkloadCredentials::tls_resolver`]. The default ignores it.
+    ///
+    /// [`HostBuilder::with_workload_credentials`]: crate::host::HostBuilder::with_workload_credentials
+    /// [`WorkloadCredentials::tls_resolver`]: crate::host::workload_identity::WorkloadCredentials::tls_resolver
+    fn install_workload_credentials(
+        &self,
+        _credentials: crate::host::workload_identity::WorkloadCredentials,
+    ) {
+    }
 }
 
 /// Default [`OutgoingHandler`] — sends requests through per-workload
@@ -1347,6 +1378,8 @@ pub struct DefaultOutgoingHandler {
     /// Shared with every client cache this handler builds, so a gate
     /// installed before or after one is built reaches it either way.
     egress: Arc<OnceLock<crate::host::egress_policy::EgressAddressGate>>,
+    /// Shared the same way as `egress`.
+    identity: Arc<OnceLock<crate::host::workload_identity::WorkloadCredentials>>,
 }
 
 impl Default for DefaultOutgoingHandler {
@@ -1360,6 +1393,7 @@ impl Default for DefaultOutgoingHandler {
             clients: OnceLock::new(),
             quotas: crate::host::quota::QuotaRegistry::new(Default::default(), None),
             egress: Arc::default(),
+            identity: Arc::default(),
         }
     }
 }
@@ -1383,18 +1417,21 @@ impl DefaultOutgoingHandler {
     ) -> Self {
         let quotas = crate::host::quota::QuotaRegistry::new(Default::default(), None);
         let egress = Arc::default();
+        let identity = Arc::default();
         let cell = OnceLock::new();
         let _ = cell.set(
             crate::host::http_client::WorkloadClients::with_tls_config_resolver(
                 tls,
                 Arc::clone(&quotas),
             )
-            .with_egress_gate_cell(Arc::clone(&egress)),
+            .with_egress_gate_cell(Arc::clone(&egress))
+            .with_identity_cell(Arc::clone(&identity)),
         );
         Self {
             clients: cell,
             quotas,
             egress,
+            identity,
         }
     }
 
@@ -1433,13 +1470,15 @@ impl DefaultOutgoingHandler {
                     clients.tls_config_resolver(),
                     Arc::clone(&quotas),
                 )
-                .with_egress_gate_cell(Arc::clone(&self.egress)),
+                .with_egress_gate_cell(Arc::clone(&self.egress))
+                .with_identity_cell(Arc::clone(&self.identity)),
             );
         }
         Self {
             clients: cell,
             quotas,
             egress: self.egress,
+            identity: self.identity,
         }
     }
 
@@ -1450,6 +1489,7 @@ impl DefaultOutgoingHandler {
                 Arc::clone(&self.quotas),
             )
             .with_egress_gate_cell(Arc::clone(&self.egress))
+            .with_identity_cell(Arc::clone(&self.identity))
         })
     }
 }
@@ -1491,6 +1531,19 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         true
     }
 
+    fn network_only(&self, workload_id: &str, uri: &hyper::Uri) -> bool {
+        if uri.scheme() != Some(&http::uri::Scheme::HTTPS) {
+            return false;
+        }
+        let Some(host) = uri.host() else {
+            return false;
+        };
+        self.clients()
+            .resolver()
+            .config_for_destination(workload_id, host, uri.port_u16().unwrap_or(443))
+            .is_some()
+    }
+
     fn on_workload_bind(&self, workload_id: &str, call_concurrency: usize) {
         self.clients()
             .set_call_concurrency(workload_id, call_concurrency);
@@ -1516,6 +1569,13 @@ impl OutgoingHandler for DefaultOutgoingHandler {
         // Into the shared cell, which every client cache this handler builds
         // reads, so no cache needs visiting.
         let _ = self.egress.set(gate);
+    }
+
+    fn install_workload_credentials(
+        &self,
+        credentials: crate::host::workload_identity::WorkloadCredentials,
+    ) {
+        let _ = self.identity.set(credentials);
     }
 }
 
@@ -1641,6 +1701,13 @@ pub trait HostHandler: Send + Sync + 'static {
     /// policy applies to raw sockets, for every connection this handler makes
     /// on a workload's behalf. See [`OutgoingHandler::install_egress_gate`].
     fn install_egress_gate(&self, _gate: crate::host::egress_policy::EgressAddressGate) {}
+    /// Called once, when the host is built with workload credentials. See
+    /// [`OutgoingHandler::install_workload_credentials`].
+    fn install_workload_credentials(
+        &self,
+        _credentials: crate::host::workload_identity::WorkloadCredentials,
+    ) {
+    }
     /// Start the HTTP server
     async fn start(&self) -> anyhow::Result<()>;
     /// Stop the HTTP server
@@ -2531,7 +2598,7 @@ impl<T: Router, O: OutgoingHandler> Ingress<T, O> {
         workload_id: &str,
         uri: &hyper::Uri,
     ) -> Option<(String, LocalTarget)> {
-        if !self.local_routing {
+        if !self.local_routing || self.outgoing_handler.network_only(workload_id, uri) {
             return None;
         }
         let mut matched = false;
@@ -2977,6 +3044,14 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         self.outgoing_handler.install_egress_gate(gate);
     }
 
+    fn install_workload_credentials(
+        &self,
+        credentials: crate::host::workload_identity::WorkloadCredentials,
+    ) {
+        self.outgoing_handler
+            .install_workload_credentials(credentials);
+    }
+
     async fn start(&self) -> anyhow::Result<()> {
         let addr = self.addr;
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
@@ -3302,16 +3377,27 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                 Some(Substituted::default())
             } else {
                 let decided = if self.outgoing_handler.accepts_secrets() {
-                    self.router.egress_secrets(caller).map_err(|err| {
-                        warn!(workload_id, component_id, err = %err, "outgoing request denied: no secret decision");
-                        CredentialError::Undecided
-                    })
+                    self.router
+                        .egress_secrets(caller)
+                        .and_then(|secrets| Ok((secrets, self.router.egress_signers(caller)?)))
+                        .map_err(|err| {
+                            warn!(workload_id, component_id, err = %err, "outgoing request denied: no secret decision");
+                            CredentialError::Undecided
+                        })
                 } else {
                     Err(CredentialError::Unsupported)
                 };
+                // Signed last, so the signature covers the values that go out.
                 let result = decided
                     .map_err(Refused::from)
-                    .and_then(|secrets| substitute(&mut request, &secrets));
+                    .and_then(|(secrets, signers)| {
+                        substitute_and_sign(
+                            &mut request,
+                            &secrets,
+                            &signers,
+                            std::time::SystemTime::now(),
+                        )
+                    });
                 let authority = request.uri().authority().map_or("", |a| a.as_str());
                 let event = |placeholder, outcome| SecretUse {
                     caller,
@@ -3354,17 +3440,17 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
                         let (mut response, io) = send.await?;
                         let done = Arc::new(done);
                         done.revert(response.headers_mut());
+                        let reverting = Arc::clone(&done);
                         let response = response.map(|body| {
                             body.map_frame(move |frame| match frame.into_trailers() {
                                 Ok(mut trailers) => {
-                                    done.revert(&mut trailers);
+                                    reverting.revert(&mut trailers);
                                     hyper::body::Frame::trailers(trailers)
                                 }
                                 Err(frame) => frame,
                             })
-                            .boxed_unsync()
                         });
-                        Ok((response, io))
+                        Ok((scrub_signed_response(response, done), io))
                     })
                 }
                 Some(_) => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -11,12 +12,18 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
+)
+
+const (
+	testStableBilling    = "billing"
+	testLegacyReplicaSet = "rs-old"
 )
 
 // The start request carries the workload's own namespace's ConfigMaps,
@@ -204,5 +211,78 @@ func TestPlacementAPIFailuresPreserveRetryState(t *testing.T) {
 				t.Fatal("API failure started or changed the workload")
 			}
 		})
+	}
+}
+
+// The stable name follows wash-runtime's stable_name precedence over the
+// annotations sent, ignoring blank values.
+func TestStableNamePrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+		want        string
+	}{
+		{"none", nil, "scraper"},
+		{"app name", map[string]string{appNameAnnotation: " billing "}, testStableBilling},
+		{"legacy replicaset", map[string]string{appNameAnnotation: testStableBilling, workloadReplicaSetLegacyAnnotation: testLegacyReplicaSet}, testLegacyReplicaSet},
+		{"replicaset", map[string]string{workloadReplicaSetLegacyAnnotation: testLegacyReplicaSet, workloadReplicaSetNameAnnotation: "rs"}, "rs"},
+		{"daemonset", map[string]string{workloadReplicaSetNameAnnotation: "rs", workloadDaemonSetNameAnnotation: "ds"}, "ds"},
+		{"deployment", map[string]string{workloadDaemonSetNameAnnotation: "ds", workloadDeploymentNameAnnotation: "deploy"}, "deploy"},
+		{"blank deployment", map[string]string{workloadDeploymentNameAnnotation: " ", workloadReplicaSetNameAnnotation: "rs"}, "rs"},
+	} {
+		if got := stableName(tc.annotations, "scraper"); got != tc.want {
+			t.Errorf("%s: stableName = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Placement records the stable name the host computes from the start it is
+// sent, and never changes it: a later start that would name the workload
+// differently is refused before it reaches a host.
+func TestPlacementRecordsStableNameOnce(t *testing.T) {
+	r, workload, bus := placementFixture(t)
+	recorder := events.NewFakeRecorder(4)
+	r.Recorder = recorder
+	workload.Annotations = map[string]string{appNameAnnotation: testStableBilling}
+	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+		t.Fatal(err)
+	}
+	if workload.Status.StableName != testStableBilling {
+		t.Fatalf("recorded stable name = %q", workload.Status.StableName)
+	}
+
+	workload.Annotations[appNameAnnotation] = "renamed"
+	if err := r.reconcilePlacement(t.Context(), workload); err != nil {
+		t.Fatal(err)
+	}
+	if workload.Status.StableName != testStableBilling {
+		t.Fatalf("a placed workload's stable name changed to %q", workload.Status.StableName)
+	}
+
+	workload.Status.WorkloadID = ""
+	err := r.reconcilePlacement(t.Context(), workload)
+	if err == nil || !strings.Contains(err.Error(), `first placed as "billing"`) {
+		t.Fatalf("re-placing under a new name returned %v", err)
+	}
+	if got := condition.ErrorConditionFor(runtimev1alpha1.WorkloadConditionPlacement, err); got.Reason != reasonStableNameChanged {
+		t.Fatalf("placement condition reason = %q", got.Reason)
+	}
+	if recorded := drainEvents(recorder); len(recorded) != 1 || !strings.Contains(recorded[0], reasonStableNameChanged) ||
+		!strings.Contains(recorded[0], "recreate the Workload") {
+		t.Fatalf("events = %q", recorded)
+	}
+	if workload.Status.StableName != testStableBilling || workload.Status.WorkloadID != "" {
+		t.Fatalf("refused re-placement recorded %+v", workload.Status)
+	}
+	if len(bus.requests) != 1 {
+		t.Fatalf("sent %d requests; the refused start reached the host", len(bus.requests))
+	}
+
+	workload.Annotations[appNameAnnotation] = testStableBilling
+	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+		t.Fatal(err)
+	}
+	if workload.Status.WorkloadID != fixtureRuntimeID {
+		t.Fatalf("re-placement under the same name recorded %q", workload.Status.WorkloadID)
 	}
 }

@@ -82,6 +82,14 @@ impl HostControlDefaults {
     ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
         workload_status(self.host.as_ref(), request).await
     }
+
+    /// Replace a running workload's scheduling lease.
+    pub fn identity_renew(
+        &self,
+        request: types::v2::WorkloadIdentityRenewRequest,
+    ) -> types::v2::WorkloadIdentityRenewResponse {
+        identity_renew(self.host.as_ref(), request)
+    }
 }
 
 /// Optional command customization. The default implementation of each method
@@ -123,6 +131,13 @@ pub trait HostCommandHandler: Send + Sync {
         request: types::v2::WorkloadStatusRequest,
     ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
         defaults.status(request).await
+    }
+    async fn identity_renew(
+        &self,
+        defaults: &HostControlDefaults,
+        request: types::v2::WorkloadIdentityRenewRequest,
+    ) -> anyhow::Result<types::v2::WorkloadIdentityRenewResponse> {
+        Ok(defaults.identity_renew(request))
     }
 }
 
@@ -401,6 +416,7 @@ pub struct ClusterHostBuilder {
     host_config: Option<HostConfig>,
     max_concurrent_starts: Option<usize>,
     liveness: Option<Arc<crate::host::probes::Liveness>>,
+    handler: Option<Arc<dyn HostCommandHandler>>,
 }
 
 impl ClusterHostBuilder {
@@ -428,6 +444,13 @@ impl ClusterHostBuilder {
     /// from whether a socket accepted.
     pub fn with_liveness(mut self, liveness: Arc<crate::host::probes::Liveness>) -> Self {
         self.liveness = Some(liveness);
+        self
+    }
+
+    /// Inject product admission and ownership for remote commands, as
+    /// [`AttachedHostControlBuilder::with_handler`] does for an attached host.
+    pub fn with_handler(mut self, handler: Arc<dyn HostCommandHandler>) -> Self {
+        self.handler = Some(handler);
         self
     }
 
@@ -601,6 +624,7 @@ impl ClusterHostBuilder {
                 .max_concurrent_starts
                 .unwrap_or_else(default_max_concurrent_starts),
             liveness: self.liveness,
+            handler: self.handler,
         })
     }
 }
@@ -634,6 +658,7 @@ pub struct ClusterHost {
     cleanup_age: Duration,
     max_concurrent_starts: usize,
     liveness: Option<Arc<crate::host::probes::Liveness>>,
+    handler: Option<Arc<dyn HostCommandHandler>>,
 }
 
 struct HostControlLoopOptions {
@@ -1328,6 +1353,7 @@ impl ClusterHost {
             max_concurrent_starts,
             liveness,
             stop_host: true,
+            handler: self.handler.clone(),
             ..HostControlLoopOptions::default()
         };
         options.validate()?;
@@ -1743,6 +1769,25 @@ async fn handle_command(
                 }),
             )
         }
+        "workload.identity.renew" => {
+            let req: types::v2::WorkloadIdentityRenewRequest = match from_api(payload) {
+                Ok(request) => request,
+                Err(error) => {
+                    return to_api(&types::v2::WorkloadIdentityRenewResponse {
+                        error: format!("invalid request: {error:#}"),
+                    });
+                }
+            };
+            let response = match handler {
+                Some(handler) => handler.identity_renew(defaults, req).await,
+                None => Ok(defaults.identity_renew(req)),
+            };
+            to_api(
+                &response.unwrap_or_else(|error| types::v2::WorkloadIdentityRenewResponse {
+                    error: format!("{error:#}"),
+                }),
+            )
+        }
         _ => anyhow::bail!("unknown command: {command}"),
     }
 }
@@ -1843,6 +1888,7 @@ async fn workload_start(
         service,
         wit_world,
         volumes,
+        identity,
     }) = req.workload
     else {
         anyhow::bail!("workload is required");
@@ -1999,6 +2045,15 @@ async fn workload_start(
         }
     };
 
+    if let Some(identity) = identity
+        && let Err(message) =
+            bind_identity(host, &workload_id, &request.workload.namespace, identity)
+    {
+        host.workload_release(&workload_id, reservation).await;
+        start_guard.disarm();
+        return Ok(workload_start_error(&workload_id, message));
+    }
+
     info!(
         workload_id=?workload_id,
         namespace=?request.workload.namespace,
@@ -2011,6 +2066,73 @@ async fn workload_start(
         .workload_start_reserved(reservation, request)
         .await?
         .into())
+}
+
+/// Record the identity the control plane granted `workload_id`, for the host
+/// to check its digests against and to request SVIDs with.
+fn bind_identity(
+    host: &Host,
+    workload_id: &str,
+    namespace: &str,
+    identity: types::v2::WorkloadIdentity,
+) -> Result<(), String> {
+    use crate::host::workload_identity::{IdentityGrant, MtlsDestination, SchedulingLease};
+    let Some(credentials) = host.workload_credentials() else {
+        return Err("the workload names an identity, but this host has no identity issuer".into());
+    };
+    let expires_at = lease_expiry(identity.scheduling_lease_expires_at)?;
+    let mtls_destinations = identity
+        .mtls_destinations
+        .iter()
+        .map(|d| {
+            let port =
+                u16::try_from(d.port).map_err(|_| format!("port {} is out of range", d.port))?;
+            MtlsDestination::new(&d.host, port).map_err(|e| format!("{e:#}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let grant = IdentityGrant {
+        namespace: Some(namespace.to_string()).filter(|n| !n.is_empty()),
+        identity_ref: Some(identity.identity_ref).filter(|r| !r.is_empty()),
+        approved_digests: identity.approved_digests,
+        scheduling_lease: SchedulingLease::new(identity.scheduling_lease, expires_at),
+        mtls_destinations,
+        jwt_audiences: identity.jwt_audiences,
+    };
+    credentials
+        .bind(workload_id, grant)
+        .map_err(|e| format!("{e:#}"))
+}
+
+fn lease_expiry(seconds: i64) -> Result<std::time::SystemTime, String> {
+    u64::try_from(seconds)
+        .ok()
+        .and_then(|secs| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs)))
+        .ok_or_else(|| format!("the scheduling lease expiry {seconds} is out of range"))
+}
+
+/// Replace a running workload's scheduling lease.
+#[instrument(skip_all, fields(workload_id = %req.workload_id))]
+fn identity_renew(
+    host: &Host,
+    req: types::v2::WorkloadIdentityRenewRequest,
+) -> types::v2::WorkloadIdentityRenewResponse {
+    let renewed = lease_expiry(req.scheduling_lease_expires_at).and_then(|expires_at| {
+        let credentials = host
+            .workload_credentials()
+            .ok_or_else(|| "this host has no identity issuer".to_string())?;
+        credentials
+            .renew_lease(
+                &req.workload_id,
+                crate::host::workload_identity::SchedulingLease::new(
+                    req.scheduling_lease,
+                    expires_at,
+                ),
+            )
+            .map_err(|e| format!("{e:#}"))
+    });
+    types::v2::WorkloadIdentityRenewResponse {
+        error: renewed.err().unwrap_or_default(),
+    }
 }
 
 #[instrument(skip_all, fields(workload_id = %req.workload_id))]

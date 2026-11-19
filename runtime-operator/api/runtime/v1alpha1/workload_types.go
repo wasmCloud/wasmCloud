@@ -356,6 +356,14 @@ type WorkloadSpec struct {
 	// +kubebuilder:validation:Optional
 	Volumes []Volume `json:"volumes,omitempty"`
 
+	// IdentityRef names the WorkloadIdentity the workload runs as, in the
+	// workload's namespace. The operator passes only the name: the host also
+	// needs a scheduling lease and the approved component digests, which a
+	// control plane that defines WorkloadIdentity supplies, and refuses the
+	// workload without them or without an identity issuer.
+	// +kubebuilder:validation:Optional
+	IdentityRef *corev1.LocalObjectReference `json:"identityRef,omitempty"`
+
 	// Kubernetes groups Kubernetes-specific configuration such as Service
 	// references and endpoint management.
 	// +kubebuilder:validation:Optional
@@ -462,6 +470,16 @@ type WorkloadStatus struct {
 	Environment string `json:"environment,omitempty"`
 	// +kubebuilder:validation:Optional
 	WorkloadID string `json:"workloadId,omitempty"`
+	// StableName is the name the host gives this Workload's replicas, as
+	// computed from what it was sent when first placed. It comes from names
+	// in the Workload's own namespace, chosen by whoever created it or its
+	// owners, so it is unique only within that namespace. It is fixed once
+	// placed: a later placement that would change it is refused with reason
+	// StableNameChanged, and the remedy is to recreate the Workload. Workloads
+	// placed before this field existed do not have it until they are
+	// recreated.
+	// +kubebuilder:validation:Optional
+	StableName string `json:"stableName,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -9,6 +9,7 @@ use tokio_util::task::TaskTracker;
 
 use super::{Host, HostWorkload, Reservation};
 use crate::engine::workload::WorkloadResources;
+use crate::host::workload_identity::WorkloadCredentials;
 
 // NOTE: a std lock, formerly a tokio one (the host's workload map). Never hold
 // its guard across an `.await`: drop it first, or the worker thread blocks
@@ -43,6 +44,7 @@ pub(super) struct WorkloadRecovery {
     /// The start answered its caller with a failure before its cleanup
     /// finished, so that failure outlives the cleanup as the workload's `Error`.
     retain_failure: bool,
+    identity: Option<WorkloadCredentials>,
     #[cfg(feature = "washlet")]
     _control: Option<Arc<super::HostControlLease>>,
 }
@@ -126,6 +128,9 @@ impl WorkloadRecovery {
         };
         // Remove recovery bookkeeping while the ID is still held.
         self.forget(workload_id, cancelled);
+        if let Some(identity) = &self.identity {
+            identity.release(workload_id);
+        }
         match failure {
             Some(reason) => {
                 workloads.insert(workload_id.into(), HostWorkload::Error(reason));
@@ -148,6 +153,7 @@ pub(crate) struct WorkloadCleanupGuard {
     cleanup: WorkloadResources,
     armed: bool,
     retain_failure: bool,
+    identity: Option<WorkloadCredentials>,
     #[cfg(feature = "washlet")]
     control: Option<Arc<super::HostControlLease>>,
 }
@@ -163,6 +169,7 @@ impl WorkloadCleanupGuard {
             cleanup: WorkloadResources::default(),
             armed: true,
             retain_failure: false,
+            identity: host.workload_credentials.clone(),
             #[cfg(feature = "washlet")]
             control: host
                 .control
@@ -200,12 +207,28 @@ impl Drop for WorkloadCleanupGuard {
         }
         let workload_id = self.workload_id.clone();
         let workloads = Arc::clone(&self.workloads);
+        if let Some(identity) = &self.identity {
+            // Under the lock, so the identity is still this start's.
+            let slots = workloads
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(
+                HostWorkload::Starting(held)
+                | HostWorkload::Stopping(held)
+                | HostWorkload::Failing(held, _),
+            ) = slots.get(&workload_id)
+                && *held == self.reservation
+            {
+                identity.revoke(&workload_id);
+            }
+        }
         let cancelled = Arc::clone(&self.cancelled);
         let recovery = Arc::new(WorkloadRecovery {
             reservation: self.reservation,
             cleanup: self.cleanup.clone(),
             serial: tokio::sync::Mutex::new(()),
             retain_failure: self.retain_failure,
+            identity: self.identity.take(),
             #[cfg(feature = "washlet")]
             _control: self.control.take(),
         });

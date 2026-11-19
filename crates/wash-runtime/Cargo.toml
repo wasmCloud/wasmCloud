@@ -33,7 +33,7 @@ workspace = true
 
 [features]
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements", "wasmcloud-nats"]
-oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:hmac", "dep:wit-component"]
+oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci", "dep:nkeys"]
 wasi-config = []
@@ -80,7 +80,7 @@ fastrand = { workspace = true }
 rand = { workspace = true, features = ["std", "thread_rng"] }
 futures = { workspace = true }
 getrandom = { workspace = true }
-hmac = { workspace = true, optional = true }
+hmac = { workspace = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
@@ -89,6 +89,7 @@ hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }
 imbl = { workspace = true }
+memchr = { workspace = true }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
 object_store = { workspace = true, optional = true }
@@ -155,6 +156,7 @@ docker_credential = { workspace = true, optional = true }
 nkeys = { workspace = true, optional = true }
 oci-client = { workspace = true, optional = true, features = ["rustls-tls"] }
 oci-wasm = { workspace = true, optional = true, features = ["rustls-tls"] }
+rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "zeroize"] }
 sha2 = { workspace = true }
 wit-component = { workspace = true, optional = true }
 
@@ -212,7 +214,11 @@ http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["client", "http1"] }
 wasmtime-wasi-http = { workspace = true, features = ["p2"] }
 gag = "1.0"
-rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem"] }
+rcgen = { version = "0.14.7", default-features = false, features = ["crypto", "aws_lc_rs", "pem", "x509-parser"] }
+time = { version = "0.3", default-features = false, features = ["std"] }
+# An independent SigV4 signer the re-signing is checked against.
+aws-sigv4 = { version = "1.3", default-features = false, features = ["sign-http", "http1"] }
+aws-credential-types = { version = "1.2", default-features = false, features = ["hardcoded-credentials"] }
 testcontainers = { workspace = true }
 # redis client for the keyvalue redis interop test
 redis = { workspace = true }
