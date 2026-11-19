@@ -44,6 +44,7 @@ fn pg_iface(name: &str, url: &str) -> WitInterface {
         version: None,
         config: wash_runtime::wit::Config::from_iter([("url".to_string(), url.to_string())]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 

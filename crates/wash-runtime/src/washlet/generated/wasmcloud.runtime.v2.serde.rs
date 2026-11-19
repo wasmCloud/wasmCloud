@@ -396,6 +396,9 @@ impl serde::Serialize for HostHeartbeat {
         if !self.environment.is_empty() {
             len += 1;
         }
+        if !self.features.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.HostHeartbeat", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -459,6 +462,9 @@ impl serde::Serialize for HostHeartbeat {
         if !self.environment.is_empty() {
             struct_ser.serialize_field("environment", &self.environment)?;
         }
+        if !self.features.is_empty() {
+            struct_ser.serialize_field("features", &self.features)?;
+        }
         struct_ser.end()
     }
 }
@@ -498,6 +504,7 @@ impl<'de> serde::Deserialize<'de> for HostHeartbeat {
             "http_port",
             "httpPort",
             "environment",
+            "features",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -520,6 +527,7 @@ impl<'de> serde::Deserialize<'de> for HostHeartbeat {
             Exports,
             HttpPort,
             Environment,
+            Features,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -559,6 +567,7 @@ impl<'de> serde::Deserialize<'de> for HostHeartbeat {
                             "exports" => Ok(GeneratedField::Exports),
                             "httpPort" | "http_port" => Ok(GeneratedField::HttpPort),
                             "environment" => Ok(GeneratedField::Environment),
+                            "features" => Ok(GeneratedField::Features),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -596,6 +605,7 @@ impl<'de> serde::Deserialize<'de> for HostHeartbeat {
                 let mut exports__ = None;
                 let mut http_port__ = None;
                 let mut environment__ = None;
+                let mut features__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -720,6 +730,12 @@ impl<'de> serde::Deserialize<'de> for HostHeartbeat {
                             }
                             environment__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Features => {
+                            if features__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("features"));
+                            }
+                            features__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(HostHeartbeat {
@@ -741,6 +757,7 @@ impl<'de> serde::Deserialize<'de> for HostHeartbeat {
                     exports: exports__.unwrap_or_default(),
                     http_port: http_port__.unwrap_or_default(),
                     environment: environment__.unwrap_or_default(),
+                    features: features__.unwrap_or_default(),
                 })
             }
         }
@@ -1339,6 +1356,116 @@ impl<'de> serde::Deserialize<'de> for LocalResources {
         deserializer.deserialize_struct("wasmcloud.runtime.v2.LocalResources", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PluginSecretRef {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if !self.keys.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.PluginSecretRef", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if !self.keys.is_empty() {
+            struct_ser.serialize_field("keys", &self.keys)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PluginSecretRef {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "keys",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Keys,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "keys" => Ok(GeneratedField::Keys),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PluginSecretRef;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct wasmcloud.runtime.v2.PluginSecretRef")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PluginSecretRef, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut keys__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Keys => {
+                            if keys__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("keys"));
+                            }
+                            keys__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
+                    }
+                }
+                Ok(PluginSecretRef {
+                    name: name__.unwrap_or_default(),
+                    keys: keys__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("wasmcloud.runtime.v2.PluginSecretRef", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for Service {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -1789,6 +1916,9 @@ impl serde::Serialize for WitInterface {
         if !self.name.is_empty() {
             len += 1;
         }
+        if !self.plugin_secrets.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("wasmcloud.runtime.v2.WitInterface", len)?;
         if !self.namespace.is_empty() {
             struct_ser.serialize_field("namespace", &self.namespace)?;
@@ -1808,6 +1938,9 @@ impl serde::Serialize for WitInterface {
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
         }
+        if !self.plugin_secrets.is_empty() {
+            struct_ser.serialize_field("pluginSecrets", &self.plugin_secrets)?;
+        }
         struct_ser.end()
     }
 }
@@ -1824,6 +1957,8 @@ impl<'de> serde::Deserialize<'de> for WitInterface {
             "interfaces",
             "config",
             "name",
+            "plugin_secrets",
+            "pluginSecrets",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1834,6 +1969,7 @@ impl<'de> serde::Deserialize<'de> for WitInterface {
             Interfaces,
             Config,
             Name,
+            PluginSecrets,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1861,6 +1997,7 @@ impl<'de> serde::Deserialize<'de> for WitInterface {
                             "interfaces" => Ok(GeneratedField::Interfaces),
                             "config" => Ok(GeneratedField::Config),
                             "name" => Ok(GeneratedField::Name),
+                            "pluginSecrets" | "plugin_secrets" => Ok(GeneratedField::PluginSecrets),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1886,6 +2023,7 @@ impl<'de> serde::Deserialize<'de> for WitInterface {
                 let mut interfaces__ = None;
                 let mut config__ = None;
                 let mut name__ = None;
+                let mut plugin_secrets__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Namespace => {
@@ -1926,6 +2064,12 @@ impl<'de> serde::Deserialize<'de> for WitInterface {
                             }
                             name__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PluginSecrets => {
+                            if plugin_secrets__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("pluginSecrets"));
+                            }
+                            plugin_secrets__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(WitInterface {
@@ -1935,6 +2079,7 @@ impl<'de> serde::Deserialize<'de> for WitInterface {
                     interfaces: interfaces__.unwrap_or_default(),
                     config: config__.unwrap_or_default(),
                     name: name__.unwrap_or_default(),
+                    plugin_secrets: plugin_secrets__.unwrap_or_default(),
                 })
             }
         }

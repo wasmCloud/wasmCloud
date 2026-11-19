@@ -45,6 +45,7 @@ pub fn async_pg_interface(database: &str) -> WitInterface {
             database.to_string(),
         )]),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

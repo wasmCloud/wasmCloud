@@ -28,7 +28,7 @@
 //! * **Memory only.** Resolved values are returned by value and never
 //!   written back to disk.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -175,9 +175,20 @@ impl From<PluginSecretSource> for SecretEntry {
     }
 }
 
+/// An explicitly permitted use of a plugin-backed source by a workload reference.
+/// Host-declared plugin bindings are authorized separately by their declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum PluginSecretUse {
+    /// The workload may obtain the raw value, including through config or reveal.
+    Reveal,
+}
+
 /// A `secrets:` entry a host plugin serves through
 /// `wasmcloud:host/secret-source`. It is resolved each time a workload binds,
-/// and only a `host.plugins` entry or binding can name it.
+/// and a `host.plugins` entry or binding can name it. Workload references also
+/// require an explicit `allowedUses: [reveal]` opt-in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -190,6 +201,12 @@ pub struct PluginSecretSource {
     /// is visible to every workload on the host, so the entry says which of
     /// them may have them.
     pub workloads: crate::plugin::WorkloadGrant,
+    /// Uses a workload reference may request. Empty (the default) permits no
+    /// workload references; the workload grant alone never permits disclosure.
+    /// `reveal` authorizes raw disclosure through any consuming interface.
+    /// This does not authorize workload identity selection or broker credentials.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub allowed_uses: BTreeSet<PluginSecretUse>,
 }
 
 impl PluginSecretSource {
@@ -204,7 +221,21 @@ impl PluginSecretSource {
             plugin: plugin.into(),
             keys: keys.into_iter().collect(),
             workloads,
+            allowed_uses: BTreeSet::new(),
         }
+    }
+
+    /// Explicitly permit a use for references originating in workload manifests.
+    #[must_use]
+    pub fn with_allowed_use(mut self, usage: PluginSecretUse) -> Self {
+        self.allowed_uses.insert(usage);
+        self
+    }
+
+    /// Whether workload references may disclose this source's raw values.
+    #[must_use]
+    pub fn allows_workload_references(&self) -> bool {
+        self.allowed_uses.contains(&PluginSecretUse::Reveal)
     }
 }
 
@@ -228,6 +259,8 @@ struct RawSecretEntry {
     keys: Option<BTreeMap<String, crate::plugin::SecretKey>>,
     #[serde(default)]
     workloads: Option<crate::plugin::WorkloadGrant>,
+    #[serde(default)]
+    allowed_uses: Option<BTreeSet<PluginSecretUse>>,
 }
 
 impl TryFrom<RawSecretEntry> for SecretEntry {
@@ -241,10 +274,13 @@ impl TryFrom<RawSecretEntry> for SecretEntry {
             from_env: raw.from_env,
         };
         match (raw.plugin, raw.keys) {
-            (None, None) if raw.workloads.is_none() => Ok(Self::Static(source)),
-            (None, _) => {
-                Err("`keys`/`workloads` are set without the `plugin` that serves them".into())
+            (None, None) if raw.workloads.is_none() && raw.allowed_uses.is_none() => {
+                Ok(Self::Static(source))
             }
+            (None, _) => Err(
+                "`keys`/`workloads`/`allowedUses` are set without the `plugin` that serves them"
+                    .into(),
+            ),
             (Some(plugin), keys) => {
                 if source != SecretSource::default() {
                     return Err(format!(
@@ -268,6 +304,7 @@ impl TryFrom<RawSecretEntry> for SecretEntry {
                     plugin,
                     keys,
                     workloads,
+                    allowed_uses: raw.allowed_uses.unwrap_or_default(),
                 }))
             }
         }
@@ -1104,6 +1141,37 @@ mod tests {
             let err = parse(json).unwrap_err();
             assert!(err.contains(expect), "{json}: {err}");
         }
+    }
+
+    #[test]
+    fn workload_reference_disclosure_is_opt_in_and_round_trips() {
+        let parse = |allowed: &str| {
+            serde_json::from_str::<SecretEntry>(&format!(
+                r#"{{"plugin":"vault","keys":{{"password":"pw"}},"workloads":"all"{allowed}}}"#
+            ))
+        };
+        for allowed in ["", r#", "allowedUses":[]"#] {
+            let SecretEntry::Plugin(entry) = parse(allowed).unwrap() else {
+                panic!("plugin source")
+            };
+            assert!(!entry.allows_workload_references());
+        }
+        let entry = parse(r#", "allowedUses":["reveal"]"#).unwrap();
+        let SecretEntry::Plugin(source) = &entry else {
+            panic!("plugin source")
+        };
+        assert!(source.allows_workload_references());
+        assert_eq!(
+            serde_json::from_str::<SecretEntry>(&serde_json::to_string(&entry).unwrap()).unwrap(),
+            entry
+        );
+        assert!(parse(r#", "allowedUses":["reveall"]"#).is_err());
+        assert!(
+            serde_json::from_str::<SecretEntry>(
+                r#"{"inline":{"password":"x"},"allowedUses":["reveal"]}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

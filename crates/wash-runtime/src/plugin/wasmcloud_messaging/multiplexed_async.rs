@@ -379,6 +379,7 @@ mod tests {
                 "in-memory".to_string(),
             )]),
             name: name.map(String::from),
+            plugin_secrets: Vec::new(),
         }
     }
 

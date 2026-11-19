@@ -303,6 +303,7 @@ fn messaging_handler_interface(subscriptions: Option<&str>) -> WitInterface {
         version: Some(semver::Version::new(0, 3, 0)),
         config,
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

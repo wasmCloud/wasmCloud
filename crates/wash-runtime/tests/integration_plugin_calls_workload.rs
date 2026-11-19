@@ -44,6 +44,7 @@ fn acme_events_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: Default::default(),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 
@@ -436,6 +437,7 @@ fn acme_events_handler_interface() -> WitInterface {
         version: Some(semver::Version::parse("0.1.0").unwrap()),
         config: Default::default(),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

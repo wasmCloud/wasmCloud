@@ -362,6 +362,7 @@ pub(super) fn http_interface(host_header: &str, fixture: &str) -> WitInterface {
             host_header.to_string(),
         )]),
         name: None,
+        plugin_secrets: Vec::new(),
     }
 }
 

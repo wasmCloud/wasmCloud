@@ -201,6 +201,7 @@ fn egress_workload_with(
                     config
                 },
                 name: None,
+                plugin_secrets: Vec::new(),
             }],
             volumes: vec![],
         },

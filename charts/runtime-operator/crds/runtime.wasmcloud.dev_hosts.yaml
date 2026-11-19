@@ -114,6 +114,13 @@ spec:
                   - type
                   type: object
                 type: array
+              features:
+                description: |-
+                  Features lists the start-request features the host acts on, from its
+                  heartbeat. A Workload that uses one is placed only on a host listing it.
+                items:
+                  type: string
+                type: array
               lastSeen:
                 format: date-time
                 type: string

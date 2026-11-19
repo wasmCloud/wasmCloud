@@ -118,6 +118,7 @@ fn grow_workload(name: &str) -> WorkloadStartRequest {
                     name.to_string(),
                 )]),
                 name: None,
+                plugin_secrets: Vec::new(),
             }],
             volumes: vec![],
         },

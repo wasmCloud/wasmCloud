@@ -2152,6 +2152,7 @@ mod nats_tests {
                     Config::from([("backend", "nats".to_string()), ("url", url)])
                 },
                 name: None,
+                plugin_secrets: Vec::new(),
             }
         }
 

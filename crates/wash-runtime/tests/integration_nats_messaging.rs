@@ -177,6 +177,7 @@ fn messaging_handler_workload(
                     SUBSCRIPTION_SUBJECT.to_string(),
                 )]),
                 name: None,
+                plugin_secrets: Vec::new(),
             }],
             volumes: vec![],
         },

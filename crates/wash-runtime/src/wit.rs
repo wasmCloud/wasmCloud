@@ -217,6 +217,10 @@ pub struct WitInterface {
     /// component in the workload carries it too.
     #[serde(default)]
     pub name: Option<String>,
+    /// Plugin-backed `secrets:` entries whose values `config` takes when the
+    /// workload binds. Names only: the host resolves the values itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugin_secrets: Vec<crate::plugin::PluginSecretFrom>,
 }
 
 /// Config keys, never config values: see [`Config`].
@@ -229,6 +233,7 @@ impl std::fmt::Debug for WitInterface {
             .field("version", &self.version)
             .field("name", &self.name)
             .field("config", &self.config)
+            .field("plugin_secrets", &self.plugin_secrets)
             .finish()
     }
 }
@@ -258,6 +263,11 @@ impl WitInterface {
 
         self.interfaces.extend(other.interfaces.clone());
         self.config.extend(other.config.clone());
+        for secret in &other.plugin_secrets {
+            if !self.plugin_secrets.contains(secret) {
+                self.plugin_secrets.push(secret.clone());
+            }
+        }
         true
     }
 
@@ -427,6 +437,7 @@ impl std::hash::Hash for WitInterface {
             k.hash(state);
             v.as_text().hash(state);
         }
+        self.plugin_secrets.hash(state);
     }
 }
 
@@ -465,6 +476,7 @@ impl From<&str> for WitInterface {
             version,
             config: Config::new(),
             name: None,
+            plugin_secrets: Vec::new(),
         }
     }
 }
@@ -500,6 +512,7 @@ mod tests {
             .into_iter()
             .collect::<Config>(),
             name: None,
+            plugin_secrets: Vec::new(),
         };
 
         let rendered = format!("{interface:?}");
@@ -523,6 +536,7 @@ mod tests {
             version: None,
             config: Config::new(),
             name: None,
+            plugin_secrets: Vec::new(),
         }
     }
 
@@ -539,6 +553,7 @@ mod tests {
             version: Some(semver::Version::parse(version).unwrap()),
             config: Config::new(),
             name: None,
+            plugin_secrets: Vec::new(),
         }
     }
 

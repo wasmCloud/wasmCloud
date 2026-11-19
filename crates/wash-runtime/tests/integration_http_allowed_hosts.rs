@@ -147,6 +147,7 @@ fn allowed_hosts_workload(allowed_hosts: Vec<String>) -> WorkloadStartRequest {
                     config
                 },
                 name: None,
+                plugin_secrets: Vec::new(),
             }],
             volumes: vec![],
         },

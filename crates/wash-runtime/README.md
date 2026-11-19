@@ -27,6 +27,69 @@ A timed-out bind loses access to its secrets, and the workload ID cannot bind
 again until the unfinished hook and its cleanup return. Bind rejections with
 secrets withhold guest error details.
 
+## Workload references to plugin secrets
+
+A workload can select a host catalog entry through
+`hostInterfaces[].pluginSecretFrom`, optionally selecting and renaming keys.
+The operator passes names only; the host checks the entry's workload grant
+before asking its secret-source plugin. The source must also explicitly allow
+raw disclosure with `allowedUses: [reveal]`:
+
+```yaml
+# Host configuration (pluginSecrets in the Helm chart).
+secrets:
+  billing-api:
+    plugin: vault-secrets
+    keys:
+      token: apps/billing/token
+    workloads:
+      - namespace: billing
+    allowedUses: [reveal]
+```
+
+```yaml
+# Workload or workload template.
+hostInterfaces:
+  - namespace: wasi
+    package: config
+    interfaces: [store]
+    pluginSecretFrom:
+      - name: billing-api
+        keys:
+          - key: token
+            as: api-token
+```
+
+Omitting `allowedUses`, or setting it to `[]`, refuses workload references even
+when the workload grant matches. Existing host-declared `secretFrom` bindings
+continue to work without this opt-in. An unknown entry, a grant refusal and a
+missing reveal opt-in have the same public error, and none calls the source.
+
+Resolved text values remain `ConfigValue::Secret` through binding policy and
+delivery; non-UTF-8 values are refused, matching host-declared binding config. Component plugins read them through
+`binding-secrets`, never `interface-binding.config`. They remain workload-origin
+config for ownership checks: `workloadConfig: deny` still refuses host-owned keys.
+
+### Relationship to identity and credential brokering
+
+This is an explicit raw-disclosure path, matching the reveal exception in the
+[credential and secret brokering RFC](https://github.com/wasmCloud/wasmCloud/issues/6007).
+The only `allowedUses` value implemented here is `reveal`; this is not the RFC's
+complete typed-source or presenter policy. Opting in lets an admitted workload
+choose any consuming interface, including `wasi:config`, and obtain the value.
+Do not opt in credentials intended only for a host/plugin presenter. A managed
+broker class must refuse reveal and these workload references in its admission
+policy; this change does not implement that class, its audit, or withdrawal.
+
+The [workload identity RFC](https://github.com/wasmCloud/wasmCloud/issues/5653)
+keeps SVIDs, private keys and tokens in host custody. Those are not entries for
+this reveal catalog. `pluginSecretFrom` neither selects an identity nor changes
+issuance, scheduling leases, attestation, renewal or egress credential resolution.
+The existing namespace/name workload grant is a config-access selector, not a
+SPIFFE identity or cryptographically attested principal. A revealed value can
+only be withdrawn from a guest by rotating it; stopping a binding cannot erase
+copies the guest has already made.
+
 ## Usage
 
 ### Basic Example

@@ -65,6 +65,7 @@ fn wasi_kv_iface(name: Option<&str>) -> WitInterface {
         version: Some(semver::Version::parse("0.2.0-draft").unwrap()),
         config,
         name: name.map(String::from),
+        plugin_secrets: Vec::new(),
     }
 }
 
@@ -80,6 +81,7 @@ fn wasmcloud_kv_store(name: &str) -> WitInterface {
             "in-memory".to_string(),
         )]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 

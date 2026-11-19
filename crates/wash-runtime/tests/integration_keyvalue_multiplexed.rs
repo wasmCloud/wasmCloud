@@ -40,6 +40,7 @@ fn kv_iface(name: &str, backend: &str, url: &str) -> WitInterface {
             ("url".to_string(), url.to_string()),
         ]),
         name: Some(name.to_string()),
+        plugin_secrets: Vec::new(),
     }
 }
 
