@@ -662,7 +662,9 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
     ///
     /// # Arguments
     /// * `workload` - The fully resolved workload
-    /// * `component_id` - The ID of the specific component within the workload
+    /// * `component_id` - The ID of the specific component within the workload.
+    ///   A plugin bound only for `hostInterfaces` entries that no component
+    ///   uses is called once, with the workload's ID here instead.
     ///
     /// # Returns
     /// Ok if the callback completed successfully.
