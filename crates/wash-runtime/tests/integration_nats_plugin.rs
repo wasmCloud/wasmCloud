@@ -119,6 +119,61 @@ async fn start_nats_version(version: &str, with_kv: bool) -> Result<Harness> {
     })
 }
 
+/// Two JetStream accounts: `BOUNDED` limits streams and storage, `OPEN` has no
+/// limits. Each has one user whose name and password are the account's, in
+/// lower case.
+const ACCOUNTS_CONF: &str = r#"
+listen: 0.0.0.0:4222
+jetstream { store_dir: "/tmp/js" }
+accounts {
+  BOUNDED {
+    jetstream { max_mem: 8M, max_file: 8M, max_streams: 2, max_consumers: 100 }
+    users: [{ user: bounded, password: bounded }]
+  }
+  OPEN {
+    jetstream: enabled
+    users: [{ user: open, password: open }]
+  }
+}
+"#;
+
+/// A server running [`ACCOUNTS_CONF`]; the harness client is `bounded`.
+async fn start_nats_with_accounts() -> Result<Harness> {
+    let container = GenericImage::new("nats", "2.12.15-alpine")
+        .with_exposed_port(4222.tcp())
+        .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+        .with_copy_to("/etc/nats/accounts.conf", ACCOUNTS_CONF.as_bytes().to_vec())
+        .with_cmd(["-c", "/etc/nats/accounts.conf"])
+        .start()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to start NATS container: {e}"))?;
+    let port = container
+        .get_host_port_ipv4(4222)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to get NATS port: {e}"))?;
+    let url = format!("nats://127.0.0.1:{port}");
+    // The wait strategy can return before the listener accepts.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let client = loop {
+        match async_nats::ConnectOptions::with_user_and_password("bounded".into(), "bounded".into())
+            .connect(&url)
+            .await
+        {
+            Ok(client) => break client,
+            Err(e) if tokio::time::Instant::now() > deadline => {
+                anyhow::bail!("NATS never became reachable at {url}: {e}")
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(200)).await,
+        }
+    };
+    Ok(Harness {
+        nats_url: url,
+        js: async_nats::jetstream::new(client.clone()),
+        client,
+        _container: container,
+    })
+}
+
 /// Connects once the server is actually accepting, or gives up at `budget`.
 async fn connect_with_retry(url: &str, budget: Duration) -> Result<async_nats::Client> {
     let deadline = tokio::time::Instant::now() + budget;
@@ -2756,6 +2811,55 @@ async fn kv_admin_under_a_label_is_held_to_the_labels_declared_grant() -> Result
 
     host.workload_stop(wash_runtime::types::WorkloadStopRequest {
         workload_id: "wl-tenant".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+/// `bucket-create-allow: *` is bounded by the JetStream account: a binding to
+/// an account without limits is refused at bind, and in a bounded account the
+/// server refuses the create past its stream limit as `limit-exceeded`.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_any_name_creation_is_bounded_by_the_account() -> Result<()> {
+    let h = start_nats_with_accounts().await?;
+    let host = start_host().await?;
+    let grant = |user: &'static str| {
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("username", user),
+            ("password", user),
+            ("subject-allow", "test.>"),
+            ("bucket-allow", "*"),
+            ("bucket-create-allow", "*"),
+            ("bucket-max-bytes", "1048576"),
+            ("bucket-storage-allow", "memory"),
+            ("core-subscriptions", "test.api"),
+        ])
+    };
+
+    let message = expect_refused(&host, workload_request("wl-any-open", grant("open"))).await?;
+    assert!(
+        message.contains("no max streams, max memory storage limit"),
+        "{message}"
+    );
+
+    host.workload_start(workload_request("wl-any-bounded", grant("bounded")))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Any name, up to the account's two streams.
+    for name in ["dyn-a", "dyn-b"] {
+        assert_eq!(
+            api_probe(&h, format!("kv-admin:create:{name}:0:-")).await?,
+            "created",
+            "{name}"
+        );
+    }
+    let refused = api_probe(&h, "kv-admin:create:dyn-c:0:-").await?;
+    assert!(refused.starts_with("limit-exceeded:"), "{refused}");
+    assert!(h.js.get_key_value("dyn-c").await.is_err());
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-any-bounded".into(),
     })
     .await?;
     Ok(())

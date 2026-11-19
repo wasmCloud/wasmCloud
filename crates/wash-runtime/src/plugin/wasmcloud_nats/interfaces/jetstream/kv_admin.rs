@@ -30,6 +30,16 @@ use kv_admin::CreateBucketError;
 /// The server's cap on revisions kept per key.
 const MAX_HISTORY: u8 = 64;
 
+/// Server refusals of a new stream because the account or server is out of
+/// streams, storage or memory.
+const ACCOUNT_LIMIT_CODES: &[jetstream::ErrorCode] = &[
+    jetstream::ErrorCode::ACCOUNT_RESOURCES_EXCEEDED,
+    jetstream::ErrorCode::INSUFFICIENT_RESOURCES,
+    jetstream::ErrorCode::MAXIMUM_STREAMS_LIMIT,
+    jetstream::ErrorCode::MEMORY_RESOURCES_EXCEEDED,
+    jetstream::ErrorCode::STORAGE_RESOURCES_EXCEEDED,
+];
+
 /// The longest `max-age-ms` the server's signed nanosecond duration holds.
 const MAX_AGE_MS: u64 = i64::MAX as u64 / 1_000_000;
 
@@ -351,6 +361,13 @@ fn classify_create_err(bucket: &str, e: CreateKeyValueError) -> CreateFailure {
                 }
                 Some(CreateStreamErrorKind::TimedOut) => {
                     types::NatsError::Timeout(format!("{what}: {e}"))
+                }
+                Some(CreateStreamErrorKind::JetStream(err))
+                    if ACCOUNT_LIMIT_CODES.contains(&err.error_code()) =>
+                {
+                    types::NatsError::LimitExceeded(format!(
+                        "{what}: refused by the JetStream account's limits: {e}"
+                    ))
                 }
                 _ => kv_err(&what, chain_timed_out(&e), &e),
             }
@@ -738,6 +755,17 @@ mod tests {
             classify_create_err("cache", conflict),
             CreateFailure::Conflict
         ));
+
+        for code in ACCOUNT_LIMIT_CODES {
+            let quota = bucket_create(CreateStreamErrorKind::JetStream(api_error(code.0)));
+            assert!(
+                matches!(
+                    classify_create_err("cache", quota),
+                    CreateFailure::Other(types::NatsError::LimitExceeded(_))
+                ),
+                "{code:?}"
+            );
+        }
 
         let other_api = bucket_create(CreateStreamErrorKind::JetStream(api_error(10074)));
         assert!(matches!(

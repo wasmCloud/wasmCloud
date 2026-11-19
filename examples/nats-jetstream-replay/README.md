@@ -134,8 +134,10 @@ deny and a workload may only narrow an operator's declared ceiling.
 
 `bucket-create-allow` and `bucket-delete-allow` gate the `kv-admin` interface's
 `create-bucket` and `delete-bucket`, on top of `bucket-allow`.
-`bucket-create-allow` lists bucket names, not patterns, and needs
-`bucket-max-bytes` (a size in bytes, or `unlimited`) to cap each bucket.
+`bucket-create-allow` lists bucket names, or is `*` for any name, and needs
+`bucket-max-bytes` (a size in bytes, or `unlimited`) to cap each bucket. With
+`*`, the NATS account must set JetStream stream and storage limits, which then
+bound how many buckets there can be.
 `bucket-storage-allow` decides whether those buckets may use memory; unset is
 file only.
 
