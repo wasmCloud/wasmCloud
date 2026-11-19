@@ -1,0 +1,110 @@
+// `wasmcloud:broker` with `client` removed, so a p2 fixture can import
+// `signer` without `wasi:http@0.3.0`. Keep in step with /wit/broker.
+package wasmcloud:broker@0.1.0;
+
+/// Types shared by every broker interface.
+///
+/// A broker performs an effect with a credential the caller is never handed:
+/// it sends a request, signs a message or checks a tag, and returns only the
+/// result. Each operation interface is imported once per credential, under a
+/// label (`import github: wasmcloud:broker/client@0.1.0;`), and the
+/// implementer binds that label to one credential before the caller is
+/// instantiated. An unlabeled operation import names no credential and is
+/// refused.
+@since(version = 0.1.0)
+interface types {
+  /// Why an operation was refused before anything left the implementer.
+  @since(version = 0.1.0)
+  variant denied-reason {
+    /// The implementer's policy refused this caller this operation.
+    not-entitled,
+    /// The scheme, host or port is not one the binding allows.
+    destination-not-allowed,
+    /// The destination resolved to an address the implementer refuses.
+    resolved-address-not-allowed,
+    /// The method, route or key operation is not one the binding allows.
+    operation-not-allowed,
+    /// The request set a header, trailer or URL part the implementer owns.
+    reserved-header,
+    /// The credential could not be obtained or has expired.
+    credential-unavailable,
+    /// A size, rate or concurrency limit on the binding was reached.
+    budget-exceeded,
+    /// The implementer cannot perform this kind of operation at all.
+    not-supported,
+    /// A reason not listed here, with detail when there is any.
+    other(option<string>),
+  }
+
+  /// Why a signing or verifying operation failed.
+  @since(version = 0.1.0)
+  variant error-code {
+    /// Refused before the key was used.
+    denied(denied-reason),
+    /// A failure not listed here, with detail when there is any.
+    other(option<string>),
+  }
+}
+
+/// The caller may sign with the one key this import is bound to.
+///
+/// The binding fixes the algorithm, so there is none to choose and none to
+/// downgrade. While the grant holds, the caller can sign anything the binding
+/// allows, so the implementer may bound message size, and bound rate and
+/// concurrency per import, so one caller's use does not spend another's. It
+/// may also fix a context that every signed message is bound to.
+@since(version = 0.1.0)
+interface signer {
+  use types.{error-code};
+
+  /// A signing algorithm. Hosts may bind keys for algorithms this version
+  /// does not name; those are reported as `other` with the algorithm's name.
+  @since(version = 0.1.0)
+  variant algorithm {
+    /// HMAC with SHA-256. The tag is 32 bytes.
+    hmac-sha256,
+    /// ECDSA over P-256 with SHA-256. The signature is the fixed 64-byte
+    /// `r || s` form.
+    ecdsa-p256-sha256,
+    /// An algorithm not named above, such as `ed25519`.
+    other(string),
+  }
+
+  /// What a verifier needs to know about the bound key.
+  @since(version = 0.1.0)
+  record key-info {
+    algorithm: algorithm,
+    /// The identifier the implementer publishes the key under, if any.
+    key-id: option<string>,
+    /// The public half as DER `SubjectPublicKeyInfo`. `none` for a MAC key.
+    public-key: option<list<u8>>,
+    /// The context the binding fixes, if any. With one, what is signed is the
+    /// 24 bytes `wasmcloud:broker/context` and a zero byte, then the
+    /// context's length as a big-endian u64, then the context, then
+    /// `message`. Without one, it is `message` alone, and a message that
+    /// begins with those 25 bytes is refused. A verifier needs this to check
+    /// a signature elsewhere.
+    context: option<list<u8>>,
+  }
+
+  /// The signature or tag over `message`, which is read as a stream and never
+  /// held whole.
+  @since(version = 0.1.0)
+  sign: async func(message: stream<u8>) -> result<list<u8>, error-code>;
+
+  /// The bound key's algorithm, identifier and public half.
+  @since(version = 0.1.0)
+  get-key-info: async func() -> key-info;
+}
+
+/// The caller may check a tag or signature against the one key this import is
+/// bound to, without being able to produce one.
+@since(version = 0.1.0)
+interface verifier {
+  use types.{error-code};
+
+  /// Whether `tag` is valid for `message`, compared in constant time.
+  /// `message` is read as a stream and never held whole.
+  @since(version = 0.1.0)
+  verify: async func(message: stream<u8>, tag: list<u8>) -> result<bool, error-code>;
+}

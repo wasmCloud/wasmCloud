@@ -75,7 +75,7 @@ pub(crate) const WASI_LINKER_VERSIONS: [semver::Version; 2] = [
 /// and our custom socket implementation (with loopback support) for socket interfaces.
 /// Both P2 and P3 bindings are registered.
 fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
-    use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random, sockets};
+    use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random};
 
     // IO interfaces (error, poll, streams)
     wasmtime_wasi_io::add_to_linker_async(linker)?;
@@ -151,37 +151,8 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
         <SharedCtx as wasmtime_wasi::cli::WasiCliView>::cli,
     )?;
 
-    // Socket interfaces — use OUR implementation with loopback support
-    sockets::tcp::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::udp::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::tcp_create_socket::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::udp_create_socket::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    sockets::instance_network::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
-    let net_options = sockets::network::LinkOptions::default();
-    sockets::network::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        &net_options,
-        ctx::extract_sockets,
-    )?;
-    sockets::ip_name_lookup::add_to_linker::<SharedCtx, crate::sockets::WasiSockets>(
-        linker,
-        ctx::extract_sockets,
-    )?;
+    // Socket interfaces, p2 and p3: OUR implementation with loopback support
+    crate::sockets::add_to_linker_with(linker, ctx::extract_sockets)?;
 
     // CLI, clocks, filesystem, random — upstream P3 add_to_linker
     wasmtime_wasi::p3::cli::add_to_linker(linker)?;
@@ -198,9 +169,6 @@ fn add_wasi_to_linker(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
         ctx::extract_active_ctx,
     )?;
     wasmtime_wasi::p3::random::add_to_linker(linker)?;
-
-    // Sockets with our custom P3 implementation (with loopback)
-    crate::sockets::add_p3_to_linker(linker)?;
 
     // wasi:tls@0.3.0-draft (p3).
     #[cfg(feature = "wasi-tls")]

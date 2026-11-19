@@ -124,6 +124,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "broker-client-p3"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "broker-managed-p2"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "broker-slow-p3"
+version = "0.0.0"
+dependencies = [
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

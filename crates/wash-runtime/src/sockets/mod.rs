@@ -397,6 +397,25 @@ pub fn add_p3_to_linker(
     Ok(())
 }
 
+/// Every `wasi:sockets` interface, p2 and p3, served through `view`.
+pub(crate) fn add_to_linker_with(
+    linker: &mut wasmtime::component::Linker<crate::engine::ctx::SharedCtx>,
+    view: fn(&mut crate::engine::ctx::SharedCtx) -> WasiSocketsCtxView<'_>,
+) -> anyhow::Result<()> {
+    use wasmtime_wasi::p2::bindings::sockets as p2;
+    use wasmtime_wasi::p3::bindings::sockets as p3;
+    p2::tcp::add_to_linker::<_, WasiSockets>(linker, view)?;
+    p2::udp::add_to_linker::<_, WasiSockets>(linker, view)?;
+    p2::tcp_create_socket::add_to_linker::<_, WasiSockets>(linker, view)?;
+    p2::udp_create_socket::add_to_linker::<_, WasiSockets>(linker, view)?;
+    p2::instance_network::add_to_linker::<_, WasiSockets>(linker, view)?;
+    p2::network::add_to_linker::<_, WasiSockets>(linker, &Default::default(), view)?;
+    p2::ip_name_lookup::add_to_linker::<_, WasiSockets>(linker, view)?;
+    p3::ip_name_lookup::add_to_linker::<_, WasiSockets>(linker, view)?;
+    p3::types::add_to_linker::<_, WasiSockets>(linker, view)?;
+    Ok(())
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SocketAddressFamily {
     Ipv4,

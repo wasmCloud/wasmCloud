@@ -1,0 +1,7 @@
+package wasmcloud:broker-host;
+
+world broker {
+    import wasmcloud:broker/client@0.1.0;
+    import wasmcloud:broker/signer@0.1.0;
+    import wasmcloud:broker/verifier@0.1.0;
+}

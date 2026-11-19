@@ -1,0 +1,9 @@
+package wasmcloud:broker-slow-p3@0.1.0;
+
+/// A sibling with no broker import, linked beside `broker-client-p3`. Its
+/// slow export keeps the store's active context on it while the caller runs.
+world broker-slow-p3 {
+    import wasi:clocks/monotonic-clock@0.3.2;
+
+    export wasmcloud:broker-test/slow@0.1.0;
+}

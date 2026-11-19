@@ -109,6 +109,7 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &[
     "wasi-otel",
     "wasi-webgpu",
     "wasmcloud-blobstore-multiplexed",
+    "wasmcloud-broker",
     "wasmcloud-keyvalue-multiplexed",
     "wasmcloud-messaging",
     "wasmcloud-messaging-async-multiplexed",
@@ -139,6 +140,7 @@ mod roster_tests {
         ids.extend([
             super::wasmcloud_messaging::multiplexed::MULTIPLEXED_MESSAGING_ID,
             super::wasmcloud_messaging::multiplexed_async::MULTIPLEXED_ASYNC_MESSAGING_ID,
+            super::wasmcloud_broker::WASMCLOUD_BROKER_ID,
         ]);
         #[cfg(feature = "wasi-blobstore")]
         ids.push(super::wasi_blobstore::nats::PLUGIN_BLOBSTORE_ID);
@@ -206,6 +208,8 @@ pub(crate) use secret_source::{resolve_plugin_secrets, validate_plugin_config_so
 /// Shared `(implements ..)` multiplexing core
 #[cfg(feature = "wasm_component_model_implements")]
 pub mod multiplex;
+#[cfg(feature = "wasm_component_model_implements")]
+pub mod wasmcloud_broker;
 
 /// Shared bounded `stream<u8>` collection for host impls whose backend takes a
 /// complete payload.
