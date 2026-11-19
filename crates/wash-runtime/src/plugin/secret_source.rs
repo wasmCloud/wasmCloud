@@ -4,8 +4,9 @@
 //! The key names are part of the [`PluginBindingSet`] from host start, so every
 //! key-level check sees them ([`validate_plugin_config_sources`]). The values are
 //! resolved each time a workload binds, before the binding policy runs
-//! ([`resolve_plugin_secrets`]), after which a secret key is an ordinary
-//! operator config key.
+//! ([`resolve_plugin_secrets`]), and remain typed secrets in operator config.
+//! Workload-owned references additionally require explicit reveal permission
+//! and remain workload-origin config ([`resolve_workload_secrets`]).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -86,6 +87,7 @@ name_type!(
 
 /// A workload's reference, on one of its interfaces, to a plugin-backed
 /// `secrets:` entry: which of the entry's keys that interface's config takes.
+/// The source must explicitly allow `reveal` use.
 /// Resolved by [`resolve_workload_secrets`] when the workload binds.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
@@ -588,8 +590,8 @@ struct WorkloadSecretKey<'a> {
 /// # Errors
 ///
 /// A reference to an entry that is not a plugin-backed entry of `catalog`, or
-/// whose grant leaves `workload` out, or which does not opt in to `reveal`, refused alike (the host log tells them
-/// apart and has the grant); a key the entry lacks; a config key, by `schema`'s
+/// whose grant leaves `workload` out, or which does not opt in to `reveal`,
+/// refused alike (the host log tells them apart and has the grant); a key the entry lacks; a config key, by `schema`'s
 /// identity for it, the interface also sets itself or takes from two
 /// references; or a source that is unavailable, refuses, or leaves a key out.
 /// Errors name the interface, entry and key, never a value.
@@ -635,13 +637,18 @@ pub(crate) async fn resolve_workload_secrets(
                 )
             };
             let entry = match catalog.get(name) {
-                Some(entry) if entry.workloads.admits(workload) && entry.allows_workload_references() => entry,
+                Some(entry)
+                    if entry.workloads.admits(workload) && entry.allows_workload_references() =>
+                {
+                    entry
+                }
                 Some(entry) => {
                     tracing::warn!(
                         plugin_id,
                         interface = %interface.instance(),
                         secret = %name,
                         grant = %entry.workloads,
+                        allowed_uses = ?entry.allowed_uses,
                         workload = %named,
                         "refused a workload's reference: grant or reveal use is not allowed"
                     );
@@ -705,6 +712,14 @@ pub(crate) async fn resolve_workload_secrets(
         wanted.push(keys);
     }
 
+    anyhow::ensure!(
+        plugins
+            .get(plugin_id)
+            .is_none_or(|plugin| plugin.takes_plugin_secrets()),
+        "plugin '{plugin_id}' cannot consume plugin secrets; component plugins must export \
+         workload-lifecycle and import binding-secrets"
+    );
+
     let mut requests: BTreeMap<(Option<&str>, &CatalogName), BTreeSet<&SecretKey>> =
         BTreeMap::new();
     for (interface, keys) in ordered.iter().zip(&wanted) {
@@ -752,6 +767,14 @@ pub(crate) async fn resolve_workload_secrets(
                 .and_then(|resolved| resolved.get(key.key))
                 .cloned()
                 .context("a requested plugin secret has no answer")?;
+            // Binding config is text, as on the host-declared secret path,
+            // but validating UTF-8 must not erase the value's secret type.
+            anyhow::ensure!(
+                value.expose().is_some(),
+                "secret `{}` key `{}` for workload `{named}` is not UTF-8 text, which config takes",
+                key.entry,
+                key.entry_key,
+            );
             interface.config.insert(key.config_key, value);
         }
         bound.insert(interface);
@@ -817,7 +840,7 @@ mod tests {
             let missing: Vec<SecretKey> = request
                 .keys
                 .iter()
-                .filter(|k| !self.0.contains_key(k.as_str()))
+                .filter(|k| k.as_str() != "binary" && !self.0.contains_key(k.as_str()))
                 .cloned()
                 .collect();
             if !missing.is_empty() {
@@ -826,7 +849,16 @@ mod tests {
             let mut found: BTreeMap<SecretKey, SecretValue> = request
                 .keys
                 .iter()
-                .map(|k| (k.clone(), SecretValue::new(self.0[k.as_str()])))
+                .map(|k| {
+                    (
+                        k.clone(),
+                        if k.as_str() == "binary" {
+                            SecretValue::from_bytes([0xff, 0xfe])
+                        } else {
+                            SecretValue::new(self.0[k.as_str()])
+                        },
+                    )
+                })
                 .collect();
             if found.remove(&SecretKey::from("silent")).is_some() {
                 found.insert("chatty".into(), SecretValue::new("extra"));
@@ -1035,7 +1067,8 @@ mod tests {
                 "vault",
                 [("url".to_string(), SecretKey::from("pg-url-app"))],
                 WorkloadGrant::Only(vec![WorkloadSelector::namespace("billing")]),
-            ).with_allowed_use(crate::config_source::PluginSecretUse::Reveal),
+            )
+            .with_allowed_use(crate::config_source::PluginSecretUse::Reveal),
         )])
     }
 
@@ -1063,6 +1096,147 @@ mod tests {
             schema,
         )
         .await
+    }
+
+    /// An existing workload grant authorizes host-declared bindings, never a
+    /// new disclosure path. Both absence and an explicit empty list deny before
+    /// any source call, with the same public error as an unknown entry.
+    #[tokio::test]
+    async fn workload_references_require_explicit_reveal_use() {
+        let source = fixed();
+        let plugins = plugins(source.clone());
+        let mut catalog = workload_catalog();
+        catalog.get_mut("app").unwrap().allowed_uses.clear();
+        let mut interface = postgres("app-db");
+        interface.plugin_secrets = vec![reference("app", &[])];
+        let denied = resolve_workload_secrets(
+            &plugins,
+            &catalog,
+            "wasmcloud-postgres",
+            &requesting(),
+            HashSet::from([interface.clone()]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert!(source.1.lock().unwrap().is_empty());
+        let unknown = resolve_workload_secrets(
+            &plugins,
+            &BTreeMap::new(),
+            "wasmcloud-postgres",
+            &requesting(),
+            HashSet::from([interface.clone()]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(format!("{denied:#}"), format!("{unknown:#}"));
+        catalog
+            .get_mut("app")
+            .unwrap()
+            .allowed_uses
+            .insert(crate::config_source::PluginSecretUse::Reveal);
+        resolve_workload_secrets(
+            &plugins,
+            &catalog,
+            "wasmcloud-postgres",
+            &requesting(),
+            HashSet::from([interface]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(source.1.lock().unwrap().len(), 1);
+    }
+
+    /// Values stay typed through binding policy; formatting and serialization
+    /// cannot turn a resolved secret back into plain config.
+    #[tokio::test]
+    async fn workload_references_preserve_secret_values() {
+        let catalog = workload_catalog();
+        let mut interface = postgres("app-db");
+        interface.plugin_secrets = vec![reference("app", &[])];
+        let bound = resolve_workload_secrets(
+            &plugins(fixed()),
+            &catalog,
+            "wasmcloud-postgres",
+            &requesting(),
+            HashSet::from([interface]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap();
+        let declared = PluginBindingSet::new("wasmcloud-postgres");
+        let resolved = declared
+            .resolve_by_name(&bound, &BindingSchema::empty(), &|_, _, _| false)
+            .unwrap();
+        let config = &resolved["app-db"];
+        assert!(matches!(
+            config.get_value("url"),
+            Some(crate::wit::ConfigValue::Secret(_))
+        ));
+        assert_eq!(config.get("url"), None);
+        assert_eq!(config.expose("url"), Some("postgres://app:pw@db/app"));
+        let wire = serde_json::to_string(config).unwrap();
+        assert!(!wire.contains("postgres://app:pw"));
+        assert!(!format!("{bound:?}").contains("postgres://app:pw"));
+        assert!(wire.contains("<redacted>"));
+        let denied = declared
+            .with_host_owned_keys(["url"])
+            .resolve_by_name(&bound, &BindingSchema::empty(), &|_, _, _| false)
+            .unwrap_err();
+        assert!(format!("{denied:#}").contains("belong to the operator"));
+        assert!(!format!("{denied:#}").contains("postgres://app:pw"));
+    }
+
+    /// A binary value is refused without exposing its bytes, matching the
+    /// existing host-declared binding-config contract.
+    #[tokio::test]
+    async fn a_workload_reference_refuses_non_utf8_config() {
+        let mut catalog = workload_catalog();
+        catalog
+            .get_mut("app")
+            .unwrap()
+            .keys
+            .insert("binary".into(), "binary".into());
+        let mut interface = postgres("app-db");
+        interface.plugin_secrets = vec![reference("app", &[("value", "binary")])];
+        let err = resolve_workload_secrets(
+            &plugins(fixed()),
+            &catalog,
+            "wasmcloud-postgres",
+            &requesting(),
+            HashSet::from([interface]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("not UTF-8 text"));
+        assert!(!format!("{err:#}").contains("255"));
+    }
+
+    #[tokio::test]
+    async fn a_reference_to_an_unsupported_consumer_never_reads_the_source() {
+        let source = fixed();
+        let mut plugins = plugins(source.clone());
+        plugins.insert(
+            "unsupported",
+            Arc::new(Stub("unsupported", None, WitWorld::default())),
+        );
+        let mut interface = postgres("app-db");
+        interface.plugin_secrets = vec![reference("app", &[])];
+        let err = resolve_workload_secrets(
+            &plugins,
+            &workload_catalog(),
+            "unsupported",
+            &requesting(),
+            HashSet::from([interface]),
+            &BindingSchema::empty(),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("cannot consume plugin secrets"));
+        assert!(source.1.lock().unwrap().is_empty());
     }
 
     /// An entry that does not exist and one granted elsewhere are refused in
@@ -1519,7 +1693,7 @@ mod tests {
             ),
         ]);
         let schema = BindingSchema::empty().and_independent_keys();
-        validate_plugin_secrets(
+        validate_plugin_config_sources(
             "wasmcloud-secrets",
             &PluginBindingSet::new("wasmcloud-secrets"),
             &schema,
@@ -1549,7 +1723,7 @@ mod tests {
                     .await
                 }
             };
-            let (bound, _) = resolve(requesting()).await.expect("a granted workload");
+            let bound = resolve(requesting()).await.expect("a granted workload");
             let config = &bound.iter().next().expect("one interface").config;
             assert_eq!(config["url"], "postgres://app:pw@db/app", "{binder}");
             let err = resolve(outsider.clone())

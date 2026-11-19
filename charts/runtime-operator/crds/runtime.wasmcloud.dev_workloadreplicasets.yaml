@@ -417,7 +417,10 @@ spec:
                               description: |-
                                 PluginSecretFrom names entries of the host's `pluginSecrets` (its
                                 plugin-backed `secrets:` catalog) whose values this interface's config
-                                takes. Each time it binds the Workload, the host checks the entry's
+                                takes. The host catalog entry must explicitly set `allowedUses: [reveal]`;
+                                a matching workload grant alone does not authorize raw disclosure. This
+                                cannot select workload identities or host-only broker credentials.
+                                Each time it binds the Workload, the host checks the entry's
                                 `workloads` grant against the Workload's namespace and the name its
                                 replicas share, then asks the entry's plugin for the values through
                                 `wasmcloud:host/secret-source`. The values never pass through the

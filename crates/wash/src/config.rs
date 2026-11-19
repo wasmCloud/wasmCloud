@@ -3565,6 +3565,7 @@ secrets:
     keys:
       url: apps/billing/pg-url
     workloads: all
+    allowedUses: [reveal]
   local:
     inline:
       token: abc
@@ -3583,6 +3584,7 @@ host:
             .map(|name| name.as_str())
             .collect();
         assert_eq!(names, ["billing-db"]);
+        assert!(bindings.secret_catalog()["billing-db"].allows_workload_references());
     }
 
     #[test]

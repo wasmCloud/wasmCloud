@@ -35,7 +35,8 @@ type WitInterface struct {
 	Name string `protobuf:"bytes,6,opt,name=name,proto3" json:"name,omitempty"`
 	// Entries of the host's plugin-backed `secrets:` catalog whose values this
 	// interface's config takes. The host resolves them when it binds the
-	// workload; a request never carries the values.
+	// workload; a request never carries the values. Each referenced source
+	// must explicitly allow reveal use in addition to its workload grant.
 	PluginSecrets []*PluginSecretRef `protobuf:"bytes,7,rep,name=plugin_secrets,json=pluginSecrets,proto3" json:"plugin_secrets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

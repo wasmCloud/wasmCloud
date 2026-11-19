@@ -22,7 +22,8 @@ pub struct WitInterface {
     pub name: ::prost::alloc::string::String,
     /// Entries of the host's plugin-backed `secrets:` catalog whose values this
     /// interface's config takes. The host resolves them when it binds the
-    /// workload; a request never carries the values.
+    /// workload; a request never carries the values. Each referenced source
+    /// must explicitly allow reveal use in addition to its workload grant.
     #[prost(message, repeated, tag = "7")]
     pub plugin_secrets: ::prost::alloc::vec::Vec<PluginSecretRef>,
 }

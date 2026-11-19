@@ -818,7 +818,7 @@ func TestDaemonSetsForHost_OnlyMatchingDaemonSets(t *testing.T) {
 func TestDaemonSetSchedule_SkipsHostLackingRequiredFeature(t *testing.T) {
 	ds := testDaemonSet(1)
 	ds.Spec.Template.Spec.HostInterfaces = []runtimev1alpha1.HostInterface{{
-		PluginSecretFrom: []runtimev1alpha1.PluginSecretReference{{Name: "billing-db"}},
+		PluginSecretFrom: []runtimev1alpha1.PluginSecretReference{{Name: testPluginSecretDB}},
 		Namespace:        "wasi",
 		Package:          "config",
 		Interfaces:       []string{"store"},

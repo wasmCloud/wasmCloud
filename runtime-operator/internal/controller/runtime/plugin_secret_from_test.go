@@ -15,7 +15,13 @@ import (
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	runtimev2 "go.wasmcloud.dev/runtime-operator/v2/pkg/rpc/wasmcloud/runtime/v2"
-	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
+)
+
+const (
+	testPluginSecretDB       = "billing-db"
+	testPluginSecretAPI      = "billing-api"
+	testPluginSecretToken    = "token"
+	testPluginSecretEndpoint = "endpoint"
 )
 
 // pluginSecretWorkload asks for two plugin secrets on one host interface, one
@@ -24,14 +30,14 @@ func pluginSecretWorkload() *runtimev1alpha1.Workload {
 	return &runtimev1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{Name: "vault-reader", Namespace: "billing"},
 		Spec: runtimev1alpha1.WorkloadSpec{
-			Components: []runtimev1alpha1.WorkloadComponent{{Name: "app", Image: "example.com/app:1"}},
+			Components: []runtimev1alpha1.WorkloadComponent{{Name: "plugin-secret-reader", Image: "example.com/app:1"}},
 			HostInterfaces: []runtimev1alpha1.HostInterface{{
 				ConfigLayer: runtimev1alpha1.ConfigLayer{Config: map[string]string{"region": "eu"}},
 				PluginSecretFrom: []runtimev1alpha1.PluginSecretReference{
-					{Name: "billing-db"},
-					{Name: "billing-api", Keys: []runtimev1alpha1.PluginSecretKey{
-						{Key: "token", As: "api-token"},
-						{Key: "endpoint"},
+					{Name: testPluginSecretDB},
+					{Name: testPluginSecretAPI, Keys: []runtimev1alpha1.PluginSecretKey{
+						{Key: testPluginSecretToken, As: "api-token"},
+						{Key: testPluginSecretEndpoint},
 					}},
 				},
 				Namespace:  "wasi",
@@ -54,21 +60,10 @@ func hostWithFeatures(id string, features ...string) *runtimev1alpha1.Host {
 	return host
 }
 
-func startReply(t *testing.T) *wasmbus.Message {
-	t.Helper()
-	reply, err := protojson.Marshal(&runtimev2.WorkloadStartResponse{
-		WorkloadStatus: &runtimev2.WorkloadStatus{WorkloadId: "workload-1"},
-	})
-	if err != nil {
-		t.Fatalf("marshal start response: %v", err)
-	}
-	return &wasmbus.Message{Data: reply}
-}
-
 // The operator carries a reference to the host as names only: it resolves
 // nothing, and no value is in the start request.
 func TestPlacementPassesPluginSecretRefsThrough(t *testing.T) {
-	bus := &mockBus{reply: startReply(t)}
+	bus := &mockBus{reply: startedReply(t)}
 	host := hostWithFeatures(testHeartbeatHostID, runtimev1alpha1.HostFeaturePluginSecretRefs)
 	r := &WorkloadReconciler{Client: newWorkloadClient(t, host), Bus: bus, OperatorNamespace: testNamespace}
 
@@ -92,11 +87,11 @@ func TestPlacementPassesPluginSecretRefsThrough(t *testing.T) {
 	if len(refs) != 2 {
 		t.Fatalf("got %d plugin secret refs, want 2", len(refs))
 	}
-	if refs[0].GetName() != "billing-db" || len(refs[0].GetKeys()) != 0 {
+	if refs[0].GetName() != testPluginSecretDB || len(refs[0].GetKeys()) != 0 {
 		t.Errorf("whole-entry ref = %v, want billing-db with no keys", refs[0])
 	}
-	wantKeys := map[string]string{"api-token": "token", "endpoint": "endpoint"}
-	if refs[1].GetName() != "billing-api" || !maps.Equal(refs[1].GetKeys(), wantKeys) {
+	wantKeys := map[string]string{"api-token": testPluginSecretToken, testPluginSecretEndpoint: testPluginSecretEndpoint}
+	if refs[1].GetName() != testPluginSecretAPI || !maps.Equal(refs[1].GetKeys(), wantKeys) {
 		t.Errorf("selected ref = %v, want billing-api with keys %v", refs[1], wantKeys)
 	}
 }
@@ -110,11 +105,11 @@ func TestPlacementRefusesHostWithoutPluginSecretRefs(t *testing.T) {
 		pinned     string
 		wantHostID string
 	}{
-		{name: "chosen", wantHostID: ""},
-		{name: "pinned", pinned: testHeartbeatHostID, wantHostID: testHeartbeatHostID},
+		{name: "automatically-chosen", wantHostID: ""},
+		{name: pinnedName, pinned: testHeartbeatHostID, wantHostID: testHeartbeatHostID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bus := &mockBus{reply: startReply(t)}
+			bus := &mockBus{reply: startedReply(t)}
 			host := hostWithFeatures(testHeartbeatHostID)
 			r := &WorkloadReconciler{Client: newWorkloadClient(t, host), Bus: bus, OperatorNamespace: testNamespace}
 			workload := pluginSecretWorkload()
@@ -136,7 +131,7 @@ func TestPlacementRefusesHostWithoutPluginSecretRefs(t *testing.T) {
 
 // A pinned host that has not registered has reported no features yet.
 func TestPlacementWaitsForPinnedHostFeatures(t *testing.T) {
-	bus := &mockBus{reply: startReply(t)}
+	bus := &mockBus{reply: startedReply(t)}
 	r := &WorkloadReconciler{Client: newWorkloadClient(t), Bus: bus, OperatorNamespace: testNamespace}
 	workload := pluginSecretWorkload()
 	workload.Spec.HostID = testHeartbeatHostID
@@ -193,8 +188,8 @@ func TestFindFreeHostRequiresPluginSecretRefs(t *testing.T) {
 func TestPluginSecretRefsRefuseDuplicateConfigKey(t *testing.T) {
 	hi := runtimev1alpha1.HostInterface{
 		PluginSecretFrom: []runtimev1alpha1.PluginSecretReference{{
-			Name: "billing-api",
-			Keys: []runtimev1alpha1.PluginSecretKey{{Key: "token"}, {Key: "other", As: "token"}},
+			Name: testPluginSecretAPI,
+			Keys: []runtimev1alpha1.PluginSecretKey{{Key: testPluginSecretToken}, {Key: "alternate-token", As: testPluginSecretToken}},
 		}},
 	}
 	if _, err := pluginSecretRefs(hi); err == nil {

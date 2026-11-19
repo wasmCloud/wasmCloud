@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 
-use wash_runtime::config_source::PluginSecretSource;
+use wash_runtime::config_source::{PluginSecretSource, PluginSecretUse};
 use wash_runtime::host::HostApi;
 use wash_runtime::plugin::{
     PluginBindingSet, PluginBindings, PluginSecretFrom, PluginSecretRef, WorkloadGrant,
@@ -346,7 +346,8 @@ async fn start_with_catalog(
             ("consumer".to_string(), "who".into()),
         ],
         grant,
-    );
+    )
+    .with_allowed_use(PluginSecretUse::Reveal);
     start(
         PluginBindings::new()
             .with_plugin(declared)
@@ -387,6 +388,80 @@ fn start_error(resp: Result<wash_runtime::types::WorkloadStartResponse>) -> Opti
         Ok(resp) => Some(resp.workload_status.message),
         Err(e) => Some(format!("{e:#}")),
     }
+}
+
+/// A catalog grant alone cannot redirect a plugin's credential into the
+/// workload's own secret store. The same source remains valid for an
+/// operator-declared binding (covered by the existing binding tests).
+#[tokio::test]
+async fn a_workload_reference_without_reveal_use_is_refused() -> Result<()> {
+    let entry = PluginSecretSource::new(
+        SECRETS_ID,
+        [("db-password".into(), "db-password".into())],
+        test_namespace(),
+    );
+    let (_, h) =
+        start(PluginBindings::new().with_secret_catalog([("plugin-only".into(), entry)])).await?;
+    let msg = start_error(
+        h.workload_start(secrets_caller_naming(
+            "billing-api",
+            vec![naming("plugin-only", &[])],
+        ))
+        .await,
+    )
+    .expect("reveal use must be explicit");
+    assert!(msg.contains("does not serve to it"), "{msg}");
+    assert!(!msg.contains("hunter2"), "{msg}");
+    Ok(())
+}
+
+/// Workload-selected values use the same opaque binding-secrets handles as
+/// host-selected ones when the consumer is a component plugin.
+#[tokio::test]
+async fn a_workload_reference_reaches_a_component_plugin_as_a_secret() -> Result<()> {
+    let host = "reference-component-consumer";
+    let entry = PluginSecretSource::new(
+        SECRETS_ID,
+        [("tier".into(), "tier".into())],
+        test_namespace(),
+    )
+    .with_allowed_use(PluginSecretUse::Reveal);
+    let (addr, h) =
+        start(PluginBindings::new().with_secret_catalog([("tier".into(), entry)])).await?;
+    let mut request = caller(host);
+    for interface in &mut request.workload.host_interfaces {
+        if interface.namespace == "acme" && interface.package == "kv" {
+            interface.plugin_secrets = vec![naming("tier", &[])];
+        }
+    }
+    let workload_id = request.workload_id.clone();
+    let response = h.workload_start(request).await?;
+    assert_eq!(
+        response.workload_status.workload_state,
+        WorkloadState::Running,
+        "{}",
+        response.workload_status.message
+    );
+    let (status, body) = req(
+        &reqwest::Client::new(),
+        &addr,
+        host,
+        "/bound-config?key=tier",
+    )
+    .await?;
+    assert_eq!((status.as_u16(), body.as_str()), (200, "platinum"));
+    let (_, info) = req(
+        &reqwest::Client::new(),
+        &addr,
+        host,
+        &format!("/bind-info?workload={workload_id}"),
+    )
+    .await?;
+    assert!(
+        !info.contains("platinum"),
+        "a secret must not be text config: {info}"
+    );
+    Ok(())
 }
 
 /// A workload naming a granted entry on its own interface reads every key of
@@ -491,6 +566,28 @@ async fn a_workload_reference_no_plugin_binds_fails() -> Result<()> {
     Ok(())
 }
 
+/// A bound entry cannot mask an unused reference on a different interface
+/// with the same package, version and binding name.
+#[tokio::test]
+async fn an_unused_reference_sharing_a_bound_instance_is_refused() -> Result<()> {
+    let (_, h) =
+        start_with_catalog(test_namespace(), PluginBindingSet::new(WORKLOAD_SECRETS_ID)).await?;
+    let mut request = secrets_caller_naming("billing-api", vec![naming("billing-pw", &[])]);
+    let mut unused = request
+        .workload
+        .host_interfaces
+        .iter()
+        .find(|interface| interface.package == "secrets")
+        .unwrap()
+        .clone();
+    unused.interfaces = ["unused".to_string()].into();
+    unused.plugin_secrets = vec![naming("not-granted", &[])];
+    request.workload.host_interfaces.push(unused);
+    let msg = start_error(h.workload_start(request).await).expect("the unused reference must fail");
+    assert!(msg.contains("which no plugin binds"), "{msg}");
+    Ok(())
+}
+
 /// The values are the workload's own config, so a plugin denying workloads a
 /// key the host owns refuses one a reference delivers, without the value.
 #[tokio::test]
@@ -577,7 +674,8 @@ async fn a_catalog_entry_that_cannot_resolve_fails_only_what_names_it() -> Resul
         "nope",
         [("db-password".to_string(), "db-password".into())],
         test_namespace(),
-    );
+    )
+    .with_allowed_use(PluginSecretUse::Reveal);
     let (_, h) =
         start(PluginBindings::new().with_secret_catalog([("billing-pw".into(), entry)])).await?;
     let msg = start_error(
