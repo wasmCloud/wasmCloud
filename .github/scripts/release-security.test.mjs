@@ -29,8 +29,13 @@ function fixture() {
   const releaseAlerts = {};
   const alerts = [];
   const requests = [];
+  const compare = { status: 'ahead' };
   const options = { repo: 'wasmCloud/wasmCloud', sha, api: async (endpoint, format) => {
     requests.push(endpoint);
+    if (endpoint.includes('/compare/')) {
+      assert.equal(format.paginate, false);
+      return [compare];
+    }
     if (endpoint.includes('/workflows/')) {
       const workflow = endpoint.split('/workflows/')[1].split('.yml')[0];
       return [{ workflow_runs: runs[workflow] }];
@@ -49,7 +54,7 @@ function fixture() {
     if (endpoint.includes('/code-scanning/alerts?')) return [alerts];
     throw new Error(`unexpected endpoint ${endpoint}`);
   } };
-  return { runs, jobs, analyses, sarif, releaseAlerts, alerts, requests, options };
+  return { runs, jobs, analyses, sarif, releaseAlerts, alerts, requests, compare, options };
 }
 
 test('requires audit and every CodeQL language on the release SHA', async () => {
@@ -151,13 +156,67 @@ test('a retried CodeQL job cannot use its earlier clean analysis', async () => {
   await assert.rejects(checkSecurity(f.options), /blocking CodeQL alert 99/);
 });
 
-for (const conclusion of ['failure', 'cancelled', 'skipped', 'neutral', 'timed_out']) {
+for (const conclusion of ['failure', 'skipped', 'neutral', 'timed_out']) {
   test(`a newer ${conclusion} run cannot inherit an older success`, async () => {
     const f = fixture();
     f.runs.audit.push({ ...f.runs.audit[0], id: 3, conclusion });
     await assert.rejects(checkSecurity(f.options), /audit run 3 must succeed/);
   });
 }
+
+test('a newer cancelled run does not override an older success', async () => {
+  const f = fixture();
+  f.runs.audit.push({ ...f.runs.audit[0], id: 3, event: 'schedule', conclusion: 'cancelled',
+    created_at: '2026-11-17T13:00:00Z', updated_at: '2026-11-17T13:05:00Z' });
+  assert.deepEqual(await checkSecurity(f.options), { ready: true, pending: [] });
+});
+
+test('a newer cancelled run does not hide an older failure', async () => {
+  const f = fixture();
+  f.runs.audit[0].conclusion = 'failure';
+  f.runs.audit.push({ ...f.runs.audit[0], id: 3, conclusion: 'cancelled', updated_at: '2026-11-17T13:00:00Z' });
+  await assert.rejects(checkSecurity(f.options), /audit run 1 must succeed/);
+});
+
+test('only cancelled runs wait for a rerun instead of failing', async () => {
+  const f = fixture();
+  f.runs.audit[0].conclusion = 'cancelled';
+  assert.deepEqual(await checkSecurity(f.options), { ready: false, pending: ['audit'] });
+});
+
+for (const name of ['gate-audit', 'cargo-deny-licenses', 'osv-scanner']) {
+  test(`a release that predates ${name} does not require it`, async () => {
+    const f = fixture();
+    f.jobs[1] = f.jobs[1].filter((job) => job.name !== name);
+    f.compare.status = 'behind';
+    assert.deepEqual(await checkSecurity(f.options), { ready: true, pending: [] });
+    assert.ok(f.requests.some((r) => r.includes('/compare/') && r.endsWith(`...${sha}?per_page=1`)));
+  });
+
+  for (const status of ['identical', 'ahead', 'diverged', undefined]) {
+    test(`a missing ${name} blocks a release that is ${status ?? 'unknown'} against its introduction`, async () => {
+      const f = fixture();
+      f.jobs[1] = f.jobs[1].filter((job) => job.name !== name);
+      f.compare.status = status;
+      await assert.rejects(checkSecurity(f.options), new RegExp(`must complete ${name}`));
+    });
+  }
+
+  test(`a predating release still fails when ${name} ran and was skipped`, async () => {
+    const f = fixture();
+    f.jobs[1].find((job) => job.name === name).conclusion = 'skipped';
+    f.compare.status = 'behind';
+    await assert.rejects(checkSecurity(f.options), new RegExp(`must complete ${name}`));
+  });
+}
+
+test('jobs present since the gate began are always required', async () => {
+  const f = fixture();
+  f.jobs[1] = f.jobs[1].filter((job) => job.name !== 'cargo-audit');
+  f.compare.status = 'behind';
+  await assert.rejects(checkSecurity(f.options), /must complete cargo-audit/);
+  assert.ok(!f.requests.some((r) => r.includes('/compare/')));
+});
 
 for (const [id, name] of [[1, 'cargo-audit'], [1, 'osv-scanner'], [1, 'cargo-deny-licenses'], [2, 'CodeQL (Rust)'], [2, 'CodeQL (Go - runtime-gateway)'], [2, 'CodeQL (Go - runtime-operator)']]) {
   test(`a successful run with skipped ${name} blocks promotion`, async () => {

@@ -10,6 +10,20 @@ const required = {
   codeql: ['CodeQL (Rust)', 'CodeQL (Go - runtime-gateway)', 'CodeQL (Go - runtime-operator)'],
 };
 
+// Commits that added these required jobs. A recovery release that predates one
+// never ran it, so its absence (not a failure or skip) is allowed.
+const introducedAt = {
+  'gate-audit': '6e75d38c2867503c4288db59fef61a216447eedf',
+  'cargo-deny-licenses': '3e4f9398074370aefe893d93829bccdc187c8b04',
+  'osv-scanner': 'ad43dcd6753e3d606a6496f61a955b1ff9705415',
+};
+
+async function predates({ repo, sha, api }, name) {
+  if (!introducedAt[name]) return false;
+  const [comparison] = await api(`repos/${repo}/compare/${introducedAt[name]}...${sha}?per_page=1`, { paginate: false });
+  return comparison?.status === 'behind';
+}
+
 const analyses = {
   '/language:rust': ['CodeQL (Rust)', 'analyze-rust'],
   '/language:go-runtime-gateway': ['CodeQL (Go - runtime-gateway)', 'analyze-go'],
@@ -83,10 +97,13 @@ export async function checkSecurity({ repo, sha, api }) {
   let codeqlJobs;
   for (const [workflow, jobs] of Object.entries(required)) {
     const pages = await api(`repos/${repo}/actions/workflows/${workflow}.yml/runs?head_sha=${sha}&branch=main&per_page=100`);
+    // A cancelled run never finished scanning, so it neither passes nor
+    // overrides another run of the same commit. With none left, wait.
     const run = pages.flatMap((page) => page.workflow_runs).filter((run) =>
       run.head_sha === sha && run.head_branch === 'main' &&
       run.path === `.github/workflows/${workflow}.yml` &&
-      ['push', 'workflow_dispatch', 'schedule'].includes(run.event),
+      ['push', 'workflow_dispatch', 'schedule'].includes(run.event) &&
+      run.conclusion !== 'cancelled',
     ).sort((a, b) => runTime(b) - runTime(a) || b.id - a.id)[0];
     if (!run || run.status !== 'completed') {
       pending.push(workflow);
@@ -107,6 +124,7 @@ export async function checkSecurity({ repo, sha, api }) {
     if (workflow === 'codeql') codeqlJobs = [...actual.values()];
     for (const name of jobs) {
       const job = actual.get(name);
+      if (!job && await predates({ repo, sha, api }, name)) continue;
       assert.equal(job?.conclusion, 'success', `${workflow} must complete ${name} successfully for ${sha}`);
     }
   }
