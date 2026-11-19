@@ -60,11 +60,11 @@ func readyDeployment(prevSetName string) *runtimev1alpha1.WorkloadDeployment {
 			DeployPolicy: runtimev1alpha1.WorkloadDeployPolicyRollingUpdate,
 		},
 		Status: runtimev1alpha1.WorkloadDeploymentStatus{
-			CurrentReplicaSet: &corev1.LocalObjectReference{Name: testReplicaSetName},
+			CurrentReplicaSet: &runtimev1alpha1.WorkloadReplicaSetReference{Name: testReplicaSetName},
 		},
 	}
 	if prevSetName != "" {
-		wd.Status.PreviousReplicaSet = &corev1.LocalObjectReference{Name: prevSetName}
+		wd.Status.PreviousReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: prevSetName}
 	}
 	wd.Status.SetConditions(
 		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionSync),
@@ -647,5 +647,120 @@ func TestStaleDeploymentCannotRetireNewCurrentReplicaSet(t *testing.T) {
 	}
 	if err := r.Get(t.Context(), client.ObjectKeyFromObject(newSet), &runtimev1alpha1.WorkloadReplicaSet{}); err != nil {
 		t.Fatalf("current set was retired: %v", err)
+	}
+}
+
+// A deployment records the set it made by UID and template digest, on the
+// first create and on a retry that finds the set already made.
+func TestDeploymentRecordsItsSetByUIDAndDigest(t *testing.T) {
+	original := readyDeployment("")
+	original.Status.CurrentReplicaSet = nil
+	original.Status.SetConditions(
+		condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact),
+		condition.UnknownCondition(runtimev1alpha1.WorkloadDeploymentConditionSync, "Pending", "not deployed"),
+	)
+	r := newScaleReconciler(t)
+	r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			obj.SetUID("made-set-uid")
+			return c.Create(ctx, obj, opts...)
+		},
+	})
+	for range 2 {
+		wd := original.DeepCopy()
+		if err := r.reconcileDeploy(t.Context(), wd); !errors.Is(err, condition.ErrSkipReconciliation()) {
+			t.Fatalf("rollout = %v", err)
+		}
+		sets := &runtimev1alpha1.WorkloadReplicaSetList{}
+		if err := r.List(t.Context(), sets); err != nil || len(sets.Items) != 1 {
+			t.Fatalf("sets = %d, %v", len(sets.Items), err)
+		}
+		set := &sets.Items[0]
+		got := wd.Status.CurrentReplicaSet
+		if got.Name != set.Name || got.UID != "made-set-uid" || got.TemplateDigest != set.Spec.Template.Digest() {
+			t.Fatalf("recorded %+v for set %s", got, set.Name)
+		}
+	}
+}
+
+// A status that names its set only is completed only from a set holding the
+// deployment's own template.
+func TestSyncCompletesASetRecordedByNameOnly(t *testing.T) {
+	scheme := newScaleTestScheme(t)
+	for _, tc := range []struct {
+		name   string
+		edit   func(*runtimev1alpha1.WorkloadReplicaSet)
+		filled bool
+	}{
+		{name: "own template", filled: true},
+		{name: "edited labels", edit: func(rs *runtimev1alpha1.WorkloadReplicaSet) {
+			rs.Spec.Template.Labels = map[string]string{"edited": "true"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wd := readyDeployment("")
+			wd.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact))
+			rs := baseReplicaSet(testReplicaSetName)
+			rs.UID = "current-set-uid"
+			if tc.edit != nil {
+				tc.edit(rs)
+			}
+			r := &WorkloadDeploymentReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).Build(), Scheme: scheme}
+			err := r.reconcileSync(t.Context(), wd)
+			if tc.filled && err != nil {
+				t.Fatal(err)
+			}
+			if !tc.filled && (err == nil || !strings.Contains(err.Error(), "template hash mismatch")) {
+				t.Fatalf("sync of an edited set = %v, want a template hash mismatch", err)
+			}
+			got := wd.Status.CurrentReplicaSet
+			if filled := got.UID == "current-set-uid" && got.TemplateDigest == rs.Spec.Template.Digest(); filled != tc.filled {
+				t.Fatalf("recorded %+v, want filled %v", got, tc.filled)
+			}
+			if !tc.filled && (got.UID != "" || got.TemplateDigest != "") {
+				t.Fatalf("an edited set was recorded: %+v", got)
+			}
+		})
+	}
+}
+
+// A current set that is no longer the one recorded refuses every replica, so
+// Sync says so instead of staying healthy.
+func TestSyncReportsASetThatIsNoLongerTheOneRecorded(t *testing.T) {
+	scheme := newScaleTestScheme(t)
+	for _, tc := range []struct {
+		name string
+		edit func(*runtimev1alpha1.WorkloadReplicaSet)
+		want string
+	}{
+		{name: "recorded"},
+		{name: "made again", edit: func(rs *runtimev1alpha1.WorkloadReplicaSet) { rs.UID = "another-set-uid" },
+			want: "is not the set this deployment recorded"},
+		{name: "edited labels", edit: func(rs *runtimev1alpha1.WorkloadReplicaSet) {
+			rs.Spec.Template.Labels = map[string]string{"edited": "by-hand"}
+		}, want: "template hash mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wd := readyDeployment("")
+			wd.Status.SetConditions(condition.ReadyCondition(runtimev1alpha1.WorkloadDeploymentConditionArtifact))
+			rs := baseReplicaSet(testReplicaSetName)
+			rs.UID = "recorded-set-uid"
+			wd.Status.CurrentReplicaSet.UID = rs.UID
+			wd.Status.CurrentReplicaSet.TemplateDigest = rs.Spec.Template.Digest()
+			if tc.edit != nil {
+				tc.edit(rs)
+			}
+			r := &WorkloadDeploymentReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).Build(), Scheme: scheme}
+			err := r.reconcileSync(t.Context(), wd)
+			if tc.edit == nil {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("sync returned %v", err)
+			}
+		})
 	}
 }

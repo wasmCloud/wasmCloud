@@ -99,6 +99,7 @@ async fn compatible_partial_overrides_preserve_other_host_functions() -> Result<
             .initialize_workload(
                 "clock-version",
                 Workload {
+                    owner: None,
                     name: "clock-version".into(),
                     namespace: "test".into(),
                     annotations: HashMap::new(),

@@ -72,6 +72,7 @@ async fn service_using_only_wasi_receives_its_opted_in_override() -> Result<()> 
         let unresolved = engine.initialize_workload(
             "service-clock",
             Workload {
+                owner: None,
                 name: "service-clock".into(),
                 namespace: "test".into(),
                 annotations: HashMap::new(),

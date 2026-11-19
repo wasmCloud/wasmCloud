@@ -415,6 +415,30 @@ pub struct Workload {
     /// The identity the workload runs as. Unset runs it with none.
     #[prost(message, optional, tag = "7")]
     pub identity: ::core::option::Option<WorkloadIdentity>,
+    /// The object that controls the workload's replicas, as the control plane
+    /// verified it. Egress credential, broker and kind-qualified secret grants
+    /// match a workload by its namespace and this owner. Unset leaves the
+    /// workload matching none of them; a secret grant by name alone still
+    /// matches the workload's grouping name. Hosts that read this field label
+    /// their heartbeats runtime.wasmcloud.dev/accepts-workload-owner=true, and
+    /// the control plane sends it to no other host, since an older host refuses
+    /// a request with a field it does not know.
+    #[prost(message, optional, tag = "8")]
+    pub owner: ::core::option::Option<WorkloadOwner>,
+}
+/// The controller a workload belongs to, in the workload's namespace: for
+/// example kind WorkloadDeployment, its name, and its UID. A workload with no
+/// controller is its own owner. Kinds keep names apart, so a Workload and a
+/// WorkloadDeployment of the same name are different owners, and the UID keeps
+/// an object recreated under the same name apart from the one it replaced.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WorkloadOwner {
+    #[prost(string, tag = "1")]
+    pub kind: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub uid: ::prost::alloc::string::String,
 }
 /// What the control plane grants a workload's identity. The host generates
 /// every key itself and asks its issuer for SVIDs, presenting the scheduling

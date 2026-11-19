@@ -186,6 +186,8 @@ pub struct WorkloadMetadata {
     linked_components: HashSet<Arc<str>>,
     /// Workload annotations
     pub(crate) annotations: Arc<HashMap<String, String>>,
+    /// The controller the workload belongs to, which grants name it by.
+    pub(crate) owner: Option<crate::types::WorkloadOwner>,
     /// Top-level imports already supplied by host plugins.
     plugin_bound_instances: HashSet<String>,
     /// Keeps the engine reusing this compile for any workload that loads the
@@ -284,8 +286,18 @@ impl WorkloadMetadata {
     /// Returns the stable workload name across replicas, if a deployment,
     /// daemonset or replicaset annotation was supplied by the orchestrator.
     /// Falls back to `workload_name`.
+    ///
+    /// It groups replicas, as into a queue group, and is no authority: any
+    /// workload can carry the annotations it reads. Match grants on
+    /// [`Self::workload_owner`].
     pub fn stable_workload_name(&self) -> &str {
         stable_name(&self.annotations, &self.workload_name)
+    }
+
+    /// The controller the workload belongs to, as its control plane verified
+    /// it, or `None` when it was not told one.
+    pub fn workload_owner(&self) -> Option<&crate::types::WorkloadOwner> {
+        self.owner.as_ref()
     }
 
     /// Returns the workload's annotations.
@@ -632,6 +644,7 @@ impl WorkloadService {
                 trap_hints: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
+                owner: None,
                 plugin_bound_instances: Default::default(),
                 compiled: None,
             },
@@ -646,6 +659,12 @@ impl WorkloadService {
         annotations: impl Into<Arc<HashMap<String, String>>>,
     ) -> Self {
         self.metadata.annotations = annotations.into();
+        self
+    }
+
+    /// Attach the controller the workload belongs to.
+    pub fn with_owner(mut self, owner: Option<crate::types::WorkloadOwner>) -> Self {
+        self.metadata.owner = owner;
         self
     }
 
@@ -760,6 +779,7 @@ impl WorkloadComponent {
                 trap_hints: Arc::default(),
                 linked_components: Default::default(),
                 annotations: Arc::default(),
+                owner: None,
                 plugin_bound_instances: Default::default(),
                 compiled: None,
             },
@@ -774,6 +794,12 @@ impl WorkloadComponent {
         annotations: impl Into<Arc<HashMap<String, String>>>,
     ) -> Self {
         self.metadata.annotations = annotations.into();
+        self
+    }
+
+    /// Attach the controller the workload belongs to.
+    pub fn with_owner(mut self, owner: Option<crate::types::WorkloadOwner>) -> Self {
+        self.metadata.owner = owner;
         self
     }
 
@@ -3167,6 +3193,8 @@ pub struct UnresolvedWorkload {
     /// The name the orchestrator gave its replicas, if any. See
     /// [`replica_group`].
     replica_group: Option<Arc<str>>,
+    /// The controller it belongs to, which owner-qualified grants match.
+    owner: Option<crate::types::WorkloadOwner>,
 }
 
 type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
@@ -3370,6 +3398,7 @@ impl UnresolvedWorkload {
             tls_provider: None,
             scratch: None,
             replica_group: None,
+            owner: None,
         }
     }
 
@@ -3401,8 +3430,15 @@ impl UnresolvedWorkload {
         self
     }
 
-    /// The name it keeps across replicas, what a plugin secret's grant
-    /// matches: the orchestrator's for its replicas, else its own.
+    /// Record the controller the workload belongs to.
+    pub(crate) fn with_owner(mut self, owner: Option<crate::types::WorkloadOwner>) -> Self {
+        self.owner = owner;
+        self
+    }
+
+    /// The name it keeps across replicas, what a plugin secret's grant by name
+    /// matches: the orchestrator's for its replicas, else its own. A grant
+    /// that names an owner's kind matches the owner instead.
     pub fn grant_name(&self) -> &str {
         self.replica_group.as_deref().unwrap_or(&self.name)
     }
@@ -3765,6 +3801,7 @@ impl UnresolvedWorkload {
                     id: self.id().to_string(),
                     name: self.grant_name().to_string(),
                     namespace: self.namespace().to_string(),
+                    owner: self.owner.clone(),
                 };
                 let filled = crate::plugin::resolve_plugin_secrets(
                     plugins,
@@ -5853,6 +5890,7 @@ mod tests {
             .initialize_workload(
                 "hostcall-fuel",
                 crate::types::Workload {
+                    owner: None,
                     namespace: "ns".into(),
                     name: "hostcall-fuel".into(),
                     annotations: Default::default(),

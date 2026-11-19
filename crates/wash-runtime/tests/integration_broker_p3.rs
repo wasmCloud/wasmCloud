@@ -32,7 +32,9 @@ use wash_runtime::{
         BrokerCaller, BrokerOutcome, BrokerPolicy, BrokerUse, ClientBinding, Presenter, SignerKey,
         VerifierKey, WasmcloudBroker,
     },
-    types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadState},
+    types::{
+        Component, LocalResources, Workload, WorkloadOwner, WorkloadStartRequest, WorkloadState,
+    },
     wit::WitInterface,
 };
 
@@ -336,6 +338,10 @@ fn p2_workload() -> WorkloadStartRequest {
     )
 }
 
+fn deployment_owner() -> WorkloadOwner {
+    WorkloadOwner::new("WorkloadDeployment", "broker-client", "deployment-uid").unwrap()
+}
+
 fn start_request(
     components: Vec<Component>,
     host_interfaces: Vec<WitInterface>,
@@ -343,8 +349,9 @@ fn start_request(
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: Some(deployment_owner()),
             namespace: "test".to_string(),
-            name: "broker-client".to_string(),
+            name: "broker-client-7d9f".to_string(),
             annotations: HashMap::new(),
             service: None,
             components,
@@ -503,7 +510,7 @@ async fn a_guest_sends_with_a_credential_it_never_holds() -> Result<()> {
         callers
             .iter()
             .all(|c| c.component_name.as_deref() == Some("broker-client-p3")
-                && &*c.workload_name == "broker-client"
+                && c.owner == deployment_owner()
                 && &*c.namespace == "test")
     );
     assert_eq!(
@@ -870,6 +877,28 @@ async fn the_guest_signs_and_verifies_with_host_held_keys() -> Result<()> {
     assert_eq!((status, body.as_str()), (200, "true"));
     let (status, body) = call(running.addr, "/verify", &[("x-tag", &tag)], "tampered").await?;
     assert_eq!((status, body.as_str()), (200, "false"));
+    Ok(())
+}
+
+/// A workload its control plane named no owner for binds no broker import,
+/// whatever its name and annotations claim.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_workload_without_an_owner_binds_nothing() -> Result<()> {
+    let mut request = workload();
+    request.workload.owner = None;
+    request.workload.name = "broker-client".to_string();
+    request.workload.annotations = HashMap::from([(
+        "runtime.wasmcloud.dev/workload-deployment".to_string(),
+        "broker-client".to_string(),
+    )]);
+    let running = start_with(Policy::new(true), false, Upstream::Echo, request).await?;
+    assert_ne!(running.state, WorkloadState::Running);
+    assert!(
+        running.message.contains("named no owner"),
+        "the refusal says why: {}",
+        running.message
+    );
+    assert!(running.policy.callers.lock().unwrap().is_empty());
     Ok(())
 }
 

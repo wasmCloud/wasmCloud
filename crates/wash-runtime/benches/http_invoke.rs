@@ -74,6 +74,7 @@ async fn start_warm_host_with_pool(flavor: Flavor, pool_size: i32) -> anyhow::Re
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "bench".to_string(),
             name: format!("bench-{}", flavor.name()),
             annotations: HashMap::new(),
@@ -335,6 +336,7 @@ async fn start_sleeper_host(
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "bench".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),

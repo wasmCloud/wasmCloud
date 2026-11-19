@@ -204,6 +204,7 @@ fn workload_request_with_limits(
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: format!("nats-{workload_id}"),
             annotations: HashMap::new(),
@@ -1092,6 +1093,7 @@ fn bridge_workload_request(
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: format!("nats-{workload_id}"),
             annotations: HashMap::new(),

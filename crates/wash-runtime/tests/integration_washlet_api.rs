@@ -414,6 +414,7 @@ fn empty_start_request(workload_id: &str) -> v2::WorkloadStartRequest {
     v2::WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Some(v2::Workload {
+            owner: None,
             namespace: "default".to_string(),
             name: "washlet-api-e2e".to_string(),
             annotations: Default::default(),
@@ -497,6 +498,7 @@ async fn check_attached_control(
     host.workload_start(wash_runtime::types::WorkloadStartRequest {
         workload_id: "local-1".into(),
         workload: wash_runtime::types::Workload {
+            owner: None,
             namespace: "default".into(),
             name: "local".into(),
             annotations: Default::default(),
@@ -756,6 +758,7 @@ async fn attached_control_reports_an_aborted_native_start_and_preserves_local_wo
     host.workload_start(wash_runtime::types::WorkloadStartRequest {
         workload_id: "local".into(),
         workload: wash_runtime::types::Workload {
+            owner: None,
             namespace: "default".into(),
             name: "local".into(),
             annotations: Default::default(),

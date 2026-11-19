@@ -31,6 +31,7 @@
 //! #   components: vec![],
 //! #   host_interfaces: vec![],
 //! #   volumes: vec![],
+//! #   owner: None,
 //! };
 //!
 //! let unresolved = engine.initialize_workload("workload-1", workload)?;
@@ -820,7 +821,7 @@ impl Engine {
             volumes,
             host_interfaces,
             annotations,
-            ..
+            owner,
         } = workload;
         let annotations_arc = Arc::new(annotations);
 
@@ -889,6 +890,7 @@ impl Engine {
                     Some(
                         handle
                             .with_annotations(Arc::clone(&annotations_arc))
+                            .with_owner(owner.clone())
                             .with_trap_hints(&trap_hints),
                     )
                 }
@@ -918,6 +920,7 @@ impl Engine {
                     workload_components.push(
                         handle
                             .with_annotations(Arc::clone(&annotations_arc))
+                            .with_owner(owner.clone())
                             .with_trap_hints(&trap_hints),
                     );
                 }
@@ -938,6 +941,7 @@ impl Engine {
         )
         .with_scratch(workload_scratch)
         .with_annotations(&annotations_arc)
+        .with_owner(owner)
         .with_stream_payloads(Arc::clone(&self.stream_payloads));
 
         #[cfg(feature = "wasi-tls")]
@@ -2750,6 +2754,7 @@ mod tests {
 
     fn volume_only_workload(volumes: Vec<crate::types::Volume>) -> Workload {
         Workload {
+            owner: None,
             namespace: "ns".into(),
             name: "volumes".into(),
             annotations: Default::default(),

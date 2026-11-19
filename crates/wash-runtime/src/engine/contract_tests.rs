@@ -15,6 +15,7 @@ fn engine() -> Engine {
 
 fn workload() -> Workload {
     Workload {
+        owner: None,
         name: "contract".into(),
         namespace: "tests".into(),
         annotations: Default::default(),

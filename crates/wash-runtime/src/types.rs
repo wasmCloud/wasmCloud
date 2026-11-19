@@ -34,6 +34,61 @@ pub struct Workload {
     pub components: Vec<Component>,
     pub host_interfaces: Vec<WitInterface>,
     pub volumes: Vec<Volume>,
+    /// The controller the workload belongs to. `None` matches no grant that
+    /// names an owner; a secret grant by name alone still matches `name`.
+    pub owner: Option<WorkloadOwner>,
+}
+
+/// The controller a workload belongs to in its namespace, as its control
+/// plane verified it: for example the `WorkloadDeployment` named `billing`,
+/// and its UID. Egress credential, broker and kind-qualified secret grants
+/// match its namespace and this, so no workload takes them by its own name or
+/// annotations. Kinds keep names apart, and the UID tells an object from one
+/// recreated under its name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkloadOwner {
+    kind: Arc<str>,
+    name: Arc<str>,
+    uid: Arc<str>,
+}
+
+impl WorkloadOwner {
+    /// # Errors
+    ///
+    /// If any part is empty, or the kind or name holds a `/`.
+    pub fn new(kind: &str, name: &str, uid: &str) -> anyhow::Result<Self> {
+        if kind.is_empty() || name.is_empty() || uid.is_empty() {
+            anyhow::bail!(
+                "a workload owner needs a kind, a name and a uid, not {kind:?}/{name:?} (uid {uid:?})"
+            );
+        }
+        if kind.contains('/') || name.contains('/') {
+            anyhow::bail!("a workload owner's kind and name cannot hold '/': {kind:?}/{name:?}");
+        }
+        Ok(Self {
+            kind: kind.into(),
+            name: name.into(),
+            uid: uid.into(),
+        })
+    }
+
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn uid(&self) -> &str {
+        &self.uid
+    }
+}
+
+impl std::fmt::Display for WorkloadOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.kind, self.name)
+    }
 }
 
 /// The current state of a workload in its lifecycle.
@@ -275,4 +330,40 @@ pub struct WorkloadStopRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkloadStopResponse {
     pub workload_status: WorkloadStatus,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkloadOwner;
+
+    #[test]
+    fn an_owner_names_its_kind_name_and_uid() {
+        let owner = WorkloadOwner::new("WorkloadDeployment", "billing", "uid-1").unwrap();
+        assert_eq!(owner.to_string(), "WorkloadDeployment/billing");
+        assert_eq!(
+            (owner.kind(), owner.name(), owner.uid()),
+            ("WorkloadDeployment", "billing", "uid-1")
+        );
+        for (kind, name, uid) in [
+            ("", "billing", "uid-1"),
+            ("WorkloadDeployment", "", "uid-1"),
+            ("WorkloadDeployment", "billing", ""),
+            ("WorkloadDeployment/x", "billing", "uid-1"),
+            ("WorkloadDeployment", "a/billing", "uid-1"),
+        ] {
+            assert!(
+                WorkloadOwner::new(kind, name, uid).is_err(),
+                "{kind}/{name} {uid}"
+            );
+        }
+    }
+
+    #[test]
+    fn kinds_and_uids_tell_owners_apart() {
+        let deployment = WorkloadOwner::new("WorkloadDeployment", "billing", "uid-1").unwrap();
+        let workload = WorkloadOwner::new("Workload", "billing", "uid-1").unwrap();
+        let recreated = WorkloadOwner::new("WorkloadDeployment", "billing", "uid-2").unwrap();
+        assert_ne!(deployment, workload);
+        assert_ne!(deployment, recreated);
+    }
 }

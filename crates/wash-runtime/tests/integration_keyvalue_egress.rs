@@ -96,6 +96,7 @@ fn start_request(url: &str) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "keyvalue-egress".to_string(),
             annotations: HashMap::new(),

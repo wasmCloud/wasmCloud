@@ -120,6 +120,7 @@ async fn start(
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "nats-blobstore-workload".to_string(),
             annotations: HashMap::new(),

@@ -54,6 +54,7 @@ fn events_workload(workload_id: &str, host: &str, tag: &str) -> WorkloadStartReq
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host.to_string(),
             annotations: HashMap::new(),
@@ -444,6 +445,7 @@ fn events_service_workload(workload_id: &str, tag: &str) -> WorkloadStartRequest
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: workload_id.to_string(),
             annotations: HashMap::new(),

@@ -74,7 +74,7 @@ pub(crate) struct ComponentCtxTemplate {
     component_id: Arc<str>,
     workload_id: Arc<str>,
     workload_namespace: Arc<str>,
-    workload_name: Arc<str>,
+    workload_owner: Option<crate::types::WorkloadOwner>,
     local_resources: crate::types::LocalResources,
     volume_mounts: Vec<ResolvedVolumeMount>,
     plugins: Option<Arc<crate::engine::ctx::StorePlugins>>,
@@ -101,7 +101,7 @@ impl ComponentCtxTemplate {
             component_id: metadata.id.clone(),
             workload_id: metadata.workload_id.clone(),
             workload_namespace: Arc::from(metadata.workload_namespace()),
-            workload_name: Arc::from(metadata.stable_workload_name()),
+            workload_owner: metadata.workload_owner().cloned(),
             local_resources: metadata.local_resources.clone(),
             volume_mounts: metadata.resolved_volume_mounts.clone(),
             plugins: metadata.store_plugins.clone(),
@@ -382,9 +382,9 @@ async fn build_ctx_from_template(
         .with_wasi_ctx(wasi_ctx_builder.build())
         .with_sockets(sockets_ctx)
         .with_allowed_hosts(template.local_resources.allowed_hosts.clone())
-        .with_workload_names(
+        .with_workload_owner(
             Arc::clone(&template.workload_namespace),
-            Arc::clone(&template.workload_name),
+            template.workload_owner.clone(),
         );
 
     if let Some(plugins) = &template.plugins {

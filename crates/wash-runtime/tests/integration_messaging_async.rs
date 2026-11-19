@@ -70,6 +70,7 @@ fn async_echo_request(workload_id: &str, host_header: &str, subject: &str) -> Wo
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),
@@ -95,6 +96,7 @@ fn sync_echo_request(workload_id: &str, host_header: &str, subject: &str) -> Wor
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),

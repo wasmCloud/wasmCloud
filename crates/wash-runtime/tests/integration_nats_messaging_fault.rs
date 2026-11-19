@@ -214,6 +214,7 @@ async fn setup(latency: Duration) -> Result<TestHarness> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "messaging-fault".to_string(),
             annotations: HashMap::new(),

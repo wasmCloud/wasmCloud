@@ -56,6 +56,7 @@ async fn test_p3_borrow_survives_two_linker_hops() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-borrow-passing".to_string(),
             annotations: HashMap::new(),

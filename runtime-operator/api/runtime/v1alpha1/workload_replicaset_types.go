@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -30,6 +32,14 @@ func (w *WorkloadReplicaTemplate) Hash() string {
 	rawSpec, _ := json.Marshal(w.Spec)
 	_, _ = h.Write(rawSpec)
 	return rand.SafeEncodeString(fmt.Sprint(h.Sum32()))
+}
+
+// Digest is a SHA-256 of the whole template. Hash is a short FNV for names
+// and change detection, too weak to tell a tampered template from its own.
+func (w *WorkloadReplicaTemplate) Digest() string {
+	raw, _ := json.Marshal(w)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // WorkloadReplicaSetSpec defines the desired state of WorkloadReplicaSet.

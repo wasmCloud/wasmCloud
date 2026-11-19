@@ -68,6 +68,7 @@ async fn start_pair_with_caller_pool(
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),
@@ -158,6 +159,7 @@ async fn start_http_component_with(
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),

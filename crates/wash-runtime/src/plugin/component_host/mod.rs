@@ -119,10 +119,11 @@ use lifecycle::{
     remove_and_unbind, replay_snapshot, report_workload_failed, send_lifecycle_job,
     spawn_deferred_unbind,
 };
-use secret_source::{ComponentSecretSource, HOST_SECRET_SOURCE_EXPORT, check_secret_source_export};
-pub(crate) use secret_source::{
-    SecretSourceRequest, SecretSourceResolve, SourceError, secret_source_resolve, secret_value,
+use secret_source::{
+    ComponentSecretSource, HOST_OWNED_SECRET_SOURCE_EXPORT, HOST_SECRET_SOURCE_EXPORT,
+    check_secret_source_export, prefer_owned,
 };
+pub(crate) use secret_source::{SecretSourceExport, SecretSourceResolve, secret_source_resolve};
 use workload_call::{WorkloadCalls, add_workload_calls_to_linker, install_host_workload};
 
 /// Capacity of a plugin incarnation's capability-call channel. Bounds queued
@@ -314,9 +315,10 @@ pub struct ComponentHostPlugin {
     capability_funcs: Vec<CapabilityFunc>,
     /// The plugin's `wasmcloud:host/workload-lifecycle` export, if it has one.
     lifecycle: Option<Arc<LifecycleFuncs>>,
-    /// Name of the plugin's `wasmcloud:host/secret-source` export, if it has
-    /// one. Called through its typed `resolve`, not the capability path.
-    secret_source: Option<Arc<str>>,
+    /// The plugin's `wasmcloud:host/secret-source` or `owned-secret-source`
+    /// export, if it has one. Called through its typed `resolve`, not the
+    /// capability path.
+    secret_source: Option<SecretSourceExport>,
     max_restarts: u32,
     state: Arc<ComponentHostPluginState>,
     /// This plugin's claim on the real addresses its `ports` declared, held so
@@ -1257,7 +1259,7 @@ async fn link_native_imports(
 }
 
 /// The host-invoked exports a plugin may provide besides its capabilities.
-type HostInvokedExports = (Option<LifecycleFuncs>, Option<Arc<str>>);
+type HostInvokedExports = (Option<LifecycleFuncs>, Option<SecretSourceExport>);
 
 /// Partition a plugin component's exports: the reserved `wasmcloud:host`
 /// lifecycle and secret-source interfaces are host-invoked contracts, while
@@ -1278,9 +1280,21 @@ fn introspect_capability_exports(
             if export.wit.interfaces.contains(HOST_LIFECYCLE_EXPORT) {
                 let takes_secrets = imports_binding_secrets(component);
                 lifecycle = Some(lifecycle_funcs(id, export, takes_secrets)?);
-            } else if export.wit.interfaces.contains(HOST_SECRET_SOURCE_EXPORT) {
-                check_secret_source_export(id, &export)?;
-                secret_source = Some(export.name);
+            } else if let Some(owned) = [
+                (HOST_OWNED_SECRET_SOURCE_EXPORT, true),
+                (HOST_SECRET_SOURCE_EXPORT, false),
+            ]
+            .into_iter()
+            .find_map(|(name, owned)| export.wit.interfaces.contains(name).then_some(owned))
+            {
+                check_secret_source_export(id, &export, owned)?;
+                secret_source = Some(prefer_owned(
+                    secret_source,
+                    SecretSourceExport {
+                        name: export.name,
+                        owned,
+                    },
+                ));
             } else {
                 anyhow::bail!(
                     "host component plugin '{id}' exports reserved host interface {}",
@@ -2031,7 +2045,7 @@ async fn run_supervisor(
     runtime: PluginRuntime,
     funcs: Vec<CapabilityFunc>,
     lifecycle: Option<Arc<LifecycleFuncs>>,
-    secret_source: Option<Arc<str>>,
+    secret_source: Option<SecretSourceExport>,
     state: Arc<ComponentHostPluginState>,
     max_restarts: u32,
     mut replay: Vec<LifecycleReplay>,

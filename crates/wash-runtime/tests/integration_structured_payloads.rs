@@ -253,6 +253,7 @@ async fn exercise(registration: Registration) -> Result<()> {
             .initialize_workload(
                 "structured",
                 Workload {
+                    owner: None,
                     name: "structured".into(),
                     namespace: "test".into(),
                     annotations: HashMap::new(),

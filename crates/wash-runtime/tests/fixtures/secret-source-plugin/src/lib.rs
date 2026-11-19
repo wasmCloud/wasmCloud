@@ -1,5 +1,7 @@
-//! Host component plugin exporting only `wasmcloud:host/secret-source`, so the
-//! host's real call path into a plugin secret is testable end to end.
+//! Host component plugin exporting only `wasmcloud:host/secret-source@0.1.6`,
+//! built against the released WIT, so the host's real call path into a plugin
+//! secret is testable end to end with a plugin that predates
+//! `owned-secret-source`.
 //!
 //! Answers from a fixed table, plus probes:
 //! - `who`: `<consumer>/<binding or "-">`, so a test sees what the host sent.

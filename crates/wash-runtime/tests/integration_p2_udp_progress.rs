@@ -32,6 +32,7 @@ async fn p2_service_udp_roundtrips_survive_empty_receive_polls() -> Result<()> {
         .workload_start(WorkloadStartRequest {
             workload_id: id.clone(),
             workload: Workload {
+                owner: None,
                 namespace: "test".into(),
                 name: "p2-udp-progress".into(),
                 annotations: HashMap::new(),
