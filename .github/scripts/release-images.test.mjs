@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { chmodSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -194,3 +194,55 @@ test('all four canary records come from manifest creation metadata and reach pro
   assert.match(release, /GH_TOKEN: \$\{\{ github.token \}\}/);
   assert.match(release, /GH_REPO: \$\{\{ github.repository \}\}/);
 });
+
+for (const missingRecord of [false, true]) {
+  test(`manual recovery uses the workflow policy with missing records=${missingRecord}`, () => {
+    const f = fixture();
+    const git = (...args) => execFileSync('git', args, { cwd: f.tools.root, encoding: 'utf8' }).trim();
+    const workflow = readFileSync(new URL('../workflows/release-tag.yml', import.meta.url), 'utf8');
+    const command = (name) => workflow.split(`      - name: ${name}\n`)[1]
+      .match(/        run: \|\n((?: {10}[^\n]*\n|\n)*)/)[1]
+      .split('\n').map((line) => line.slice(10)).join('\n');
+    try {
+      rmSync(join(f.tools.root, 'bin', 'git'));
+      git('init', '--quiet');
+      git('config', 'user.name', 'Test');
+      git('config', 'user.email', 'test@example.com');
+      mkdirSync(join(f.tools.root, '.github/scripts'), { recursive: true });
+      writeFileSync(join(f.tools.root, '.github/scripts/release-images.mjs'),
+        "console.log('legacy policy accepted the unverified registry tag');\n");
+      git('add', '.github');
+      git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'old release');
+      const release = git('rev-parse', 'HEAD');
+      writeFileSync(join(f.tools.root, '.github/scripts/release-images.mjs'), readFileSync(script));
+      git('add', '.github');
+      git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'require canary records');
+      const revision = git('rev-parse', 'HEAD');
+      git('checkout', '--quiet', '--detach', release);
+      if (missingRecord) delete f.records.wash;
+      f.save();
+      const env = { ...f.tools.env, WORKFLOW_SHA: revision, MERGE_SHA: SHA, IMAGE_TAG: '2.0.0',
+        GITHUB_ENV: join(f.tools.root, 'github-env') };
+      const execute = (name) => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', command(name)], {
+        cwd: f.tools.root, encoding: 'utf8', env,
+      });
+      const result = execute('Resolve release images');
+      assert.doesNotMatch(result.stdout, /legacy policy accepted/);
+      if (missingRecord) {
+        assert.notEqual(result.status, 0);
+        assert.equal(readFileSync(f.tools.env.GITHUB_OUTPUT, 'utf8'), '');
+      } else {
+        assert.equal(result.status, 0, result.stderr);
+        env.PLAN = outputs(f.tools).plan;
+        assert.ok(env.PLAN);
+        const promoted = execute('Promote canary container images to release tag');
+        assert.equal(promoted.status, 0, promoted.stderr);
+        assert.doesNotMatch(promoted.stdout, /legacy policy accepted/);
+        assert.equal(outputs(f.tools).wash_digest, digest('1'));
+      }
+      assert.equal(git('rev-parse', 'HEAD'), release);
+    } finally {
+      rmSync(f.tools.root, { recursive: true, force: true });
+    }
+  });
+}
