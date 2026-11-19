@@ -183,89 +183,211 @@ func TestHeartbeatHandler_SkipsRetiredHostAfterPodIsGone(t *testing.T) {
 	}
 }
 
-// A host restarted under the same ID, as with a fixed --host-id, is a
-// replacement once it started after the ID was retired. A heartbeat started
-// before that, or with no start time, still comes from the retired host.
-func TestHeartbeatHandler_AcceptsRetiredIDStartedLater(t *testing.T) {
-	// No Pod was retired at this IP, so only the ID can refuse a heartbeat.
-	const idOnlyIP = "10.9.9.9"
-	now := time.Now()
-	retired := &RetiredHosts{ids: map[string]time.Time{testHeartbeatHostID: now.Add(-2 * time.Minute)}}
+// retiredPodIP is the Pod IP of the Host that the retirement tests retire.
+const retiredPodIP = "10.1.2.3"
+
+// retiringHost is a Host under testHeartbeatHostID registered at retiredPodIP
+// well before its Pod was condemned.
+func retiringHost(condemnedAt time.Time) *runtimev1alpha1.Host {
+	host := hostAt("old-host", retiredPodIP, condemnedAt.Add(-time.Hour))
+	host.HostID = testHeartbeatHostID
+	host.UID = "old-host-uid"
+	return host
+}
+
+// retireHostAt runs the finalizer of the Pod at retiredPodIP against c.
+func retireHostAt(t *testing.T, c client.Client, condemnedAt time.Time, retired *RetiredHosts) {
+	t.Helper()
+	r := &HostPodReconciler{Client: c, apiReader: c, OperatorNamespace: testNamespace, RetiredHosts: retired}
+	if err := r.deleteHostForPod(context.Background(), terminatingPod(retiredPodIP, condemnedAt, 30)); err != nil {
+		t.Fatalf("deleteHostForPod: %v", err)
+	}
+	if !retired.contains(testHeartbeatHostID) {
+		t.Fatal("the deleted Host's ID was not retired")
+	}
+}
+
+func hostsWithID(t *testing.T, c client.Client) []runtimev1alpha1.Host {
+	t.Helper()
+	hosts := &runtimev1alpha1.HostList{}
+	if err := c.List(context.Background(), hosts, client.InNamespace(testNamespace),
+		client.MatchingFields{hostIDIndex: testHeartbeatHostID}); err != nil {
+		t.Fatal(err)
+	}
+	return hosts.Items
+}
+
+func sendHeartbeat(updater *hostStatusUpdater, heartbeat []byte) {
+	updater.handleHeartbeat(context.Background(), logr.Discard(),
+		"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
+}
+
+// countingReader counts reads past the cache.
+type countingReader struct {
+	client.Reader
+	gets int
+}
+
+func (r *countingReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	r.gets++
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+// A replacement at another Pod IP that started before the old Pod was condemned,
+// as in an overlapping restart, registers; the old host stays refused.
+func TestHeartbeatHandler_RetiredIDReplacementThatStartedFirst(t *testing.T) {
+	const newIP = "10.1.2.4"
+	condemnedAt := time.Now()
+	c := hostPodClientBuilder(t, retiringHost(condemnedAt)).Build()
+	retired := &RetiredHosts{}
+	retireHostAt(t, c, condemnedAt, retired)
+	updater := &hostStatusUpdater{client: c, apiReader: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
+
+	sendHeartbeat(updater, heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, newIP, condemnedAt.Add(-30*time.Second)))
+	sendHeartbeat(updater, heartbeatBytesAt(t, "old-host", testHeartbeatHostID, retiredPodIP, condemnedAt.Add(-time.Hour)))
+
+	hosts := hostsWithID(t, c)
+	if len(hosts) != 1 || hosts[0].Hostname != newIP {
+		got := make([]string, 0, len(hosts))
+		for _, host := range hosts {
+			got = append(got, host.Hostname)
+		}
+		t.Fatalf("Hosts under the retired ID are at %v, want only the replacement at %s", got, newIP)
+	}
+}
+
+// At the retired Pod IP, a host started after the Pod was condemned is a replacement, even
+// if the retirement was recorded later; one started before, or with no start time, is not.
+func TestHeartbeatHandler_RetiredIDOnARecycledIP(t *testing.T) {
+	condemnedAt := time.Now().Add(-time.Minute)
+	c := hostPodClientBuilder(t, retiringHost(condemnedAt)).Build()
+	retired := &RetiredHosts{}
+	retireHostAt(t, c, condemnedAt, retired)
+	updater := &hostStatusUpdater{client: c, apiReader: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
+
+	sendHeartbeat(updater, heartbeatBytes(t, "old-host", testHeartbeatHostID, retiredPodIP))
+	sendHeartbeat(updater, heartbeatBytesAt(t, "old-host", testHeartbeatHostID, retiredPodIP, condemnedAt.Add(-time.Hour)))
+	if n := len(hostsWithID(t, c)); n != 0 {
+		t.Fatalf("the retired host wrote %d Hosts back", n)
+	}
+
+	sendHeartbeat(updater, heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, retiredPodIP, condemnedAt.Add(time.Second)))
+	hosts := hostsWithID(t, c)
+	if len(hosts) != 1 || hosts[0].Name != testReplacement {
+		t.Fatalf("%d Hosts under the retired ID, want the replacement that started after the Pod was condemned", len(hosts))
+	}
+}
+
+// Right after the Delete the cache can still show the retired Host, so its
+// replacement waits until a read past the cache finds that Host gone.
+func TestHeartbeatHandler_RetiredIDReplacementWaitsPastAStaleCache(t *testing.T) {
+	const newIP = "10.1.2.4"
+	condemnedAt := time.Now()
+	old := retiringHost(condemnedAt)
+	old.Finalizers = []string{hostFinalizerName}
+	api := hostPodClientBuilder(t, old.DeepCopy()).Build()
+	retired := &RetiredHosts{}
+	retireHostAt(t, api, condemnedAt, retired)
+	stale := hostPodClientBuilder(t, old.DeepCopy()).Build()
+	updater := &hostStatusUpdater{client: stale, apiReader: api, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
+	heartbeat := heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, newIP, time.Now())
+	replacement := client.ObjectKey{Namespace: testNamespace, Name: testReplacement}
+
+	sendHeartbeat(updater, heartbeat)
+	if err := stale.Get(context.Background(), replacement, &runtimev1alpha1.Host{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the replacement registered while the retired Host was still being deleted (err %v)", err)
+	}
+
+	cleaned := &runtimev1alpha1.Host{}
+	if err := api.Get(context.Background(), client.ObjectKeyFromObject(old), cleaned); err != nil {
+		t.Fatal(err)
+	}
+	cleaned.Finalizers = nil
+	if err := api.Update(context.Background(), cleaned); err != nil {
+		t.Fatal(err)
+	}
+	sendHeartbeat(updater, heartbeat)
+	if err := stale.Get(context.Background(), replacement, &runtimev1alpha1.Host{}); err != nil {
+		t.Fatalf("the replacement did not register once the retired Host was gone: %v", err)
+	}
+}
+
+// A Pod finalizer run again from a stale cache can retire a key that a same-named
+// successor now holds; another object at the name ends the wait.
+func TestHeartbeatHandler_RetiredIDWaitEndsWhenTheNameHoldsAnotherHost(t *testing.T) {
+	const newIP = "10.1.2.4"
+	condemnedAt := time.Now()
+	old := retiringHost(condemnedAt)
+	retired := &RetiredHosts{}
+	retired.retire(old, condemnedAt)
+	successor := hostAt(old.Name, newIP, condemnedAt)
+	successor.HostID = testHeartbeatHostID
+	successor.UID = "successor-uid"
 	writes := 0
-	c := hostPodClientBuilder(t).WithInterceptorFuncs(interceptor.Funcs{
-		Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
-			writes++
-			return nil
-		},
+	c := hostPodClientBuilder(t, successor).WithInterceptorFuncs(interceptor.Funcs{
 		SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
 			writes++
 			return nil
 		},
 	}).Build()
-	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
-	send := func(heartbeat []byte) int {
-		writes = 0
-		updater.handleHeartbeat(context.Background(), logr.Discard(),
-			"runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
-		return writes
-	}
-	old := heartbeatBytesAt(t, "hb-host", testHeartbeatHostID, idOnlyIP, now.Add(-3*time.Minute))
+	updater := &hostStatusUpdater{client: c, apiReader: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
 
-	if n := send(heartbeatBytes(t, "hb-host", testHeartbeatHostID, idOnlyIP)); n != 0 {
-		t.Errorf("a retired ID with no start time wrote its Host %d times", n)
-	}
-	if n := send(old); n != 0 {
-		t.Errorf("the retired host wrote its Host %d times", n)
-	}
-	if n := send(heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, idOnlyIP, now.Add(-time.Minute))); n == 0 {
-		t.Error("a host started after its ID was retired was not registered")
-	}
-	if n := send(old); n != 0 {
-		t.Errorf("the retired host wrote a Host %d times after its replacement registered", n)
+	sendHeartbeat(updater, heartbeatBytesAt(t, old.Name, testHeartbeatHostID, newIP, time.Now()))
+	if writes == 0 {
+		t.Error("the successor waited for a retired Host whose name now holds another object")
 	}
 }
 
-// While the retired Host is still being deleted, its replacement waits: the old
-// Host's cleanup removes Workloads by host ID, the replacement's among them.
-func TestHeartbeatHandler_ReplacementWaitsForRetiredHostCleanup(t *testing.T) {
-	const idOnlyIP = "10.9.9.9"
-	now := time.Now()
-	deleting := metav1.NewTime(now.Add(-20 * time.Second))
-	old := &runtimev1alpha1.Host{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "old-host",
-			Namespace:         testNamespace,
-			Finalizers:        []string{hostFinalizerName},
-			DeletionTimestamp: &deleting,
+// A failed read past the cache keeps the replacement waiting: the retired Host
+// may still be there.
+func TestHeartbeatHandler_RetiredIDWaitsWhenTheReadFails(t *testing.T) {
+	condemnedAt := time.Now()
+	c := hostPodClientBuilder(t, retiringHost(condemnedAt)).Build()
+	retired := &RetiredHosts{}
+	retireHostAt(t, c, condemnedAt, retired)
+	failing := hostPodClientBuilder(t).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return errors.New("API server unavailable")
 		},
-		HostID:   testHeartbeatHostID,
-		Hostname: "10.9.9.8",
-	}
-	c := hostPodClientBuilder(t, old).Build()
-	retired := &RetiredHosts{ids: map[string]time.Time{testHeartbeatHostID: deleting.Time}}
-	updater := &hostStatusUpdater{client: c, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
-	heartbeat := heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, idOnlyIP, now.Add(-10*time.Second))
-	hostsWithID := func() int {
-		hosts := &runtimev1alpha1.HostList{}
-		if err := c.List(context.Background(), hosts, client.InNamespace(testNamespace),
-			client.MatchingFields{hostIDIndex: testHeartbeatHostID}); err != nil {
-			t.Fatal(err)
-		}
-		return len(hosts.Items)
-	}
+	}).Build()
+	updater := &hostStatusUpdater{client: c, apiReader: failing, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
 
-	updater.handleHeartbeat(context.Background(), logr.Discard(), "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
-	if n := hostsWithID(); n != 1 {
-		t.Fatalf("%d Hosts share the ID while the retired one is being deleted, want 1", n)
+	sendHeartbeat(updater, heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, "10.1.2.4", time.Now()))
+	if n := len(hostsWithID(t, c)); n != 0 {
+		t.Errorf("the replacement registered although the retired Host could not be read: %d Hosts", n)
 	}
+}
 
-	old.Finalizers = nil
-	if err := c.Update(context.Background(), old); err != nil {
-		t.Fatal(err)
+// Once a read finds the retired Host gone, the replacement's later heartbeats
+// check nothing more about it while its ID stays retired.
+func TestHeartbeatHandler_RetiredIDStopsCheckingOnceHostIsGone(t *testing.T) {
+	const newIP = "10.1.2.4"
+	condemnedAt := time.Now()
+	hostLists := 0
+	c := hostPodClientBuilder(t, retiringHost(condemnedAt)).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*runtimev1alpha1.HostList); ok {
+				hostLists++
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}).Build()
+	retired := &RetiredHosts{}
+	retireHostAt(t, c, condemnedAt, retired)
+	reader := &countingReader{Reader: c}
+	updater := &hostStatusUpdater{client: c, apiReader: reader, operatorNamespace: testNamespace, fleet: &fleetWitness{}, retiredHosts: retired}
+	heartbeat := heartbeatBytesAt(t, testReplacement, testHeartbeatHostID, newIP, time.Now())
+
+	sendHeartbeat(updater, heartbeat)
+	if n := len(hostsWithID(t, c)); n != 1 {
+		t.Fatalf("%d Hosts under the retired ID, want the replacement", n)
 	}
-	updater.handleHeartbeat(context.Background(), logr.Discard(), "runtime.operator.heartbeat."+testHeartbeatHostID, heartbeat)
-	if n := hostsWithID(); n != 1 {
-		t.Fatalf("%d Hosts with the ID after the retired one went, want the replacement", n)
+	hostLists, reader.gets = 0, 0
+	for range 3 {
+		sendHeartbeat(updater, heartbeat)
+	}
+	if hostLists != 0 || reader.gets != 0 {
+		t.Errorf("a registered replacement still checked the retired Host: %d Host lists, %d reads past the cache", hostLists, reader.gets)
 	}
 }
 
@@ -304,7 +426,7 @@ func TestHeartbeatHandler_SkipsRetiredPodWhenHostWasAlreadyGone(t *testing.T) {
 
 func TestHeartbeatHandler_RejectsRetiredIDBeforeHostRead(t *testing.T) {
 	retired := &RetiredHosts{}
-	retired.retire(testHeartbeatHostID)
+	retired.retire(&runtimev1alpha1.Host{HostID: testHeartbeatHostID, Hostname: "10.1.2.3"}, time.Now())
 	reads := 0
 	c := hostPodClientBuilder(t).WithInterceptorFuncs(interceptor.Funcs{
 		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
@@ -323,7 +445,7 @@ func TestHeartbeatHandler_RejectsRetiredIDBeforeHostRead(t *testing.T) {
 func TestHeartbeatHandler_RegistersUnknownHostWhenPodLookupFails(t *testing.T) {
 	listErr := errors.New("pod cache unavailable")
 	retired := &RetiredHosts{}
-	retired.retire("retired-id")
+	retired.retire(&runtimev1alpha1.Host{HostID: "retired-id", Hostname: "10.1.2.3"}, time.Now())
 	writes := 0
 	c := hostPodClientBuilder(t).WithInterceptorFuncs(interceptor.Funcs{
 		List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {

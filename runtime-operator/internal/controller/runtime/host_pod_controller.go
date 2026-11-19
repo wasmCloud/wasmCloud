@@ -136,7 +136,7 @@ func (r *HostPodReconciler) deleteHostForPod(ctx context.Context, pod *corev1.Po
 			return err
 		}
 		if gone {
-			r.RetiredHosts.retire(host.HostID)
+			r.RetiredHosts.retire(host, condemnedAt)
 		}
 	}
 	r.RetiredHosts.retirePod(podIP, condemnedAt)
