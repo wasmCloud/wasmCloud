@@ -352,18 +352,18 @@ pub struct OciConfig {
     /// registry sends nothing for [`PULL_READ_TIMEOUT`].
     pub timeout: Option<Duration>,
     /// The largest component, in bytes, a pull accepts. If None,
-    /// [`DEFAULT_MAX_COMPONENT_SIZE`] applies.
+    /// [`DEFAULT_MAX_COMPONENT_SIZE_BYTES`] applies.
     ///
     /// A pull holds the whole component in memory, so this bounds what one
     /// registry can make the host allocate. A layer that declares more is
     /// refused before it is downloaded, and one that sends more than it
     /// declared is cut off.
-    pub max_component_size: Option<u64>,
+    pub max_component_size_bytes: Option<u64>,
 }
 
-/// The largest component a pull accepts when [`OciConfig::max_component_size`]
+/// The largest component a pull accepts when [`OciConfig::max_component_size_bytes`]
 /// is unset.
-pub const DEFAULT_MAX_COMPONENT_SIZE: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_MAX_COMPONENT_SIZE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// How long a pull waits for the registry to send anything before failing.
 /// It applies to each read, so a large component that keeps arriving is never
@@ -413,15 +413,15 @@ impl OciConfig {
     }
 
     /// Set the largest component, in bytes, a pull accepts.
-    pub fn with_max_component_size(mut self, max_component_size: u64) -> Self {
-        self.max_component_size = Some(max_component_size);
+    pub fn with_max_component_size_bytes(mut self, max_component_size_bytes: u64) -> Self {
+        self.max_component_size_bytes = Some(max_component_size_bytes);
         self
     }
 
     /// The largest component a pull accepts, the default applied.
-    pub fn effective_max_component_size(&self) -> u64 {
-        self.max_component_size
-            .unwrap_or(DEFAULT_MAX_COMPONENT_SIZE)
+    pub fn effective_max_component_size_bytes(&self) -> u64 {
+        self.max_component_size_bytes
+            .unwrap_or(DEFAULT_MAX_COMPONENT_SIZE_BYTES)
     }
 }
 
@@ -545,7 +545,7 @@ pub(crate) async fn pull_component_bytes(
             cache_dir: config.cache_dir.clone(),
             pull_policy: pull_policy.clone(),
             timeout: config.timeout,
-            max_component_size: config.effective_max_component_size(),
+            max_component_size_bytes: config.effective_max_component_size_bytes(),
             trust: trust.id,
         };
         let pulled = pull_coalescer()
@@ -606,7 +606,7 @@ struct PullKey {
     /// so callers that set different timeouts must not wait on each other.
     timeout: Option<Duration>,
     /// A caller with a lower limit must not be answered by a larger pull.
-    max_component_size: u64,
+    max_component_size_bytes: u64,
     trust: TrustId,
 }
 
@@ -777,7 +777,7 @@ async fn pull_uncoalesced(
         &client,
         reference_parsed,
         auth,
-        config.effective_max_component_size(),
+        config.effective_max_component_size_bytes(),
     ))
     .await
     .with_context(|| format!("failed to pull component from {reference}"))?;
@@ -836,7 +836,7 @@ async fn pull_component_layer(
     if declared > max_size {
         bail!(
             "component layer declares {declared} bytes, over the {max_size}-byte limit \
-             (raise `max_component_size` to pull it)"
+             (raise `max_component_size_bytes` to pull it)"
         );
     }
     let declared =
@@ -1141,7 +1141,7 @@ mod tests {
         let (registry, config) = serving(test_registry::Image::build(wasm, None, Vec::new())).await;
         let err = pull_component(
             &registry.reference(),
-            config.clone().with_max_component_size(limit),
+            config.clone().with_max_component_size_bytes(limit),
             OciPullPolicy::Always,
         )
         .await
