@@ -362,6 +362,8 @@ pub(crate) const WASI_BASE_PACKAGES: &[&str] = &[
     "cli",
     "sockets",
     "http",
+    #[cfg(feature = "wasi-tls")]
+    "tls",
 ];
 
 /// Versions of a [`WASI_BASE_PACKAGES`] package the host links. Anything
@@ -371,8 +373,14 @@ fn wasi_base_versions(package: &str) -> &'static [semver::Version] {
     const P2: &[semver::Version] = &[semver::Version::new(0, 2, 0)];
     const P2_AND_P3: &[semver::Version] =
         &[semver::Version::new(0, 2, 0), semver::Version::new(0, 3, 0)];
+    #[cfg(feature = "wasi-tls")]
+    static TLS: std::sync::LazyLock<[semver::Version; 1]> = std::sync::LazyLock::new(|| {
+        [semver::Version::parse("0.3.0-draft").expect("valid linked TLS version")]
+    });
     match package {
         "io" => P2,
+        #[cfg(feature = "wasi-tls")]
+        "tls" => TLS.as_ref(),
         _ => P2_AND_P3,
     }
 }

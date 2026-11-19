@@ -2254,6 +2254,10 @@ fn build_plugin_store(
     if let Some(host) = &store_context.host_ref {
         ctx_builder = ctx_builder.with_host(host);
     }
+    #[cfg(feature = "wasi-tls")]
+    if let Some(provider) = &engine.tls_provider {
+        ctx_builder = ctx_builder.with_tls_provider(provider.clone());
+    }
     let mut ctx = ctx_builder.build();
     // The handles pinned at load, handed over the way a workload's store gets
     // its volume mounts.
