@@ -9,7 +9,7 @@
 // Invoked by .github/workflows/charts.yml. Needs `helm` and `yq` on PATH.
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { before, describe, it } from 'node:test';
 
 import { helmTemplate, yamlToDocs } from './lib/helm.mjs';
 
@@ -55,29 +55,34 @@ function plugin(volumes, volumeMounts, extra = {}) {
 }
 
 describe('host plugin volumes render', () => {
-  const { pod, hostConfig } = renderDocs({
-    pluginHostPaths: { allowed: ['/srv/models'] },
-    plugins: [
-      plugin(
-        [
-          { name: 'data', configMap: { name: 'cm' } },
-          { name: 'scratch', emptyDir: {} },
-          { name: 'models', hostPath: { path: '/srv/models/../models/llama', type: 'Directory' } },
+  // Rendered in a hook, so a failed render fails the tests that need it
+  // rather than the whole file before any case runs.
+  let pod;
+  let hostConfig;
+  before(() => {
+    ({ pod, hostConfig } = renderDocs({
+        pluginHostPaths: { allowed: ['/srv/models'] },
+        plugins: [
+          plugin(
+            [
+              { name: 'data', configMap: { name: 'cm' } },
+              { name: 'scratch', emptyDir: {} },
+              { name: 'models', hostPath: { path: '/srv/models/../models/llama', type: 'Directory' } },
+            ],
+            [
+              { name: 'data', mountPath: '/data', readOnly: true },
+              { name: 'scratch', mountPath: '/scratch' },
+              { name: 'models', mountPath: '/models', readOnly: true },
+            ],
+          ),
+          plugin([{ name: 'data', emptyDir: {} }], [{ name: 'data', mountPath: '/data' }], {
+            id: 'q',
+          }),
         ],
-        [
-          { name: 'data', mountPath: '/data', readOnly: true },
-          { name: 'scratch', mountPath: '/scratch' },
-          { name: 'models', mountPath: '/models', readOnly: true },
-        ],
-      ),
-      plugin([{ name: 'data', emptyDir: {} }], [{ name: 'data', mountPath: '/data' }], {
-        id: 'q',
-      }),
-    ],
+    }));
   });
-  const host = pod.containers[0];
   const podVolume = (dir) => {
-    const mount = host.volumeMounts.find((m) => m.mountPath === dir);
+    const mount = pod.containers[0].volumeMounts.find((m) => m.mountPath === dir);
     assert.ok(mount, `the host container does not mount ${dir}`);
     return { mount, volume: pod.volumes.find((v) => v.name === mount.name) };
   };
@@ -234,6 +239,29 @@ describe('host plugin volumes the chart refuses', () => {
       { plugins: [plugin([{ name: 'm', emptyDir: {} }], [{ name: 'm' }])] },
       /needs a `mountPath`/,
     ],
+    ...['data', '/data/', '/a/../data', '/a//data', '/./data'].map((mountPath) => [
+      `a mountPath of ${mountPath}`,
+      { plugins: [plugin([{ name: 'm', emptyDir: {} }], [{ name: 'm', mountPath }])] },
+      /must be absolute and normalized/,
+    ]),
+    [
+      'two mounts at one path',
+      {
+        plugins: [
+          plugin(
+            [
+              { name: 'm', emptyDir: {} },
+              { name: 'n', emptyDir: {} },
+            ],
+            [
+              { name: 'm', mountPath: '/x' },
+              { name: 'n', mountPath: '/x' },
+            ],
+          ),
+        ],
+      },
+      /volumeMounts "m" and "n" both mount at \/x/,
+    ],
     [
       'a mount key the host does not take',
       { plugins: [plugin([{ name: 'm', emptyDir: {} }], [{ name: 'm', mountPath: '/m', subPath: 's' }])] },
@@ -271,6 +299,14 @@ describe('host plugin volumes the chart refuses', () => {
 
   // The host reserves plugin volume directories itself, so a broad workload
   // allowlist renders, as does a scratch root beside the volumes.
+  it('renders a scratchRoot beside, but not around, the plugin volumes', () => {
+    const r = render({
+      scratchRoot: `${ROOT}/unused`,
+      plugins: [plugin([{ name: 'm', emptyDir: {} }], [{ name: 'm', mountPath: '/m' }])],
+    });
+    assert.ifError(r.error);
+  });
+
   it('renders a broad hostPaths.allowed and a separate scratchRoot', () => {
     const r = render({
       hostPaths: { allowed: ['/'] },

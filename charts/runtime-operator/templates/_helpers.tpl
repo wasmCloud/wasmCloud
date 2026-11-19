@@ -208,12 +208,13 @@ a host plugin at bind, not by a Kubernetes Secret: it goes to
 
 Takes the host group dict directly (e.g. `.` inside
 `range .Values.runtime.hostGroups`). Returns a JSON object
-`{fileBacked, cli, configFromNames, secretFromNames, pluginSecrets, pluginVolumesById, needsConfigFile}`,
-which callers parse with `fromJson`. `pluginVolumesById` maps each plugin id
-with volumes to its `runtime-operator.hostPluginVolumes`.
+`{fileBacked, cli, configFromNames, secretFromNames, pluginSecrets, pluginVolumes, needsConfigFile}`,
+which callers parse with `fromJson`. `pluginVolumes` is every entry's
+`runtime-operator.hostPluginVolumes` in declaration order, and each
+`fileBacked` entry carries its own as `resolvedVolumes`.
 
 Refuses an entry that is not a map, has no `id` or repeats one, and, when
-any plugin has volumes, a `scratchRoot` that overlaps their directory.
+any plugin has volumes, a `scratchRoot` that overlaps one of them.
 */}}
 {{- define "runtime-operator.hostPluginPartition" -}}
 {{- /* Removed keys, refused rather than ignored. Helm drops values nothing
@@ -229,7 +230,7 @@ any plugin has volumes, a `scratchRoot` that overlaps their directory.
 {{- $group := . }}
 {{- $fileBacked := list }}
 {{- $cli := list }}
-{{- $pluginVolumesById := dict }}
+{{- $pluginVolumes := list }}
 {{- $seenIds := dict }}
 {{- range concat (default list .plugins) (default list .hostPlugins) }}
 {{- if not (kindIs "map" .) }}
@@ -246,24 +247,28 @@ any plugin has volumes, a `scratchRoot` that overlaps their directory.
 {{- end }}
 {{- $_ := set $seenIds (toString .id) true }}
 {{- $volumes := include "runtime-operator.hostPluginVolumes" (dict "entry" . "group" $group) | fromJsonArray }}
-{{- if $volumes }}
-{{- $_ := set $pluginVolumesById (toString .id) $volumes }}
-{{- end }}
+{{- $pluginVolumes = concat $pluginVolumes $volumes }}
 {{- if or .config .configFrom .secretFrom .allowedHosts .allowedIpNameLookups .allowedHostLoopbackPorts .ports .workloadConfig .hostOwnedKeys .bindings .volumes .volumeMounts (not (or .image .file)) }}
-{{- $fileBacked = append $fileBacked . }}
+{{- /* The config file names each volume by the directory the pod mounts it
+       at, so the entry carries its resolved volumes. */}}
+{{- $fileBacked = append $fileBacked (merge (dict "resolvedVolumes" $volumes) .) }}
 {{- else }}
 {{- $cli = append $cli . }}
 {{- end }}
 {{- end }}
-{{- /* The host refuses a plugin volume that equals, contains or lies inside
-       its emptyDir scratch root, and would fail to start. Refused here so the
-       error names the setting. A relative root resolves against the host's
-       working directory, which only the host knows, so it is left to it. */}}
-{{- if and $pluginVolumesById .scratchRoot (hasPrefix "/" (toString .scratchRoot)) }}
-{{- $root := include "runtime-operator.hostPluginVolumeRoot" . }}
+{{- /* The host refuses a plugin volume directory that equals, contains or
+       lies inside its emptyDir scratch root, and would fail to start. Refused
+       here, for each directory the chart mounts, so the error names the
+       setting. A relative `scratchRoot`, a `--scratch-root` in `extraArgs` and
+       the default under TMPDIR all depend on what only the host sees, so the
+       host's own check covers those. */}}
+{{- if and .scratchRoot (hasPrefix "/" (toString .scratchRoot)) }}
 {{- $scratch := clean (toString .scratchRoot) }}
-{{- if or (eq $scratch $root) (hasPrefix (printf "%s/" (trimSuffix "/" $scratch)) $root) (hasPrefix (printf "%s/" $root) $scratch) }}
-{{- fail (printf "hostGroup %s: `scratchRoot` %s overlaps %s, where this host group's plugin volumes are mounted; the host refuses a plugin volume inside or around its scratch root" $group.name $scratch $root) }}
+{{- range $pluginVolumes }}
+{{- $dir := .mountPath }}
+{{- if or (eq $scratch $dir) (hasPrefix (printf "%s/" (trimSuffix "/" $scratch)) $dir) (hasPrefix (printf "%s/" $dir) $scratch) }}
+{{- fail (printf "hostGroup %s: `scratchRoot` %s overlaps plugin volume directory %s; the host refuses a plugin volume inside or around its scratch root" $group.name $scratch $dir) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- $configFromNames := list }}
@@ -294,7 +299,7 @@ any plugin has volumes, a `scratchRoot` that overlaps their directory.
 {{- $mountedSecretNames = append $mountedSecretNames . }}
 {{- end }}
 {{- end }}
-{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" $mountedSecretNames "pluginSecrets" $pluginSecrets "pluginVolumesById" $pluginVolumesById "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
+{{- dict "fileBacked" $fileBacked "cli" $cli "configFromNames" ($configFromNames | uniq) "secretFromNames" $mountedSecretNames "pluginSecrets" $pluginSecrets "pluginVolumes" $pluginVolumes "needsConfigFile" (gt (len $fileBacked) 0) | toJson }}
 {{- end }}
 
 {{/*
@@ -343,11 +348,12 @@ Refused here rather than at host start, naming the plugin:
   `secret`, `downwardAPI`, `projected` and `image` always, and any
   source that sets `readOnly: true` itself;
 - a mount naming an undeclared volume or missing `mountPath`, with a
+  `mountPath` that is relative or not normalized or that another mount
+  uses, with a
   `readOnly` that is not a boolean, or with a key the host config does not
   take (such as `subPath`), which the host would refuse as unknown.
 
-The runtime still checks the rest: an absolute, normalized `mountPath`, and
-no two mounts at one path.
+The runtime checks each `mountPath` again when the plugin loads.
 
 Call with (dict "entry" <plugin entry> "group" <host group>).
 */}}
@@ -382,6 +388,8 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- $readOnlySources := list "configMap" "secret" "downwardAPI" "projected" "image" }}
 {{- $writable := dict }}
 {{- $declared := dict }}
+{{- $mounted := dict }}
+{{- $mountPaths := dict }}
 {{- range $entry.volumes }}
 {{- $name := toString .name }}
 {{- if or (gt (len $name) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name)) }}
@@ -429,6 +437,15 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- if not .mountPath }}
 {{- fail (printf "host plugin %s: volumeMount %q needs a `mountPath`, where the plugin sees the volume" $id $name) }}
 {{- end }}
+{{- $mountPath := toString .mountPath }}
+{{- if or (not (hasPrefix "/" $mountPath)) (ne (clean $mountPath) $mountPath) }}
+{{- fail (printf "host plugin %s: volumeMount %q has `mountPath: %s`; it must be absolute and normalized, with no `.`, `..`, repeated or trailing `/`" $id $name $mountPath) }}
+{{- end }}
+{{- if hasKey $mountPaths $mountPath }}
+{{- fail (printf "host plugin %s: volumeMounts %q and %q both mount at %s" $id (index $mountPaths $mountPath) $name $mountPath) }}
+{{- end }}
+{{- $_ := set $mountPaths $mountPath $name }}
+{{- $_ := set $mounted $name true }}
 {{- with omit . "name" "mountPath" "readOnly" }}
 {{- fail (printf "host plugin %s: volumeMount %q sets %s; a plugin mount takes only `name`, `mountPath` and `readOnly`" $id $name (keys . | sortAlpha | join ", ")) }}
 {{- end }}
@@ -446,10 +463,6 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- end }}
 {{- $_ := set $writable $name true }}
 {{- end }}
-{{- end }}
-{{- $mounted := dict }}
-{{- range $entry.volumeMounts }}
-{{- $_ := set $mounted (toString .name) true }}
 {{- end }}
 {{- range $entry.volumes }}
 {{- if not (hasKey $mounted (toString .name)) }}
@@ -582,7 +595,7 @@ host:
       bindings:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with index $partition.pluginVolumesById (toString .id) }}
+      {{- with .resolvedVolumes }}
       volumes:
         {{- range . }}
         - name: {{ .name | quote }}
