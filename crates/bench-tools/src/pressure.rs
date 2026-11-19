@@ -1,9 +1,8 @@
 //! Container memory pressure runs: the case a runner asks for,
 //! the samples the `memory_pressure` bench records, and the outcome checks.
 //!
-//! The bench checks guest accounting against the runtime's own constants
-//! before it writes each later sample, so a sample's presence is evidence.
-//! [`classify`] only decides what the exit and the samples mean together.
+//! Completed checkpoints require verified guest accounting. Admission snapshots
+//! are diagnostic only. [`classify`] combines checkpoints with exit evidence.
 
 use std::ops::RangeInclusive;
 
@@ -75,14 +74,44 @@ pub struct Case {
 
 impl Case {
     pub fn label(&self) -> String {
-        format!(
+        let mut label = format!(
             "{}m-{}-{}-cow-{}-{}",
             self.memory_mib,
             self.shape.name(),
             self.mode.name(),
             if self.cow { "on" } else { "off" },
             self.repeat
-        )
+        );
+        if let Some(mib) = self.initial_cap_mib {
+            label.push_str(&format!("-initial-{mib}m"));
+        }
+        if let Some(mib) = self.guest_memory_mib {
+            label.push_str(&format!("-guest-{mib}m"));
+        }
+        label
+    }
+
+    pub fn cap_policy(&self) -> &'static str {
+        match (self.mode, self.initial_cap_mib) {
+            (Mode::Enforce, _) => "charged",
+            (Mode::Growth, Some(_)) => "explicit",
+            (Mode::Growth, None) => "runtime default",
+        }
+    }
+
+    /// Only an operator-requested cap may override the runtime default.
+    pub fn validate_initial_cap(&self, applied: Option<u64>, installed: u64) -> Result<(), String> {
+        let requested = self
+            .initial_cap_mib
+            .filter(|_| self.mode == Mode::Growth)
+            .map(|mib| mib * MIB);
+        if applied != requested {
+            return Err("initial-cap fallback is forbidden; use the runtime default or an explicit --initial-cap-mib comparison".into());
+        }
+        if requested.is_some_and(|cap| cap != installed) {
+            return Err("explicit initial cap was not applied".into());
+        }
+        Ok(())
     }
 
     /// Memories, initial bytes per memory, and data-segment bytes per memory.
@@ -107,6 +136,8 @@ impl Case {
 pub enum Phase {
     /// Engine built, nothing admitted.
     Baseline,
+    /// An admission snapshot, stored separately from completed checkpoints.
+    Admitting,
     /// Admission stopped; every admitted store is alive. Writes start next.
     Ready,
     /// Every store finished its writes and is still alive.
@@ -119,6 +150,7 @@ impl Phase {
     pub fn name(self) -> &'static str {
         match self {
             Self::Baseline => "baseline",
+            Self::Admitting => "admitting",
             Self::Ready => "ready",
             Self::Touched => "touched",
             Self::Released => "released",
@@ -137,6 +169,10 @@ pub struct Sample {
     pub initial_memory_bytes: u64,
     pub cgroup_current: Option<u64>,
     pub cgroup_peak: Option<u64>,
+    #[serde(default)]
+    pub cgroup_page_tables: Option<u64>,
+    #[serde(default)]
+    pub cgroup_kernel: Option<u64>,
     /// Refusal counters, cumulative since the engine was built.
     pub guest_refused: u64,
     pub initial_refused: u64,
@@ -196,6 +232,9 @@ pub struct Report {
     /// `None` when the bench exited before describing its host.
     pub host: Option<Host>,
     pub samples: Vec<Sample>,
+    /// Last observed live count; never a completed admission checkpoint.
+    #[serde(default)]
+    pub last_admission: Option<Sample>,
     /// Why admission stopped, then why the case failed, if it did.
     pub stop: String,
     /// Set by the runner after [`classify`].
@@ -208,6 +247,7 @@ impl Report {
             case,
             host: None,
             samples: Vec::new(),
+            last_admission: None,
             stop: String::new(),
             outcome: None,
         }
@@ -218,16 +258,24 @@ impl Report {
     }
 
     /// Stores alive when admission stopped.
-    pub fn admitted(&self) -> usize {
-        self.sample(Phase::Ready).map_or(0, |s| s.stores)
+    pub fn admitted(&self) -> Option<usize> {
+        self.sample(Phase::Ready).map(|s| s.stores)
+    }
+
+    pub fn admission_count(&self) -> String {
+        match (self.admitted(), &self.last_admission) {
+            (Some(stores), _) => stores.to_string(),
+            (None, Some(sample)) => format!("unknown (last observed {})", sample.stores),
+            (None, None) => "unknown".into(),
+        }
     }
 
     /// `admitted / budget bound`; fewer than the bound means something
     /// other than the budgets stopped admission.
     pub fn admissions(&self) -> String {
         match &self.host {
-            Some(host) => format!("{} / {}", self.admitted(), host.budget_stores),
-            None => self.admitted().to_string(),
+            Some(host) => format!("{} / {}", self.admission_count(), host.budget_stores),
+            None => self.admission_count(),
         }
     }
 
@@ -317,9 +365,14 @@ pub struct Exit {
 pub fn classify(report: &Report, exit: &Exit) -> Result<Outcome, String> {
     let case = &report.case;
     let host = report.host.as_ref().ok_or("no report before exit")?;
-    let ready = report
-        .sample(Phase::Ready)
-        .ok_or("failed before admission completed")?;
+    let ready = report.sample(Phase::Ready).ok_or_else(|| {
+        let reason = if exit.oom_killed {
+            "OOM before admission completed"
+        } else {
+            "failed before admission completed"
+        };
+        format!("{reason}; admitted={}", report.admission_count())
+    })?;
     if ready.stores == 0 {
         return Err("no guests admitted".into());
     }
@@ -371,12 +424,20 @@ pub fn classify(report: &Report, exit: &Exit) -> Result<Outcome, String> {
 pub fn print_sample(header: bool, sample: &Sample) {
     if header {
         eprintln!(
-            "{:>10} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10}",
-            "phase", "stores", "footprint", "charged", "initial", "cgroup", "peak"
+            "{:>10} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "phase",
+            "stores",
+            "footprint",
+            "charged",
+            "initial",
+            "cgroup",
+            "peak",
+            "page tbl",
+            "kernel"
         );
     }
     eprintln!(
-        "{:>10} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "{:>10} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
         sample.phase.name(),
         sample.stores,
         or_dash(sample.footprint_bytes),
@@ -384,6 +445,8 @@ pub fn print_sample(header: bool, sample: &Sample) {
         render_bytes(sample.initial_memory_bytes),
         or_dash(sample.cgroup_current),
         or_dash(sample.cgroup_peak),
+        or_dash(sample.cgroup_page_tables),
+        or_dash(sample.cgroup_kernel),
     );
 }
 
@@ -408,6 +471,18 @@ pub fn print_summary(reports: &[Report]) {
     }
 }
 
+/// Read a named byte counter; missing or malformed counters stay unknown.
+pub fn cgroup_stat_bytes(stat: &str, name: &str) -> Option<u64> {
+    stat.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        if fields.next()? != name {
+            return None;
+        }
+        let value = fields.next()?.parse().ok()?;
+        fields.next().is_none().then_some(value)
+    })
+}
+
 fn or_dash(bytes: Option<u64>) -> String {
     bytes.map_or_else(|| "-".into(), render_bytes)
 }
@@ -425,6 +500,8 @@ mod tests {
             initial_memory_bytes: stores as u64 * MIB,
             cgroup_current: Some(100 * MIB),
             cgroup_peak: Some(100 * MIB),
+            cgroup_page_tables: None,
+            cgroup_kernel: None,
             guest_refused: 0,
             initial_refused: 1,
             process_refused: 0,
@@ -569,11 +646,93 @@ mod tests {
     }
 
     #[test]
+    fn fallback_cannot_pass_as_the_runtime_default() {
+        let (mut report, _) = oom();
+        assert!(report.case.validate_initial_cap(None, 11059 * MIB).is_ok());
+        assert!(
+            report
+                .case
+                .validate_initial_cap(Some(2304 * MIB), 2304 * MIB)
+                .is_err()
+        );
+        report.case.initial_cap_mib = Some(2304);
+        assert!(
+            report
+                .case
+                .validate_initial_cap(Some(2304 * MIB), 2304 * MIB)
+                .is_ok()
+        );
+        assert!(
+            report
+                .case
+                .validate_initial_cap(Some(2304 * MIB), 11059 * MIB)
+                .is_err()
+        );
+        assert!(report.case.validate_initial_cap(None, 2304 * MIB).is_err());
+        assert_eq!(report.case.cap_policy(), "explicit");
+        assert!(report.case.label().ends_with("-initial-2304m"));
+    }
+
+    #[test]
+    fn admission_snapshots_never_supply_completion_evidence() {
+        let (mut report, exit) = oom();
+        report.samples.pop();
+        report.last_admission = Some(sample(Phase::Admitting, 2176));
+        assert_eq!(report.admitted(), None);
+        assert_eq!(report.admission_count(), "unknown (last observed 2176)");
+        assert_eq!(
+            classify(&report, &exit),
+            Err("OOM before admission completed; admitted=unknown (last observed 2176)".into())
+        );
+        assert!(!report.metrics().iter().any(|m| m.name == "admitted_stores"));
+        report.samples.push(sample(Phase::Ready, 2304));
+        assert_eq!(report.admission_count(), "2304");
+        assert_eq!(classify(&report, &exit), Ok(Outcome::ExpectedOom));
+    }
+
+    #[test]
+    fn old_reports_keep_unknown_diagnostics() -> anyhow::Result<()> {
+        let (report, _) = oom();
+        let mut json = serde_json::to_value(report)?;
+        json.as_object_mut().unwrap().remove("last_admission");
+        for sample in json["samples"].as_array_mut().unwrap() {
+            sample.as_object_mut().unwrap().remove("cgroup_page_tables");
+            sample.as_object_mut().unwrap().remove("cgroup_kernel");
+        }
+        let restored: Report = serde_json::from_value(json)?;
+        assert!(restored.last_admission.is_none());
+        assert!(
+            restored
+                .samples
+                .iter()
+                .all(|s| s.cgroup_kernel.is_none() && s.cgroup_page_tables.is_none())
+        );
+        assert_eq!(restored.admitted(), Some(2304));
+        Ok(())
+    }
+
+    #[test]
+    fn cgroup_counters_remain_unknown_when_unavailable() {
+        let stat = "kernel 4096\npagetables 1024\nsec_pagetables 2048\n";
+        assert_eq!(cgroup_stat_bytes(stat, "pagetables"), Some(1024));
+        assert_eq!(cgroup_stat_bytes(stat, "kernel"), Some(4096));
+        for stat in [
+            "",
+            "pagetables",
+            "pagetables bad",
+            "pagetables 1024 bytes",
+            "sec_pagetables 2048",
+        ] {
+            assert_eq!(cgroup_stat_bytes(stat, "pagetables"), None);
+        }
+    }
+
+    #[test]
     fn report_round_trips() -> anyhow::Result<()> {
         let (report, _) = oom();
         let restored: Report = serde_json::from_slice(&serde_json::to_vec(&report)?)?;
         assert_eq!(restored.case, report.case);
-        assert_eq!(restored.admitted(), 2304);
+        assert_eq!(restored.admitted(), Some(2304));
         Ok(())
     }
 

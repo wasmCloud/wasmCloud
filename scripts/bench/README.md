@@ -903,13 +903,13 @@ On the Linux bench host:
 
 ```bash
 CARGO_TARGET_DIR=target scripts/bench/run-bench.sh memory_pressure \
-  --memory-mib 384 768 --repeats 3
+  --memory-mib 384 512 --repeats 3
 ```
 
 For a local Docker run, including on macOS, invoke the same Rust runner directly:
 
 ```bash
-cargo run -p bench-tools -- memory-pressure --memory-mib 384 768 --repeats 3
+cargo run -p bench-tools -- memory-pressure --memory-mib 384 512 --repeats 3
 ```
 
 #### What runs
@@ -925,13 +925,19 @@ cargo run -p bench-tools -- memory-pressure --memory-mib 384 768 --repeats 3
   (`--target-volume`, `--registry-volume`).
   Do not rebuild into the same target volume while a pressure run is using its binary.
 
+The default matrix covers 384 and 512 MiB, all four shapes, both modes, and CoW on/off.
+Use three repeats for regression checks.
+
 The engine uses the runtime's budget defaults
 (`G = 75%` of the limit, `I = 4 × G`, the process guard at 90%)
 unless `--guest-memory-mib` or `--initial-cap-mib` overrides them.
 Pool settings are not production defaults:
-a 64 MiB heap ceiling per memory and 8192 memories, so `4 × G` of 1 MiB memories fits the pool.
+a 64 MiB heap ceiling per memory and 8192 memories.
 Each slot still reserves wasmtime's default address space plus guard.
 The bench refuses a case whose budgets would admit more memories than the pool holds.
+It must never lower the initial cap to make a runtime-default case fit.
+Use a smaller container limit, or an explicit lower-cap comparison.
+Summaries label the cap policy, and explicit budget overrides appear in case names.
 Fuel is off, and the build uses `--no-default-features`.
 
 Admission runs without pauses, as a burst of real starts would.
@@ -963,6 +969,7 @@ Other selectors:
 
 - `--modes enforce growth` and `--cow on off` select subsets.
 - `--initial-cap-mib` applies only to `growth`.
+- `--require-runtime-defaults` requires sparse growth coverage and rejects both budget overrides.
 
 To focus on late writes, then compare a smaller initial allowance:
 
@@ -985,9 +992,14 @@ for the budget calculation and its physical-memory assumptions.
 - A timestamped directory beside it holds the build log,
   revision and working-tree patch, image ID, and per-case logs, reports, and Docker state.
 - Each report records samples at `baseline`, `ready`, `touched`, and `released`:
-  stores, guest reservations, process footprint, cgroup current and peak memory, and refusal counters.
+  stores, guest reservations, process footprint, cgroup current and peak memory,
+  page-table and kernel memory from `memory.stat`, and refusal counters.
   It also records the kernel, architecture, THP policies, CPUs, and actual limits.
-- The bench checks the guest accounting before it writes each later sample:
+- Every 128 MiB of admitted initial memory (128 sparse or 16 data-heavy stores),
+  the report atomically replaces a separate `last_admission` snapshot.
+  An early OOM reports admission as unknown with the last observed count.
+  This snapshot cannot satisfy a missing `ready` checkpoint.
+- The bench checks the guest accounting before it writes each completed checkpoint:
   - At `ready`, the reservations must equal the retained memories and stay within their budgets.
   - At `touched`, they must not have changed during writes.
   - At `released`, both counters must be back at zero.
@@ -1051,6 +1063,17 @@ Classifier and schema tests run without containers:
 ```bash
 cargo test -p bench-tools
 ```
+
+#### Automatic regression check
+
+The `memory-pressure` workflow runs for PRs that change runtime memory code,
+the pressure harness, or dependency/toolchain configuration, and for merge groups.
+It uses a disposable GitHub-hosted ARM64 runner, not the dedicated bench host.
+The check runs the full default matrix three times with `--require-runtime-defaults`:
+96 cases, including strict controls and late-write cases.
+Failure logs, admission snapshots, Docker OOM state, and a Markdown summary
+are retained as artifacts. Maintainers can require the `gate-memory-pressure` status
+in branch protection; adding the workflow does not change that setting.
 
 ## 10. Pre-flight assertions
 
