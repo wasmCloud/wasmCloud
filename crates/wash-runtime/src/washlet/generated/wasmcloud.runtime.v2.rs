@@ -444,15 +444,25 @@ pub struct WorkloadIdentity {
     /// HTTPS destinations the host presents the X.509-SVID to.
     #[prost(message, repeated, tag = "6")]
     pub mtls_destinations: ::prost::alloc::vec::Vec<MtlsDestination>,
+    /// Exact host names the host's HTTPS ingress presents the X.509-SVID for,
+    /// picked by SNI. Requests on such a connection must route to this workload.
+    #[prost(string, repeated, tag = "7")]
+    pub ingress_hosts: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// An exact HTTPS host and port the X.509-SVID is presented to. The server is
-/// verified against the host's roots, by host name.
+/// verified against the host's roots, by host name, unless server_spiffe_id is
+/// set.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MtlsDestination {
     #[prost(string, tag = "1")]
     pub host: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub port: u32,
+    /// Verify the server by its X.509-SVID against the host's trust bundles
+    /// instead: spiffe://<trust domain> admits any ID in that trust domain, and
+    /// an ID with a path admits that ID alone. The host name is not checked.
+    #[prost(string, tag = "4")]
+    pub server_spiffe_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Service {

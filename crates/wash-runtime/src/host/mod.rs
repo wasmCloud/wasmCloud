@@ -80,10 +80,12 @@ pub mod egress_sigv4;
 pub mod http;
 pub mod http_client;
 pub mod http_p3;
+pub mod ingress_identity;
 #[cfg(feature = "host-component-plugins")]
 pub(crate) mod job_registry;
 pub mod token_exchange;
 pub mod trigger_service;
+pub mod trust_bundle;
 pub mod workload_identity;
 
 /// The API for interacting with a wasmcloud host.
@@ -3105,6 +3107,7 @@ mod tests {
             ),
             mtls_destinations: Vec::new(),
             jwt_audiences: vec!["aud".into()],
+            ingress_hosts: Vec::new(),
         };
 
         credentials.bind("unapproved", grant(sha256_digest(b"other code")))?;
@@ -3145,6 +3148,7 @@ mod tests {
             ),
             mtls_destinations: Vec::new(),
             jwt_audiences: vec!["aud".into()],
+            ingress_hosts: Vec::new(),
         }
     }
 
@@ -3271,6 +3275,7 @@ mod tests {
                 ),
                 mtls_destinations: Vec::new(),
                 jwt_audiences: vec!["aud".into()],
+                ingress_hosts: Vec::new(),
             },
         )?;
         host.stop().await?;
@@ -3313,6 +3318,7 @@ mod tests {
             ),
             mtls_destinations: Vec::new(),
             jwt_audiences: vec!["aud".into()],
+            ingress_hosts: Vec::new(),
         };
         credentials.bind("cancelled", grant())?;
         let task = tokio::spawn({
