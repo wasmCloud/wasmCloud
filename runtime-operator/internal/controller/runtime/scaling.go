@@ -2,11 +2,11 @@ package runtime
 
 import (
 	"context"
-	"math/rand/v2"
 	"sync"
 	"time"
 
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -57,7 +57,7 @@ func (b *busyBackoff) retry(host, key string, limit int) reconcile.Result {
 
 // jittered adds up to 50% so a backlog does not wake in lockstep.
 func jittered(delay time.Duration) time.Duration {
-	return delay + time.Duration(rand.Int64N(int64(delay/2)))
+	return wait.Jitter(delay, 0.5)
 }
 
 // done removes key from the waiters once it ran or no longer needs a slot.
@@ -124,13 +124,8 @@ func (r *WorkloadReconciler) withHostBudget(next reconcile.Reconciler, cleanup b
 			queue = "cleanup/"
 		}
 		key := queue + req.String()
-		releaseObject, ok := r.objectSlots.acquire(req.String(), 1)
-		if !ok {
-			// The other queue holds this object only briefly; no backlog to
-			// spread, so a short jittered retry is enough.
-			return reconcile.Result{RequeueAfter: jittered(busyRetry)}, nil
-		}
-		defer releaseObject()
+		// Read the object before taking its slot: a request this queue would
+		// drop must not wait behind the other queue's hold on the object.
 		workload := &runtimev1alpha1.Workload{}
 		if err := r.Get(ctx, req.NamespacedName, workload); err != nil {
 			r.busyWaits.done(key)
@@ -140,18 +135,31 @@ func (r *WorkloadReconciler) withHostBudget(next reconcile.Reconciler, cleanup b
 			r.busyWaits.done(key)
 			return reconcile.Result{}, nil
 		}
+		releaseObject, ok := r.objectSlots.acquire(req.String(), 1)
+		if !ok {
+			// The other queue holds this object only briefly; no backlog to
+			// spread, so a short jittered retry is enough.
+			return reconcile.Result{RequeueAfter: jittered(busyRetry)}, nil
+		}
+		defer releaseObject()
 		host := workload.Status.HostID
 		if host == "" {
 			r.busyWaits.done(key)
 			return next.Reconcile(ctx, req)
 		}
-		slots := &r.liveSlots
-		if cleanup {
+		slots, pool := &r.liveSlots, host
+		switch {
+		case cleanup:
 			slots = &r.cleanupSlots
+		case !workload.Status.AllTrue(runtimev1alpha1.WorkloadConditionPlacement):
+			// A pass that may send a Start can hold its slot for the whole
+			// start timeout. Starts get their own slots so they cannot keep
+			// Sync polling and eviction for the host's other Workloads waiting.
+			slots, pool = &r.startSlots, "start/"+host
 		}
 		release, ok := slots.acquire(host, r.hostConcurrency())
 		if !ok {
-			return r.busyWaits.retry(host, key, r.hostConcurrency()), nil
+			return r.busyWaits.retry(pool, key, r.hostConcurrency()), nil
 		}
 		defer release()
 		r.busyWaits.done(key)

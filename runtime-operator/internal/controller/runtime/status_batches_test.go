@@ -57,7 +57,7 @@ func TestBatchStatusReusesObservationsAndFallsBackOnIncompleteReply(t *testing.T
 	if len(bus.requests) != 1 {
 		t.Fatalf("8 observations required %d RPCs", len(bus.requests))
 	}
-	if s.cached(batchHost, "replica-0", time.Now().Add(time.Second), true) != nil {
+	if s.cached(batchHost, "replica-0", time.Now().Add(time.Second), time.Now().Add(-time.Minute)) != nil {
 		t.Fatal("observation predating placement was reused")
 	}
 	s = &statusBatches{}
@@ -117,5 +117,23 @@ func TestBatchStatusReusesOnlySettledObservations(t *testing.T) {
 	// later batches get the full status timeout.
 	if probe, full := time.Until(bus.deadlines[0]), time.Until(bus.deadlines[1]); probe > statusBatchProbeTimeout || full <= statusBatchProbeTimeout {
 		t.Fatalf("probe deadline %v, supported deadline %v", probe, full)
+	}
+}
+
+func TestStatusFetchServesOnlyTheEntriesItRefreshed(t *testing.T) {
+	fetched := time.Now()
+	starting := &runtimev2.WorkloadStatus{WorkloadState: runtimev2.WorkloadState_WORKLOAD_STATE_STARTING}
+	s := &statusBatches{entries: map[string]statusObservation{
+		"host/old":   {status: starting, at: fetched.Add(-20 * time.Second)},
+		"host/fresh": {status: starting, at: fetched},
+	}}
+	if s.cached("host", "old", time.Time{}, fetched) != nil {
+		t.Fatal("an unsettled status the fetch did not refresh outlived its ttl")
+	}
+	if s.cached("host", "fresh", time.Time{}, fetched) == nil {
+		t.Fatal("the status the fetch just made was not returned")
+	}
+	if s.cached("host", "old", time.Time{}, time.Time{}) != nil {
+		t.Fatal("a failed fetch returned an expired unsettled status")
 	}
 }

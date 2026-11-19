@@ -170,7 +170,9 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 				Labels:      workloadLabels,
 				Annotations: annotations,
 			},
-			Spec: replicaSet.Spec.Template.Spec,
+			// Creates run concurrently and each decodes the response into its
+			// object, so replicas must not share the template's maps and slices.
+			Spec: *replicaSet.Spec.Template.Spec.DeepCopy(),
 		}
 
 		if err := controllerutil.SetControllerReference(replicaSet, workload, r.Scheme); err != nil {

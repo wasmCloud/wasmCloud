@@ -72,16 +72,18 @@ func ttl(status *runtimev2.WorkloadStatus) time.Duration {
 }
 
 // cached returns an observation made since placement that is still within
-// its ttl. With fresh set, as for the caller that just waited on the fetch that
-// produced it, any unexpired observation is returned whatever its state.
-func (s *statusBatches) cached(host, id string, placed time.Time, fresh bool) *runtimev2.WorkloadStatus {
+// its ttl. An observation made by the fetch at or after fetched, as for a
+// caller that just waited on that fetch, is returned whatever its state; a
+// zero fetched (no fetch, or a failed one) applies the ttl to every entry.
+func (s *statusBatches) cached(host, id string, placed, fetched time.Time) *runtimev2.WorkloadStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry := s.entries[host+"/"+id]
-	if entry.at.Before(placed) || time.Since(entry.at) >= workloadReconcileInterval {
+	entry, ok := s.entries[host+"/"+id]
+	if !ok || entry.at.Before(placed) || time.Since(entry.at) >= workloadReconcileInterval {
 		return nil
 	}
-	if !fresh && time.Since(entry.at) >= ttl(entry.status) {
+	refreshed := !fetched.IsZero() && !entry.at.Before(fetched)
+	if !refreshed && time.Since(entry.at) >= ttl(entry.status) {
 		return nil
 	}
 	return entry.status
@@ -90,7 +92,7 @@ func (s *statusBatches) cached(host, id string, placed time.Time, fresh bool) *r
 func (s *statusBatches) status(ctx context.Context, r *WorkloadReconciler, w *runtimev1alpha1.Workload) *runtimev2.WorkloadStatus {
 	host, id := w.Status.HostID, w.Status.WorkloadID
 	placed := w.Status.GetCondition(runtimev1alpha1.WorkloadConditionPlacement).LastTransitionTime.Time
-	if cached := s.cached(host, id, placed, false); cached != nil {
+	if cached := s.cached(host, id, placed, time.Time{}); cached != nil {
 		return cached
 	}
 	s.mu.Lock()
@@ -101,21 +103,27 @@ func (s *statusBatches) status(ctx context.Context, r *WorkloadReconciler, w *ru
 	}
 	key := statusBucket(host, id)
 	// DoChan lets a cancelled reconcile leave without blocking on another caller.
+	// The shared fetch returns when its query started, so each waiter can
+	// tell an entry that fetch refreshed from an older one it did not cover.
 	result := s.requests.DoChan(key, func() (any, error) {
-		if cached := s.cached(host, id, placed, false); cached != nil {
-			return nil, nil
+		if cached := s.cached(host, id, placed, time.Time{}); cached != nil {
+			return time.Time{}, nil
 		}
-		return nil, s.fetch(ctx, r, host, id, key)
+		return s.fetch(ctx, r, host, id, key)
 	})
 	select {
 	case <-ctx.Done():
 		return nil
-	case <-result:
-		return s.cached(host, id, placed, true)
+	case res := <-result:
+		fetched, _ := res.Val.(time.Time)
+		if res.Err != nil {
+			fetched = time.Time{}
+		}
+		return s.cached(host, id, placed, fetched)
 	}
 }
 
-func (s *statusBatches) fetch(ctx context.Context, r *WorkloadReconciler, host, id, key string) error {
+func (s *statusBatches) fetch(ctx context.Context, r *WorkloadReconciler, host, id, key string) (time.Time, error) {
 	s.mu.Lock()
 	proven := time.Since(s.supported[host]) < statusBatchSupportTTL
 	s.mu.Unlock()
@@ -127,7 +135,7 @@ func (s *statusBatches) fetch(ctx context.Context, r *WorkloadReconciler, host, 
 	}
 	list := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(ctx, list, client.MatchingFields{statusBucketIndex: key}); err != nil {
-		return err
+		return time.Time{}, err
 	}
 	ids := make([]string, 0, len(list.Items)+1)
 	ids = append(ids, id)
@@ -141,7 +149,8 @@ func (s *statusBatches) fetch(ctx context.Context, r *WorkloadReconciler, host, 
 	return s.query(ctx, r, host, ids[start:min(start+128, len(ids))], workloadStatusTimeout)
 }
 
-func (s *statusBatches) query(ctx context.Context, r *WorkloadReconciler, host string, ids []string, timeout time.Duration) error {
+// query returns when it started, the time its observations are recorded at.
+func (s *statusBatches) query(ctx context.Context, r *WorkloadReconciler, host string, ids []string, timeout time.Duration) (time.Time, error) {
 	at := time.Now()
 	queryCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -183,18 +192,18 @@ func (s *statusBatches) query(ctx context.Context, r *WorkloadReconciler, host s
 	if err != nil {
 		// The caller leaving says nothing about the host.
 		if ctx.Err() != nil {
-			return err
+			return time.Time{}, err
 		}
 		// Older hosts do not answer this subject. Retry capability periodically
 		// so a host upgrade does not require restarting the operator.
 		s.unsupported[host] = time.Now().Add(time.Minute)
-		return err
+		return time.Time{}, err
 	}
 	s.supported[host] = time.Now()
 	for _, status := range response.Workloads {
 		s.entries[host+"/"+status.WorkloadId] = statusObservation{status: status, at: at}
 	}
-	return nil
+	return at, nil
 }
 
 func validateStatusBatch(ids []string, statuses []*runtimev2.WorkloadStatus) error {

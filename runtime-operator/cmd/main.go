@@ -171,7 +171,7 @@ func run(ctx context.Context, fs *flag.FlagSet, args []string, getConfig func() 
 	fs.IntVar(&workloadConcurrency, "workload-concurrency", 8, "Maximum concurrent live Workload reconciliations.")
 	fs.IntVar(&cleanupConcurrency, "workload-cleanup-concurrency", 16, "Maximum concurrent Workload finalizations.")
 	fs.IntVar(&hostConcurrency, "workload-host-concurrency", 2,
-		"Maximum concurrent reconciliations per host in each Workload queue.")
+		"Maximum concurrent reconciliations per host for each of live passes, starts and cleanup.")
 	fs.IntVar(&replicaBatchSize, "replica-batch-size", 64, "Maximum ReplicaSet creates or deletes per scaling pass.")
 	fs.IntVar(&replicaConcurrency, "replica-concurrency", 8, "Maximum concurrent API mutations within a ReplicaSet batch.")
 	fs.DurationVar(&readyRequeueInterval, "ready-requeue-interval", 0,

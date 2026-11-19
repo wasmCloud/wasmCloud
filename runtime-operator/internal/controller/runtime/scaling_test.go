@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -169,7 +170,7 @@ func TestEndpointSlicesStayBoundedAndStableDuringRemoval(t *testing.T) {
 
 func TestStatusObservationExpiresAndCannotPrecedePlacement(t *testing.T) {
 	s := &statusBatches{entries: map[string]statusObservation{"host/id": {status: &runtimev2.WorkloadStatus{WorkloadId: "id"}, at: time.Now().Add(-time.Hour)}}}
-	if s.cached("host", "id", time.Time{}, true) != nil {
+	if s.cached("host", "id", time.Time{}, time.Now().Add(-2*time.Hour)) != nil {
 		t.Fatal("expired status reused")
 	}
 }
@@ -312,5 +313,79 @@ func TestBusyBackoffSpreadsWaitersByHostBacklog(t *testing.T) {
 	b.done("cleanup/x")
 	if len(b.waiting) != 0 || len(b.hostOf) != 0 {
 		t.Fatalf("waiters leaked: %v %v", b.waiting, b.hostOf)
+	}
+}
+
+func TestLiveQueueDropsDeletingWorkloadWithoutWaitingOnItsSlot(t *testing.T) {
+	w := placedWorkload()
+	w.Finalizers = []string{workloadFinalizerName}
+	now := metav1.Now()
+	w.DeletionTimestamp = &now
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, w), HostConcurrency: 2}
+	key := client.ObjectKeyFromObject(w)
+	release, ok := r.objectSlots.acquire(key.String(), 1)
+	if !ok {
+		t.Fatal("cannot occupy object slot")
+	}
+	defer release()
+	next := reconcile.Func(func(context.Context, reconcile.Request) (reconcile.Result, error) {
+		t.Fatal("live queue reconciled a deleting workload")
+		return reconcile.Result{}, nil
+	})
+	result, err := r.withHostBudget(next, false).Reconcile(t.Context(), reconcile.Request{NamespacedName: key})
+	if err != nil || result.RequeueAfter != 0 {
+		t.Fatalf("live queue retried a deleting workload: %+v %v", result, err)
+	}
+}
+
+func TestStartsDoNotTakeLiveSlots(t *testing.T) {
+	placed := placedWorkload()
+	starting := placedWorkload()
+	starting.Name = "budget-starting"
+	starting.Status.WorkloadID = ""
+	starting.Status.Conditions = nil
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, placed, starting), HostConcurrency: 1}
+	host := placed.Status.HostID
+	releaseStart, ok := r.startSlots.acquire(host, 1)
+	if !ok {
+		t.Fatal("cannot occupy start slot")
+	}
+	var calls atomic.Int32
+	next := reconcile.Func(func(context.Context, reconcile.Request) (reconcile.Result, error) {
+		calls.Add(1)
+		return reconcile.Result{}, nil
+	})
+	if _, err := r.withHostBudget(next, false).Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(placed)}); err != nil || calls.Load() != 1 {
+		t.Fatal("a start in flight blocked a placed workload's live pass", err)
+	}
+	result, err := r.withHostBudget(next, false).Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(starting)})
+	if err != nil || result.RequeueAfter == 0 || calls.Load() != 1 {
+		t.Fatalf("a second start ran past the host's start slots: %+v %v", result, err)
+	}
+	releaseStart()
+	releaseLive, ok := r.liveSlots.acquire(host, 1)
+	if !ok {
+		t.Fatal("cannot occupy live slot")
+	}
+	defer releaseLive()
+	if _, err := r.withHostBudget(next, false).Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(starting)}); err != nil || calls.Load() != 2 {
+		t.Fatal("busy live slots blocked a start", err)
+	}
+}
+
+func TestOnlyAnUnansweredStopMarksTheHostStalled(t *testing.T) {
+	if !stopShowsHostStalled(t.Context(), errors.New("nats: timeout")) {
+		t.Fatal("an unanswered stop did not count against the host")
+	}
+	if !stopShowsHostStalled(t.Context(), nil) {
+		t.Fatal("a stop given up on an unavailable host did not count against it")
+	}
+	if stopShowsHostStalled(t.Context(), hostLookupError{errors.New("cache not synced")}) {
+		t.Fatal("a failed Host lookup counted against the host")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if stopShowsHostStalled(ctx, context.Canceled) {
+		t.Fatal("a cancelled reconcile counted against the host")
 	}
 }

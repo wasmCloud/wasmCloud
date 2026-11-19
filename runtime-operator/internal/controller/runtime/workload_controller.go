@@ -72,6 +72,7 @@ type WorkloadReconciler struct {
 	HostConcurrency      int
 	liveSlots            hostSlots
 	cleanupSlots         hostSlots
+	startSlots           hostSlots
 	cleanupStalls        stalledHosts
 	Bus                  wasmbus.Bus
 	Recorder             events.EventRecorder
@@ -359,10 +360,10 @@ func (r *WorkloadReconciler) evictOutsideEnvironment(ctx context.Context, worklo
 			"hostID", hostID, "workloadID", string(workload.GetUID()))
 	default:
 		answered, err := r.stopOnHost(ctx, workload, workloadEvictionStopTimeout, hostFailed)
-		if err != nil || !answered {
-			r.stalledHosts.failed(hostID)
-		} else {
+		if answered {
 			r.stalledHosts.answered(hostID)
+		} else if stopShowsHostStalled(ctx, err) {
+			r.stalledHosts.failed(hostID)
 		}
 		if err != nil {
 			return err
@@ -1058,7 +1059,7 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 	answered, err := r.stopOnHost(ctx, workload, workloadStopTimeout, hostUnavailable)
 	if answered {
 		r.cleanupStalls.answered(workload.Status.HostID)
-	} else {
+	} else if stopShowsHostStalled(ctx, err) {
 		r.cleanupStalls.failed(workload.Status.HostID)
 	}
 	return err
@@ -1091,6 +1092,24 @@ func hostFailed(host *runtimev1alpha1.Host) bool {
 	return host == nil || host.Status.GetCondition(condition.TypeReady).Status == condition.ConditionFalse
 }
 
+// hostLookupError marks a stopOnHost failure to read the Host after a failed
+// stop, which says nothing about the host itself.
+type hostLookupError struct{ err error }
+
+func (e hostLookupError) Error() string { return "look up host after a failed stop: " + e.err.Error() }
+func (e hostLookupError) Unwrap() error { return e.err }
+
+// stopShowsHostStalled reports whether a stopOnHost call that did not get an
+// answer counts against the host. A cancelled reconcile or a failed Host
+// lookup does not: neither is evidence the host stopped answering.
+func stopShowsHostStalled(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var lookup hostLookupError
+	return !errors.As(err, &lookup)
+}
+
 // stopOnHost stops the workload on the host it was placed on. A stop that
 // fails is returned for a retry unless giveUp says the host is past waiting
 // for; answered is false when it gave up on the host that way.
@@ -1111,7 +1130,7 @@ func (r *WorkloadReconciler) stopOnHost(ctx context.Context, workload *runtimev1
 	// A host that may be running the workload is asked again.
 	host, lookupErr := r.lookupHostByID(ctx, workload.Status.HostID)
 	if lookupErr != nil {
-		return false, lookupErr
+		return false, hostLookupError{lookupErr}
 	}
 	if !giveUp(host) {
 		return false, fmt.Errorf("stop workload on host %s: %w", workload.Status.HostID, err)

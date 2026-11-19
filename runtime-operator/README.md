@@ -199,7 +199,7 @@ can set the corresponding fields on `EmbeddedOperatorConfig`:
 | --- | --- | --- |
 | `--workload-concurrency` | 8 | Live Workload workers |
 | `--workload-cleanup-concurrency` | 16 | Workload cleanup workers |
-| `--workload-host-concurrency` | 2 | Concurrent reconciliations per host, separately in each queue |
+| `--workload-host-concurrency` | 2 | Concurrent reconciliations per host, separately for live passes, starts and cleanup |
 | `--replica-batch-size` | 64 | Creates or deletes per ReplicaSet scaling or cleanup batch |
 | `--replica-concurrency` | 8 | Concurrent API mutations within a ReplicaSet batch |
 | `--ready-requeue-interval` | 0 | Healthy-object polling interval; zero retains controller defaults |
@@ -210,9 +210,11 @@ a deterministic prefix of live children and counts terminating children as
 already selected, so retries do not choose extra victims. Operator-created
 Workloads carry their cleanup finalizer from creation. Failed stops on Ready
 hosts retain the finalizer and back off together. After a failed stop, queued
-cleanup on a missing or explicitly failed Host can use the existing unavailable-host
-cleanup policy without repeating the timeout; suppression alone never authorizes
-that shortcut for a Ready or Unknown Host.
+cleanup on a Host that is missing or not available (failed, or Unknown after
+missed heartbeats) uses the existing unavailable-host cleanup policy without
+repeating the timeout, so those Workloads are dropped without another stop.
+Suppression alone never authorizes that shortcut for a Ready Host. A cancelled
+reconcile or a failed Host lookup does not count as a failed stop.
 
 Child and route events coalesce over 100 milliseconds without extending the
 deadline when new events arrive. Routes omit terminating workloads, resolve
@@ -226,7 +228,7 @@ missing or mismatched response entries invalidate the batch. These are bounded
 request/reply observations, not an atomic fleet snapshot. Operator restart drops
 the cache and rebuilds it from fresh queries. Hosts that do not answer, or return
 an invalid response, use the existing individual status RPC; batch capability is
-retried after one minute. An unsupported batch probe can add up to five seconds
+retried after one minute. An unsupported batch probe can add up to one second
 before fallback; sharing observations can add up to 30 seconds to failure
 detection beyond the configured polling interval. Individual start/stop
 confirmations remain uncached.

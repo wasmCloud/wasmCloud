@@ -1751,6 +1751,9 @@ async fn handle_command(
                         Ok(status) => status,
                         Err(error) => command_error(&workload_id, format!("{error:#}")),
                     };
+                    // Entries answer by position. A plugin that leaves the ID empty
+                    // or normalizes it must not make the caller reject the batch.
+                    status.workload_id = workload_id;
                     // Bound the reply even when a plugin supplies a large diagnostic.
                     if status.message.len() > 1024 {
                         let mut end = 1024;
@@ -2495,6 +2498,43 @@ mod tests {
         ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
             anyhow::bail!("status denied");
         }
+    }
+
+    /// Answers every status lookup without naming the workload.
+    struct AnonymousStatus;
+
+    #[async_trait]
+    impl HostCommandHandler for AnonymousStatus {
+        async fn status(
+            &self,
+            defaults: &HostControlDefaults,
+            request: types::v2::WorkloadStatusRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
+            let mut response = defaults.status(request).await?;
+            if let Some(status) = response.workload_status.as_mut() {
+                status.workload_id.clear();
+            }
+            Ok(response)
+        }
+    }
+
+    #[tokio::test]
+    async fn batched_status_names_each_requested_workload() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let defaults = control_defaults(host.clone());
+        let msg = command_message(
+            "workload.status.batch",
+            br#"{"workloadIds":["absent-a","absent-b"]}"#.to_vec(),
+        );
+        let reply = handle_command(&defaults, &msg, Some(&AnonymousStatus), None).await?;
+        let reply: types::v2::WorkloadStatusBatchResponse = from_api(&reply)?;
+        let ids: Vec<_> = reply
+            .workloads
+            .iter()
+            .map(|s| s.workload_id.as_str())
+            .collect();
+        assert_eq!(ids, ["absent-a", "absent-b"]);
+        host.stop().await
     }
 
     #[tokio::test]

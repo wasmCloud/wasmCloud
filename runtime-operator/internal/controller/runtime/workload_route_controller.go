@@ -440,9 +440,20 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	}
 
+	// Only Services some Workload routes through need a pass; the rest of the
+	// cluster's Services are not this controller's concern.
+	referencedServiceRequest := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		workloads := &runtimev1alpha1.WorkloadList{}
+		if err := r.List(ctx, workloads, client.InNamespace(obj.GetNamespace()),
+			client.MatchingFields{workloadKubernetesServiceIndex: obj.GetName()}); err != nil || len(workloads.Items) == 0 {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(obj)}}
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Watches(&runtimev1alpha1.Workload{}, coalesce(handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest))).
-		Watches(&corev1.Service{}, coalesce(&handler.EnqueueRequestForObject{})).
+		Watches(&corev1.Service{}, coalesce(handler.EnqueueRequestsFromMapFunc(referencedServiceRequest))).
 		Named("workload-route").
 		Complete(r)
 }
