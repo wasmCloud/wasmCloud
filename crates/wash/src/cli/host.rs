@@ -2266,6 +2266,20 @@ mod nats_tests {
         assert_eq!(host.http_connection_wait, Some(Duration::from_millis(500)));
         assert_eq!(host.drain_delay, Duration::from_millis(500));
         assert_eq!(host.registry_pull_timeout, Duration::from_secs(90));
+
+        let host = parse(&["--drain-delay=1d 12h"]);
+        assert_eq!(host.drain_delay, Duration::from_secs(129_600));
+    }
+
+    #[test]
+    fn host_duration_flags_reject_negative_and_calendar_values() {
+        for value in ["-1s", "1month", "1y", "30m1h", "1h1h"] {
+            let flag = format!("--registry-pull-timeout={value}");
+            assert!(
+                TestCli::try_parse_from(["wash-host", &flag]).is_err(),
+                "{value}"
+            );
+        }
     }
 
     #[test]
