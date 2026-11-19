@@ -44,7 +44,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, bail};
 use names::{Generator, Name};
@@ -363,7 +363,7 @@ pub struct Host {
     environment: String,
     version: String,
     labels: HashMap<String, String>,
-    started_at: chrono::DateTime<chrono::Utc>,
+    started_at: SystemTime,
     /// System monitor for tracking CPU/memory usage
     system_monitor: Arc<RwLock<SystemMonitor>>,
     // endpoints: HashMap<String, EndpointConfiguration>
@@ -2117,7 +2117,7 @@ impl HostBuilder {
             environment: self.environment.unwrap_or_default(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             labels: self.labels,
-            started_at: chrono::Utc::now(),
+            started_at: SystemTime::now(),
             system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
             http_handler,
             _port_reservations: port_reservations,

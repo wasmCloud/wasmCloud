@@ -210,7 +210,8 @@ pub struct HostHeartbeat {
     pub friendly_name: String,
     pub version: String,
     pub labels: HashMap<String, String>,
-    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// The wall-clock instant when this host started.
+    pub started_at: std::time::SystemTime,
     pub os_arch: String,
     pub os_name: String,
     pub os_kernel: String,

@@ -2159,13 +2159,35 @@ where
     Ok(parsed.into())
 }
 
+fn heartbeat_timestamp(started_at: std::time::SystemTime) -> pbjson_types::Timestamp {
+    let (seconds, nanos) = match started_at.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => (
+            i128::from(duration.as_secs()),
+            duration.subsec_nanos() as i32,
+        ),
+        Err(error) => {
+            let duration = error.duration();
+            let seconds = -i128::from(duration.as_secs());
+            let nanos = duration.subsec_nanos() as i32;
+            if nanos == 0 {
+                (seconds, 0)
+            } else {
+                (seconds - 1, 1_000_000_000 - nanos)
+            }
+        }
+    };
+    // The protobuf field has signed seconds even on platforms with a wider clock range.
+    let seconds = i64::try_from(seconds).unwrap_or(if seconds < 0 { i64::MIN } else { i64::MAX });
+    pbjson_types::Timestamp { seconds, nanos }
+}
+
 impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
     fn from(hb: crate::types::HostHeartbeat) -> Self {
         types::v2::HostHeartbeat {
             id: hb.id,
             hostname: hb.hostname,
             version: hb.version,
-            started_at: Some(hb.started_at.into()),
+            started_at: Some(heartbeat_timestamp(hb.started_at)),
             imports: hb.imports.into_iter().map(Into::into).collect(),
             exports: hb.exports.into_iter().map(Into::into).collect(),
             os_name: hb.os_name,
@@ -2269,6 +2291,22 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    #[test]
+    fn heartbeat_timestamps_keep_nonnegative_nanoseconds_before_the_epoch() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        for (instant, seconds, nanos) in [
+            (UNIX_EPOCH, 0, 0),
+            (UNIX_EPOCH + Duration::new(1, 250_000_000), 1, 250_000_000),
+            (UNIX_EPOCH - Duration::from_nanos(100), -1, 999_999_900),
+            (UNIX_EPOCH - Duration::from_secs(1), -1, 0),
+            (UNIX_EPOCH - Duration::new(1, 250_000_000), -2, 750_000_000),
+        ] {
+            let timestamp = heartbeat_timestamp(instant);
+            assert_eq!((timestamp.seconds, timestamp.nanos), (seconds, nanos));
+        }
+    }
 
     #[test]
     fn cluster_host_id_matches_the_inner_builder() -> anyhow::Result<()> {

@@ -83,7 +83,7 @@ pub struct HostCommand {
     /// happens to go the other way. The chart sets this; zero — the default —
     /// fails on the first refusal, which is what someone running `wash host`
     /// against a NATS they start themselves wants to see.
-    #[arg(long = "nats-connect-timeout", default_value = "0s", value_parser = humantime::parse_duration)]
+    #[arg(long = "nats-connect-timeout", default_value = "0s", value_parser = wash_runtime::duration::parse_duration)]
     pub nats_connect_timeout: Duration,
 
     /// Restrict host and workload NATS connections to their configured URLs.
@@ -269,7 +269,7 @@ pub struct HostCommand {
         long = "http-client-identity-refresh",
         env = "WASH_HTTP_CLIENT_IDENTITY_REFRESH",
         requires = "http_client_cert_path",
-        value_parser = humantime::parse_duration
+        value_parser = wash_runtime::duration::parse_duration
     )]
     pub http_client_identity_refresh: Option<std::time::Duration>,
 
@@ -668,7 +668,7 @@ pub struct HostCommand {
     #[arg(
         long = "http-connection-wait",
         env = "WASH_HTTP_CONNECTION_WAIT",
-        value_parser = humantime::parse_duration
+        value_parser = wash_runtime::duration::parse_duration
     )]
     pub http_connection_wait: Option<Duration>,
 
@@ -800,13 +800,13 @@ pub struct HostCommand {
     #[arg(
         long = "drain-delay",
         env = "WASH_DRAIN_DELAY",
-        value_parser = humantime::parse_duration,
+        value_parser = wash_runtime::duration::parse_duration,
         default_value = "0s"
     )]
     pub drain_delay: Duration,
 
     /// Timeout for pulling artifacts from OCI registries
-    #[arg(long = "registry-pull-timeout", value_parser = humantime::parse_duration, default_value = "30s")]
+    #[arg(long = "registry-pull-timeout", value_parser = wash_runtime::duration::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
 
     /// The directory to use for caching OCI artifacts
@@ -2255,6 +2255,22 @@ mod nats_tests {
     }
 
     #[test]
+    fn host_duration_flags_accept_compound_and_fractional_values() {
+        use std::time::Duration;
+
+        let host = parse(&[
+            "--nats-connect-timeout=1m30s",
+            "--http-connection-wait=500ms",
+            "--drain-delay=0.5s",
+            "--registry-pull-timeout=1.5m",
+        ]);
+        assert_eq!(host.nats_connect_timeout, Duration::from_secs(90));
+        assert_eq!(host.http_connection_wait, Some(Duration::from_millis(500)));
+        assert_eq!(host.drain_delay, Duration::from_millis(500));
+        assert_eq!(host.registry_pull_timeout, Duration::from_secs(90));
+    }
+
+    #[test]
     fn host_nats_auth_takes_one_credential_per_connection() {
         for plane in ["scheduler", "data"] {
             let creds = format!("--{plane}-nats-creds=a.creds");
@@ -2818,7 +2834,7 @@ fn parse_ip_name_lookup_grant_lifetime(raw: &str) -> Result<Option<Duration>, St
     if raw.trim().is_empty() {
         return Ok(None);
     }
-    humantime::parse_duration(raw)
+    wash_runtime::duration::parse_duration(raw)
         .map(Some)
         .map_err(|e| e.to_string())
 }

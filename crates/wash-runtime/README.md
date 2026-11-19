@@ -29,6 +29,14 @@ secrets withhold guest error details.
 
 ## Usage
 
+### Host heartbeat start time
+
+`HostHeartbeat::started_at` uses `std::time::SystemTime`.
+Use `started_at.elapsed()` to calculate uptime,
+or `started_at.duration_since(std::time::UNIX_EPOCH)` to obtain a Unix timestamp.
+Code that formats this field should convert the system time with its chosen date formatter.
+Heartbeat messages continue to carry seconds and nonnegative nanoseconds.
+
 ### Basic Example
 
 ```rust

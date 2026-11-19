@@ -61,7 +61,6 @@ async-trait = { version = "0.1", default-features = false}
 bon = { version = "3.9", default-features = false }
 bytes = { version = "1", default-features = false }
 cap-primitives = "4.0.3"
-chrono = { version = "0.4.42", default-features = false, features = ["clock", "alloc"] }
 clap-markdown = { version = "0.1.5", default-features = false }
 ctrlc = { version = "3.4.7", default-features = false }
 dialoguer = { version = "0.11.0", default-features = false, features = ["editor", "password", "zeroize", "fuzzy-select", "fuzzy-matcher"] }
@@ -78,7 +77,6 @@ humansize = { version = "2.1", default-features = false }
 hyper = { version = "1.11.1", default-features = false }
 hyper-rustls = { version = "0.27", default-features = false }
 hyper-util = { version = "0.1.21", default-features = false }
-humantime = { version = "2.3.0" }
 imbl = { version = "7.0.2", default-features = false }
 k8s-openapi = { version = "0.25", default-features = false }
 kube = { version = "1", default-features = false }

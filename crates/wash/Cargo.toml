@@ -56,7 +56,6 @@ anyhow = { workspace = true }
 async-nats = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env", "help", "color", "suggestions", "wrap_help", "cargo", "string"] }
 clap_complete = { workspace = true }
 clap-markdown = { workspace = true }
@@ -67,7 +66,6 @@ fastrand = { workspace = true }
 figment = { workspace = true, features = ["json", "env", "toml"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
 humansize = { workspace = true }
-humantime = { workspace = true }
 oci-client = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 reqwest-oci = { package = "reqwest", version = "0.13", default-features = false }
@@ -79,6 +77,7 @@ serde-saphyr = { workspace = true, features = ["deserialize", "serialize", "figm
 tar = { workspace = true }
 toml = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true, features = ["attributes"] }
 url = { workspace = true }

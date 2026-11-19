@@ -1708,7 +1708,7 @@ pub(crate) const ADMISSION_WAIT_CONFIG: &str = "admission_wait";
 
 /// Parses an [`ADMISSION_WAIT_CONFIG`] value into a wait duration.
 ///
-/// Accepts what `humantime` accepts — `30s`, `5m`, `1m30s`, `500ms` — and a
+/// Accepts human-readable durations — `30s`, `5m`, `1m30s`, `500ms` — and a
 /// bare integer as seconds, since that is what an operator used to plain
 /// numeric knobs is most likely to write. `None` for absent, empty, or
 /// unparseable; the caller falls back to [`DEFAULT_ADMISSION_WAIT`].
@@ -1729,7 +1729,7 @@ pub(crate) fn parse_admission_wait<'a>(raw: Option<impl Into<ConfigStr<'a>>>) ->
     if let Ok(secs) = raw.expose().parse::<u64>() {
         return Some(clamp_admission_wait(Duration::from_secs(secs)));
     }
-    match humantime::parse_duration(raw.expose()) {
+    match crate::duration::parse_duration(raw.expose()) {
         Ok(d) => Some(clamp_admission_wait(d)),
         Err(_) => {
             tracing::warn!(
