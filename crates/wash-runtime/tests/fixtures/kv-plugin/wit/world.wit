@@ -7,12 +7,12 @@ package acme:kvplugin@0.1.0;
 /// background `cli/run` work of its own. It imports only the monotonic clock,
 /// used by the `slow` op to yield cooperatively.
 world kv-plugin {
-    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.2;
     // Wall clock: the lifecycle-bind trap knobs read it so a bind can be made to
     // succeed on deploy but trap once a real-time threshold passes — a
     // deterministic poison replay for the quarantine tests (the store resets on
     // restart, but wall-clock time does not).
-    import wasi:clocks/system-clock@0.3.0;
+    import wasi:clocks/system-clock@0.3.2;
     // Host identity import: lets the plugin partition state by the calling
     // workload (the host answers based on the in-flight capability call).
     import wasmcloud:host/identity@0.1.6;

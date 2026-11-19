@@ -6,5 +6,5 @@ package example:feeds-caller@0.1.0;
 world component {
     import feed-a: example:feeds/reader@0.1.0;
     import feed-b: example:feeds/reader@0.1.0;
-    export wasi:http/incoming-handler@0.2.2;
+    export wasi:http/incoming-handler@0.2.12;
 }

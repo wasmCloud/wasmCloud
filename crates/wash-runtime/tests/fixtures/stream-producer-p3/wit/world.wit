@@ -9,9 +9,9 @@ interface producer {
 }
 
 world stream-producer {
-    import wasi:cli/types@0.3.0;
-    import wasi:clocks/types@0.3.0;
-    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:cli/types@0.3.2;
+    import wasi:clocks/types@0.3.2;
+    import wasi:clocks/monotonic-clock@0.3.2;
 
     export producer;
 }

@@ -5,8 +5,8 @@ package wasmcloud:test-p3@0.1.0;
 /// service), sends a fixed payload, and returns the echoed reply as the HTTP
 /// response body.
 world http-loopback-gateway {
-    import wasi:http/types@0.3.0;
-    import wasi:sockets/types@0.3.0;
+    import wasi:http/types@0.3.2;
+    import wasi:sockets/types@0.3.2;
 
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
 }

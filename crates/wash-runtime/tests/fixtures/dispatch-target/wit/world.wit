@@ -8,7 +8,7 @@ package acme:dispatchtarget@0.1.0;
 /// It exports `wasi:cli/run` so it is a conventional service in the second
 /// shape; deployed as a component, that export is simply never called.
 world target {
-    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:clocks/monotonic-clock@0.3.2;
     export acme:tasks/runner@0.1.0;
-    export wasi:cli/run@0.3.0;
+    export wasi:cli/run@0.3.2;
 }

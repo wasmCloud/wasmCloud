@@ -5,10 +5,10 @@ package wasmcloud:postgres-stream-p3;
 // host binding. The component is an HTTP handler so a test can trigger it over
 // the wire and read back what the guest streamed out of the row stream.
 world postgres-stream-p3 {
-    import wasi:http/types@0.3.0;
-    import wasi:clocks/types@0.3.0;
+    import wasi:http/types@0.3.2;
+    import wasi:clocks/types@0.3.2;
     import wasmcloud:postgres/types@0.2.0;
     import wasmcloud:postgres/query@0.2.0;
 
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
 }
