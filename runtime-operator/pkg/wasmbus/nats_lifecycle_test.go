@@ -151,3 +151,37 @@ func TestNatsEmbeddedServerStartupTimeout(t *testing.T) {
 		t.Fatal("expired startup did not return an error")
 	}
 }
+
+// Draining after the connection has closed reports the failure but still
+// stops the handler, so shutdown does not hang on a dead bus.
+func TestNatsSubscriptionDrainAfterConnectionClosed(t *testing.T) {
+	opts := &server.Options{Host: "127.0.0.1", Port: server.RANDOM_PORT, NoLog: true, NoSigs: true}
+	s, err := NatsEmbeddedServer(opts, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Shutdown(); s.WaitForShutdown() })
+	nc, err := nats.Connect(s.ClientURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := NewNatsBus(nc).Subscribe("drain.test", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	sub.Handle(func(*Message) {})
+	nc.Close()
+
+	go func() {
+		if err := sub.Drain(); err == nil {
+			t.Error("drained a subscription on a closed connection without an error")
+		}
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Drain hung on a closed connection")
+	}
+}

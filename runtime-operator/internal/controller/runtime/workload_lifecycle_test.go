@@ -227,6 +227,13 @@ func TestPlacementRefusedStart(t *testing.T) {
 			placed: true,
 		},
 		{
+			// A short-lived workload can finish before the replayed start lands.
+			name:   "earlier start already completed",
+			reason: "Workload ID [" + testWorkloadUID + "] already exists",
+			held:   heldAs(runtimev2.WorkloadState_WORKLOAD_STATE_COMPLETED, ""),
+			placed: true,
+		},
+		{
 			name:   "failure the host keeps",
 			reason: "component trapped during start",
 			held:   heldAs(runtimev2.WorkloadState_WORKLOAD_STATE_ERROR, "component trapped during start"),

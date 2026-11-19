@@ -586,7 +586,11 @@ func TestReplicaAnnotationsComeFromOwners(t *testing.T) {
 			UID:       "ds-uid",
 		},
 	}
-	r := &WorkloadReconciler{Client: newWorkloadClient(t, replicaSet, daemonSet)}
+	// Created directly, not by a WorkloadDeployment.
+	standalone := &runtimev1alpha1.WorkloadReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "standalone", Namespace: metav1.NamespaceDefault, UID: "standalone-uid"},
+	}
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, replicaSet, daemonSet, standalone)}
 	const keptAnnotation, keptValue = "example.com/kept", "yes"
 	spoofed := map[string]string{
 		workloadDeploymentNameAnnotation:   "billing-api",
@@ -609,6 +613,11 @@ func TestReplicaAnnotationsComeFromOwners(t *testing.T) {
 			workloadReplicaSetNameAnnotation: replicaSet.Name,
 			workloadDeploymentNameAnnotation: "billing-api",
 		}},
+		{"a standalone replica", ownedBy("WorkloadReplicaSet", standalone.Name, "standalone-uid"), map[string]string{
+			keptAnnotation:                   keptValue,
+			workloadReplicaSetNameAnnotation: standalone.Name,
+		}},
+		{"an owner of another kind", ownedBy("WorkloadDeployment", "billing-api", "deployment-uid"), map[string]string{keptAnnotation: keptValue}},
 		{"a stale daemonset owner", ownedBy(workloadDaemonSetKind, daemonSet.Name, "other-uid"), map[string]string{keptAnnotation: keptValue}},
 		{"a daemonset replica", ownedBy(workloadDaemonSetKind, daemonSet.Name, "ds-uid"), map[string]string{
 			keptAnnotation:                  keptValue,
@@ -770,8 +779,11 @@ func TestWorkloadsForHostEnqueuesThoseItCanTake(t *testing.T) {
 	// A host was chosen but the start has not succeeded; another Host cannot help.
 	chosenElsewhere := pending("chosen-elsewhere", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching})
 	chosenElsewhere.Status.HostID = otherID
+	// Chosen for this host before it was Ready: its arrival is the retry.
+	chosenHere := pending("chosen-here", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching})
+	chosenHere.Status.HostID = arrivingID
 	objects := []client.Object{
-		placedHere, pinnedRecorded, chosenElsewhere,
+		placedHere, pinnedRecorded, chosenElsewhere, chosenHere,
 		pending("selected", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching}),
 		pending("no-selector", tenant, runtimev1alpha1.WorkloadSpec{}),
 		pending("own-environment", tenant, runtimev1alpha1.WorkloadSpec{HostSelector: matching, Environment: tenant}),
@@ -805,13 +817,13 @@ func TestWorkloadsForHostEnqueuesThoseItCanTake(t *testing.T) {
 		{
 			name: "isolated, a Host in the Workload's namespace",
 			host: ready(nil),
-			want: []string{"no-selector", "own-environment", "pinned", "pinned-recorded", "selected"},
+			want: []string{"chosen-here", "no-selector", "own-environment", "pinned", "pinned-recorded", "selected"},
 		},
 		{
 			name:         "shared, a Host in any Environment",
 			allowSharing: true,
 			host:         ready(func(h *runtimev1alpha1.Host) { h.Environment = "elsewhere" }),
-			want:         []string{"no-selector", "other-namespace", "pinned", "pinned-recorded", "selected"},
+			want:         []string{"chosen-here", "no-selector", "other-namespace", "pinned", "pinned-recorded", "selected"},
 		},
 		{
 			name: "a Host not Ready yet",

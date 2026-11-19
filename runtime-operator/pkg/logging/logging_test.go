@@ -247,6 +247,8 @@ func TestStandardHTTPDiagnostics(t *testing.T) {
 func TestTextTimestamps(t *testing.T) {
 	for _, tc := range []struct{ encoding, want string }{
 		{"epoch", "ts=1234567890.25"}, {"millis", "ts=1234567890250"}, {"rfc3339", "ts=" + testRFC3339},
+		{"rfc3339nano", "ts=2009-02-13T23:31:30.25Z"}, {"nanos", "ts=1234567890250000000"},
+		{"iso8601", "ts=2009-02-13T23:31:30.250Z"},
 	} {
 		var output bytes.Buffer
 		logger, err := parseLogging(t, "--log-format=text", "--log-time-encoding="+tc.encoding).Logger(&output)
