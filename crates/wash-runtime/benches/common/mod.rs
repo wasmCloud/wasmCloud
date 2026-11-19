@@ -10,8 +10,10 @@ use wash_runtime::{
     engine::Engine,
     host::{
         Host, HostApi, HostBuilder,
+        egress_policy::EgressAddressPolicy,
         http::{DevRouter, Ingress},
     },
+    sockets::policy::SocketPolicy,
     types::{
         Component, LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState,
         WorkloadStopRequest,
@@ -115,8 +117,15 @@ pub async fn start_host_and_workload(
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();
 
+    // Benchmark peers listen on loopback; fixture allowedHosts scopes their egress.
+    let engine = Engine::builder()
+        .with_socket_policy(Arc::new(SocketPolicy {
+            egress_addrs: EgressAddressPolicy::permissive(),
+            ..Default::default()
+        }))
+        .build()?;
     let host = HostBuilder::new()
-        .with_engine(engine())
+        .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
         .build()?;
     let host = host.start().await?;
