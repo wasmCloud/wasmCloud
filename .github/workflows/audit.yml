@@ -17,9 +17,11 @@ defaults:
   run:
     shell: bash
 
+# A pull request's new push cancels its previous audit. Runs on main each get
+# their own group: release promotion requires this commit's audit to finish.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 
