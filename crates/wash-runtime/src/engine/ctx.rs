@@ -120,6 +120,12 @@ pub struct SharedCtx {
     ///
     /// Wasmtime disposes guest fibers and host tasks before dropping store data.
     pub dropped: StoreDropped,
+    /// The component this store was built for, which [`Self::active_ctx`]
+    /// returns to once no cross-component call is in flight.
+    root_component_id: Arc<str>,
+    /// Cross-component calls in flight (see [`AccessorActiveCtxGuard`] and
+    /// [`StoreActiveCtxGuard`]).
+    linked_calls_in_flight: usize,
 }
 
 /// Lazily creates a token and cancels it when dropped.
@@ -243,6 +249,8 @@ pub struct WorkloadCaller {
 impl SharedCtx {
     pub fn new(context: Ctx) -> Self {
         Self {
+            root_component_id: context.component_id.clone(),
+            linked_calls_in_flight: 0,
             active_ctx: context,
             stream_payloads: Arc::default(),
             table: ResourceTable::new(),
@@ -291,18 +299,51 @@ impl SharedCtx {
     }
 }
 
+impl SharedCtx {
+    /// Point the active context at `id` for a cross-component call, returning
+    /// the component to restore when it ends.
+    fn enter_linked_call(&mut self, id: &Arc<str>) -> wasmtime::Result<Arc<str>> {
+        let previous = self.active_ctx.component_id.clone();
+        self.set_active_ctx(id)?;
+        self.linked_calls_in_flight += 1;
+        Ok(previous)
+    }
+
+    /// End a call begun by [`Self::enter_linked_call`]. The last one to end
+    /// returns the store to its own component, since interleaved restores can
+    /// otherwise leave it on whichever component was saved last.
+    fn leave_linked_call(&mut self, previous: &Arc<str>) -> wasmtime::Result<()> {
+        self.linked_calls_in_flight = self.linked_calls_in_flight.saturating_sub(1);
+        if self.linked_calls_in_flight == 0 {
+            let root = self.root_component_id.clone();
+            self.set_active_ctx(&root)
+        } else {
+            self.set_active_ctx(previous)
+        }
+    }
+
+    /// Whether the active component is certainly the one making a host call.
+    ///
+    /// Only in a store that holds one component. Once a store links others,
+    /// any of their tasks may run while the slot names another: a callee's
+    /// task (a stream producer, say) outlives the call that started it, and
+    /// with concurrency support even a synchronous linked call lets other
+    /// tasks run. So attestation never resumes for such a store.
+    pub(crate) fn caller_is_attested(&self) -> bool {
+        self.contexts.is_empty()
+    }
+}
+
 /// RAII guard that points [`SharedCtx::active_ctx`] at a linked component for
 /// the duration of a cross-component call, restoring the previous component on
 /// drop.
 ///
-/// TODO(concurrency): the single `active_ctx` slot with LIFO save/restore is
-/// only correct for *sequential* linked calls. `func_new_concurrent` allows
-/// several in flight on one shared store, and their save/restore interleaves —
-/// A sets B; C (concurrent) saves B, sets D; A restores B; C restores B — so
-/// the original ctx is lost and `active_ctx` is wrong even after both finish
-/// (and mid-flight, across awaits, it need not match the running call). The
-/// single-call fixtures issue one at a time so they don't exercise this; a real
-/// fix needs per-call ctx scoping rather than a shared slot. Tracked follow-up.
+/// `func_new_concurrent` allows several of these in flight on one store, and
+/// tasks of other components may run while one is, so the single slot need
+/// not name the component making a given host call. Callers that key
+/// authority on the component read [`SharedCtx::caller_is_attested`] first.
+/// The slot also selects the WASI context and `allowed_hosts`, which are
+/// therefore per component only while linked calls are sequential.
 pub(crate) struct AccessorActiveCtxGuard<'a> {
     accessor: &'a Accessor<SharedCtx>,
     previous_component_id: Arc<str>,
@@ -310,11 +351,8 @@ pub(crate) struct AccessorActiveCtxGuard<'a> {
 
 impl<'a> AccessorActiveCtxGuard<'a> {
     pub(crate) fn new(accessor: &'a Accessor<SharedCtx>, id: &Arc<str>) -> wasmtime::Result<Self> {
-        let previous_component_id = accessor.with(|mut access| -> wasmtime::Result<_> {
-            let previous_component_id = access.data_mut().active_ctx.component_id.clone();
-            access.data_mut().set_active_ctx(id)?;
-            Ok(previous_component_id)
-        })?;
+        let previous_component_id =
+            accessor.with(|mut access| access.data_mut().enter_linked_call(id))?;
 
         Ok(Self {
             accessor,
@@ -328,7 +366,7 @@ impl Drop for AccessorActiveCtxGuard<'_> {
         let _ = self.accessor.with(|mut access| {
             access
                 .data_mut()
-                .set_active_ctx(&self.previous_component_id)
+                .leave_linked_call(&self.previous_component_id)
         });
     }
 }
@@ -343,8 +381,7 @@ impl<'a> StoreActiveCtxGuard<'a> {
         mut store: StoreContextMut<'a, SharedCtx>,
         id: &Arc<str>,
     ) -> wasmtime::Result<Self> {
-        let previous_component_id = store.data().active_ctx.component_id.clone();
-        store.data_mut().set_active_ctx(id)?;
+        let previous_component_id = store.data_mut().enter_linked_call(id)?;
         Ok(Self {
             store,
             previous_component_id,
@@ -361,7 +398,7 @@ impl Drop for StoreActiveCtxGuard<'_> {
         let _ = self
             .store
             .data_mut()
-            .set_active_ctx(&self.previous_component_id);
+            .leave_linked_call(&self.previous_component_id);
     }
 }
 
@@ -524,6 +561,7 @@ impl wasmtime_wasi_io::IoView for SharedCtx {
 
 impl WasiHttpView for SharedCtx {
     fn http(&mut self) -> WasiHttpCtxView<'_> {
+        self.active_ctx.http_hooks.caller_attested = self.caller_is_attested();
         WasiHttpCtxView {
             ctx: &mut self.active_ctx.http,
             table: &mut self.table,
@@ -578,6 +616,13 @@ impl HostLink {
 struct CtxHttpHooks {
     host: HostLink,
     workload_id: Arc<str>,
+    component_id: Arc<str>,
+    workload_namespace: Arc<str>,
+    workload_name: Arc<str>,
+    /// Refreshed each time the store hands out its HTTP view: whether
+    /// `component_id` is certainly the caller (see
+    /// [`SharedCtx::caller_is_attested`]).
+    caller_attested: bool,
     allowed_hosts: Arc<[AllowedHost]>,
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
@@ -592,8 +637,14 @@ impl WasiHttpHooks for CtxHttpHooks {
         fut: crate::host::http::RequestIoFuture,
     ) -> crate::host::http::SendFuture {
         match self.host.handler() {
-            Ok(handler) => handler.outgoing_request(
-                &self.workload_id,
+            Ok(handler) => handler.outgoing_request_from(
+                crate::host::egress_credential::EgressCaller {
+                    workload_id: &self.workload_id,
+                    namespace: &self.workload_namespace,
+                    name: &self.workload_name,
+                    component_id: Some(&*self.component_id)
+                        .filter(|id| self.caller_attested && !id.is_empty()),
+                },
                 request,
                 options,
                 fut,
@@ -628,6 +679,8 @@ pub struct CtxBuilder {
     store_id: Option<Arc<str>>,
     workload_id: Arc<str>,
     component_id: Arc<str>,
+    workload_namespace: Arc<str>,
+    workload_name: Arc<str>,
     ctx: Option<WasiCtx>,
     sockets: Option<crate::sockets::WasiSocketsCtx>,
     plugins: HashMap<&'static str, Arc<dyn HostPlugin + Send + Sync>>,
@@ -648,6 +701,8 @@ impl CtxBuilder {
             store_id: None,
             component_id: component_id.into(),
             workload_id: workload_id.into(),
+            workload_namespace: Arc::from(""),
+            workload_name: Arc::from(""),
             ctx: None,
             sockets: None,
             http_handler: None,
@@ -723,6 +778,13 @@ impl CtxBuilder {
         self
     }
 
+    /// The namespace and name of the workload, reported with its egress.
+    pub fn with_workload_names(mut self, namespace: Arc<str>, name: Arc<str>) -> Self {
+        self.workload_namespace = namespace;
+        self.workload_name = name;
+        self
+    }
+
     pub fn build(self) -> Ctx {
         let plugins = match (self.store_plugins, self.plugins.is_empty()) {
             (Some(shared), true) => shared,
@@ -741,6 +803,10 @@ impl CtxBuilder {
         let http_hooks = CtxHttpHooks {
             host: HostLink(self.http_handler),
             workload_id: self.workload_id.clone(),
+            component_id: self.component_id.clone(),
+            workload_namespace: self.workload_namespace,
+            workload_name: self.workload_name,
+            caller_attested: true,
             allowed_hosts: self.allowed_hosts,
             warned_unserved: false,
         };
@@ -855,6 +921,56 @@ mod tests {
         let result = shared.set_active_ctx(&unknown);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    /// A sets B; C (concurrent) saves B and sets D; A restores A; C restores B.
+    /// Restoring by the last save would leave the store on B with nothing in
+    /// flight.
+    #[test]
+    fn interleaved_linked_calls_return_the_store_to_its_own_component() {
+        setup();
+        let mut shared = SharedCtx::new(Ctx::builder("wk", "comp-a").build());
+        for id in ["comp-b", "comp-d"] {
+            shared
+                .contexts
+                .insert(Arc::from(id), Ctx::builder("wk", id).build());
+        }
+        let (b, d): (Arc<str>, Arc<str>) = (Arc::from("comp-b"), Arc::from("comp-d"));
+
+        let first = shared.enter_linked_call(&b).unwrap();
+        let second = shared.enter_linked_call(&d).unwrap();
+        assert_eq!(second.as_ref(), "comp-b");
+        shared.leave_linked_call(&first).unwrap();
+        shared.leave_linked_call(&second).unwrap();
+
+        assert_eq!(shared.active_ctx.component_id.as_ref(), "comp-a");
+    }
+
+    /// A callee's task can outlive the call that started it, so a store that
+    /// links components never attests one, before, during or after a call.
+    #[test]
+    fn a_store_that_links_components_never_attests_one() {
+        setup();
+        let mut single = SharedCtx::new(Ctx::builder("wk", "comp-a").build());
+        let _ = single.http();
+        assert!(single.active_ctx.http_hooks.caller_attested);
+
+        let mut shared = SharedCtx::new(Ctx::builder("wk", "comp-a").build());
+        shared
+            .contexts
+            .insert(Arc::from("comp-b"), Ctx::builder("wk", "comp-b").build());
+        let b: Arc<str> = Arc::from("comp-b");
+        let _ = shared.http();
+        assert!(!shared.active_ctx.http_hooks.caller_attested, "before");
+        let previous = shared.enter_linked_call(&b).unwrap();
+        let _ = shared.http();
+        assert!(!shared.active_ctx.http_hooks.caller_attested, "during");
+        shared.leave_linked_call(&previous).unwrap();
+        let _ = shared.http();
+        assert!(
+            !shared.active_ctx.http_hooks.caller_attested,
+            "after the call returned, while its task may still run"
+        );
     }
 
     #[test]

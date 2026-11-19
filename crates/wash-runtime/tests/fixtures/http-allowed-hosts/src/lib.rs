@@ -22,13 +22,29 @@ async fn main(req: Request<Body>) -> Result<Response<Body>, wstd::http::Error> {
         // check the path rides along with a locally dispatched request. The
         // authority is deliberately not one of the hosts above.
         "/path" => fetch("http://gateway.test/functiona/items").await,
+        // Sends `API_TOKEN` as a bearer token the way unmodified client code
+        // would, used by the egress secret substitution tests.
+        "/token" => fetch_with_token("https://api.example.com/v1").await,
+        "/token-elsewhere" => fetch_with_token("https://paste.example.net/").await,
         _ => not_found().await,
     }
 }
 
 async fn fetch(url: &str) -> Result<Response<Body>, wstd::http::Error> {
+    send(Request::get(url).body(Body::empty()).unwrap(), url).await
+}
+
+async fn fetch_with_token(url: &str) -> Result<Response<Body>, wstd::http::Error> {
+    let token = std::env::var("API_TOKEN").unwrap_or_default();
+    let req = Request::get(url)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    send(req, url).await
+}
+
+async fn send(req: Request<Body>, url: &str) -> Result<Response<Body>, wstd::http::Error> {
     let client = Client::new();
-    let req = Request::get(url).body(Body::empty()).unwrap();
     let (status, body) = match client.send(req).await {
         Ok(resp) => (StatusCode::OK, format!("{url}: upstream {}", resp.status())),
         Err(e) => (status_for_error(&e), format!("{url} failed: {e}")),
