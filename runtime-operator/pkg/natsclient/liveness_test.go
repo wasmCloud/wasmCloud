@@ -245,3 +245,11 @@ func TestNatsOutageKeepsLiveness(t *testing.T) {
 		t.Fatalf("an hour-long outage: %v", err)
 	}
 }
+
+// Liveness is registered before the connection exists, so it passes until
+// Watch hands it one rather than failing the pod during startup.
+func TestNatsLivenessBeforeWatch(t *testing.T) {
+	if err := NewLiveness(DefaultAuthFailureGrace).Check(nil); err != nil {
+		t.Fatalf("expected healthy before a connection is watched, got: %v", err)
+	}
+}

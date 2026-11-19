@@ -206,3 +206,21 @@ func TestPlacementAPIFailuresPreserveRetryState(t *testing.T) {
 		})
 	}
 }
+
+// A service pulled without credentials carries no pull secret to the host.
+func TestMaterializeServiceWithoutPullSecret(t *testing.T) {
+	r, workload, _ := placementFixture(t)
+	workload.Spec.Service.ImagePullSecret = nil
+
+	materialized, err := r.materializeWorkload(context.Background(), workload)
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	service := materialized.GetService()
+	if service == nil || service.GetImage() != workload.Spec.Service.Image {
+		t.Fatalf("service = %v", service)
+	}
+	if service.GetImagePullSecret() != nil {
+		t.Errorf("a service without a pull secret carried one: %v", service.GetImagePullSecret())
+	}
+}

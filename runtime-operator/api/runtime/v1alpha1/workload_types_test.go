@@ -196,3 +196,52 @@ func TestMaxVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureHostInterface_MergeAddsConfigToEntryWithout(t *testing.T) {
+	spec := &WorkloadSpec{}
+
+	// The first declaration carries no config, so merging one in must allocate
+	// the map rather than write into a nil map.
+	spec.EnsureHostInterface(kvCache("", kvStore))
+	withConfig := kvCache("", "atomics")
+	withConfig.Config = map[string]string{kvBackend: natsBackend}
+	spec.EnsureHostInterface(withConfig)
+
+	if len(spec.HostInterfaces) != 1 {
+		t.Fatalf("expected 1 host interface after merge, got %d", len(spec.HostInterfaces))
+	}
+	if got := spec.HostInterfaces[0].Config[kvBackend]; got != natsBackend {
+		t.Errorf("expected merged config backend %q, got %q", natsBackend, got)
+	}
+}
+
+func TestEnsureHostInterface_MergeWithoutConfigKeepsExisting(t *testing.T) {
+	spec := &WorkloadSpec{}
+
+	first := kvCache("", kvStore)
+	first.Config = map[string]string{kvBackend: natsBackend}
+	spec.EnsureHostInterface(first)
+	spec.EnsureHostInterface(kvCache("", "atomics"))
+
+	if got := spec.HostInterfaces[0].Config; len(got) != 1 || got[kvBackend] != natsBackend {
+		t.Errorf("expected existing config to survive a config-less merge, got %v", got)
+	}
+}
+
+// unparsed is a version string that is not semver.
+const unparsed = "nightly"
+
+func TestMaxVersion_BothUnparseable(t *testing.T) {
+	cases := []struct{ a, b, want string }{
+		{"", "", ""},
+		{"", unparsed, unparsed},
+		{unparsed, "", unparsed},
+		// Neither orders above the other, so the first is kept.
+		{unparsed, "preview", unparsed},
+	}
+	for _, c := range cases {
+		if got := maxVersion(c.a, c.b); got != c.want {
+			t.Errorf("maxVersion(%q, %q) = %q, want %q", c.a, c.b, got, c.want)
+		}
+	}
+}
