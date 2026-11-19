@@ -7,18 +7,18 @@ name = "wasi:http"
 registry = "wasi.dev"
 
 [[packages.versions]]
-requirement = "=0.3.0"
-version = "0.3.0"
-digest = "sha256:92cd8f3730c00226dc15626a2e7b21834dd187fc221f09818720d228585bbbf7"
+requirement = "=0.3.2"
+version = "0.3.2"
+digest = "sha256:5616d7ede3027cb05b8448df348434492587086a8b7e73e2fdcd4ec2e7905f9b"
 
 [[packages]]
 name = "wasi:random"
 registry = "wasi.dev"
 
 [[packages.versions]]
-requirement = "=0.3.0"
-version = "0.3.0"
-digest = "sha256:daa3c8897a68fbfc58b95c2e1de1b7af5be8c647bbb2cfeaa54c1e5b1ba9b772"
+requirement = "=0.3.2"
+version = "0.3.2"
+digest = "sha256:31130504d47f55e99ddc9501ee18ab3b01a906f2adb6efc926e1db512db0b857"
 
 [[packages]]
 name = "wasmcloud:blobstore"
