@@ -744,6 +744,11 @@ impl HostPlugin for WasmcloudNats {
             // A subset too, but never empty: a blank value reads as unset,
             // which is `file`, whatever the host allowed.
             "bucket-storage-allow" => {
+                let ceiling = if ceiling.trim().is_empty() {
+                    super::config::BucketStorage::File.as_str()
+                } else {
+                    ceiling
+                };
                 let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
                 split(value).next().is_some() && split(value).all(|v| ceiling.contains(v))
             }
@@ -1920,6 +1925,90 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn blank_host_storage_keeps_the_file_default_narrowable() {
+        let plugin = WasmcloudNats::new();
+        let schema = super::super::binding_schema();
+        let narrows = |key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload);
+
+        for value in ["", "   "] {
+            let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+                .with_workload_config(WorkloadConfigPolicy::Deny)
+                .with_base(Config::from_iter([
+                    ("servers".to_string(), "nats://host:4222".to_string()),
+                    ("bucket-storage-allow".to_string(), value.to_string()),
+                ]));
+            for storage in [None, Some("file")] {
+                let manifest = storage.map_or_else(Config::new, |storage| {
+                    Config::from_iter([("bucket-storage-allow".to_string(), storage.to_string())])
+                });
+                let resolved = declared
+                    .resolve("", &manifest, &schema, &narrows)
+                    .expect("file matches the host's effective storage default");
+                assert_eq!(
+                    NatsConfig::from_map(&resolved)
+                        .unwrap()
+                        .policy
+                        .bucket_storage_allow,
+                    [super::super::config::BucketStorage::File]
+                );
+            }
+            assert!(
+                declared
+                    .resolve(
+                        "",
+                        &Config::from_iter([(
+                            "bucket-storage-allow".to_string(),
+                            "memory".to_string()
+                        )]),
+                        &schema,
+                        &narrows
+                    )
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn a_storage_bundle_sets_the_effective_host_ceiling() {
+        let declared = PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_default_bundle(
+                "servers",
+                [
+                    ("servers", "nats://host:4222"),
+                    ("bucket-storage-allow", "memory"),
+                ],
+            );
+        let plugin = WasmcloudNats::new();
+        let schema = super::super::binding_schema();
+        let narrows = |key: &str, host: &str, workload: &str| plugin.narrows(key, host, workload);
+
+        for storage in [None, Some("memory")] {
+            let manifest = storage.map_or_else(Config::new, |storage| {
+                Config::from_iter([("bucket-storage-allow".to_string(), storage.to_string())])
+            });
+            let resolved = declared.resolve("", &manifest, &schema, &narrows).unwrap();
+            assert_eq!(
+                NatsConfig::from_map(&resolved)
+                    .unwrap()
+                    .policy
+                    .bucket_storage_allow,
+                [super::super::config::BucketStorage::Memory]
+            );
+        }
+        assert!(
+            declared
+                .resolve(
+                    "",
+                    &Config::from_iter([("bucket-storage-allow".to_string(), "file".to_string())]),
+                    &schema,
+                    &narrows
+                )
+                .is_err()
+        );
     }
 
     /// A blank storage list reads as unset, which is `file`, so accepting it
