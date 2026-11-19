@@ -388,14 +388,27 @@ impl HostPathPolicy {
     /// policy lives, before any plugin that mounts them has loaded. Adds to
     /// the shared list, so every clone sees them.
     pub(crate) fn with_plugin_volumes(self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.reserve_plugin_volumes(paths);
+        self
+    }
+
+    /// Keep workload volumes out of these directories for as long as the
+    /// policy lives, whatever becomes of the plugin that mounts them: one that
+    /// fails, or whose supervisor stops restarting it, releases its load-time
+    /// registration but not these. Adds to the shared list, so every clone
+    /// sees them.
+    pub(crate) fn reserve_plugin_volumes(&self, paths: impl IntoIterator<Item = PathBuf>) {
         let paths: Vec<_> = paths.into_iter().map(absolute_from_cwd).collect();
         let mut listed = self
             .plugin_volumes
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Arc::make_mut(&mut listed).configured.extend(paths);
-        drop(listed);
-        self
+        let configured = &mut Arc::make_mut(&mut listed).configured;
+        for path in paths {
+            if !configured.contains(&path) {
+                configured.push(path);
+            }
+        }
     }
 
     /// Reserve the canonical paths before opening the plugin's directories.
