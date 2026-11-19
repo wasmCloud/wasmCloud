@@ -962,6 +962,10 @@ pub struct ResolvedWorkload {
     /// Native bindings retained after a successful start so a cancelled stop
     /// can resume the same per-plugin teardown journal.
     teardown_bindings: Arc<[PendingBinding]>,
+    /// Every plugin bound to this workload, in bind order, with exactly the
+    /// interfaces its `on_workload_bind` received. [`Self::unbind_all_plugins`]
+    /// hands each the same set back, once per workload.
+    plugin_bindings: Arc<[PendingBinding]>,
     /// TLS provider override for `wasi:tls` client connections in this workload.
     #[cfg(feature = "wasi-tls")]
     tls_provider: Option<SharedTlsProvider>,
@@ -2978,7 +2982,8 @@ impl ResolvedWorkload {
         Ok(invocations)
     }
 
-    /// Unbind all plugins from all components in this workload.
+    /// Unbind every plugin bound to this workload, once each, with the
+    /// interfaces it was bound with.
     ///
     /// This should be called when stopping a workload to ensure proper cleanup
     /// of plugin resources. Errors from individual plugin unbind operations are
@@ -2998,41 +3003,25 @@ impl ResolvedWorkload {
             // building one right now. Calls still in flight own their own
             // stores and are unaffected.
             component.instances.close();
+        }
 
-            if let Some(plugins) = component.plugins() {
-                for (plugin_id, plugin) in plugins.iter() {
-                    trace!(
-                        plugin_id,
-                        component_id = component.id(),
-                        workload_id = self.id.as_ref(),
-                        "unbinding plugin from component"
-                    );
-
-                    // Get the interfaces this plugin was bound to by checking the component's imports
-                    let world = component.world();
-                    let plugin_world = plugin.world();
-
-                    // Find the intersection of what the component imports and what the plugin provides
-                    let bound_interfaces = world
-                        .imports
-                        .iter()
-                        .filter(|import| plugin_world.imports.contains(import))
-                        .cloned()
-                        .collect::<std::collections::HashSet<_>>();
-
-                    if let Err(e) = plugin
-                        .on_workload_unbind(self.id(), WitInterfaces::new(&bound_interfaces))
-                        .await
-                    {
-                        warn!(
-                            plugin_id,
-                            component_id = component.id(),
-                            workload_id = self.id.as_ref(),
-                            error = ?e,
-                            "failed to unbind plugin from workload, continuing cleanup"
-                        );
-                    }
-                }
+        // Newest first, the reverse of bind order, as a failed bind rolls back.
+        for (plugin, interfaces) in self.plugin_bindings.iter().rev() {
+            trace!(
+                plugin_id = plugin.id(),
+                workload_id = self.id.as_ref(),
+                "unbinding plugin from workload"
+            );
+            if let Err(e) = plugin
+                .on_workload_unbind(self.id(), WitInterfaces::new(interfaces))
+                .await
+            {
+                warn!(
+                    plugin_id = plugin.id(),
+                    workload_id = self.id.as_ref(),
+                    error = ?e,
+                    "failed to unbind plugin from workload, continuing cleanup"
+                );
             }
         }
 
@@ -3048,37 +3037,6 @@ impl ResolvedWorkload {
                 error = ?e,
                 "failed to unbind HTTP handler from workload, continuing cleanup"
             );
-        }
-
-        // The service item records plugin bindings just like a component;
-        // unbind them the same way so a plugin bound only to the service is
-        // not left tracking a stopped workload.
-        if let Some(service) = self.service.as_ref()
-            && let Some(plugins) = service.plugins()
-        {
-            for (plugin_id, plugin) in plugins.iter() {
-                let world = service.world();
-                let plugin_world = plugin.world();
-                let bound_interfaces = world
-                    .imports
-                    .iter()
-                    .filter(|import| plugin_world.imports.contains(import))
-                    .cloned()
-                    .collect::<std::collections::HashSet<_>>();
-
-                if let Err(e) = plugin
-                    .on_workload_unbind(self.id(), WitInterfaces::new(&bound_interfaces))
-                    .await
-                {
-                    warn!(
-                        plugin_id,
-                        service_id = service.id(),
-                        workload_id = self.id.as_ref(),
-                        error = ?e,
-                        "failed to unbind plugin from service, continuing cleanup"
-                    );
-                }
-            }
         }
 
         // A trigger service registered its HTTP/messaging handlers at start
@@ -3153,6 +3111,9 @@ pub struct UnresolvedWorkload {
     /// The name the orchestrator gave its replicas, if any. See
     /// [`replica_group`].
     replica_group: Option<Arc<str>>,
+    /// What the last successful bind bound, carried into
+    /// [`ResolvedWorkload::plugin_bindings`].
+    plugin_bindings: Vec<PendingBinding>,
 }
 
 type PendingBinding = (Arc<dyn HostPlugin>, HashSet<WitInterface>);
@@ -3356,6 +3317,7 @@ impl UnresolvedWorkload {
             tls_provider: None,
             scratch: None,
             replica_group: None,
+            plugin_bindings: Vec::new(),
         }
     }
 
@@ -3627,7 +3589,36 @@ impl UnresolvedWorkload {
             }
         }
 
-        trace!(?unmatched_interfaces, "resolving unmatched interfaces");
+        // Entries the spec declares that no workload item uses. No item links
+        // them, but declaring one still asks for the plugin serving it, so that
+        // plugin gets the workload-level `on_workload_bind`,
+        // `on_workload_resolved` and `on_workload_unbind`, and no
+        // `on_workload_item_bind`. Built-in WASI packages are the host's, not a
+        // plugin's, and an entry some item already requires (a WASI override's,
+        // say) binds through that item.
+        let service_world = self.service.as_ref().map(|service| service.world());
+        let mut declared_only: HashSet<WitInterface> = host_interfaces
+            .iter()
+            .filter(|entry| entry.name.is_some() || !entry.is_host_builtin())
+            .filter(|entry| {
+                !service_world
+                    .iter()
+                    .chain(component_worlds.iter().map(|(_, _, world)| world))
+                    .any(|world| world.uses(entry))
+            })
+            .filter(|entry| {
+                !unmatched_interfaces
+                    .values()
+                    .any(|required| required.contains(*entry))
+            })
+            .cloned()
+            .collect();
+
+        trace!(
+            ?unmatched_interfaces,
+            ?declared_only,
+            "resolving unmatched interfaces"
+        );
 
         // Iterate through each plugin first, then check every component for matching worlds.
         //
@@ -3647,79 +3638,82 @@ impl UnresolvedWorkload {
             let plugin_interfaces = p.world();
             trace!(plugin_id = plugin_id, plugin_interfaces = ?plugin_interfaces, "checking plugin interfaces");
 
+            // Whether this plugin takes `wit_interface`, by the same routing
+            // rules whether a workload item uses the entry or only the spec
+            // declares it.
+            let plugin_matches = |wit_interface: &WitInterface| -> bool {
+                // A named binding whose name matches a registered plugin
+                // id directly routes to exactly that plugin — the id IS
+                // the routing key, so this bypasses the
+                // named/unnamed `supports_named_instances()` deferral
+                // below entirely (that deferral is for the closed,
+                // native-only multiplexer's own `(implements ..)`
+                // labels, a separate routing axis). A plugin still has to
+                // actually serve the interface to be matched; a name that
+                // doesn't resolve to any registered plugin id falls
+                // through to the existing world-matching path unchanged
+                // (e.g. a `(implements ..)` multiplex label).
+                if let Some(name) = &wit_interface.name
+                    && plugins.contains_key(name.as_str())
+                {
+                    return name.as_str() == *plugin_id
+                        && plugin_interfaces.includes_bidirectional(wit_interface)
+                        && p.claims(wit_interface);
+                }
+                // Check if plugin supports this interface. `claims` is the
+                // plugin's own veto over a world match it cannot serve
+                // (e.g. an entry that pins no version, which matches every
+                // revision); a refusal leaves the interface unmatched so a
+                // sibling plugin gets it.
+                if !plugin_interfaces.includes_bidirectional(wit_interface)
+                    || !p.claims(wit_interface)
+                {
+                    return false;
+                }
+                // An `(implements ..)` label routes to the plugin
+                // whose `host.plugins` entry declares it; failing
+                // that, to one that supports named instances. A plain
+                // import stays with a plugin that serves it plainly.
+                let defer_to_other = if let Some(label) = wit_interface.name.as_deref() {
+                    match declaring_plugin(plugins, plugin_bindings, label, wit_interface) {
+                        Some(owner) => owner != *plugin_id,
+                        None => {
+                            !p.supports_named_instances()
+                                && other_plugin_serves(plugins, plugin_id, wit_interface, true)
+                        }
+                    }
+                } else {
+                    p.defers_unnamed_instances()
+                        && other_plugin_serves(plugins, plugin_id, wit_interface, false)
+                };
+                !defer_to_other
+            };
+
             // Collect bindings for this plugin across all components
             let mut plugin_component_bindings = Vec::new();
 
             // Check each component to see if this plugin matches any of their required interfaces
             for (component_id, required_interfaces) in unmatched_interfaces.iter() {
                 // Find interfaces that this plugin can satisfy for this component
-                let mut matching_interfaces = HashSet::new();
-                for wit_interface in required_interfaces.iter() {
-                    // A named binding whose name matches a registered plugin
-                    // id directly routes to exactly that plugin — the id IS
-                    // the routing key, so this bypasses the
-                    // named/unnamed `supports_named_instances()` deferral
-                    // below entirely (that deferral is for the closed,
-                    // native-only multiplexer's own `(implements ..)`
-                    // labels, a separate routing axis). A plugin still has to
-                    // actually serve the interface to be matched; a name that
-                    // doesn't resolve to any registered plugin id falls
-                    // through to the existing world-matching path unchanged
-                    // (e.g. a `(implements ..)` multiplex label).
-                    if let Some(name) = &wit_interface.name
-                        && plugins.contains_key(name.as_str())
-                    {
-                        if name.as_str() == *plugin_id
-                            && plugin_interfaces.includes_bidirectional(wit_interface)
-                            && p.claims(wit_interface)
-                        {
-                            matching_interfaces.insert(wit_interface.clone());
-                        }
-                        continue;
-                    }
-                    // Check if plugin supports this interface. `claims` is the
-                    // plugin's own veto over a world match it cannot serve
-                    // (e.g. an entry that pins no version, which matches every
-                    // revision); a refusal leaves the interface unmatched so a
-                    // sibling plugin gets it.
-                    if plugin_interfaces.includes_bidirectional(wit_interface)
-                        && p.claims(wit_interface)
-                    {
-                        // An `(implements ..)` label routes to the plugin
-                        // whose `host.plugins` entry declares it; failing
-                        // that, to one that supports named instances. A plain
-                        // import stays with a plugin that serves it plainly.
-                        let defer_to_other = if let Some(label) = wit_interface.name.as_deref() {
-                            match declaring_plugin(plugins, plugin_bindings, label, wit_interface) {
-                                Some(owner) => owner != *plugin_id,
-                                None => {
-                                    !p.supports_named_instances()
-                                        && other_plugin_serves(
-                                            plugins,
-                                            plugin_id,
-                                            wit_interface,
-                                            true,
-                                        )
-                                }
-                            }
-                        } else {
-                            p.defers_unnamed_instances()
-                                && other_plugin_serves(plugins, plugin_id, wit_interface, false)
-                        };
-                        if defer_to_other {
-                            continue;
-                        }
-                        matching_interfaces.insert(wit_interface.clone());
-                    }
-                }
+                let matching_interfaces: HashSet<WitInterface> = required_interfaces
+                    .iter()
+                    .filter(|wit_interface| plugin_matches(wit_interface))
+                    .cloned()
+                    .collect();
 
                 if !matching_interfaces.is_empty() {
                     plugin_component_bindings.push((component_id.clone(), matching_interfaces));
                 }
             }
 
-            // If this plugin matches any components, bind them
-            if !plugin_component_bindings.is_empty() {
+            let declared_matches: HashSet<WitInterface> = declared_only
+                .iter()
+                .filter(|wit_interface| plugin_matches(wit_interface))
+                .cloned()
+                .collect();
+
+            // If this plugin matches any components or spec-only entries, bind it
+            if !plugin_component_bindings.is_empty() || !declared_matches.is_empty() {
                 // The operator's declaration for this plugin, applied before
                 // any of it reaches the plugin, so `on_workload_bind` and
                 // `on_workload_item_bind` see the same resolved map and no
@@ -3738,6 +3732,7 @@ impl UnresolvedWorkload {
                 let requested_interfaces: HashSet<WitInterface> = plugin_component_bindings
                     .iter()
                     .flat_map(|(_, interfaces)| interfaces.clone())
+                    .chain(declared_matches.iter().cloned())
                     .collect();
                 // Plugin-backed secrets become operator config before the
                 // policy runs, so it judges them like any other host key. The
@@ -3815,10 +3810,12 @@ impl UnresolvedWorkload {
                         })
                         .collect();
 
-                // Collect all unique interfaces across all component bindings for on_workload_bind
+                // Collect all unique interfaces across all component bindings
+                // and spec-only entries for on_workload_bind
                 let plugin_matched_interfaces: HashSet<WitInterface> = resolved_component_bindings
                     .iter()
                     .flat_map(Clone::clone)
+                    .chain(declared.apply_resolved(&declared_matches, &resolved_by_name))
                     .collect();
 
                 // A name selects one backend of a package, so two bindings for
@@ -4027,6 +4024,12 @@ impl UnresolvedWorkload {
                     }
                 }
 
+                // The first plugin to bind a spec-only entry claims it, as an
+                // item's bind claims an interface it uses.
+                for interface in &declared_matches {
+                    declared_only.remove(interface);
+                }
+
                 // Add this plugin with all its bound component IDs
                 bound_plugins.push((p.clone(), plugin_component_ids.clone()));
                 bound_plugins_with_interfaces.push((
@@ -4058,6 +4061,10 @@ impl UnresolvedWorkload {
             }
         }
 
+        self.plugin_bindings = bound_plugins_with_interfaces
+            .into_iter()
+            .map(|(plugin, interfaces, _)| (plugin, interfaces))
+            .collect();
         Ok(bound_plugins)
     }
 
@@ -4141,6 +4148,7 @@ impl UnresolvedWorkload {
             released: Arc::default(),
             host_interfaces: Arc::new(self.host_interfaces),
             teardown_bindings: Arc::default(),
+            plugin_bindings: self.plugin_bindings.into(),
             http_handler: host.clone(),
             invocation: meters.invocation.clone(),
             #[cfg(feature = "wasi-tls")]
@@ -4203,8 +4211,16 @@ impl UnresolvedWorkload {
                 component_count = component_ids.len(),
                 "notifying plugin of resolved workload"
             );
-            // Call on_workload_resolved for each component this plugin is bound to
-            for component_id in component_ids {
+            // Call on_workload_resolved for each component this plugin is bound
+            // to. A plugin bound only for entries no item uses is told once,
+            // with the workload's id in place of a component's.
+            let workload_id = [resolved_workload.id().to_string()];
+            let targets = if component_ids.is_empty() {
+                &workload_id[..]
+            } else {
+                &component_ids[..]
+            };
+            for component_id in targets {
                 if let Err(e) = plugin
                     .on_workload_resolved(&resolved_workload, component_id.as_str())
                     .await
@@ -4807,7 +4823,6 @@ mod tests {
         plugin_id: String,
         method: String,
         component_id: Option<String>,
-        #[allow(unused)]
         interfaces: Vec<String>,
     }
 
@@ -6510,6 +6525,218 @@ mod tests {
             1,
             "a plugin bound before the failing step must be unbound"
         );
+    }
+
+    const OTHER: &str = "test:probe/other@0.1.0";
+
+    /// Resolve `workload` against `plugins`, keeping the HTTP handler the
+    /// resolved workload only holds weakly.
+    async fn resolve_with(
+        workload: UnresolvedWorkload,
+        plugins: &HashMap<&'static str, Arc<dyn HostPlugin>>,
+    ) -> (ResolvedWorkload, Arc<dyn crate::host::http::HostHandler>) {
+        let http_handler: Arc<dyn crate::host::http::HostHandler> =
+            Arc::new(crate::host::http::NullServer::default());
+        let resolved = workload
+            .resolve(
+                Some(plugins),
+                &crate::plugin::PluginBindings::new(),
+                &crate::host::HostRef::from_handler(&http_handler),
+                &crate::observability::Meters::new(crate::observability::MeterKind::Off),
+            )
+            .await
+            .expect("the workload resolves");
+        (resolved, http_handler)
+    }
+
+    fn plugin_map(plugins: &[&Arc<MockPlugin>]) -> HashMap<&'static str, Arc<dyn HostPlugin>> {
+        plugins
+            .iter()
+            .map(|plugin| (plugin.id(), Arc::clone(plugin) as Arc<dyn HostPlugin>))
+            .collect()
+    }
+
+    /// The interfaces of each `method` call this plugin recorded, sorted.
+    fn recorded(plugin: &MockPlugin, method: &str) -> Vec<Vec<String>> {
+        plugin
+            .get_call_records()
+            .into_iter()
+            .filter(|record| record.method == method)
+            .map(|record| {
+                let mut interfaces = record.interfaces;
+                interfaces.sort();
+                interfaces
+            })
+            .collect()
+    }
+
+    /// A `hostInterfaces` entry no component imports still binds the plugin
+    /// serving it at the workload level. It is told the workload resolved,
+    /// once and under the workload's id, and stopping the workload unbinds
+    /// it. No component links the interface, so no item bind runs.
+    #[tokio::test]
+    async fn a_declared_interface_no_component_imports_binds_and_unbinds_the_plugin() {
+        let plugin = Arc::new(MockPlugin::new(
+            "marker-plugin",
+            vec![WitInterface::from(MARKER)],
+            vec![],
+        ));
+        let workload = marker_workload(vec![component_from_wat("plain", "(component)")]);
+
+        let (resolved, _http) = resolve_with(workload, &plugin_map(&[&plugin])).await;
+
+        assert_eq!(plugin.get_call_count("on_workload_bind"), 1);
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 0);
+        let resolved_for: Vec<Option<String>> = plugin
+            .get_call_records()
+            .into_iter()
+            .filter(|record| record.method == "on_workload_resolved")
+            .map(|record| record.component_id)
+            .collect();
+        assert_eq!(resolved_for, [Some(resolved.id().to_string())]);
+
+        resolved.unbind_all_plugins().await.unwrap();
+        assert_eq!(
+            recorded(&plugin, "on_workload_unbind"),
+            recorded(&plugin, "on_workload_bind"),
+        );
+    }
+
+    /// A plugin serving one entry a component imports and one nobody uses is
+    /// bound with both, and unbound with both.
+    #[tokio::test]
+    async fn a_plugin_serving_used_and_declared_entries_unbinds_both() {
+        let plugin = Arc::new(MockPlugin::new(
+            "marker-plugin",
+            vec![WitInterface::from(MARKER), WitInterface::from(OTHER)],
+            vec![],
+        ));
+        let workload = UnresolvedWorkload::new(
+            "mixed".to_string(),
+            "mixed".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![marker_importer("importer")],
+            vec![WitInterface::from(MARKER), WitInterface::from(OTHER)],
+        );
+
+        let (resolved, _http) = resolve_with(workload, &plugin_map(&[&plugin])).await;
+
+        let bound = recorded(&plugin, "on_workload_bind");
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0].len(), 2, "bound with both entries: {bound:?}");
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 1);
+
+        resolved.unbind_all_plugins().await.unwrap();
+        assert_eq!(recorded(&plugin, "on_workload_unbind"), bound);
+    }
+
+    /// A plugin bound to several components is unbound once per workload.
+    #[tokio::test]
+    async fn a_plugin_shared_by_components_unbinds_once() {
+        let plugin = Arc::new(MockPlugin::new(
+            "marker-plugin",
+            vec![WitInterface::from(MARKER)],
+            vec![],
+        ));
+        let workload = marker_workload(vec![marker_importer("a"), marker_importer("b")]);
+
+        let (resolved, _http) = resolve_with(workload, &plugin_map(&[&plugin])).await;
+        assert_eq!(plugin.get_call_count("on_workload_item_bind"), 2);
+
+        resolved.unbind_all_plugins().await.unwrap();
+        assert_eq!(recorded(&plugin, "on_workload_unbind").len(), 1);
+    }
+
+    /// Two plugins serving one entry nobody uses: the first in id order binds
+    /// it, as it would for an imported entry, and the other is left alone.
+    #[tokio::test]
+    async fn the_first_plugin_claims_a_declared_interface() {
+        let first = Arc::new(MockPlugin::new(
+            "a-plugin",
+            vec![WitInterface::from(MARKER)],
+            vec![],
+        ));
+        let second = Arc::new(MockPlugin::new(
+            "b-plugin",
+            vec![WitInterface::from(MARKER)],
+            vec![],
+        ));
+        let mut workload = marker_workload(vec![component_from_wat("plain", "(component)")]);
+
+        workload
+            .bind_plugins(
+                &plugin_map(&[&first, &second]),
+                &crate::plugin::PluginBindings::new(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(first.get_call_count("on_workload_bind"), 1);
+        assert_eq!(second.get_call_count("on_workload_bind"), 0);
+    }
+
+    /// An entry a WASI override makes a component require binds through that
+    /// component only. Whichever plugin claims it gets an item bind with it,
+    /// and no plugin is bound for it at the workload level alone.
+    #[tokio::test]
+    async fn an_override_entry_is_not_also_bound_at_the_workload_level() {
+        let fs_user = component_from_wat(
+            "fs-user",
+            r#"(component (import "wasi:filesystem/types@0.2.12" (instance)))"#,
+        );
+        let regular = Arc::new(MockPlugin::new(
+            "a-regular",
+            vec![WitInterface::from(MARKER)],
+            vec![],
+        ));
+        let overriding = Arc::new(
+            MockPlugin::new("view-plugin", vec![WitInterface::from(MARKER)], vec![])
+                .overriding("wasi:filesystem/preopens,types@0.2.0"),
+        );
+        let mut workload = marker_workload(vec![fs_user]);
+
+        workload
+            .bind_plugins(
+                &plugin_map(&[&regular, &overriding]),
+                &crate::plugin::PluginBindings::new(),
+            )
+            .await
+            .unwrap();
+
+        let item_binds = regular.get_call_count("on_workload_item_bind")
+            + overriding.get_call_count("on_workload_item_bind");
+        assert_eq!(item_binds, 1, "the entry binds through the component once");
+        for plugin in [&regular, &overriding] {
+            assert_eq!(
+                plugin.get_call_count("on_workload_bind"),
+                plugin.get_call_count("on_workload_item_bind"),
+                "{} has no workload-level-only bind",
+                plugin.id()
+            );
+        }
+    }
+
+    /// An entry no component imports and no plugin serves is not an error:
+    /// nothing links it, so the workload has nothing missing. A plugin serving
+    /// something else is not bound for it.
+    #[tokio::test]
+    async fn a_declared_interface_no_plugin_serves_is_ignored() {
+        let unrelated = Arc::new(MockPlugin::new(
+            "other-plugin",
+            vec![WitInterface::from(OTHER)],
+            vec![],
+        ));
+        let mut workload = marker_workload(vec![component_from_wat("plain", "(component)")]);
+        let bound = workload
+            .bind_plugins(
+                &plugin_map(&[&unrelated]),
+                &crate::plugin::PluginBindings::new(),
+            )
+            .await
+            .unwrap();
+        assert!(bound.is_empty());
+        assert_eq!(unrelated.get_call_count("on_workload_bind"), 0);
     }
 
     /// A host-dispatched export (like the `wasi:http` entrypoint) must go to
