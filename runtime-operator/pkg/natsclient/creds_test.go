@@ -3,6 +3,7 @@ package natsclient
 import (
 	"bytes"
 	"flag"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -139,8 +140,10 @@ func TestNatsSecretFileReadFailureLogsOnce(t *testing.T) {
 		t.Fatalf("read %q", got)
 	}
 
-	path = path + ".gone"
-	secret.path = path
+	// The kubelet removes a Secret's file when the Secret goes away.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
 	for range 3 {
 		if got := secret.read(); got != "" {
 			t.Fatalf("an unreadable secret read as %q", got)

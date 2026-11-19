@@ -339,11 +339,11 @@ func TestDaemonSetSchedule_TerminatingOrphanHoldsItsSlot(t *testing.T) {
 	schedule(t, r, ds)
 }
 
-// failingReader rejects every read past the cache.
 // errUncachedRead is what failingReader returns, so tests can tell its reads
 // from other failures.
 var errUncachedRead = errors.New("unexpected uncached read")
 
+// failingReader rejects every read past the cache.
 type failingReader struct{}
 
 func (failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
