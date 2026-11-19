@@ -1490,6 +1490,25 @@ impl NatsConnectionOptions {
     }
 }
 
+/// Whether a connection keeps to its configured servers and ignores those an
+/// INFO advertises.
+///
+/// Unless TLS comes first, INFO is read in plaintext, and async-nats dials an
+/// advertised `ws://` server without TLS whatever it is told to require. So any
+/// connection that means to use TLS ignores them: one with TLS material, one
+/// that starts TLS first, and one dialing a `tls://` URL, which upgrades only
+/// after that plaintext INFO.
+fn ignores_discovered_servers(
+    options: &NatsConnectionOptions,
+    addrs: &[async_nats::ServerAddr],
+) -> bool {
+    options.ignore_discovered_servers
+        || options.tls_ca.is_some()
+        || options.tls_cert.is_some()
+        || options.tls_first
+        || addrs.iter().any(async_nats::ServerAddr::tls_required)
+}
+
 #[instrument(skip_all)]
 pub async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
@@ -1519,6 +1538,9 @@ pub async fn connect_nats(
             server.port()
         );
     }
+
+    // Decided before the TLS options below are moved out of `options`.
+    let ignore_discovered = ignores_discovered_servers(&options, &addrs);
 
     let mut opts = options.auth.into_connect_options()?;
 
@@ -1554,9 +1576,7 @@ pub async fn connect_nats(
         opts = opts.add_client_certificate(cert_path, key_path)
     }
 
-    // That INFO can also advertise a `ws://` server, which async-nats dials
-    // without TLS whatever it is told to require.
-    if options.ignore_discovered_servers || tls_required || options.tls_first {
+    if ignore_discovered {
         opts = opts.ignore_discovered_servers();
     }
 
@@ -3437,6 +3457,37 @@ mod tests {
         let pool = client.server_pool().await?;
         assert_eq!(pool.len(), 1);
         assert!(pool.iter().all(|s| !s.is_discovered));
+        Ok(())
+    }
+
+    /// A `tls://` URL with no CA or client certificate still reads the INFO in
+    /// plaintext before it upgrades, so it never takes an advertised server
+    /// from it either. Checked on the decision itself: a live handshake would
+    /// need a CA, which is the case `a_tls_connection_ignores_advertised_servers`
+    /// already covers.
+    #[test]
+    fn a_tls_url_ignores_advertised_servers() -> anyhow::Result<()> {
+        use async_nats::ToServerAddrs as _;
+        let addrs = |urls: &[&str]| -> anyhow::Result<Vec<async_nats::ServerAddr>> {
+            Ok(urls.to_server_addrs()?.collect())
+        };
+        let none = NatsConnectionOptions::default();
+        assert!(ignores_discovered_servers(
+            &none,
+            &addrs(&["tls://localhost:4222"])?
+        ));
+        assert!(ignores_discovered_servers(
+            &none,
+            &addrs(&["TLS://localhost:4222"])?
+        ));
+        assert!(ignores_discovered_servers(
+            &none,
+            &addrs(&["nats://a:4222", "tls://b:4222"])?
+        ));
+        assert!(!ignores_discovered_servers(
+            &none,
+            &addrs(&["nats://localhost:4222"])?
+        ));
         Ok(())
     }
 

@@ -179,6 +179,21 @@ pub struct ConnectionRegistry {
     workloads: RwLock<HashMap<String, WorkloadConns>>,
 }
 
+/// Whether `config` means to use TLS, so a server the plaintext INFO advertises
+/// is never taken: async-nats dials an advertised `ws://` one without TLS
+/// whatever it is told to require. A `tls://` server upgrades only after that
+/// plaintext INFO, so it counts even with no CA or certificate.
+fn requires_tls(config: &NatsConfig) -> bool {
+    config.tls.ca.is_some()
+        || config.tls.cert.is_some()
+        || config.tls.first
+        || config.servers.iter().any(|server| {
+            server
+                .split_once("://")
+                .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("tls"))
+        })
+}
+
 /// Builds connect options from a workload's config.
 ///
 /// `reconnects` is bumped from the event callback, which is the only place the
@@ -222,11 +237,8 @@ async fn build_options(
             .add_client_certificate(cert.clone(), key.clone())
             .require_tls(true);
     }
-    // Only operator-declared servers are checked against an egress policy. A
-    // server the plaintext INFO advertises may also be `ws://`, which
-    // async-nats dials without TLS whatever it is told to require.
-    let tls_required = config.tls.ca.is_some() || config.tls.cert.is_some() || config.tls.first;
-    if ignore_discovered_servers || tls_required {
+    // Only operator-declared servers are checked against an egress policy.
+    if ignore_discovered_servers || requires_tls(config) {
         opts = opts.ignore_discovered_servers();
     }
 
@@ -802,6 +814,24 @@ mod tests {
         let pool = jetstream.client().server_pool().await?;
         assert_eq!(pool.len(), 1);
         assert!(pool.iter().all(|s| !s.is_discovered));
+        Ok(())
+    }
+
+    /// A `tls://` server with no CA or certificate reads INFO in plaintext
+    /// before it upgrades, so its binding ignores advertised servers too.
+    #[test]
+    fn a_tls_url_requires_tls() -> anyhow::Result<()> {
+        let config = |servers: &str| {
+            NatsConfig::from_map(
+                &[("servers".to_string(), servers.to_string())]
+                    .into_iter()
+                    .collect(),
+            )
+        };
+        assert!(requires_tls(&config("tls://localhost:4222")?));
+        assert!(requires_tls(&config("TLS://localhost:4222")?));
+        assert!(requires_tls(&config("nats://a:4222,tls://b:4222")?));
+        assert!(!requires_tls(&config("nats://localhost:4222")?));
         Ok(())
     }
 
