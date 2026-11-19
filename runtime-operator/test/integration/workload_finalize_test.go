@@ -45,7 +45,7 @@ type fakeHost struct {
 	gates    map[string]chan struct{}
 	// unanswered is the set of host IDs whose stops time out.
 	unanswered map[string]bool
-	stops      int
+	stops      map[string]int
 }
 
 func newFakeHost() *fakeHost {
@@ -54,6 +54,7 @@ func newFakeHost() *fakeHost {
 		received:   map[string]chan struct{}{},
 		gates:      map[string]chan struct{}{},
 		unanswered: map[string]bool{},
+		stops:      map[string]int{},
 	}
 }
 
@@ -73,11 +74,11 @@ func (h *fakeHost) answerStops(hostID string, answer bool) {
 	h.unanswered[hostID] = !answer
 }
 
-// stopsAsked counts the stops sent to any host.
-func (h *fakeHost) stopsAsked() int {
+// stopsAsked counts the stops sent to hostID.
+func (h *fakeHost) stopsAsked(hostID string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.stops
+	return h.stops[hostID]
 }
 
 func (h *fakeHost) isRunning(id string) bool {
@@ -145,7 +146,7 @@ func (h *fakeHost) Request(ctx context.Context, msg *wasmbus.Message) (*wasmbus.
 			return nil, err
 		}
 		h.mu.Lock()
-		h.stops++
+		h.stops[host]++
 		if h.unanswered[host] {
 			h.mu.Unlock()
 			return nil, context.DeadlineExceeded
@@ -375,6 +376,7 @@ var _ = Describe("Workload eviction", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: evictHostID}, host)).To(Succeed())
 		host.Environment = "elsewhere"
 		Expect(k8sClient.Update(ctx, host)).To(Succeed())
+		waitForCachedHost(ctx, host)
 		touchWorkload(ctx, key, "1")
 
 		Eventually(func(g Gomega) {
@@ -416,14 +418,16 @@ var _ = Describe("Workload eviction from a host that does not answer", func() {
 		}).Should(Succeed())
 
 		// Ready is Unknown: the Host has never been judged.
+		stopsAsked := func() int { return testHost.stopsAsked(unansweredHostID) }
+		asked := stopsAsked()
 		testHost.answerStops(unansweredHostID, false)
 		DeferCleanup(testHost.answerStops, unansweredHostID, true)
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: testNamespace, Name: unansweredHostID}, host)).To(Succeed())
 		host.Environment = "elsewhere"
 		Expect(k8sClient.Update(ctx, host)).To(Succeed())
-		asked := testHost.stopsAsked()
+		waitForCachedHost(ctx, host)
 		touchWorkload(ctx, key, "1")
-		Eventually(testHost.stopsAsked).Should(BeNumerically(">", asked))
+		Eventually(stopsAsked).Should(BeNumerically(">", asked))
 		Consistently(func(g Gomega) {
 			var got runtimev1alpha1.Workload
 			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
@@ -432,23 +436,36 @@ var _ = Describe("Workload eviction from a host that does not answer", func() {
 
 		// Now the host has failed. It did not answer the last stop, so the
 		// workload is dropped without another.
+		asked = stopsAsked()
 		host.Status.SetConditions(condition.ErrorCondition(condition.TypeReady, "Reconcile",
 			errors.New("host has not reported recently")))
 		Expect(k8sClient.Status().Update(ctx, host)).To(Succeed())
-		asked = testHost.stopsAsked()
+		waitForCachedHost(ctx, host)
 		touchWorkload(ctx, key, "2")
 		Eventually(func(g Gomega) {
 			var got runtimev1alpha1.Workload
 			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
 			g.Expect(got.Status.HostID).To(BeEmpty())
 		}).Should(Succeed())
-		Expect(testHost.stopsAsked()).To(Equal(asked), "a failed host that did not answer was asked again")
+		Expect(stopsAsked()).To(Equal(asked), "a failed host that did not answer was asked again")
 	})
 })
 
-// touchWorkload changes an annotation so the Workload is reconciled now,
-// since nothing watches Hosts. A merge patch carries no resourceVersion, so
-// the controller's own status writes cannot make it conflict.
+// waitForCachedHost ensures a workload reconcile sees the Host update, even
+// when the separate Host and Workload informers deliver events out of order.
+func waitForCachedHost(ctx context.Context, host *runtimev1alpha1.Host) {
+	GinkgoHelper()
+	key := client.ObjectKeyFromObject(host)
+	Eventually(func(g Gomega) {
+		var cached runtimev1alpha1.Host
+		g.Expect(testCache.Get(ctx, key, &cached)).To(Succeed())
+		g.Expect(cached.ResourceVersion).To(Equal(host.ResourceVersion))
+	}, "5s").Should(Succeed())
+}
+
+// touchWorkload changes an annotation so the placed Workload is reconciled
+// now; the Host watch wakes only unplaced Workloads. A merge patch omits
+// resourceVersion, so the controller's own status writes cannot conflict.
 func touchWorkload(ctx context.Context, key types.NamespacedName, value string) {
 	GinkgoHelper()
 	w := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}
