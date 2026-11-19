@@ -1007,9 +1007,14 @@ runtime:
       #                   loopback URL directly.
       #                   Each entry is a port or `port/udp`; TCP is default.
       #                   Requires this host group's `allowHostLoopback`.
-      #   volumes         named volumes, each with any Pod volume source
+      #   volumes         named volumes, each with a supported Pod volume source
       #                   (`persistentVolumeClaim`, `configMap`, `secret`,
-      #                   `emptyDir`, `hostPath`, ...). The chart adds each to
+      #                   `emptyDir`, `hostPath`, ...). `gitRepo` and
+      #                   `flexVolume` are refused because they can execute
+      #                   commands on the node (gitRepo: CVE-2024-10220).
+      #                   Use an init container to clone into an `emptyDir`
+      #                   instead of `gitRepo`, or use `csi` instead of
+      #                   `flexVolume`. The chart adds each supported volume to
       #                   the host pod, mounts it into the host container under
       #                   /var/lib/wasmcloud/host-plugin-volumes/<id>/<name>,
       #                   and hands that directory to the plugin as a

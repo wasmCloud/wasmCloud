@@ -144,6 +144,24 @@ describe('host plugin volumes render', () => {
 
 describe('host plugin volumes the chart refuses', () => {
   const mount = [{ name: 'm', mountPath: '/m' }];
+  for (const field of ['plugins', 'hostPlugins']) {
+    for (const [source, spec] of [
+      ['gitRepo', { repository: 'https://example.com/repo.git' }],
+      ['flexVolume', { driver: 'example.com/driver' }],
+    ]) {
+      for (const readOnly of [false, true]) {
+        it(`refuses ${source} in ${field} with readOnly: ${readOnly}`, () => {
+          assertRefused(
+            {
+              [field]: [plugin([{ name: 'm', [source]: spec }], [{ ...mount[0], readOnly }])],
+            },
+            new RegExp(`host plugin p: volume "m" uses disabled volume source \`${source}\``),
+          );
+        });
+      }
+    }
+  }
+
   const cases = [
     ['an entry with no id', { plugins: [{ image: 'a' }, { image: 'b' }] }, /needs an `id`/],
     ['an entry given as a string', { plugins: ['wasmcloud-nats'] }, /must be a map with an `id`/],
