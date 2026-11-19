@@ -339,6 +339,7 @@ Refused here rather than at host start, naming the plugin:
 - a volume name that is not a DNS-1123 label or is repeated;
 - a volume without exactly one Pod volume source, such as `readOnly` set
   on the volume instead of its mount, or a misspelled source;
+- `gitRepo` or `flexVolume` sources, which can execute commands on the node;
 - a Kubernetes `hostPath` source outside the host group's
   `pluginHostPaths.allowed`, which is empty by default, or of a `type`
   that is not a directory, since the host opens every volume as one;
@@ -384,7 +385,7 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- range (default dict $group.pluginHostPaths).allowed }}
 {{- $allowedHostPaths = append $allowedHostPaths (clean (toString .)) }}
 {{- end }}
-{{- $volumeSources := list "awsElasticBlockStore" "azureDisk" "azureFile" "cephfs" "cinder" "configMap" "csi" "downwardAPI" "emptyDir" "ephemeral" "fc" "flexVolume" "flocker" "gcePersistentDisk" "gitRepo" "glusterfs" "hostPath" "image" "iscsi" "nfs" "persistentVolumeClaim" "photonPersistentDisk" "portworxVolume" "projected" "quobyte" "rbd" "scaleIO" "secret" "storageos" "vsphereVolume" }}
+{{- $volumeSources := list "awsElasticBlockStore" "azureDisk" "azureFile" "cephfs" "cinder" "configMap" "csi" "downwardAPI" "emptyDir" "ephemeral" "fc" "flocker" "gcePersistentDisk" "glusterfs" "hostPath" "image" "iscsi" "nfs" "persistentVolumeClaim" "photonPersistentDisk" "portworxVolume" "projected" "quobyte" "rbd" "scaleIO" "secret" "storageos" "vsphereVolume" }}
 {{- $readOnlySources := list "configMap" "secret" "downwardAPI" "projected" "image" }}
 {{- $writable := dict }}
 {{- $declared := dict }}
@@ -399,6 +400,13 @@ Call with (dict "entry" <plugin entry> "group" <host group>).
 {{- fail (printf "host plugin %s: volume %q is declared twice" $id $name) }}
 {{- end }}
 {{- $sourceKeys := keys (omit . "name") | sortAlpha }}
+{{- /* gitRepo has a container escape (CVE-2024-10220), and FlexVolume
+       invokes driver executables on the node. Neither is safe here. */}}
+{{- range $source := list "gitRepo" "flexVolume" }}
+{{- if has $source $sourceKeys }}
+{{- fail (printf "host plugin %s: volume %q uses disabled volume source `%s`; use `emptyDir`, `persistentVolumeClaim` or `csi` instead" $id $name $source) }}
+{{- end }}
+{{- end }}
 {{- if or (ne (len $sourceKeys) 1) (not (has (first $sourceKeys) $volumeSources)) }}
 {{- fail (printf "host plugin %s: volume %q needs exactly one Pod volume source, such as `persistentVolumeClaim`, `configMap`, `secret` or `emptyDir`, and nothing else; it sets %s" $id $name (default "nothing" (join ", " $sourceKeys))) }}
 {{- end }}
