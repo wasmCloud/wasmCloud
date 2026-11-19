@@ -4079,7 +4079,6 @@ dependencies = [
  "array-init",
  "bit-vec 0.6.3",
  "bytes",
- "chrono",
  "cidr",
  "fallible-iterator",
  "geo-types",
@@ -4087,6 +4086,7 @@ dependencies = [
  "postgres-protocol",
  "serde_core",
  "serde_json",
+ "time",
  "uuid",
 ]
 
@@ -6431,6 +6431,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tikv-jemallocator",
+ "time",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
