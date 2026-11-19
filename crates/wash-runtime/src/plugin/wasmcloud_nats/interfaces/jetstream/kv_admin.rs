@@ -38,11 +38,17 @@ const ACCOUNT_LIMIT_CODES: &[jetstream::ErrorCode] = &[
     jetstream::ErrorCode::MAXIMUM_STREAMS_LIMIT,
     jetstream::ErrorCode::MEMORY_RESOURCES_EXCEEDED,
     jetstream::ErrorCode::STORAGE_RESOURCES_EXCEEDED,
+    STREAM_MAX_BYTES_REQUIRED,
+    NO_LIMITS,
     STREAM_MAX_BYTES_OVER_ACCOUNT,
 ];
 
-/// The stream's `max_bytes` is over the account's per-stream limit. Not named
-/// in async-nats.
+// Account refusals async-nats has no names for (nats-server `errors.json`).
+/// The account requires every stream to set `max_bytes`.
+const STREAM_MAX_BYTES_REQUIRED: jetstream::ErrorCode = jetstream::ErrorCode(10113);
+/// The account has no limit for the stream's replica tier.
+const NO_LIMITS: jetstream::ErrorCode = jetstream::ErrorCode(10120);
+/// The stream's `max_bytes` is over the account's per-stream limit.
 const STREAM_MAX_BYTES_OVER_ACCOUNT: jetstream::ErrorCode = jetstream::ErrorCode(10122);
 
 /// The longest `max-age-ms` the server's signed nanosecond duration holds.

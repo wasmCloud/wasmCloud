@@ -218,9 +218,10 @@ impl PolicySpec {
             return Ok(());
         }
         Err(format!(
-            "`bucket-create-allow: *` lets a workload create any number of buckets, so the \
-             JetStream account must bound them, but it has no {} limit; set them on the \
-             account, or list bucket names instead",
+            "the operator's `bucket-create-allow: *` lets workloads create any number of \
+             buckets, even when one narrows it to names, so the JetStream account must bound \
+             them, but it has no {} limit; set them on the account, or have the operator list \
+             bucket names instead of `*`",
             unlimited.join(", ")
         ))
     }

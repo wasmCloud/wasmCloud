@@ -79,10 +79,29 @@ pub struct WasmcloudNats {
     /// See [`subscriber::HostBacklogBudget`] for why a reservation was the
     /// wrong shape.
     host_backlog: Arc<subscriber::HostBacklogBudget>,
-    /// Bindings whose operator grant is `bucket-create-allow: *`. Recorded
-    /// from the declaration, so a workload narrowing `*` to names is still
-    /// held to the account budget `*` needs.
-    any_bucket_grants: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Where the operator grants `bucket-create-allow: *`, recorded from the
+    /// declaration so a workload narrowing `*` to names is still held to the
+    /// account budget `*` needs.
+    any_bucket_grants: std::sync::Mutex<AnyBucketGrants>,
+}
+
+/// Operator `*` create grants, accumulated across `validate_bindings` calls.
+#[derive(Debug, Default)]
+struct AnyBucketGrants {
+    /// The base grants `*`, so does any binding it is not overridden for.
+    base: bool,
+    /// Declared binding names.
+    declared: std::collections::BTreeSet<String>,
+    /// Declared bindings whose own layer grants `*`.
+    named: std::collections::BTreeSet<String>,
+}
+
+impl AnyBucketGrants {
+    /// An undeclared label is served the base layer, so it takes the base's
+    /// answer.
+    fn covers(&self, binding: &str) -> bool {
+        self.named.contains(binding) || (self.base && !self.declared.contains(binding))
+    }
 }
 
 impl Default for WasmcloudNats {
@@ -173,20 +192,20 @@ impl WasmcloudNats {
                         .any(|n| n.trim() == super::config::ANY_BUCKET)
                 })
         };
-        let mut found = Vec::new();
-        if grants_any(
+        let base = grants_any(
             declared.base(),
             &declared.pending_secret_keys(UNNAMED_BINDING, &schema),
-        ) {
-            found.push(UNNAMED_BINDING.to_string());
-        }
+        );
+        let mut grants = self
+            .any_bucket_grants
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        grants.base |= base;
         for (name, layer, pending) in declared.host_layers(&schema) {
+            grants.declared.insert(name.to_string());
             if grants_any(&layer, &pending) {
-                found.push(name.to_string());
+                grants.named.insert(name.to_string());
             }
-        }
-        if let Ok(mut grants) = self.any_bucket_grants.lock() {
-            grants.extend(found);
         }
     }
 
@@ -194,7 +213,8 @@ impl WasmcloudNats {
     fn operator_grants_any_bucket(&self, binding: &str) -> bool {
         self.any_bucket_grants
             .lock()
-            .is_ok_and(|grants| grants.contains(binding))
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .covers(binding)
     }
 
     /// Opens one connection per binding name.
@@ -327,8 +347,9 @@ impl WasmcloudNats {
             {
                 let account = handle.jetstream.query_account().await.with_context(|| {
                     format!(
-                        "wasmcloud:nats binding `{}` grants `bucket-create-allow: *`, which needs \
-                         the JetStream account's limits, and they could not be read",
+                        "wasmcloud:nats binding `{}` may create buckets under the operator's \
+                         `bucket-create-allow: *`, which needs the JetStream account's limits, \
+                         and they could not be read",
                         describe_binding(binding)
                     )
                 })?;
@@ -2162,7 +2183,8 @@ mod tests {
         assert!(plugin.operator_grants_any_bucket("wild"));
         assert!(plugin.operator_grants_any_bucket("secret"));
         assert!(!plugin.operator_grants_any_bucket("named"));
-        assert!(!plugin.operator_grants_any_bucket("undeclared"));
+        // An undeclared label is served the base, and so its `*`.
+        assert!(plugin.operator_grants_any_bucket("undeclared"));
 
         // A later, partial validation only adds.
         plugin
@@ -2172,6 +2194,43 @@ mod tests {
             )
             .unwrap();
         assert!(plugin.operator_grants_any_bucket("wild"));
+
+        // Without a base `*`, only bindings that grant it are covered.
+        let names = WasmcloudNats::new();
+        names
+            .validate_bindings(
+                &PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+                    .with_base(layer("cache"))
+                    .with_binding("wild", layer("*")),
+            )
+            .unwrap();
+        assert!(names.operator_grants_any_bucket("wild"));
+        assert!(!names.operator_grants_any_bucket(UNNAMED_BINDING));
+        assert!(!names.operator_grants_any_bucket("undeclared"));
+
+        // An entry-level secret grant reaches the base and every binding.
+        let entry_secret = WasmcloudNats::new();
+        let mut base = layer("cache");
+        base.remove("bucket-create-allow");
+        entry_secret
+            .validate_bindings(
+                &PluginBindingSet::new(super::super::PLUGIN_NATS_ID)
+                    .with_base(base)
+                    .with_base_secrets(std::collections::HashMap::from([(
+                        "bucket-create-allow".to_string(),
+                        crate::plugin::PluginSecretRef {
+                            source: "grants".into(),
+                            plugin: "vault".into(),
+                            key: "create".into(),
+                            grant: crate::plugin::WorkloadGrant::All,
+                        },
+                    )]))
+                    .with_binding("inherits", Config::new()),
+            )
+            .unwrap();
+        assert!(entry_secret.operator_grants_any_bucket(UNNAMED_BINDING));
+        assert!(entry_secret.operator_grants_any_bucket("inherits"));
+        assert!(entry_secret.operator_grants_any_bucket("undeclared"));
     }
 
     /// A grant the operator never declared cannot be narrowed into: an
