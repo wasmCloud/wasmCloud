@@ -63,6 +63,8 @@ Wed–Thu as a buffer for any same-week follow-up patch.
      that SHA and checks existing release tags against those records on retries.
      The records are retained for 90 days. Missing records or a mismatched tag
      fail promotion, including during manual recovery.
+     Recovery uses the image policy from the workflow revision, even when the
+     release commit predates that policy.
    - **Re-attests** each promoted manifest digest (Sigstore-signed via Fulcio).
    - **Downloads** the canary-binaries artifacts from the wash.yml run that built them, attests
      them, and (after pushing the tag) creates the GitHub Release with those exact binaries.

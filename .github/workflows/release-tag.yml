@@ -238,11 +238,14 @@ jobs:
           IMAGE_TAG: ${{ steps.ver.outputs.image_tag }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         # Resolve authenticated digest artifacts from successful canary runs
         # on the release SHA, then check any existing release tags against them.
         run: |
           echo "STAGE=resolve-images" >> "${GITHUB_ENV}"
-          node .github/scripts/release-images.mjs resolve
+          # Recovery must use the current workflow's policy even for old releases.
+          git show "${WORKFLOW_SHA}:.github/scripts/release-images.mjs" > "${RUNNER_TEMP}/release-images.mjs"
+          node "${RUNNER_TEMP}/release-images.mjs" resolve
 
       - name: Download canary-binaries artifacts from wash.yml run
         id: bins
@@ -325,7 +328,7 @@ jobs:
         # preserves the multi-arch manifest.
         run: |
           echo "STAGE=promote-images" >> "${GITHUB_ENV}"
-          node .github/scripts/release-images.mjs promote
+          node "${RUNNER_TEMP}/release-images.mjs" promote
 
       # actions/attest-build-provenance takes a single subject per invocation,
       # so unroll one step per image. Each attestation links the released
