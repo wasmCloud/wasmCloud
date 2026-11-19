@@ -2901,6 +2901,26 @@ async fn kv_admin_a_narrowed_operator_wildcard_still_needs_a_bounded_account() -
         let message = expect_refused(&open, workload_request(id, manifest(create))).await?;
         assert!(message.contains("no max streams"), "{create:?}: {message}");
     }
+    // An undeclared label is served the operator's base `*` too.
+    let mut labeled = bridge_workload_request(
+        "wl-open-label",
+        vec![named_nats_interface(
+            "tenant",
+            &["types", "kv-admin", "core-handler"],
+            &[
+                ("bucket-create-allow", "tenant-made"),
+                ("core-subscriptions", "test.create"),
+            ],
+        )],
+    );
+    labeled
+        .workload
+        .components
+        .first_mut()
+        .context("the request has a component")?
+        .bytes = bytes::Bytes::from_static(NATS_KV_ADMIN_LABELED_WASM);
+    let message = expect_refused(&open, labeled).await?;
+    assert!(message.contains("no max streams"), "labeled: {message}");
 
     let bounded = start_host_with(operator("bounded")).await?;
     bounded
