@@ -1,11 +1,11 @@
 package wasmcloud:test-p3@0.1.0;
 
 world cli-service {
-    import wasi:cli/environment@0.3.0;
-    import wasi:cli/stderr@0.3.0;
-    import wasi:cli/types@0.3.0;
-    import wasi:clocks/types@0.3.0;
-    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:cli/environment@0.3.2;
+    import wasi:cli/stderr@0.3.2;
+    import wasi:cli/types@0.3.2;
+    import wasi:clocks/types@0.3.2;
+    import wasi:clocks/monotonic-clock@0.3.2;
 
-    export wasi:cli/run@0.3.0;
+    export wasi:cli/run@0.3.2;
 }

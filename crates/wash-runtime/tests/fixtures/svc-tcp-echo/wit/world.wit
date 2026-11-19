@@ -7,7 +7,7 @@ package wasmcloud:test-p3@0.1.0;
 /// this fixture exists to probe whether guest-spawned tasks and guest-side
 /// wakes are driven without periodic host events.
 world svc-tcp-echo {
-    import wasi:sockets/types@0.3.0;
+    import wasi:sockets/types@0.3.2;
 
-    export wasi:cli/run@0.3.0;
+    export wasi:cli/run@0.3.2;
 }

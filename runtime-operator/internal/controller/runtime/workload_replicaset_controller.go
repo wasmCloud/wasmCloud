@@ -203,7 +203,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 	}
 
 	for i := len(workloads.Items); i > expectedReplicas; i-- {
-		if err := deleteObservedChild(ctx, r.Client, &workloads.Items[i-1]); err != nil {
+		if err := deleteObservedObject(ctx, r.Client, &workloads.Items[i-1]); err != nil {
 			return err
 		}
 	}
@@ -327,7 +327,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx con
 
 		// At this point, the workload is not of the current generation
 		// and should be cleaned up
-		if err := deleteObservedChild(ctx, r.Client, &workload); err != nil {
+		if err := deleteObservedObject(ctx, r.Client, &workload); err != nil {
 			return err
 		}
 	}
@@ -352,7 +352,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 			continue
 		}
 		// Delete the workload, which will be replaced by the scale-up logic
-		if err := deleteObservedChild(ctx, r.Client, &workload); err != nil {
+		if err := deleteObservedObject(ctx, r.Client, &workload); err != nil {
 			return err
 		}
 	}

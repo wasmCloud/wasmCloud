@@ -22,10 +22,8 @@ use wash_runtime::host::allowed_loopback::AllowedLoopbackPort;
 use wash_runtime::oci::OciPullPolicy;
 use wash_runtime::wit::WitInterface;
 
-use crate::{
-    cli::{CONFIG_DIR_NAME, CONFIG_FILE_NAME, VALID_CONFIG_FILES},
-    wit::WitConfig,
-};
+pub use crate::project_paths::{locate_config as locate_user_config, locate_project_config};
+use crate::wit::WitConfig;
 
 /// Main wash configuration structure with hierarchical merging support and explicit defaults
 ///
@@ -1770,28 +1768,6 @@ where
         .context("failed to load wash configuration")
 }
 
-pub fn locate_project_config(project_dir: &Path) -> PathBuf {
-    for file_name in VALID_CONFIG_FILES.iter() {
-        let config_path = project_dir.join(CONFIG_DIR_NAME).join(file_name);
-        if config_path.exists() {
-            return config_path;
-        }
-    }
-
-    project_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME)
-}
-
-pub fn locate_user_config(dot_dir: &Path) -> PathBuf {
-    for file_name in VALID_CONFIG_FILES.iter() {
-        let config_path = dot_dir.join(file_name);
-        if config_path.exists() {
-            return config_path;
-        }
-    }
-
-    dot_dir.join(CONFIG_FILE_NAME)
-}
-
 /// Parse a single config file at `path` and deserialize it into a [`Config`].
 ///
 /// Unlike [`load_config`], this does not merge defaults, other config layers, or env
@@ -3284,7 +3260,7 @@ host:
     #[test]
     fn figment_loads_integer_loopback_ports() {
         let dir = tempfile::tempdir().unwrap();
-        let wash_dir = dir.path().join(CONFIG_DIR_NAME);
+        let wash_dir = dir.path().join(crate::cli::CONFIG_DIR_NAME);
         std::fs::create_dir(&wash_dir).unwrap();
         std::fs::write(
             wash_dir.join("config.yaml"),

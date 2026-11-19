@@ -2,12 +2,15 @@ package condition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -142,12 +145,18 @@ type ConditionedReconciler[T ConditionedType] struct {
 	conditions    []conditionPair[T]
 	finalizerFunc func(context.Context, T) error
 	finalizerName string
+	// separateFinalizer leaves deletion to a controller with its own workers.
+	separateFinalizer bool
 	// trackGeneration stamps each condition with the generation it was
 	// computed for. See TrackGeneration.
 	trackGeneration        bool
 	batchStatusUpdates     bool
 	readyRequeueInterval   time.Duration
 	optimisticStatusWrites bool
+	// conflictReader and conflictRebase let a status patch rejected by the
+	// optimistic lock be reapplied to the same object. See RetryStatusConflicts.
+	conflictReader client.Reader
+	conflictRebase func(fresh, desired T) bool
 }
 
 // restampOnly reports whether next differs from current in its generation
@@ -193,6 +202,36 @@ func (r *ConditionedReconciler[T]) OptimisticStatusWrites() {
 	r.optimisticStatusWrites = true
 }
 
+// statusConflictAttempts bounds how often a conflicted status patch is
+// reapplied in one pass before the pass is requeued.
+const statusConflictAttempts = 3
+
+// errStaleVerdict is the conflict reported when a rebase refuses a fresh read:
+// another writer changed what the pass's conclusions were drawn from.
+var errStaleVerdict = apierrors.NewConflict(schema.GroupResource{}, "",
+	errors.New("a concurrent write invalidated this pass's conclusions"))
+
+// RetryStatusConflicts turns on OptimisticStatusWrites and, when the lock
+// rejects a status patch, rereads the object through reader (uncached) instead
+// of discarding the pass. If the object is the same one (same UID), rebase
+// reconciles the pass's desired status with the fresh read, for fields another
+// writer may own, and the pass's changes are patched again under the fresh
+// resource version. A replaced or deleted object is never written.
+//
+// rebase returns false when the fresh read invalidates what the pass concluded
+// (a verdict computed from a field the other writer just changed). The pass is
+// then dropped and requeued, as with plain OptimisticStatusWrites, and its
+// post-hooks do not run.
+//
+// Use it when another writer updates the same object often, so a conflict is
+// expected rather than a sign that the pass's conclusions are stale. rebase
+// may be nil when the pass owns every field it writes.
+func (r *ConditionedReconciler[T]) RetryStatusConflicts(reader client.Reader, rebase func(fresh, desired T) bool) {
+	r.optimisticStatusWrites = true
+	r.conflictReader = reader
+	r.conflictRebase = rebase
+}
+
 // AddPreHook adds a function to be called before the conditions are evaluated.
 // Functions are executed in first-in/first-out order.
 // A failure in a pre-hook will prevent the conditions from being evaluated.
@@ -219,6 +258,28 @@ func (r *ConditionedReconciler[T]) SetCondition(ct ConditionType, fn func(contex
 func (r *ConditionedReconciler[T]) SetFinalizer(finalizer string, fn func(context.Context, T) error) {
 	r.finalizerName = finalizer
 	r.finalizerFunc = fn
+}
+
+// SeparateFinalizer keeps cleanup from occupying the workers that reconcile live
+// objects. Reconcile still installs the finalizer, but leaves deleting objects to
+// the returned reconciler. Register it with a separate controller that watches
+// both deletion transitions and objects already deleting at startup. Like the
+// other configuration methods, call this before starting either controller.
+func (r *ConditionedReconciler[T]) SeparateFinalizer() reconcile.Reconciler {
+	r.separateFinalizer = true
+	return reconcile.Func(r.reconcileFinalizer)
+}
+
+func (r *ConditionedReconciler[T]) reconcileFinalizer(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	obj := r.obj.DeepCopyObject().(T)
+	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
+		return reconcile.Result{}, client.IgnoreNotFound(err)
+	}
+	if obj.GetDeletionTimestamp().IsZero() || r.finalizerName == "" {
+		return reconcile.Result{}, nil
+	}
+	_, err := HandleFinalizer(ctx, r.client, obj, r.finalizerName, r.finalizerFunc)
+	return reconcile.Result{}, err
 }
 
 type ctxKey string
@@ -265,6 +326,9 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 	if err := r.client.Get(ctx, req.NamespacedName, obj); err != nil {
 		return reconcile.Result{}, client.IgnoreNotFound(err)
 	}
+	if r.separateFinalizer && !obj.GetDeletionTimestamp().IsZero() {
+		return reconcile.Result{}, nil
+	}
 
 	// NOTE(lxf): this means we only auto-initialize conditions if finalizer name is set.
 	if r.finalizerName != "" {
@@ -285,6 +349,10 @@ func (r *ConditionedReconciler[T]) Reconcile(ctx context.Context, req reconcile.
 		}
 	}
 
+	return r.reconcileConditions(ctx, obj)
+}
+
+func (r *ConditionedReconciler[T]) reconcileConditions(ctx context.Context, obj T) (reconcile.Result, error) {
 	originalObject := obj.DeepCopyObject().(T)
 
 	reconcilerCtx := &ReconcilerContext{
@@ -416,8 +484,56 @@ func (r *ConditionedReconciler[T]) patchStatus(ctx context.Context, original, ob
 	if string(data) == "{}" {
 		return nil
 	}
-	if optimisticLock {
-		patch = client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{})
+	if !optimisticLock {
+		return r.client.Status().Patch(ctx, obj, patch)
 	}
-	return r.client.Status().Patch(ctx, obj, patch)
+	err = r.client.Status().Patch(ctx, obj, client.MergeFromWithOptions(original, client.MergeFromWithOptimisticLock{}))
+	if !apierrors.IsConflict(err) || r.conflictReader == nil {
+		return err
+	}
+	for range statusConflictAttempts {
+		if err = r.reapplyStatus(ctx, original, obj); !apierrors.IsConflict(err) || errors.Is(err, errStaleVerdict) {
+			return err
+		}
+	}
+	return err
+}
+
+// reapplyStatus patches the pass's status changes onto a fresh read of the
+// same object, locked to that read's resource version.
+func (r *ConditionedReconciler[T]) reapplyStatus(ctx context.Context, original, obj T) error {
+	fresh := original.DeepCopyObject().(T)
+	if err := r.conflictReader.Get(ctx, client.ObjectKeyFromObject(original), fresh); err != nil {
+		return err
+	}
+	if fresh.GetUID() != original.GetUID() {
+		// A same-name replacement: what this pass concluded is about another
+		// object. Report it as the conflict it is so the pass is requeued.
+		return apierrors.NewConflict(schema.GroupResource{Group: fresh.GetObjectKind().GroupVersionKind().Group},
+			fresh.GetName(), errors.New("object was replaced during reconcile"))
+	}
+	if r.conflictRebase != nil && !r.conflictRebase(fresh, obj) {
+		return errStaleVerdict
+	}
+	data, err := client.MergeFrom(original).Data(obj)
+	if err != nil {
+		return err
+	}
+	var body map[string]any
+	if err := json.Unmarshal(data, &body); err != nil {
+		return err
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	metadata, _ := body["metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["resourceVersion"] = fresh.GetResourceVersion()
+	body["metadata"] = metadata
+	if data, err = json.Marshal(body); err != nil {
+		return err
+	}
+	return r.client.Status().Patch(ctx, obj, client.RawPatch(types.MergePatchType, data))
 }

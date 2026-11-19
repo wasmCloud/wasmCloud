@@ -8,6 +8,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Subcommand, ValueEnum};
 use serde::Deserialize;
 
+use crate::read_toml;
+
 const PARSER_DEPENDENCIES: &[&str] = &["http", "oci-client", "prost", "serde_json"];
 const FUZZ_ONLY_PACKAGES: &[&str] = &["wash-runtime-fuzz"];
 const ROUTE_INCLUDE: &str = r#"
@@ -168,11 +170,6 @@ struct Package {
     version: String,
     source: Option<String>,
     checksum: Option<String>,
-}
-
-fn read_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
-    let contents = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    toml::from_str(&contents).with_context(|| format!("parse {}", path.display()))
 }
 
 fn verify_lock(source: &Path) -> Result<()> {

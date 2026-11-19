@@ -39,7 +39,7 @@ func TestRecoveryHostFinalizeBoundsParallelDeletes(t *testing.T) {
 	release := make(chan struct{})
 	deleteFailure := errors.New("delete failed")
 	base := newHostFinalizeClient(t, objs...)
-	r := &HostReconciler{deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency), Client: &deleteTestClient{Client: base, delete: func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	r := &HostReconciler{apiReader: base, deleteSlots: semaphore.NewWeighted(hostFinalizeDeleteConcurrency), Client: &deleteTestClient{Client: base, delete: func(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 		preconditions := (&client.DeleteOptions{}).ApplyOptions(opts).Preconditions
 		if preconditions == nil || preconditions.UID == nil || preconditions.ResourceVersion == nil {
 			return errors.New("delete lacked identity and version preconditions")

@@ -11,5 +11,5 @@ world keyvalue-aba {
     import wasmcloud:keyvalue/cas@0.2.0;
     import wasmcloud:keyvalue/batch@0.2.0;
 
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
 }

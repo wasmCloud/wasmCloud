@@ -60,6 +60,8 @@ type HostPodReconciler struct {
 	OperatorNamespace string
 	// RetiredHosts records Host IDs and Pod IPs during removal.
 	RetiredHosts *RetiredHosts
+
+	apiReader client.Reader
 }
 
 // Reconcile is called whenever a Pod with HostPodLabel changes.
@@ -129,13 +131,38 @@ func (r *HostPodReconciler) deleteHostForPod(ctx context.Context, pod *corev1.Po
 				"hostCreated", host.CreationTimestamp.Time, "podCondemnedAt", condemnedAt)
 			continue
 		}
-		if err := r.Delete(ctx, host); client.IgnoreNotFound(err) != nil {
+		gone, err := r.deletePodHost(ctx, host, podIP)
+		if err != nil {
 			return err
 		}
-		r.RetiredHosts.retire(host.HostID)
+		if gone {
+			r.RetiredHosts.retire(host.HostID)
+		}
 	}
 	r.RetiredHosts.retirePod(podIP, condemnedAt)
 	return nil
+}
+
+// deletePodHost deletes host if it is still registered at podIP and reports
+// whether it is gone. A draining host keeps heartbeating, so a conflict is
+// retried against an uncached read rather than failing Pod finalization.
+func (r *HostPodReconciler) deletePodHost(ctx context.Context, host *runtimev1alpha1.Host, podIP string) (bool, error) {
+	return deleteObservedWithReread(ctx, r.Client, r.apiReader, host,
+		func() *runtimev1alpha1.Host { return &runtimev1alpha1.Host{} },
+		func(snapshot *runtimev1alpha1.Host) rereadVerdict {
+			switch {
+			case snapshot.UID != host.UID:
+				return snapshotGone
+			case snapshot.Hostname != podIP:
+				return spareSnapshot
+			case !snapshot.DeletionTimestamp.IsZero():
+				// Already deleting: its own finalizer finishes the job. Deleting
+				// again would only race the draining host's heartbeats into
+				// conflicts until the retries ran out and Pod finalization failed.
+				return snapshotGone
+			}
+			return deleteSnapshot
+		})
 }
 
 // podCondemnedAt returns the instant the Pod was told to go away, the earliest
@@ -162,6 +189,7 @@ func podCondemnedAt(pod *corev1.Pod) time.Time {
 
 // SetupWithManager registers the controller and the Host field index it depends on.
 func (r *HostPodReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.apiReader = mgr.GetAPIReader()
 	// Index Host objects by Hostname (= pod IP) so deleteHostForPod can do a
 	// direct lookup rather than listing every Host and filtering in memory.
 	if err := mgr.GetFieldIndexer().IndexField(

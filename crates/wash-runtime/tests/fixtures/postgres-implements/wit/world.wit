@@ -9,5 +9,5 @@ world postgres-implements {
     import wasmcloud:postgres/types@0.1.1-draft;
     import team-a: wasmcloud:postgres/query@0.1.1-draft;
     import team-b: wasmcloud:postgres/query@0.1.1-draft;
-    export wasi:http/incoming-handler@0.2.2;
+    export wasi:http/incoming-handler@0.2.12;
 }
