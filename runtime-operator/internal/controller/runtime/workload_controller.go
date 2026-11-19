@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	"go.wasmcloud.dev/runtime-operator/v2/pkg/wasmbus"
@@ -73,6 +74,8 @@ type WorkloadReconciler struct {
 	liveSlots            hostSlots
 	cleanupSlots         hostSlots
 	startSlots           hostSlots
+	liveWake             chan event.GenericEvent
+	cleanupWake          chan event.GenericEvent
 	cleanupStalls        stalledHosts
 	Bus                  wasmbus.Bus
 	Recorder             events.EventRecorder
@@ -992,7 +995,9 @@ func (r *WorkloadReconciler) reconcileSync(ctx context.Context, workload *runtim
 
 	var status *runtimev2.WorkloadStatus
 	if r.statusBatches != nil {
-		status = r.statusBatches.status(ctx, r, workload)
+		if status, err = r.statusBatches.status(ctx, r, workload); err != nil {
+			return err
+		}
 	}
 	if status == nil {
 		queryCtx, cancel := context.WithTimeout(ctx, workloadStatusTimeout)
@@ -1041,18 +1046,11 @@ func (r *WorkloadReconciler) finalize(ctx context.Context, workload *runtimev1al
 		return nil
 	}
 	// A failed stop has already established that this host is unreachable.
-	// Apply the same give-up policy the stop below would (hostUnavailable)
-	// without paying that timeout once for every remaining replica.
-	if dropped, decided := ctx.Value(stalledVerdictKey{}).(bool); decided {
-		// withHostBudget already looked the stalled host up.
-		if dropped {
-			return nil
-		}
-	} else if r.cleanupStalls.stalled(workload.Status.HostID) {
-		giveUp, err := r.stalledCleanupGivesUp(ctx, workload)
-		if err != nil || giveUp {
-			return err
-		}
+	// withHostBudget, the only way cleanup reaches here, applies the give-up
+	// policy the stop below would (hostUnavailable) without paying that
+	// timeout once for every remaining replica.
+	if dropped, _ := ctx.Value(stalledVerdictKey{}).(bool); dropped {
+		return nil
 	}
 	// Deletion gives up sooner than eviction, on any host not heartbeating:
 	// waiting for its Host to be reaped could block the deletion for good.
@@ -1174,6 +1172,8 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		r.CleanupConcurrency = DefaultCleanupConcurrency
 	}
 	r.statusBatches = &statusBatches{}
+	r.liveWake = make(chan event.GenericEvent, slotWakeBuffer)
+	r.cleanupWake = make(chan event.GenericEvent, slotWakeBuffer)
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &runtimev1alpha1.Workload{}, statusBucketIndex, statusBucketValue); err != nil {
 		return err
 	}
@@ -1235,6 +1235,7 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&runtimev1alpha1.Host{},
 			enqueueSpread(r.workloadsForHost, hostArrivalSpread),
 			builder.WithPredicates(hostPlacementChanged, ignoreDeletes)).
+		WatchesRawSource(source.Channel(r.liveWake, &handler.EnqueueRequestForObject{})).
 		Named("workload-replica").
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r); err != nil {
@@ -1244,6 +1245,7 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&runtimev1alpha1.Workload{}, builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
 			return !obj.GetDeletionTimestamp().IsZero()
 		}))).
+		WatchesRawSource(source.Channel(r.cleanupWake, &handler.EnqueueRequestForObject{})).
 		Named("workload-cleanup").
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.CleanupConcurrency}).
 		Complete(r.withHostBudget(cleanup, true))

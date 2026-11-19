@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -26,8 +27,10 @@ func TestReplicaBatchesYieldAndPreserveTerminatingVictims(t *testing.T) {
 	rs.Spec.Replicas = new(int32(10))
 	r := newCleanupReconciler(t, interceptor.Funcs{}, rs)
 	r.BatchSize, r.Concurrency, r.APIReader = 3, 2, r.Client
-	if err := r.reconcileScaleUp(t.Context(), rs); err != nil {
-		t.Fatal(err)
+	// ScaleUp stays open while replicas are missing, so cleanup of previous
+	// revisions, which waits on it, cannot run mid-rollout.
+	if err := r.reconcileScaleUp(t.Context(), rs); !condition.IsStatusUnknown(err) {
+		t.Fatalf("partial scale-up reported %v", err)
 	}
 	list := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(t.Context(), list); err != nil {
@@ -243,7 +246,8 @@ func TestReplicaDeleteCostIsBoundedAcrossFleetSizes(t *testing.T) {
 					},
 				}, objects...)
 				r.BatchSize, r.Concurrency, r.APIReader = 64, 4, r.Client
-				if err := r.reconcileScaleDown(t.Context(), rs); err != nil {
+				// Every fleet here needs more than one batch, so ScaleDown stays open.
+				if err := r.reconcileScaleDown(t.Context(), rs); !condition.IsStatusUnknown(err) {
 					t.Fatal(err)
 				}
 				if calls.Load() != 64 || peak.Load() != 4 || active.Load() != 0 {
@@ -295,16 +299,16 @@ func TestBusyBackoffSpreadsWaitersByHostBacklog(t *testing.T) {
 	// Two slots: the first two waiters retry within a round; later waiters,
 	// new or old, get the delay of the backlog ahead of them.
 	for i := range 6 {
-		got := b.retry("h", fmt.Sprintf("cleanup/w%d", i), 2).RequeueAfter
+		got := b.retry("h", fmt.Sprintf("cleanup/w%d", i), reconcile.Request{}, 2).RequeueAfter
 		if rounds := i/2 + 1; got < busyRetry*time.Duration(rounds) || got > upper(rounds) {
 			t.Fatalf("waiter %d: %v", i, got)
 		}
 	}
 	// A repeat miss does not count twice, and another host has its own backlog.
-	if got := b.retry("h", "cleanup/w0", 2).RequeueAfter; got > upper(3) {
+	if got := b.retry("h", "cleanup/w0", reconcile.Request{}, 2).RequeueAfter; got > upper(3) {
 		t.Fatalf("repeat waiter: %v", got)
 	}
-	if got := b.retry("other", "cleanup/x", 2).RequeueAfter; got > upper(1) {
+	if got := b.retry("other", "cleanup/x", reconcile.Request{}, 2).RequeueAfter; got > upper(1) {
 		t.Fatalf("other host inherited backlog: %v", got)
 	}
 	for i := range 6 {
@@ -387,5 +391,73 @@ func TestOnlyAnUnansweredStopMarksTheHostStalled(t *testing.T) {
 	cancel()
 	if stopShowsHostStalled(ctx, context.Canceled) {
 		t.Fatal("a cancelled reconcile counted against the host")
+	}
+}
+
+func TestReleasedSlotWakesTheLongestWaiter(t *testing.T) {
+	waiting := placedWorkload()
+	waiting.Name = "wake-waiting"
+	running := placedWorkload()
+	running.Name = "wake-running"
+	r := &WorkloadReconciler{Client: newWorkloadClient(t, waiting, running), HostConcurrency: 1,
+		liveWake: make(chan event.GenericEvent, 1)}
+	next := reconcile.Func(func(context.Context, reconcile.Request) (reconcile.Result, error) {
+		return reconcile.Result{}, nil
+	})
+	release, ok := r.liveSlots.acquire(waiting.Status.HostID, 1)
+	if !ok {
+		t.Fatal("cannot occupy live slot")
+	}
+	if result, err := r.withHostBudget(next, false).Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(waiting)}); err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("waiter was not held back: %+v %v", result, err)
+	}
+	release()
+	if _, err := r.withHostBudget(next, false).Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(running)}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case e := <-r.liveWake:
+		if e.Object.GetName() != waiting.Name {
+			t.Fatalf("woke %s", e.Object.GetName())
+		}
+	default:
+		t.Fatal("a released slot did not wake its waiter")
+	}
+}
+
+func TestNewEndpointSliceSkipsAForeignHolderOfItsName(t *testing.T) {
+	svc := newRouteService(testServiceName)
+	w := newAvailableWorkload("ready", svc.Name, testHostID)
+	r := newRouteReconciler(t, svc, w, newHost("ready", testHostID, testPodIP, routeTestPort))
+	runReconcile(t, r, svc.Name)
+	desired := getSlice(t, r, svc.Name).DeepCopy()
+	desired.ResourceVersion = ""
+	desired.Endpoints = nil
+	for i := range 101 {
+		desired.Endpoints = append(desired.Endpoints, discoveryv1.Endpoint{Addresses: []string{fmt.Sprintf("10.0.0.%d", i+1)}})
+	}
+	// An unrelated slice, outside this controller's labels, holds "-1".
+	foreign := &discoveryv1.EndpointSlice{AddressType: discoveryv1.AddressTypeIPv4}
+	foreign.Name = endpointSliceName(fmt.Sprintf("%s-%d", desired.Name, 1))
+	foreign.Namespace = desired.Namespace
+	if err := r.Create(t.Context(), foreign); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.syncSlices(t.Context(), desired); err != nil {
+		t.Fatalf("a foreign slice blocked routing: %v", err)
+	}
+	list := &discoveryv1.EndpointSliceList{}
+	if err := r.List(t.Context(), list, client.MatchingLabels{routeManagerLabel: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, slice := range list.Items {
+		if slice.Name == foreign.Name {
+			t.Fatal("took over the foreign slice")
+		}
+		total += len(slice.Endpoints)
+	}
+	if len(list.Items) != 2 || total != 101 {
+		t.Fatalf("got %d slices with %d endpoints", len(list.Items), total)
 	}
 }

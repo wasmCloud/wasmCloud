@@ -236,7 +236,9 @@ confirmations remain uncached.
 The runtime applies the normal status handler to every batch entry, including
 custom authorization. Requests are limited to 128 IDs of at most 128 bytes each;
 diagnostic messages in batch replies are truncated to 1 KiB at a UTF-8 boundary.
-The existing query admission limit also applies to batch requests.
+The existing query admission limit also applies to batch requests, and the
+lookups of every batch on a host share one pool of 16, so batching does not
+multiply the number of status handler calls in flight.
 
 Use controller-runtime queue/worker metrics and API-server request metrics to
 tune these limits. Measure traffic withdrawal, actual runtime cleanup, and

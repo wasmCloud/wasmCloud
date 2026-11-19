@@ -182,7 +182,15 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 
 		creates.Go(func() error { return r.createReplica(createCtx, replicaSet, workload, templateHash) })
 	}
-	return creates.Wait()
+	if err := creates.Wait(); err != nil {
+		return err
+	}
+	if missing > count {
+		// Not True until every replica exists: cleanup of previous revisions
+		// waits on ScaleUp, and must not run while new replicas are missing.
+		return condition.ErrStatusUnknown(fmt.Errorf("created %d of %d missing replicas; continuing", count, missing))
+	}
+	return nil
 }
 
 func (r *WorkloadReplicaSetReconciler) createReplica(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet, workload *runtimev1alpha1.Workload, templateHash string) error {
@@ -257,7 +265,14 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 	if excess <= 0 {
 		return nil
 	}
-	return r.deleteReplicaBatch(ctx, replicaSet, live[len(live)-excess:])
+	if err := r.deleteReplicaBatch(ctx, replicaSet, live[len(live)-excess:]); err != nil {
+		return err
+	}
+	if excess > r.batchSize() {
+		// As in scale-up, the condition stays open until the batches finish.
+		return condition.ErrStatusUnknown(fmt.Errorf("deleted %d of %d excess replicas; continuing", r.batchSize(), excess))
+	}
+	return nil
 }
 
 func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {

@@ -7,11 +7,13 @@ package runtime
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"hash/fnv"
 	"net"
 	"reflect"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -207,7 +209,13 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	sortEndpoints(desiredSlice.Endpoints)
 
-	return ctrl.Result{}, r.syncSlices(ctx, desiredSlice)
+	if err := r.syncSlices(ctx, desiredSlice); err != nil {
+		if stderrors.Is(err, errSliceNotYetCached) {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
 }
 
 // Preserve existing membership so deleting one endpoint changes only its slice.
@@ -277,25 +285,62 @@ func (r *WorkloadRouteReconciler) syncSlices(ctx context.Context, desired *disco
 		if slot == len(slices) {
 			next := desired.DeepCopy()
 			next.Endpoints = nil
-			for suffix := 0; ; suffix++ {
-				next.Name = desired.Name
-				if suffix > 0 {
-					next.Name = endpointSliceName(fmt.Sprintf("%s-%d", desired.Name, suffix))
-				}
-				if !occupied[next.Name] {
-					break
-				}
-			}
-			occupied[next.Name] = true
+			next.Name = freeSliceName(desired.Name, occupied)
 			slices = append(slices, next)
 		}
 		slices[slot].Endpoints = append(slices[slot].Endpoints, remaining[address])
 	}
-	return r.applySlices(ctx, list, slices)
+	return r.applySlices(ctx, list, slices, occupied)
+}
+
+// freeSliceName returns the first name for base, then base-1, base-2 and so
+// on, that is not in occupied, and marks it taken.
+func freeSliceName(base string, occupied map[string]bool) string {
+	for suffix := 0; ; suffix++ {
+		name := base
+		if suffix > 0 {
+			name = endpointSliceName(fmt.Sprintf("%s-%d", base, suffix))
+		}
+		if !occupied[name] {
+			occupied[name] = true
+			return name
+		}
+	}
+}
+
+// errSliceNotYetCached means a slice this controller created is not in its
+// cache yet. The pass is retried shortly rather than reported as a failure.
+var errSliceNotYetCached = stderrors.New("endpoint slice not yet in cache")
+
+// createSlice creates next, moving it to a free name when an object this
+// controller does not own already holds the generated one.
+func (r *WorkloadRouteReconciler) createSlice(ctx context.Context, next *discoveryv1.EndpointSlice, occupied map[string]bool) error {
+	base := next.Labels[discoveryv1.LabelServiceName]
+	for range 8 {
+		err := r.Create(ctx, next)
+		if !errors.IsAlreadyExists(err) {
+			return err
+		}
+		existing := &discoveryv1.EndpointSlice{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(next), existing); err != nil {
+			if errors.IsNotFound(err) {
+				// The cache has not seen the slice this name belongs to,
+				// most likely one an earlier pass just created.
+				return errSliceNotYetCached
+			}
+			return err
+		}
+		owner := metav1.GetControllerOfNoCopy(existing)
+		if owner != nil && len(next.OwnerReferences) > 0 && owner.UID == next.OwnerReferences[0].UID {
+			return errSliceNotYetCached
+		}
+		next.Name = freeSliceName(endpointSliceName(base), occupied)
+	}
+	return fmt.Errorf("no free EndpointSlice name for service %s", base)
 }
 
 func (r *WorkloadRouteReconciler) applySlices(
-	ctx context.Context, list *discoveryv1.EndpointSliceList, slices []*discoveryv1.EndpointSlice,
+	ctx context.Context, list *discoveryv1.EndpointSliceList, slices []*discoveryv1.EndpointSlice, occupied map[string]bool,
 ) error {
 	existing := make(map[string]*discoveryv1.EndpointSlice, len(list.Items))
 	for i := range list.Items {
@@ -313,7 +358,7 @@ func (r *WorkloadRouteReconciler) applySlices(
 		}
 		sort.Slice(next.Endpoints, func(i, j int) bool { return next.Endpoints[i].Addresses[0] < next.Endpoints[j].Addresses[0] })
 		if current == nil {
-			if err := r.Create(ctx, next); err != nil {
+			if err := r.createSlice(ctx, next, occupied); err != nil {
 				return err
 			}
 			continue

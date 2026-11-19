@@ -8,6 +8,7 @@ import (
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -18,9 +19,14 @@ const (
 	DefaultReplicaBatchSize    = 64
 	DefaultReplicaConcurrency  = 8
 	busyRetry                  = 250 * time.Millisecond
-	// busyRetryMax caps the backoff for requests waiting on a host's slots, so
-	// a deep per-host backlog does not spin through the queue.
-	busyRetryMax = 4 * time.Second
+	// busyRetryMax caps the backoff for requests waiting on a host's slots.
+	// A released slot wakes the next waiter directly, so this is only the
+	// fallback for a wake-up that was dropped, and a deep backlog (a start
+	// holds its slot up to a minute) does not spin through the queue.
+	busyRetryMax = 30 * time.Second
+	// slotWakeBuffer bounds wake-ups not yet taken by the queue. A full buffer
+	// drops the wake-up; the waiter's own requeue still runs.
+	slotWakeBuffer = 1024
 )
 
 // busyBackoff spaces out retries for requests that found no free slot. The
@@ -28,26 +34,35 @@ const (
 // one request has waited, so newly queued requests do not outrun old ones.
 type busyBackoff struct {
 	mu      sync.Mutex
-	waiting map[string]map[string]struct{}
+	waiting map[string]map[string]waiter
 	hostOf  map[string]string
 }
 
-// retry records key as waiting on host and returns its requeue. limit is the
-// host's slot count; key should be unique per queue.
-func (b *busyBackoff) retry(host, key string, limit int) reconcile.Result {
+type waiter struct {
+	req   reconcile.Request
+	since time.Time
+}
+
+// retry records key as waiting on host, a slot pool, and returns its requeue.
+// limit is the pool's slot count; key should be unique per queue.
+func (b *busyBackoff) retry(host, key string, req reconcile.Request, limit int) reconcile.Result {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.waiting == nil {
-		b.waiting = make(map[string]map[string]struct{})
+		b.waiting = make(map[string]map[string]waiter)
 		b.hostOf = make(map[string]string)
 	}
 	if previous, ok := b.hostOf[key]; ok && previous != host {
 		b.forget(key)
 	}
 	if b.waiting[host] == nil {
-		b.waiting[host] = make(map[string]struct{})
+		b.waiting[host] = make(map[string]waiter)
 	}
-	b.waiting[host][key] = struct{}{}
+	since := time.Now()
+	if w, ok := b.waiting[host][key]; ok {
+		since = w.since
+	}
+	b.waiting[host][key] = waiter{req: req, since: since}
 	b.hostOf[key] = host
 	// Each round frees about limit slots; spread the waiters over the rounds
 	// ahead of them.
@@ -58,6 +73,27 @@ func (b *busyBackoff) retry(host, key string, limit int) reconcile.Result {
 // jittered adds up to 50% so a backlog does not wake in lockstep.
 func jittered(delay time.Duration) time.Duration {
 	return wait.Jitter(delay, 0.5)
+}
+
+// next removes and returns the longest-waiting request on host, so a released
+// slot goes to it rather than to whichever retry happens to fire first.
+func (b *busyBackoff) next(host string) (reconcile.Request, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var (
+		oldest string
+		found  waiter
+	)
+	for key, w := range b.waiting[host] {
+		if oldest == "" || w.since.Before(found.since) {
+			oldest, found = key, w
+		}
+	}
+	if oldest == "" {
+		return reconcile.Request{}, false
+	}
+	b.forget(oldest)
+	return found.req, true
 }
 
 // done removes key from the waiters once it ran or no longer needs a slot.
@@ -150,7 +186,7 @@ func (r *WorkloadReconciler) withHostBudget(next reconcile.Reconciler, cleanup b
 		slots, pool := &r.liveSlots, host
 		switch {
 		case cleanup:
-			slots = &r.cleanupSlots
+			slots, pool = &r.cleanupSlots, "cleanup/"+host
 		case !workload.Status.AllTrue(runtimev1alpha1.WorkloadConditionPlacement):
 			// A pass that may send a Start can hold its slot for the whole
 			// start timeout. Starts get their own slots so they cannot keep
@@ -159,9 +195,12 @@ func (r *WorkloadReconciler) withHostBudget(next reconcile.Reconciler, cleanup b
 		}
 		release, ok := slots.acquire(host, r.hostConcurrency())
 		if !ok {
-			return r.busyWaits.retry(pool, key, r.hostConcurrency()), nil
+			return r.busyWaits.retry(pool, key, req, r.hostConcurrency()), nil
 		}
-		defer release()
+		defer func() {
+			release()
+			r.wakeWaiter(pool, cleanup)
+		}()
 		r.busyWaits.done(key)
 		if cleanup && r.cleanupStalls.stalled(host) {
 			// A gone or non-heartbeating host is dropped by finalize under the
@@ -178,4 +217,26 @@ func (r *WorkloadReconciler) withHostBudget(next reconcile.Reconciler, cleanup b
 		}
 		return next.Reconcile(ctx, req)
 	})
+}
+
+// wakeWaiter hands a slot just released in pool to its longest waiter by
+// queueing that request now, instead of leaving it to its backoff.
+func (r *WorkloadReconciler) wakeWaiter(pool string, cleanup bool) {
+	wake := r.liveWake
+	if cleanup {
+		wake = r.cleanupWake
+	}
+	if wake == nil {
+		return
+	}
+	req, ok := r.busyWaits.next(pool)
+	if !ok {
+		return
+	}
+	w := &runtimev1alpha1.Workload{}
+	w.Name, w.Namespace = req.Name, req.Namespace
+	select {
+	case wake <- event.GenericEvent{Object: w}:
+	default:
+	}
 }

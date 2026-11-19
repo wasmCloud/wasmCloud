@@ -49,6 +49,10 @@ fn attachment_shutdown_budget(plugin_stop: Duration) -> Duration {
 pub struct HostControlDefaults {
     host: Arc<Host>,
     starts: Arc<tokio::sync::Semaphore>,
+    /// Status lookups in flight across every `workload.status.batch` request.
+    /// A batch holds one query admission slot, so without a shared pool its
+    /// lookups would multiply the admission limit.
+    batch_lookups: Arc<tokio::sync::Semaphore>,
     _control: Option<Arc<crate::host::HostControlLease>>,
 }
 
@@ -819,6 +823,7 @@ fn spawn_control_loop(
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: starts.clone(),
+            batch_lookups: Arc::new(tokio::sync::Semaphore::new(STATUS_BATCH_CONCURRENCY)),
             _control: Some(control),
         };
         // Commands run as their own tasks, so shutdown has to wait for
@@ -1735,6 +1740,8 @@ async fn handle_command(
             // batch past the caller's timeout. `buffered` keeps request order.
             let workloads = futures::stream::iter(req.workload_ids)
                 .map(|workload_id| async move {
+                    // The semaphore is never closed, so a permit always arrives.
+                    let _lookup = defaults.batch_lookups.acquire().await;
                     let request = types::v2::WorkloadStatusRequest {
                         workload_id: workload_id.clone(),
                     };
@@ -1867,7 +1874,7 @@ fn workload_start_error(workload_id: &str, message: String) -> types::v2::Worklo
     }
 }
 
-/// Status lookups a single `workload.status.batch` request runs at once.
+/// Status lookups all `workload.status.batch` requests on a host run at once.
 const STATUS_BATCH_CONCURRENCY: usize = 16;
 
 fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatus {
@@ -2467,6 +2474,7 @@ mod tests {
         HostControlDefaults {
             host,
             starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            batch_lookups: Arc::new(tokio::sync::Semaphore::new(STATUS_BATCH_CONCURRENCY)),
             _control: None,
         }
     }
@@ -2791,6 +2799,7 @@ mod tests {
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            batch_lookups: Arc::new(tokio::sync::Semaphore::new(STATUS_BATCH_CONCURRENCY)),
             _control: None,
         };
         let reply = AnnotatingStatus
