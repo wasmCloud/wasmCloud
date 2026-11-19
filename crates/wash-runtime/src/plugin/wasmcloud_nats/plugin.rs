@@ -275,6 +275,22 @@ impl WasmcloudNats {
             let handle = super::keys::guard_connection(&merged, acquired)?;
             *opened = true;
 
+            // `*` creation is bounded only by the account, so the account has
+            // to bound it; NATS then refuses each create past its limits.
+            if config.policy.creates_any_bucket() {
+                let account = handle.jetstream.query_account().await.with_context(|| {
+                    format!(
+                        "wasmcloud:nats binding `{}` grants `bucket-create-allow: *`, which needs \
+                         the JetStream account's limits, and they could not be read",
+                        describe_binding(binding)
+                    )
+                })?;
+                config
+                    .policy
+                    .check_account_budget(&account)
+                    .map_err(|e| anyhow::anyhow!("binding `{}`: {e}", describe_binding(binding)))?;
+            }
+
             debug!(
                 workload_id,
                 binding = describe_binding(binding),
@@ -732,12 +748,18 @@ impl HostPlugin for WasmcloudNats {
                     .map(super::policy::NatsSubjectPattern::parse)
                     .all(|v| ceiling.iter().any(|c| c.contains(&v)))
             }
+            // Bucket grants are patterns too: an operator's `*` narrows to
+            // names, and a name never widens to `*`.
+            "bucket-allow" | "bucket-create-allow" | "bucket-delete-allow" => {
+                let ceiling: Vec<_> = split(ceiling)
+                    .map(super::policy::NatsSubjectPattern::parse)
+                    .collect();
+                split(value)
+                    .map(super::policy::NatsSubjectPattern::parse)
+                    .all(|v| ceiling.iter().any(|c| c.contains(&v)))
+            }
             // Plain names: subset, not pattern containment.
-            "stream-allow"
-            | "stream-delete-allow"
-            | "bucket-allow"
-            | "bucket-create-allow"
-            | "bucket-delete-allow" => {
+            "stream-allow" | "stream-delete-allow" => {
                 let ceiling: std::collections::HashSet<&str> = split(ceiling).collect();
                 split(value).all(|v| ceiling.contains(v))
             }
@@ -1303,12 +1325,17 @@ mod tests {
     #[test]
     fn bucket_admin_ceilings_only_allow_narrowing() {
         let plugin = WasmcloudNats::new();
-        for key in ["bucket-create-allow", "bucket-delete-allow"] {
+        for key in ["bucket-allow", "bucket-create-allow", "bucket-delete-allow"] {
             assert!(plugin.narrows(key, "cache,sessions", "cache"), "{key}");
             assert!(plugin.narrows(key, "cache", ""), "{key}");
             assert!(!plugin.narrows(key, "cache", "cache,other"), "{key}");
             assert!(!plugin.narrows(key, "", "cache"), "{key}");
             assert!(!plugin.narrows(key, "cache", ">"), "{key}");
+            // An operator's `*` narrows to names; a name never widens to `*`.
+            assert!(plugin.narrows(key, "*", "cache,sessions"), "{key}");
+            assert!(plugin.narrows(key, "*", "*"), "{key}");
+            assert!(!plugin.narrows(key, "cache", "*"), "{key}");
+            assert!(!plugin.narrows(key, "*", ">"), "{key}");
         }
         assert!(plugin.narrows("bucket-max-bytes", "1048576", "1024"));
         assert!(plugin.narrows("bucket-max-bytes", "1048576", "1048576"));

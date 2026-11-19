@@ -175,6 +175,57 @@ pub struct PolicySpec {
     pub bucket_storage_allow: Vec<BucketStorage>,
 }
 
+/// `bucket-create-allow` value that grants any bucket name.
+pub const ANY_BUCKET: &str = "*";
+
+impl PolicySpec {
+    /// Whether creation is granted for any bucket name, so only the JetStream
+    /// account's limits bound how many buckets there can be.
+    #[must_use]
+    pub fn creates_any_bucket(&self) -> bool {
+        self.bucket_create_allow
+            .iter()
+            .any(|name| name == ANY_BUCKET)
+    }
+
+    /// Checks that the JetStream account bounds what `*` creation can use: a
+    /// positive stream limit, and a storage limit for each allowed storage
+    /// type. Uses the replica tier's limits when the account has tiers. `Err`
+    /// names the limits that are unlimited.
+    pub fn check_account_budget(
+        &self,
+        account: &async_nats::jetstream::account::Account,
+    ) -> Result<(), String> {
+        let tier = format!("R{}", self.bucket_replicas.unwrap_or(1));
+        let limits = account
+            .tiers
+            .get(&tier)
+            .map_or(&account.limits, |t| &t.limits);
+        let bounded = |limit: Option<i64>| limit.is_some_and(|n| n > 0);
+        let mut unlimited = Vec::new();
+        if !bounded(limits.max_streams) {
+            unlimited.push("max streams");
+        }
+        if self.bucket_storage_allow.contains(&BucketStorage::File) && !bounded(limits.max_storage)
+        {
+            unlimited.push("max file storage");
+        }
+        if self.bucket_storage_allow.contains(&BucketStorage::Memory) && !bounded(limits.max_memory)
+        {
+            unlimited.push("max memory storage");
+        }
+        if unlimited.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "`bucket-create-allow: *` lets a workload create any number of buckets, so the \
+             JetStream account must bound them, but it has no {} limit; set them on the \
+             account, or list bucket names instead",
+            unlimited.join(", ")
+        ))
+    }
+}
+
 /// JetStream's cap on replicas per stream.
 pub const MAX_BUCKET_REPLICAS: usize = 5;
 
@@ -627,14 +678,15 @@ fn read<A>(
     };
 
     let bucket_create_allow = r.list("bucket-create-allow");
-    // Explicit names keep the number of buckets a workload can make finite.
+    // Names, or `*` on its own: the operator's explicit opt-in to any name,
+    // bounded by the JetStream account's limits (checked at bind).
     if let Some(pattern) = bucket_create_allow
         .iter()
-        .find(|name| name.contains(['*', '>']))
+        .find(|name| *name != ANY_BUCKET && name.contains(['*', '>']))
     {
         bail!(
-            "`bucket-create-allow` must list bucket names, got the wildcard `{pattern}`; a \
-             wildcard would let a workload create any number of buckets"
+            "`bucket-create-allow` takes bucket names, or `*` on its own for any name, got \
+             `{pattern}`"
         );
     }
     // Creating storage needs a declared size, so leaving it out never grants
@@ -1431,16 +1483,36 @@ mod tests {
     }
 
     #[test]
-    fn a_create_grant_lists_bucket_names() {
-        for wildcard in [">", "*", "cache,>", "tenant-*"] {
+    fn a_create_grant_lists_names_or_any() {
+        for wildcard in [">", "cache,>", "tenant-*", "a.*"] {
             let err = NatsConfig::from_map(&map(&[
                 ("servers", "nats://localhost:4222"),
                 ("bucket-create-allow", wildcard),
                 ("bucket-max-bytes", "1024"),
             ]))
             .unwrap_err();
-            assert!(err.to_string().contains("wildcard"), "{wildcard}: {err:#}");
+            assert!(
+                err.to_string().contains("`*` on its own"),
+                "{wildcard}: {err:#}"
+            );
         }
+        // `*` on its own is the operator's opt-in to any name.
+        for any in ["*", "cache,*"] {
+            let config = NatsConfig::from_map(&map(&[
+                ("servers", "nats://localhost:4222"),
+                ("bucket-create-allow", any),
+                ("bucket-max-bytes", "1024"),
+            ]))
+            .unwrap();
+            assert!(config.policy.creates_any_bucket(), "{any}");
+        }
+        let named = NatsConfig::from_map(&map(&[
+            ("servers", "nats://localhost:4222"),
+            ("bucket-create-allow", "cache"),
+            ("bucket-max-bytes", "1024"),
+        ]))
+        .unwrap();
+        assert!(!named.policy.creates_any_bucket());
         // Reading and deleting may still use patterns.
         assert!(
             NatsConfig::from_map(&map(&[
@@ -1450,6 +1522,60 @@ mod tests {
             ]))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn any_bucket_creation_needs_a_bounded_account() {
+        use async_nats::jetstream::account::{Account, Limits, Tier};
+        let limits = |streams, file, memory| Limits {
+            max_streams: streams,
+            max_storage: file,
+            max_memory: memory,
+            ..Default::default()
+        };
+        let account = |l| Account {
+            limits: l,
+            ..Default::default()
+        };
+        let spec = |storage: &[BucketStorage], replicas| PolicySpec {
+            bucket_create_allow: vec![ANY_BUCKET.to_string()],
+            bucket_storage_allow: storage.to_vec(),
+            bucket_replicas: replicas,
+            ..Default::default()
+        };
+        let file = spec(&[BucketStorage::File], None);
+
+        assert!(
+            file.check_account_budget(&account(limits(Some(10), Some(1 << 20), None)))
+                .is_ok()
+        );
+        // Unlimited (`-1`, read as none) or zero is no bound.
+        let err = file
+            .check_account_budget(&account(limits(None, Some(0), None)))
+            .unwrap_err();
+        assert!(err.contains("max streams, max file storage"), "{err}");
+        // Memory is only required when memory buckets are allowed.
+        let both = spec(&[BucketStorage::File, BucketStorage::Memory], None);
+        let err = both
+            .check_account_budget(&account(limits(Some(10), Some(1 << 20), None)))
+            .unwrap_err();
+        assert!(err.contains("max memory storage"), "{err}");
+
+        // A tiered account is checked at the replica count's tier.
+        let mut tiered = account(limits(None, None, None));
+        tiered.tiers.insert(
+            "R3".to_string(),
+            Tier {
+                limits: limits(Some(5), Some(1 << 20), None),
+                ..Default::default()
+            },
+        );
+        assert!(
+            spec(&[BucketStorage::File], Some(3))
+                .check_account_budget(&tiered)
+                .is_ok()
+        );
+        assert!(file.check_account_budget(&tiered).is_err());
     }
 
     #[test]

@@ -115,9 +115,10 @@ interface types {
     ///
     /// `kv-admin.create-bucket` also returns it, as
     /// `create-bucket-error.nats`, when the requested storage is not in the
-    /// host's `bucket-storage-allow`, or when the requested `max-bytes` is
-    /// over its `bucket-max-bytes` and no such bucket exists (an existing one
-    /// is `config-conflict`).
+    /// host's `bucket-storage-allow`, when the requested `max-bytes` is over
+    /// its `bucket-max-bytes` and no such bucket exists (an existing one is
+    /// `config-conflict`), or when the JetStream account's stream or storage
+    /// limits refuse a new bucket.
     ///
     /// Either way nothing was delivered, and retrying unchanged fails the
     /// same way.
@@ -554,9 +555,11 @@ interface kv {
 /// deny-by-default and host-owned.
 ///
 /// The host also bounds what is created. `bucket-create-allow` lists bucket
-/// names, never patterns, so a workload can create only those buckets.
-/// `bucket-max-bytes` caps each one's size, and `bucket-storage-allow` decides
-/// whether it may use memory (file only unless the host allows memory).
+/// names, or is `*` for any name. Under `*` the JetStream account's stream
+/// and storage limits bound how many buckets there can be, and a create they
+/// refuse is `limit-exceeded`. Either way `bucket-max-bytes` caps each
+/// bucket's size, and `bucket-storage-allow` decides whether it may use
+/// memory (file only unless the host allows memory).
 ///
 /// Replicas, placement, mirrors, and sources are not exposed: they are
 /// cluster decisions. The host's `bucket-replicas` sets the replica count;

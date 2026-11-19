@@ -757,15 +757,25 @@ runtime:
       # checks its stored subject. All grants are host-owned ceilings.
       # Creating or deleting a KV bucket (`kv-admin`) needs the bucket in
       # `bucket-allow` and in `bucket-create-allow` or `bucket-delete-allow`.
-      # `bucket-create-allow` lists bucket names, not patterns, so the
-      # buckets a workload can create are exactly the ones named. A binding
-      # with it must set `bucket-max-bytes`: each bucket's largest size, or
-      # `unlimited` to leave it to the JetStream account limits.
-      # `bucket-storage-allow` (`file`, `memory`, or both) is the storage
-      # those buckets may use; unset is `file`, so a bucket only takes server
-      # RAM when the operator allows memory. The most a binding can create is
-      # one bucket per name, each up to `bucket-max-bytes`, times
-      # `bucket-replicas` copies.
+      # `bucket-create-allow` lists bucket names, so the buckets a workload
+      # can create are exactly the ones named. A binding with it must set
+      # `bucket-max-bytes`: each bucket's largest size, or `unlimited` to
+      # leave it to the JetStream account limits. `bucket-storage-allow`
+      # (`file`, `memory`, or both) is the storage those buckets may use;
+      # unset is `file`, so a bucket only takes server RAM when the operator
+      # allows memory. The most a binding can create is one bucket per name,
+      # each up to `bucket-max-bytes`, times `bucket-replicas` copies.
+      #
+      # `bucket-create-allow: "*"` instead lets a workload create buckets of
+      # any name. The size, storage and replica settings still apply to each
+      # one, and a workload may narrow `*` to names. The JetStream account
+      # bounds the rest: the binding is refused at bind unless the account
+      # has a positive stream limit and a storage limit for each allowed
+      # storage type, and NATS refuses each create past them
+      # (`limit-exceeded`). Every stream in the account counts against those
+      # limits, workloads in one account share them, and `bucket-allow: "*"`
+      # also reaches the account's existing buckets. Give each independently
+      # budgeted tenant or workload its own NATS account.
       # `bucket-replicas` (1-5, operator-only) sets how many copies such a
       # bucket keeps; unset is one. Changing any of these later leaves
       # existing buckets as they are. A workload's repeat create still opens
