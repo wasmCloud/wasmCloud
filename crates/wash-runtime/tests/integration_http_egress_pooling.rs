@@ -34,7 +34,7 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
-        egress_policy::EgressAddressPolicy,
+        allowed_loopback::AllowedLoopbackPort,
         http::{DynamicRouter, Ingress},
     },
     plugin::{wasi_config::DynamicConfig, wasi_logging::TracingLogger},
@@ -140,12 +140,12 @@ impl Drop for LiveConnection {
 /// Start a host whose ingress uses the *default* outgoing handler — the
 /// pooled transport under test.
 ///
-/// The upstream listens on loopback, which the default address policy refuses
-/// for `wasi:http` as it does for sockets, so this host permits special ranges.
+/// The upstream uses the explicit host-loopback route and per-component port
+/// grant, under the default enforcing address policy.
 async fn start_host() -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder()
         .with_socket_policy(Arc::new(SocketPolicy {
-            egress_addrs: EgressAddressPolicy::permissive(),
+            host_loopback_enabled: true,
             ..Default::default()
         }))
         .build()?;
@@ -171,9 +171,11 @@ fn egress_workload_with(
     pool_size: i32,
     max_concurrency: i32,
 ) -> WorkloadStartRequest {
-    let allowed: wash_runtime::host::allowed_hosts::AllowedHost = allowed_host
-        .parse()
-        .expect("test gave an invalid allowed_hosts entry");
+    let upstream: std::net::SocketAddr = allowed_host.parse().expect("upstream address");
+    let allowed: wash_runtime::host::allowed_hosts::AllowedHost =
+        format!("host.wasmcloud.internal:{}", upstream.port())
+            .parse()
+            .expect("test gave an invalid allowed_hosts entry");
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
@@ -193,7 +195,8 @@ fn egress_workload_with(
                     volume_mounts: vec![],
                     allowed_hosts: vec![allowed].into(),
                     allowed_ip_name_lookups: Default::default(),
-                    allowed_host_loopback_ports: Default::default(),
+                    allowed_host_loopback_ports: vec![AllowedLoopbackPort::tcp(upstream.port())]
+                        .into(),
                 },
                 pool_size,
                 max_invocations: 1000,
@@ -217,6 +220,32 @@ fn egress_workload_with(
     }
 }
 
+#[tokio::test]
+async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
+    let (upstream, stats) = spawn_counting_server().await?;
+    let (ingress, host) = start_host().await?;
+    let mut workload = egress_workload("without-loopback-grant", &upstream.to_string());
+    workload.workload.components[0]
+        .local_resources
+        .allowed_host_loopback_ports = Arc::default();
+    host.workload_start(workload).await?;
+    let response = reqwest::Client::new()
+        .get(format!(
+            "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
+            upstream.port()
+        ))
+        .header("HOST", "test")
+        .send()
+        .await?;
+    assert_eq!(response.status(), 502);
+    assert_eq!(stats.opened.load(Ordering::SeqCst), 0);
+    host.workload_stop(WorkloadStopRequest {
+        workload_id: "without-loopback-grant".into(),
+    })
+    .await?;
+    Ok(())
+}
+
 /// Drive `count` inbound requests, each of which makes one outbound request
 /// through the host's egress transport. Returns nothing; asserts every hop
 /// succeeded so a connection count can't look good because requests failed.
@@ -230,7 +259,10 @@ async fn drive_requests(
         let response = timeout(
             Duration::from_secs(10),
             client
-                .get(format!("http://{ingress}/fetch?target={upstream}"))
+                .get(format!(
+                    "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
+                    upstream.port()
+                ))
                 .header("HOST", "test")
                 .send(),
         )
@@ -353,7 +385,10 @@ async fn drive_concurrent_requests(
             let response = timeout(
                 Duration::from_secs(30),
                 client
-                    .get(format!("http://{ingress}/fetch?target={upstream}"))
+                    .get(format!(
+                        "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
+                        upstream.port()
+                    ))
                     .header("HOST", "test")
                     .send(),
             )

@@ -482,6 +482,15 @@ pub(crate) async fn connect_http_tcp(
         }
     };
     let connect = async {
+        if let Ok(authority) = authority.parse::<hyper::http::uri::Authority>()
+            && let Some(addr) =
+                host_loopback_addr(authority.host(), authority.port_u16().unwrap_or(80))
+        {
+            if let Some(gate) = gate {
+                gate.check_host_loopback(addr).map_err(refused_error)?;
+            }
+            return TcpStream::connect(addr).await.map_err(io_error);
+        }
         let resolved: Vec<SocketAddr> = tokio::net::lookup_host(authority)
             .await
             .map_err(io_error)?
@@ -499,6 +508,21 @@ pub(crate) async fn connect_http_tcp(
         warn!(err = ?e, authority = %authority, "failed to set TCP_NODELAY on outbound connection");
     }
     Ok(stream)
+}
+
+/// The reserved host name is resolved locally, never through DNS. Its
+/// component-level grant is checked by `CtxHttpHooks` before dispatch, on
+/// every request, so sharing a workload's pool cannot share a component's
+/// permission. The URI stays intact for HTTP Host and TLS SNI.
+pub(crate) fn host_loopback_addr(host: &str, port: u16) -> Option<SocketAddr> {
+    use crate::sockets::internal_names::{self, InternalName};
+
+    match internal_names::resolve(host) {
+        Some(Ok(InternalName::Host)) => {
+            Some(SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port))
+        }
+        _ => None,
+    }
 }
 
 /// The guest-visible error for an address the egress gate refused: distinct
@@ -1306,6 +1330,16 @@ impl tower_service::Service<hyper_util::client::legacy::connect::dns::Name> for 
     }
 
     fn call(&mut self, name: hyper_util::client::legacy::connect::dns::Name) -> Self::Future {
+        if let Some(addr) = host_loopback_addr(name.as_str(), self.port) {
+            let decision = self
+                .gate
+                .as_ref()
+                .map_or(Ok(()), |gate| gate.check_host_loopback(addr));
+            return Box::pin(async move {
+                decision?;
+                Ok(vec![addr].into_iter())
+            });
+        }
         let resolving = self.inner.call(name);
         let gate = self.gate.clone();
         let port = self.port;
@@ -3198,6 +3232,102 @@ mod tests {
         (clients.client("workload"), meters)
     }
 
+    fn host_loopback_gate() -> EgressAddressGate {
+        EgressAddressGate::from_socket_policy(&crate::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn the_reserved_host_name_reaches_loopback_for_http_and_grpc() -> anyhow::Result<()> {
+        let (http_addr, _) = spawn_counting_server().await;
+        let (grpc_addr, _) = spawn_counting_h2c_server().await;
+        let clients = WorkloadClients::new(default_client_tls_config());
+        clients.install_egress_gate(host_loopback_gate());
+        let client = clients.client("workload");
+        let (response, _io) = client
+            .send_request(
+                request(&format!(
+                    "http://host.wasmcloud.internal:{}/",
+                    http_addr.port()
+                )),
+                test_options(),
+            )
+            .await?;
+        assert_eq!(response.status(), 200);
+        let (response, _io) = client
+            .send_grpc_request(
+                grpc_request(&format!(
+                    "http://host.wasmcloud.internal:{}/svc.Test/Call",
+                    grpc_addr.port()
+                )),
+                test_options(),
+            )
+            .await?;
+        assert_eq!(response.status(), 200);
+        let stream = connect_http_tcp(
+            &format!("HOST.WASMCLOUD.INTERNAL.:{}", http_addr.port()),
+            Duration::from_secs(5),
+            Some(&host_loopback_gate()),
+        )
+        .await?;
+        assert_eq!(stream.peer_addr()?, http_addr);
+        for uri in [
+            format!("http://localhost:{}/", http_addr.port()),
+            format!("http://127.255.255.254:{}/", http_addr.port()),
+            "http://169.254.169.254/".into(),
+        ] {
+            let result = client.send_request(request(&uri), test_options()).await;
+            assert!(
+                matches!(result, Err(HttpError::DestinationIpProhibited)),
+                "{uri} must still pass the ordinary address gate"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_reserved_host_name_keeps_the_host_gate_and_port_reservations() -> anyhow::Result<()>
+    {
+        use crate::host::declared_port::Protocol;
+        use crate::host::ports::{PortOwner, PortTable};
+        use crate::sockets::policy::SocketPolicy;
+
+        let (addr, connections) = spawn_counting_server().await;
+        let table = PortTable::new();
+        let _owned = table.reserve(Protocol::Tcp, addr, PortOwner::Host("ingress".into()))?;
+        for policy in [
+            SocketPolicy::default(),
+            SocketPolicy {
+                host_loopback_enabled: true,
+                host_owned_ports: Some(table),
+                ..Default::default()
+            },
+        ] {
+            let gate = EgressAddressGate::from_socket_policy(&policy);
+            let clients = WorkloadClients::new(default_client_tls_config());
+            clients.install_egress_gate(gate.clone());
+            let result = clients
+                .client("workload")
+                .send_request(
+                    request(&format!("http://host.wasmcloud.internal:{}/", addr.port())),
+                    test_options(),
+                )
+                .await;
+            assert!(matches!(result, Err(HttpError::DestinationIpProhibited)));
+            let result = connect_http_tcp(
+                &format!("host.wasmcloud.internal:{}", addr.port()),
+                Duration::from_secs(5),
+                Some(&gate),
+            )
+            .await;
+            assert!(matches!(result, Err(HttpError::DestinationIpProhibited)));
+        }
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
+        Ok(())
+    }
+
     /// The DNS-rebinding shape: `allowedHosts` let the guest name `localhost`,
     /// and the name resolves to the machine itself. Nothing is dialed.
     #[tokio::test]
@@ -3321,14 +3451,15 @@ mod tests {
         assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
-    /// A TLS server for `localhost` behind a private CA that records the
-    /// server name each client asked for.
-    async fn sni_recording_tls_server() -> (u16, String, Arc<std::sync::Mutex<Vec<String>>>) {
+    /// A TLS server behind a private CA that records TLS SNI followed by the
+    /// HTTP Host header each client sent.
+    async fn sni_recording_tls_server(
+        name: &str,
+    ) -> (u16, String, Arc<std::sync::Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         crate::init_crypto();
-        let certified_key =
-            rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let certified_key = rcgen::generate_simple_self_signed(vec![name.to_string()]).unwrap();
         let ca_pem = certified_key.cert.pem();
         let key_der =
             rustls::pki_types::PrivateKeyDer::try_from(certified_key.signing_key.serialize_der())
@@ -3361,6 +3492,13 @@ mod tests {
                             Ok(n) => seen.extend_from_slice(&buf[..n]),
                         }
                     }
+                    let head = String::from_utf8_lossy(&seen);
+                    let host = head.lines().find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("host")
+                            .then(|| value.trim().to_string())
+                    });
+                    seen_names.lock().unwrap().push(host.unwrap_or_default());
                     let _ = tls
                         .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
                         .await;
@@ -3375,33 +3513,42 @@ mod tests {
     /// against it.
     #[tokio::test]
     async fn tls_through_the_gate_keeps_the_hostname() {
-        let (port, ca_pem, names) = sni_recording_tls_server().await;
-        let dir = tempfile::tempdir().unwrap();
-        let ca_path = dir.path().join("ca.pem");
-        std::fs::write(&ca_path, ca_pem).unwrap();
-        let tls = ClientTlsOptions {
-            roots: TrustRoots::ExtraOnly,
-            extra_ca_paths: vec![ca_path],
-            ..Default::default()
+        for hostname in ["localhost", "host.wasmcloud.internal"] {
+            let (port, ca_pem, names) = sni_recording_tls_server(hostname).await;
+            let dir = tempfile::tempdir().unwrap();
+            let ca_path = dir.path().join("ca.pem");
+            std::fs::write(&ca_path, ca_pem).unwrap();
+            let tls = ClientTlsOptions {
+                roots: TrustRoots::ExtraOnly,
+                extra_ca_paths: vec![ca_path],
+                ..Default::default()
+            }
+            .build()
+            .unwrap();
+            // Enforcing, with the ranges this test's loopback server needs.
+            let (gate, _) = egress_gate(
+                crate::sockets::policy::EgressMode::Enforce,
+                crate::host::egress_policy::EgressAddressPolicy::permissive(),
+            );
+            let clients = WorkloadClients::new(tls);
+            clients.install_egress_gate(if hostname == "localhost" {
+                gate
+            } else {
+                host_loopback_gate()
+            });
+            let (response, _io) = clients
+                .client("workload")
+                .send_request(
+                    request(&format!("https://{hostname}:{port}/")),
+                    test_options(),
+                )
+                .await
+                .expect("a permitted host must be reachable over TLS");
+            assert_eq!(response.status(), 200);
+            assert_eq!(
+                *names.lock().unwrap(),
+                [hostname.to_string(), format!("{hostname}:{port}")]
+            );
         }
-        .build()
-        .unwrap();
-        // Enforcing, with the ranges this test's loopback server needs.
-        let (gate, _) = egress_gate(
-            crate::sockets::policy::EgressMode::Enforce,
-            crate::host::egress_policy::EgressAddressPolicy::permissive(),
-        );
-        let clients = WorkloadClients::new(tls);
-        clients.install_egress_gate(gate);
-        let (response, _io) = clients
-            .client("workload")
-            .send_request(
-                request(&format!("https://localhost:{port}/")),
-                test_options(),
-            )
-            .await
-            .expect("a permitted host must be reachable over TLS");
-        assert_eq!(response.status(), 200);
-        assert_eq!(*names.lock().unwrap(), ["localhost"]);
     }
 }

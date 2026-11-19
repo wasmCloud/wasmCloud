@@ -4359,7 +4359,7 @@ async fn drain_denied_body(mut body: WasiBody, timeout: Duration) {
 }
 
 /// Refuse an outgoing request while briefly draining its body.
-fn deny_request(request: hyper::Request<WasiBody>) -> SendFuture {
+pub(crate) fn deny_request(request: hyper::Request<WasiBody>) -> SendFuture {
     static DRAINS: std::sync::LazyLock<Arc<Semaphore>> =
         std::sync::LazyLock::new(|| Arc::new(Semaphore::new(MAX_DENIED_BODY_DRAINS)));
     if let Ok(permit) = Arc::clone(&DRAINS).try_acquire_owned() {

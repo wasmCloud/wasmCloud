@@ -88,6 +88,7 @@ pub struct EgressAddressGate {
     egress_addrs: EgressAddressPolicy,
     egress_mode: EgressMode,
     host_owned_ports: Option<Arc<PortTable>>,
+    host_loopback_enabled: bool,
     meters: Option<Arc<PolicyMeters>>,
 }
 
@@ -116,6 +117,7 @@ impl EgressAddressGate {
             egress_addrs: policy.egress_addrs,
             egress_mode: policy.egress_mode,
             host_owned_ports: policy.host_owned_ports.clone(),
+            host_loopback_enabled: policy.host_loopback_enabled,
             meters: policy.meters.clone(),
         }
     }
@@ -173,8 +175,29 @@ impl EgressAddressGate {
         if !self.egress_addrs.permits(addr.ip()) {
             return Err(DenyReason::BlockedRange);
         }
-        // Reached only when the range policy lets the machine's own addresses
-        // through. A loopback or unspecified spelling reaches whatever the host
+        self.check_host_owned_port(addr)
+    }
+
+    /// The fixed loopback target of `host.wasmcloud.internal`. The store's
+    /// HTTP hook checks its component's port grant on every request, including
+    /// pooled reuse; this check retains the host's gate and port reservations
+    /// when the transport opens a connection.
+    pub(crate) fn check_host_loopback(&self, addr: SocketAddr) -> Result<(), EgressRefused> {
+        let decision = if self.host_loopback_enabled {
+            self.check_host_owned_port(addr)
+        } else {
+            Err(DenyReason::HostLoopbackNotPermitted)
+        };
+        decision.map_err(|reason| {
+            if let Some(meters) = &self.meters {
+                meters.record_deny(reason);
+            }
+            EgressRefused(reason)
+        })
+    }
+
+    fn check_host_owned_port(&self, addr: SocketAddr) -> Result<(), DenyReason> {
+        // A loopback or unspecified spelling reaches whatever the host
         // bound on loopback, so it is judged as the loopback address the
         // host's own reservations are keyed on.
         if let Some(table) = &self.host_owned_ports {

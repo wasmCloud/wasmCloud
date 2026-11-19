@@ -579,6 +579,7 @@ struct CtxHttpHooks {
     host: HostLink,
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
+    socket_addr_check: crate::sockets::SocketAddrCheck,
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
     warned_unserved: bool,
@@ -591,6 +592,32 @@ impl WasiHttpHooks for CtxHttpHooks {
         options: Option<wasmtime_wasi_http::RequestOptions>,
         fut: crate::host::http::RequestIoFuture,
     ) -> crate::host::http::SendFuture {
+        // Check the active component on every request, before a pooled socket
+        // can be reused by another component in the same workload. The socket
+        // policy owns both halves of the grant and the host's reservations.
+        if let Some(host) = request.uri().host()
+            && let Some(target) = crate::host::http_client::host_loopback_addr(
+                host,
+                request.uri().port_u16().unwrap_or_else(|| {
+                    crate::host::allowed_hosts::default_port(
+                        request.uri().scheme_str().unwrap_or("http"),
+                    )
+                    .unwrap_or(80)
+                }),
+            )
+        {
+            let sentinel = std::net::SocketAddr::new(
+                crate::sockets::internal_names::HOST_SENTINEL.into(),
+                target.port(),
+            );
+            let allowed = self
+                .socket_addr_check
+                .check(sentinel, crate::sockets::SocketAddrUse::TcpConnect);
+            if !matches!(allowed, Ok(allowed) if allowed.plane == crate::sockets::Plane::Host && allowed.addr == target)
+            {
+                return crate::host::http::deny_request(request);
+            }
+        }
         match self.host.handler() {
             Ok(handler) => handler.outgoing_request(
                 &self.workload_id,
@@ -738,10 +765,12 @@ impl CtxBuilder {
             }
         };
 
+        let sockets = self.sockets.unwrap_or_default();
         let http_hooks = CtxHttpHooks {
             host: HostLink(self.http_handler),
             workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts,
+            socket_addr_check: sockets.socket_addr_check.clone(),
             warned_unserved: false,
         };
 
@@ -760,7 +789,7 @@ impl CtxBuilder {
             component_id: self.component_id,
             volume_mounts: Vec::new(),
             http: WasiHttpCtx::new(),
-            sockets: self.sockets.unwrap_or_default(),
+            sockets,
             #[cfg(feature = "wasi-tls")]
             tls: {
                 // EngineBuilder::build already warns once if no provider was
@@ -785,6 +814,109 @@ impl CtxBuilder {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    /// Components in one workload share an HTTP pool, but never port grants.
+    /// A permitted request reaches the missing-handler error in this test;
+    /// a refused one must stop at the hook before dispatch.
+    #[tokio::test]
+    async fn http_host_loopback_checks_each_components_socket_grant() -> anyhow::Result<()> {
+        use crate::host::allowed_loopback::AllowedLoopbackPort;
+        use crate::host::declared_port::Protocol;
+        use crate::host::ports::{PortOwner, PortTable};
+        use crate::sockets::policy::SocketPolicy;
+
+        setup();
+        let table = PortTable::new();
+        let _owned = table.reserve(
+            Protocol::Tcp,
+            "127.0.0.1:8000".parse()?,
+            PortOwner::Host("ingress".into()),
+        )?;
+        for (enabled, ports, uri, permitted) in [
+            (
+                false,
+                vec![AllowedLoopbackPort::tcp(3000)],
+                "http://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (true, vec![], "http://host.wasmcloud.internal:3000/", false),
+            (
+                true,
+                vec![AllowedLoopbackPort::udp(3000)],
+                "http://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(3001)],
+                "http://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(3000)],
+                "http://host.wasmcloud.internal:3000/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(3000)],
+                "http://HOST.WASMCLOUD.INTERNAL.:3000/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(80)],
+                "http://host.wasmcloud.internal/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(443)],
+                "https://host.wasmcloud.internal/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(8000)],
+                "http://host.wasmcloud.internal:8000/",
+                false,
+            ),
+        ] {
+            let policy = Arc::new(SocketPolicy {
+                host_loopback_enabled: enabled,
+                host_loopback: ports.into(),
+                host_owned_ports: Some(Arc::clone(&table)),
+                ..Default::default()
+            });
+            let sockets =
+                crate::sockets::WasiSocketsCtx::for_store(policy, Arc::default(), Arc::default());
+            let mut ctx = Ctx::builder("same-workload", "component")
+                .with_sockets(sockets)
+                .build();
+            let request = hyper::Request::builder()
+                .uri(uri)
+                .body(wasmtime_wasi_http::WasiBody::default())?;
+            let result = Box::into_pin(ctx.http_hooks.send_request(
+                request,
+                None,
+                Box::new(async { Ok(()) }),
+            ))
+            .await;
+            if permitted {
+                assert!(
+                    matches!(result, Err(wasmtime_wasi_http::Error::InternalError(_))),
+                    "{uri}: expected dispatch to the missing handler"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
+                    "{uri}: expected the port grant to refuse dispatch"
+                );
+            }
+        }
+        Ok(())
+    }
 
     fn setup() {
         #[cfg(feature = "wasi-tls")]
