@@ -374,6 +374,10 @@ fn wasi_base_versions(package: &str) -> &'static [semver::Version] {
     const P2_AND_P3: &[semver::Version] =
         &[semver::Version::new(0, 2, 0), semver::Version::new(0, 3, 0)];
     #[cfg(feature = "wasi-tls")]
+    #[expect(
+        clippy::expect_used,
+        reason = "the linked TLS version is a valid constant"
+    )]
     static TLS: std::sync::LazyLock<[semver::Version; 1]> = std::sync::LazyLock::new(|| {
         [semver::Version::parse("0.3.0-draft").expect("valid linked TLS version")]
     });
@@ -674,6 +678,33 @@ mod tests {
             "wasmcloud:random/random@0.2.2",
         ] {
             assert!(!WitInterface::from(other).is_host_builtin(), "{other}");
+        }
+    }
+
+    #[test]
+    fn tls_builtin_matches_only_the_linked_draft_when_enabled() {
+        for interface in [
+            "wasi:tls/client@0.3.0-draft",
+            "wasi:tls/types@0.3.0-draft",
+            "wasi:tls/client",
+        ] {
+            assert_eq!(
+                WitInterface::from(interface).is_host_builtin(),
+                cfg!(feature = "wasi-tls"),
+                "{interface}",
+            );
+        }
+        for interface in [
+            "wasi:tls/client@0.2.0-draft",
+            "wasi:tls/client@0.3.0",
+            "wasi:tls/client@0.3.1-draft",
+            "wasi:tls/client@0.3.0-rc.1",
+            "other:tls/client@0.3.0-draft",
+        ] {
+            assert!(
+                !WitInterface::from(interface).is_host_builtin(),
+                "{interface}"
+            );
         }
     }
 
