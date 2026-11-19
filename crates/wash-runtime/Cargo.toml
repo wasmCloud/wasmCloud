@@ -73,7 +73,6 @@ async-nats = { workspace = true, features = ["server_2_10", "server_2_11", "serv
 async-trait = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
 rand = { workspace = true, features = ["std", "thread_rng"] }
@@ -83,7 +82,6 @@ hmac = { workspace = true, optional = true }
 hostname = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
-humantime = { workspace = true }
 hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-rustls = { workspace = true, features = ["http1", "http2", "tls12", "aws-lc-rs"] }
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio", "server-auto"] }

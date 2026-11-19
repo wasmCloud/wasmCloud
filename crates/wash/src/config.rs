@@ -1407,7 +1407,7 @@ pub struct DevConfig {
 
     /// How long an outbound request waits for a connection slot once one of
     /// the caps above is reached, before failing with a connect timeout.
-    /// A humantime duration such as `5s` or `500ms`; defaults to the
+    /// A duration such as `5s` or `500ms`; defaults to the
     /// runtime's built-in wait. A component's own `connect-timeout` bounds
     /// its request independently, so this only decides how long an attempt
     /// nothing is waiting on may hold a slot reservation.
@@ -1573,7 +1573,7 @@ impl DevConfig {
         let http_connection_wait = self
             .http_connection_wait
             .as_deref()
-            .map(humantime::parse_duration)
+            .map(wash_runtime::duration::parse_duration)
             .transpose()
             .context("dev.http_connection_wait is not a valid duration (e.g. `5s`)")?;
         connection_quotas(

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::Context as _;
-use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
 use tracing::instrument;
 use wash_runtime::component_source::ComponentSource;
@@ -239,7 +238,9 @@ impl PushCommand {
 
         all_annotations.insert(
             "org.opencontainers.image.created".into(),
-            Utc::now().to_rfc3339(),
+            time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .context("failed to format image creation time")?,
         );
 
         let oci_config = self.registry.oci_config(ctx)?;
