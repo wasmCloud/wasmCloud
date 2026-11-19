@@ -37,6 +37,16 @@ or `started_at.duration_since(std::time::UNIX_EPOCH)` to obtain a Unix timestamp
 Code that formats this field should convert the system time with its chosen date formatter.
 Heartbeat messages continue to carry seconds and nonnegative nanoseconds.
 
+### Duration configuration
+
+CLI flags and configuration durations use Jiff's friendly format, such as `500ms`, `1m30s`, or `1.5h`.
+Units must appear from largest to smallest without repeats, and a fraction may only appear on the last unit.
+A bare `0` is accepted, and days and weeks are fixed multiples of 24 hours.
+Months and years are rejected because they require a calendar date; use days or hours for fixed timeouts.
+Compared with humantime, rewrite `30m1h` as `1h30m`, `1h1h` as `2h`, and `1.5h30m` as `2h`.
+Use `12h` instead of a fractional day such as `0.5d`.
+Public timeout values remain `std::time::Duration`.
+
 ### Basic Example
 
 ```rust

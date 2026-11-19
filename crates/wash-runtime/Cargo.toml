@@ -73,6 +73,7 @@ async-nats = { workspace = true, features = ["server_2_10", "server_2_11", "serv
 async-trait = { workspace = true }
 bon = { workspace = true }
 bytes = { workspace = true }
+jiff = { workspace = true }
 etcetera = { workspace = true }
 fastrand = { workspace = true }
 rand = { workspace = true, features = ["std", "thread_rng"] }
