@@ -55,7 +55,7 @@ wasmcloud-postgres = [
     "dep:tokio-postgres", "dep:tokio-postgres-rustls",
     "dep:deadpool-postgres", "dep:postgres-types",
     "dep:bigdecimal", "dep:pg_bigdecimal",
-    "dep:bit-vec", "dep:cidr", "dep:geo-types",
+    "dep:bit-vec", "dep:cidr", "dep:geo-types", "dep:time",
 ]
 wasi-tls = ["dep:wasmtime-wasi-tls"]
 # Internal and unstable: global allocator for this crate's benches only, so
@@ -164,8 +164,9 @@ cidr = { optional = true, workspace = true, features = ["std"] }
 deadpool-postgres = { optional = true, workspace = true, features = ["rt_tokio_1"] }
 geo-types = { optional = true, workspace = true }
 pg_bigdecimal = { optional = true, workspace = true }
-postgres-types = { optional = true, workspace = true, features = ["derive", "with-serde_json-1", "with-chrono-0_4", "with-uuid-1", "with-geo-types-0_7", "with-bit-vec-0_6", "with-cidr-0_2", "array-impls"] }
-tokio-postgres = { optional = true, workspace = true, features = [ "runtime", "with-serde_json-1", "with-chrono-0_4", "with-geo-types-0_7", "array-impls", "with-bit-vec-0_6", "with-uuid-1" ] }
+postgres-types = { optional = true, workspace = true, features = ["derive", "with-serde_json-1", "with-time-0_3", "with-uuid-1", "with-geo-types-0_7", "with-bit-vec-0_6", "with-cidr-0_2", "array-impls"] }
+time = { optional = true, workspace = true, features = ["large-dates"] }
+tokio-postgres = { optional = true, workspace = true, features = [ "runtime", "with-serde_json-1", "with-time-0_3", "with-geo-types-0_7", "array-impls", "with-bit-vec-0_6", "with-uuid-1" ] }
 tokio-postgres-rustls = { optional = true, workspace = true }
 ulid = { workspace = true, features = ["std"] }
 url = { workspace = true }
