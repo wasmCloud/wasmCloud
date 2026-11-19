@@ -27,11 +27,16 @@ type HostPathVolume struct {
 }
 
 // Volume represents a named volume that can be mounted by components.
+// At most one volume type may be set; a volume with none is ephemeral.
+// +kubebuilder:validation:XValidation:rule="!(has(self.ephemeral) && has(self.hostPath))",message="ephemeral and hostPath are mutually exclusive"
 type Volume struct {
 	// Name of the volume. Must be a DNS_LABEL and unique within the Workload.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 	// EphemeralVolume represents a temporary directory that shares a workload's lifetime.
+	// It is the default when no volume type is set.
 	// +kubebuilder:validation:Optional
 	EphemeralVolume *EphemeralVolume `json:"ephemeral,omitempty"`
 	// HostPathVolume represents a pre-existing file or directory on the host machine.
@@ -354,6 +359,9 @@ type WorkloadSpec struct {
 	// +kubebuilder:validation:Optional
 	Service *WorkloadService `json:"service,omitempty"`
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=map
+	// +listMapKey=name
 	Volumes []Volume `json:"volumes,omitempty"`
 
 	// Kubernetes groups Kubernetes-specific configuration such as Service
