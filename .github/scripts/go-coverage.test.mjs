@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { absoluteReplacements, branchCounts, isTestCode, meetsTarget, statementCounts } from './go-coverage.mjs';
+import {
+  absoluteReplacements, branchCounts, isTestCode, isUncoveredCondition, meetsTarget, statementCounts,
+} from './go-coverage.mjs';
 
 test('relative replace paths become absolute; module and versioned targets stay', () => {
   const gomod = [
@@ -102,6 +104,13 @@ test('the module path does not make its packages test code', () => {
   assert.throws(() => isTestCode('example.org/other/pkg', 'example.org/mod'));
 });
 
+test('gobco uncovered conditions are recognized so they stay out of problem matchers', () => {
+  assert.equal(isUncoveredCondition('/w/mod/a.go:97:39: condition "err != nil" was 3 times false but never true'), true);
+  assert.equal(isUncoveredCondition('/w/mod/a.go:167:5: condition "x != nil" was never evaluated'), true);
+  assert.equal(isUncoveredCondition('./a.go:12:3: undefined: foo'), false);
+  assert.equal(isUncoveredCondition('Branch coverage: 120/130'), false);
+});
+
 test('target comparisons use exact counts instead of rounded percentages', () => {
   assert.equal(meetsTarget({ covered: 89999, total: 100000 }, 90), false);
   assert.equal(meetsTarget({ covered: 90, total: 100 }, 90), true);
@@ -163,7 +172,10 @@ if (tool === 'git') {
       fs.writeFileSync(args[args.indexOf('-stats') + 1], JSON.stringify(Array.from({ length: count }, (_, i) =>
         ({ Start: 'a.go:' + i + ':1', Code: 'x', TrueCount: 1, FalseCount: i === 0 || mode === 'below-branches' ? 0 : 1 }))));
     }
-    process.exit(mode === 'branch-failure' ? 1 : 0);
+    // Real gobco output, split across writes the way a pipe can deliver it.
+    process.stdout.write('Branch coverage: 1/2\\n/w/a.go:1:1: condition "x" was once tr');
+    setTimeout(() => process.stdout.write('ue but never false\\n./a.go:2:2: compile error\\n'), 10);
+    setTimeout(() => process.exit(mode === 'branch-failure' ? 1 : 0), 20);
   }
 } else throw new Error('unexpected tool');
 `;
@@ -198,6 +210,10 @@ if (tool === 'git') {
       assert.ok(summary.includes('Coverage percentages do not affect CI status.'));
       assert.ok(summary.includes(`Gold targets (informational): ${complete ? mode === 'passing' ? 'met' : 'below target' : 'not assessed'}`));
       assert.ok(readFileSync(join(out, 'provenance.json'), 'utf8').includes('fixture-commit'));
+      assert.ok(!result.stdout.includes('condition "x"'), 'uncovered conditions reached the step log');
+      assert.ok(result.stdout.includes('./a.go:2:2: compile error'), 'gobco diagnostics hidden');
+      assert.ok(result.stdout.includes('1 uncovered branch outcomes listed in branches-0.txt'));
+      assert.ok(readFileSync(join(out, 'branches-0.txt'), 'utf8').includes('condition "x" was once true but never false'));
     }
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -69,6 +69,13 @@ export function isTestCode(importPath, modulePath) {
   return inner.includes('test') || (inner.length > 0 && inner.at(-1) === `${importPath.split('/').at(-2)}test`);
 }
 
+// gobco lists each uncovered branch outcome as `file.go:line:col: condition ...`.
+// actions/setup-go registers a problem matcher that turns any `*.go:N:N: ` line
+// in the step log into an error annotation, so these stay in the log files only.
+export function isUncoveredCondition(line) {
+  return /\.go:\d+:\d+: condition ".*" was /.test(line);
+}
+
 function percentage({ covered, total }) {
   return total ? `${(covered * 100 / total).toFixed(2)}%` : 'N/A';
 }
@@ -117,17 +124,34 @@ async function run(module) {
   const commands = [];
   const failures = [];
 
-  async function command(program, args, log) {
+  async function command(program, args, log, { hideConditions = false } = {}) {
     commands.push({ program, args });
     const path = resolve(out, log);
     writeFileSync(path, '');
     return await new Promise((accept, reject) => {
       let stdout = '';
+      let partial = '';
+      let hidden = 0;
+      const echo = (text) => {
+        const kept = text.split('\n').filter((line) => !(isUncoveredCondition(line) && ++hidden));
+        if (kept.length) process.stdout.write(kept.join('\n'));
+      };
       const child = spawn(program, args, { cwd, env });
       child.stdout.on('data', (data) => {
         stdout += data;
         appendFileSync(path, data);
-        process.stdout.write(data);
+        if (!hideConditions) {
+          process.stdout.write(data);
+          return;
+        }
+        const text = partial + data;
+        const end = text.lastIndexOf('\n') + 1;
+        partial = text.slice(end);
+        if (end) echo(text.slice(0, end));
+      });
+      child.stdout.on('end', () => {
+        if (partial) echo(partial);
+        if (hidden) process.stdout.write(`${hidden} uncovered branch outcomes listed in ${log}\n`);
       });
       child.stderr.on('data', (data) => {
         appendFileSync(path, data);
@@ -202,7 +226,7 @@ async function run(module) {
       }
       const result = await command(gobco, [
         '-branch', '-stats', stats, '-test=-timeout=10m', pkg.dir,
-      ], `branches-${index}.txt`);
+      ], `branches-${index}.txt`, { hideConditions: true });
       try {
         const counts = branchCounts(JSON.parse(readFileSync(stats, 'utf8')));
         branches.covered += counts.covered;
