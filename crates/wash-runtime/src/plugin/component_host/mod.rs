@@ -3719,7 +3719,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_volumes_are_released_when_the_component_fails_to_load() -> anyhow::Result<()> {
+    async fn plugin_volumes_stay_closed_after_the_component_fails_to_load() -> anyhow::Result<()> {
         let data = tempfile::tempdir()?;
         let engine = Engine::builder()
             .with_allowed_host_paths([data.path().to_path_buf()])
@@ -3734,7 +3734,14 @@ mod tests {
             .build()
             .await;
         assert!(result.is_err(), "invalid WebAssembly must fail to load");
-        engine.host_paths().open(data.path())?;
+        let err = engine
+            .host_paths()
+            .open(data.path())
+            .expect_err("a plugin volume stays reserved after its plugin fails to load");
+        assert!(
+            err.to_string().contains("a host plugin mounts"),
+            "unexpected error: {err:#}"
+        );
         Ok(())
     }
 
