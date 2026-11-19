@@ -58,7 +58,10 @@ async fn pull_client_from_cache(
     if let Some(client) = clients.get(&key) {
         return Ok(client);
     }
-    let config = trust.client_config(insecure)?;
+    let mut config = trust.client_config(insecure)?;
+    // Pull-only: a push waits on the registry while it ingests the upload.
+    config.read_timeout = Some(super::PULL_READ_TIMEOUT);
+    config.connect_timeout = Some(super::PULL_CONNECT_TIMEOUT);
     let clients = clients.clone();
     blocking_io(move || {
         clients
