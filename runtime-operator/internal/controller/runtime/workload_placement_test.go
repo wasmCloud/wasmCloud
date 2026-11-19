@@ -431,6 +431,29 @@ func TestPlacementOwner(t *testing.T) {
 	}
 }
 
+// A host that does not advertise the owner field is started without it, since
+// it would refuse the whole request, and owner-keyed grants match nothing there.
+func TestPlacementOmitsOwnerForOlderHosts(t *testing.T) {
+	r, workload, bus := placementFixture(t)
+	var host runtimev1alpha1.Host
+	if err := r.Get(t.Context(), client.ObjectKey{Namespace: testNamespace, Name: testHeartbeatHostID}, &host); err != nil {
+		t.Fatal(err)
+	}
+	host.Labels = nil
+	if err := r.Update(t.Context(), &host); err != nil {
+		t.Fatal(err)
+	}
+	if err := place(t.Context(), r, workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+		t.Fatal(err)
+	}
+	if got := sentOwner(t, bus); got != nil {
+		t.Fatalf("sent owner %v to a host that does not accept it", got)
+	}
+	if workload.Status.Owner == nil {
+		t.Fatal("the owner was not recorded")
+	}
+}
+
 // daemonSetFixture makes workload an instance of a WorkloadDaemonSet's
 // current template and stores the set.
 func daemonSetFixture(t *testing.T, r *WorkloadReconciler, workload *runtimev1alpha1.Workload) *runtimev1alpha1.WorkloadDaemonSet {

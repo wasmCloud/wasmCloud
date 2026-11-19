@@ -160,7 +160,10 @@ func recordPlacement(workload *runtimev1alpha1.Workload, err error) {
 func placementFixture(t *testing.T) (*WorkloadReconciler, *runtimev1alpha1.Workload, *mockBus) {
 	t.Helper()
 	host := &runtimev1alpha1.Host{
-		ObjectMeta:  metav1.ObjectMeta{Name: testHeartbeatHostID, Namespace: testNamespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testHeartbeatHostID, Namespace: testNamespace,
+			Labels: map[string]string{hostAcceptsOwnerLabel: "true"},
+		},
 		HostID:      testHeartbeatHostID,
 		Environment: testTenant,
 	}
