@@ -34,9 +34,11 @@ use wash_runtime::{
     engine::Engine,
     host::{
         HostApi, HostBuilder,
+        egress_policy::EgressAddressPolicy,
         http::{DynamicRouter, Ingress},
     },
     plugin::{wasi_config::DynamicConfig, wasi_logging::TracingLogger},
+    sockets::policy::SocketPolicy,
     types::{Component, LocalResources, Workload, WorkloadStartRequest, WorkloadStopRequest},
     wit::WitInterface,
 };
@@ -137,8 +139,16 @@ impl Drop for LiveConnection {
 
 /// Start a host whose ingress uses the *default* outgoing handler — the
 /// pooled transport under test.
+///
+/// The upstream listens on loopback, which the default address policy refuses
+/// for `wasi:http` as it does for sockets, so this host permits special ranges.
 async fn start_host() -> Result<(std::net::SocketAddr, impl HostApi)> {
-    let engine = Engine::builder().build()?;
+    let engine = Engine::builder()
+        .with_socket_policy(Arc::new(SocketPolicy {
+            egress_addrs: EgressAddressPolicy::permissive(),
+            ..Default::default()
+        }))
+        .build()?;
     let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse()?).await?;
     let bound_addr = ingress.addr();
     let host = HostBuilder::new()
