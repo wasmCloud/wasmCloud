@@ -31,6 +31,7 @@
 //! #   components: vec![],
 //! #   host_interfaces: vec![],
 //! #   volumes: vec![],
+//! #   owner: None,
 //! };
 //!
 //! let unresolved = engine.initialize_workload("workload-1", workload)?;

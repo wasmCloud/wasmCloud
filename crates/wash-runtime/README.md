@@ -79,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
             components: vec![],
             host_interfaces: vec![],
             volumes: vec![],
+            owner: None,
         },
     };
 
