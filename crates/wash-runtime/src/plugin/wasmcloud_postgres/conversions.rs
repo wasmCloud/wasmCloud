@@ -2415,7 +2415,7 @@ mod tests {
             );
             match PgValue::from_sql(&PgType::LSEG, &wire)? {
                 PgValue::Lseg(lseg) => assert_eq!(lseg, expected),
-                other => panic!("an lseg decoded as {other:?}"),
+                _ => return Err("an lseg decoded as an unexpected variant".into()),
             }
 
             // Round trip through the encoder, then as an lseg[] element.
@@ -2427,7 +2427,7 @@ mod tests {
                 .to_sql_checked(&PgType::LSEG_ARRAY, &mut array)?;
             match PgValue::from_sql(&PgType::LSEG_ARRAY, &array)? {
                 PgValue::LsegArray(lsegs) => assert_eq!(lsegs, vec![expected, expected]),
-                other => panic!("an lseg[] decoded as {other:?}"),
+                _ => return Err("an lseg[] decoded as an unexpected variant".into()),
             }
 
             // A line is three float8s; refuse it rather than misread it.
