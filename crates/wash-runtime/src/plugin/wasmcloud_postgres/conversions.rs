@@ -21,14 +21,16 @@ use anyhow::Context as _;
 use bigdecimal::num_traits::Float;
 use bit_vec::BitVec;
 use bytes::{BufMut, BytesMut};
-use chrono::{
-    DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset as _, Timelike,
-    Utc,
-};
 use cidr::IpCidr;
 use geo_types::{LineString, Point, Rect, coord};
 use pg_bigdecimal::PgNumeric;
-use postgres_types::{FromSql, IsNull, Kind, PgLsn, ToSql, Type as PgType, WrongType};
+use postgres_types::{
+    Date as PgDate, FromSql, IsNull, Kind, PgLsn, Timestamp as PgTimestamp, ToSql, Type as PgType,
+    WrongType,
+};
+use time::{
+    Date as TimeDate, Month, OffsetDateTime, PrimitiveDateTime, Time as TimeTime, UtcOffset,
+};
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -276,25 +278,39 @@ fn mac_eui64_as_bytes(m: MacAddressEui64) -> [u8; 8] {
 
 // ── Date/Time conversions ───────────────────────────────────────────────────
 
-fn date_to_naive(d: &Date) -> anyhow::Result<NaiveDate> {
+fn date_to_postgres(d: &Date) -> anyhow::Result<PgDate<TimeDate>> {
     match d {
-        Date::PositiveInfinity => Ok(NaiveDate::MAX),
-        Date::NegativeInfinity => Ok(NaiveDate::MIN),
-        Date::Ymd((year, month, day)) => NaiveDate::from_ymd_opt(*year, *month, *day)
-            .with_context(|| format!("failed to build date from ymd ({year}/{month}/{day})")),
+        Date::PositiveInfinity => Ok(PgDate::PosInfinity),
+        Date::NegativeInfinity => Ok(PgDate::NegInfinity),
+        Date::Ymd((year, month, day)) => {
+            let month = Month::try_from(u8::try_from(*month)?)?;
+            let date = TimeDate::from_calendar_date(*year, month, u8::try_from(*day)?)
+                .with_context(|| format!("failed to build date from ymd ({year}/{month}/{day})"))?;
+            Ok(PgDate::Value(date))
+        }
     }
 }
 
-fn naive_to_date(nd: NaiveDate) -> Date {
-    match nd {
-        NaiveDate::MAX => Date::PositiveInfinity,
-        NaiveDate::MIN => Date::NegativeInfinity,
-        nd => Date::Ymd((nd.year(), nd.month(), nd.day())),
+fn postgres_to_date(date: PgDate<TimeDate>) -> Date {
+    match date {
+        PgDate::PosInfinity => Date::PositiveInfinity,
+        PgDate::NegInfinity => Date::NegativeInfinity,
+        PgDate::Value(date) => Date::Ymd((
+            date.year(),
+            u32::from(u8::from(date.month())),
+            u32::from(date.day()),
+        )),
     }
 }
 
-fn time_to_naive(t: &Time) -> anyhow::Result<NaiveTime> {
-    NaiveTime::from_hms_micro_opt(t.hour, t.min, t.sec, t.micro).with_context(|| {
+fn time_to_native(t: &Time) -> anyhow::Result<TimeTime> {
+    TimeTime::from_hms_micro(
+        u8::try_from(t.hour)?,
+        u8::try_from(t.min)?,
+        u8::try_from(t.sec)?,
+        t.micro,
+    )
+    .with_context(|| {
         format!(
             "failed to convert time [{}h {}m {}s {}micro]",
             t.hour, t.min, t.sec, t.micro
@@ -302,53 +318,113 @@ fn time_to_naive(t: &Time) -> anyhow::Result<NaiveTime> {
     })
 }
 
-fn naive_to_time(nt: NaiveTime) -> Time {
+fn native_to_time(nt: TimeTime) -> Time {
     Time {
-        hour: nt.hour(),
-        min: nt.minute(),
-        sec: nt.second(),
+        hour: u32::from(nt.hour()),
+        min: u32::from(nt.minute()),
+        sec: u32::from(nt.second()),
         // Intentional truncation: postgres has microsecond precision
         micro: nt.nanosecond() / 1_000,
     }
 }
 
-fn timestamp_to_naive(ts: &Timestamp) -> anyhow::Result<NaiveDateTime> {
-    match &ts.date {
-        Date::PositiveInfinity => Ok(NaiveDateTime::MAX),
-        Date::NegativeInfinity => Ok(NaiveDateTime::MIN),
-        Date::Ymd(_) => Ok(NaiveDateTime::new(
-            date_to_naive(&ts.date)?,
-            time_to_naive(&ts.time)?,
-        )),
+impl FromSql<'_> for Time {
+    fn from_sql(ty: &PgType, raw: &[u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        let micros = i64::from_be_bytes(raw.try_into().map_err(|_| "invalid time length")?);
+        // The time driver wraps values outside one day. Preserve a decode error
+        // for values such as PostgreSQL's 24:00:00 instead of returning midnight.
+        if !(0..86_400_000_000).contains(&micros) {
+            return Err("time is outside the supported range".into());
+        }
+        Ok(native_to_time(TimeTime::from_sql(ty, raw)?))
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        <TimeTime as FromSql>::accepts(ty)
     }
 }
 
-fn naive_to_timestamp(ndt: NaiveDateTime) -> Timestamp {
-    Timestamp {
-        date: naive_to_date(ndt.date()),
-        time: naive_to_time(ndt.time()),
+impl ToSql for Time {
+    fn to_sql(
+        &self,
+        ty: &PgType,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
+        time_to_native(self)?.to_sql(ty, out)
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        <TimeTime as ToSql>::accepts(ty)
+    }
+    tokio_postgres::types::to_sql_checked!();
+}
+
+fn timestamp_to_postgres(ts: &Timestamp) -> anyhow::Result<PgTimestamp<PrimitiveDateTime>> {
+    match date_to_postgres(&ts.date)? {
+        PgDate::PosInfinity => Ok(PgTimestamp::PosInfinity),
+        PgDate::NegInfinity => Ok(PgTimestamp::NegInfinity),
+        PgDate::Value(date) => Ok(PgTimestamp::Value(PrimitiveDateTime::new(
+            date,
+            time_to_native(&ts.time)?,
+        ))),
     }
 }
 
-fn offset_to_fixed(offset: Offset) -> anyhow::Result<FixedOffset> {
-    match offset {
-        Offset::EasternHemisphereSecs(secs) => FixedOffset::east_opt(secs)
-            .with_context(|| format!("failed to convert eastern hemisphere seconds [{secs}]")),
-        Offset::WesternHemisphereSecs(secs) => FixedOffset::west_opt(secs)
-            .with_context(|| format!("failed to convert western hemisphere seconds [{secs}]")),
+fn postgres_to_timestamp(ts: PgTimestamp<PrimitiveDateTime>) -> Timestamp {
+    match ts {
+        PgTimestamp::Value(ts) => Timestamp {
+            date: postgres_to_date(PgDate::Value(ts.date())),
+            time: native_to_time(ts.time()),
+        },
+        PgTimestamp::PosInfinity | PgTimestamp::NegInfinity => Timestamp {
+            date: if matches!(ts, PgTimestamp::PosInfinity) {
+                Date::PositiveInfinity
+            } else {
+                Date::NegativeInfinity
+            },
+            time: native_to_time(TimeTime::MIDNIGHT),
+        },
     }
 }
 
-fn timestamptz_to_utc(tstz: &TimestampTz) -> anyhow::Result<DateTime<Utc>> {
-    let fixed_offset = offset_to_fixed(tstz.offset)?;
-    let timestamp = timestamp_to_naive(&tstz.timestamp)?;
-    Ok(DateTime::<FixedOffset>::from_naive_utc_and_offset(timestamp, fixed_offset).into())
+fn offset_to_utc_offset(offset: Offset) -> anyhow::Result<UtcOffset> {
+    let secs = match offset {
+        Offset::EasternHemisphereSecs(secs) => Some(secs),
+        Offset::WesternHemisphereSecs(secs) => secs.checked_neg(),
+    }
+    .context("invalid time zone offset")?;
+    anyhow::ensure!(
+        (-86_399..=86_399).contains(&secs),
+        "time zone offset must be less than 24 hours"
+    );
+    UtcOffset::from_whole_seconds(secs).context("invalid time zone offset")
 }
 
-fn utc_to_timestamptz(dt: DateTime<Utc>) -> TimestampTz {
+fn timestamptz_to_utc(tstz: &TimestampTz) -> anyhow::Result<PgTimestamp<OffsetDateTime>> {
+    let offset = offset_to_utc_offset(tstz.offset)?;
+    Ok(match timestamp_to_postgres(&tstz.timestamp)? {
+        PgTimestamp::PosInfinity => PgTimestamp::PosInfinity,
+        PgTimestamp::NegInfinity => PgTimestamp::NegInfinity,
+        PgTimestamp::Value(ts) => PgTimestamp::Value(
+            ts.assume_offset(offset)
+                .checked_to_offset(UtcOffset::UTC)
+                .context("timestamp is outside the supported UTC range")?,
+        ),
+    })
+}
+
+fn utc_to_timestamptz(ts: PgTimestamp<OffsetDateTime>) -> TimestampTz {
+    let ts = match ts {
+        PgTimestamp::PosInfinity => PgTimestamp::PosInfinity,
+        PgTimestamp::NegInfinity => PgTimestamp::NegInfinity,
+        PgTimestamp::Value(ts) => {
+            let ts = ts.to_offset(UtcOffset::UTC);
+            PgTimestamp::Value(PrimitiveDateTime::new(ts.date(), ts.time()))
+        }
+    };
     TimestampTz {
-        offset: Offset::WesternHemisphereSecs(dt.offset().fix().local_minus_utc()),
-        timestamp: naive_to_timestamp(dt.naive_local()),
+        offset: Offset::WesternHemisphereSecs(0),
+        timestamp: postgres_to_timestamp(ts),
     }
 }
 
@@ -566,20 +642,20 @@ fn check_scalar_type(value: &PgValue, ty: &PgType) -> Result<(), Box<dyn Error +
             wrong(<bool as ToSql>::accepts(base), WrongType::new::<bool>)
         }
         PgValue::Date(_) | PgValue::DateArray(_) => {
-            wrong(*base == PgType::DATE, WrongType::new::<NaiveDate>)
+            wrong(*base == PgType::DATE, WrongType::new::<PgDate<TimeDate>>)
         }
         PgValue::Time(_) | PgValue::TimeArray(_) => {
-            wrong(*base == PgType::TIME, WrongType::new::<NaiveTime>)
+            wrong(*base == PgType::TIME, WrongType::new::<TimeTime>)
         }
         // `timestamp` and `timestamptz` share one binary encoding (microseconds
         // since 2000-01-01), so a value of either binds to either.
         PgValue::Timestamp(_) | PgValue::TimestampArray(_) => wrong(
             matches!(*base, PgType::TIMESTAMP | PgType::TIMESTAMPTZ),
-            WrongType::new::<NaiveDateTime>,
+            WrongType::new::<PgTimestamp<PrimitiveDateTime>>,
         ),
         PgValue::TimestampTz(_) | PgValue::TimestampTzArray(_) => wrong(
             matches!(*base, PgType::TIMESTAMP | PgType::TIMESTAMPTZ),
-            WrongType::new::<DateTime<Utc>>,
+            WrongType::new::<PgTimestamp<OffsetDateTime>>,
         ),
         // `tsquery` and `pg_snapshot` values are encoded as their text.
         PgValue::Text(_)
@@ -977,38 +1053,31 @@ impl ToSql for PgValue {
 
             // Date-time
             PgValue::Date(d) => {
-                let d: NaiveDate = date_to_naive(d)?;
+                let d: PgDate<TimeDate> = date_to_postgres(d)?;
                 d.to_sql(ty, out)
             }
             PgValue::DateArray(ds) => ds
                 .iter()
-                .map(date_to_naive)
-                .collect::<Result<Vec<NaiveDate>, _>>()?
+                .map(date_to_postgres)
+                .collect::<Result<Vec<PgDate<TimeDate>>, _>>()?
                 .to_sql(ty, out),
             PgValue::Interval(_) | PgValue::IntervalArray(_) => Err(
                 "interval not supported (consider using a cast like 'value'::text::interval)"
                     .into(),
             ),
-            PgValue::Time(t) => {
-                let t = time_to_naive(t)?;
-                t.to_sql(ty, out)
-            }
-            PgValue::TimeArray(ts) => ts
-                .iter()
-                .map(time_to_naive)
-                .collect::<Result<Vec<NaiveTime>, _>>()?
-                .to_sql(ty, out),
+            PgValue::Time(t) => t.to_sql(ty, out),
+            PgValue::TimeArray(ts) => ts.to_sql(ty, out),
             PgValue::TimeTz(_) | PgValue::TimeTzArray(_) => Err(
                 "timetz not supported (consider using a cast like 'value'::text::timetz)".into(),
             ),
             PgValue::Timestamp(ts) => {
-                let ts = timestamp_to_naive(ts)?;
+                let ts = timestamp_to_postgres(ts)?;
                 ts.to_sql(ty, out)
             }
             PgValue::TimestampArray(tss) => tss
                 .iter()
-                .map(timestamp_to_naive)
-                .collect::<Result<Vec<NaiveDateTime>, _>>()?
+                .map(timestamp_to_postgres)
+                .collect::<Result<Vec<PgTimestamp<PrimitiveDateTime>>, _>>()?
                 .to_sql(ty, out),
             PgValue::TimestampTz(tstz) => {
                 let tstz = timestamptz_to_utc(tstz)?;
@@ -1017,7 +1086,7 @@ impl ToSql for PgValue {
             PgValue::TimestampTzArray(tstzs) => tstzs
                 .iter()
                 .map(timestamptz_to_utc)
-                .collect::<Result<Vec<DateTime<Utc>>, _>>()?
+                .collect::<Result<Vec<PgTimestamp<OffsetDateTime>>, _>>()?
                 .to_sql(ty, out),
 
             // JSON
@@ -1349,12 +1418,12 @@ impl FromSql<'_> for PgValue {
                 Vec::<MacAddressEui64>::from_sql(ty, raw)?,
             )),
             &tokio_postgres::types::Type::DATE => {
-                Ok(PgValue::Date(naive_to_date(NaiveDate::from_sql(ty, raw)?)))
+                Ok(PgValue::Date(postgres_to_date(PgDate::<TimeDate>::from_sql(ty, raw)?)))
             }
             &tokio_postgres::types::Type::DATE_ARRAY => Ok(PgValue::DateArray(
-                Vec::<NaiveDate>::from_sql(ty, raw)?
+                Vec::<PgDate<TimeDate>>::from_sql(ty, raw)?
                     .into_iter()
-                    .map(naive_to_date)
+                    .map(postgres_to_date)
                     .collect::<Vec<Date>>(),
             )),
 
@@ -1365,21 +1434,18 @@ impl FromSql<'_> for PgValue {
             }
 
             &tokio_postgres::types::Type::TIME => {
-                Ok(PgValue::Time(naive_to_time(NaiveTime::from_sql(ty, raw)?)))
+                Ok(PgValue::Time(Time::from_sql(ty, raw)?))
             }
             &tokio_postgres::types::Type::TIME_ARRAY => Ok(PgValue::TimeArray(
-                Vec::<NaiveTime>::from_sql(ty, raw)?
-                    .into_iter()
-                    .map(naive_to_time)
-                    .collect::<Vec<Time>>(),
+                Vec::<Time>::from_sql(ty, raw)?,
             )),
             &tokio_postgres::types::Type::TIMESTAMP => Ok(PgValue::Timestamp(
-                naive_to_timestamp(NaiveDateTime::from_sql(ty, raw)?),
+                postgres_to_timestamp(PgTimestamp::<PrimitiveDateTime>::from_sql(ty, raw)?),
             )),
             &tokio_postgres::types::Type::TIMESTAMP_ARRAY => Ok(PgValue::TimestampArray(
-                Vec::<NaiveDateTime>::from_sql(ty, raw)?
+                Vec::<PgTimestamp<PrimitiveDateTime>>::from_sql(ty, raw)?
                     .into_iter()
-                    .map(naive_to_timestamp)
+                    .map(postgres_to_timestamp)
                     .collect::<Vec<Timestamp>>(),
             )),
 
@@ -1400,10 +1466,10 @@ impl FromSql<'_> for PgValue {
             }
 
             &tokio_postgres::types::Type::TIMESTAMPTZ => Ok(PgValue::TimestampTz(
-                utc_to_timestamptz(DateTime::<Utc>::from_sql(ty, raw)?),
+                utc_to_timestamptz(PgTimestamp::<OffsetDateTime>::from_sql(ty, raw)?),
             )),
             &tokio_postgres::types::Type::TIMESTAMPTZ_ARRAY => Ok(PgValue::TimestampTzArray(
-                Vec::<DateTime<Utc>>::from_sql(ty, raw)?
+                Vec::<PgTimestamp<OffsetDateTime>>::from_sql(ty, raw)?
                     .into_iter()
                     .map(utc_to_timestamptz)
                     .collect::<Vec<TimestampTz>>(),
@@ -1872,49 +1938,52 @@ mod tests {
 
     #[test]
     fn dates_times_and_geometry_preserve_values() -> TestResult {
-        let day = NaiveDate::from_ymd_opt(2024, 2, 29).ok_or("invalid fixture date")?;
-        let time =
-            NaiveTime::from_hms_micro_opt(23, 59, 58, 123456).ok_or("invalid fixture time")?;
-        let ts = NaiveDateTime::new(day, time);
-        for date in [day, NaiveDate::MIN, NaiveDate::MAX] {
+        let day = TimeDate::from_calendar_date(2024, Month::February, 29)?;
+        let time = TimeTime::from_hms_micro(23, 59, 58, 123456)?;
+        let ts = PgTimestamp::Value(PrimitiveDateTime::new(day, time));
+        for date in [
+            PgDate::Value(day),
+            PgDate::Value(TimeDate::MIN),
+            PgDate::Value(TimeDate::MAX),
+        ] {
             round_trip(
-                PgValue::Date(naive_to_date(date)),
-                PgValue::Date(naive_to_date(date)),
+                PgValue::Date(postgres_to_date(date)),
+                PgValue::Date(postgres_to_date(date)),
                 PgType::DATE,
                 &date,
             )?;
         }
         round_trip(
-            PgValue::DateArray(vec![naive_to_date(day)]),
-            PgValue::DateArray(vec![naive_to_date(day)]),
+            PgValue::DateArray(vec![postgres_to_date(PgDate::Value(day))]),
+            PgValue::DateArray(vec![postgres_to_date(PgDate::Value(day))]),
             PgType::DATE_ARRAY,
-            &vec![day],
+            &vec![PgDate::Value(day)],
         )?;
         round_trip(
-            PgValue::Time(naive_to_time(time)),
-            PgValue::Time(naive_to_time(time)),
+            PgValue::Time(native_to_time(time)),
+            PgValue::Time(native_to_time(time)),
             PgType::TIME,
             &time,
         )?;
         round_trip(
-            PgValue::TimeArray(vec![naive_to_time(time)]),
-            PgValue::TimeArray(vec![naive_to_time(time)]),
+            PgValue::TimeArray(vec![native_to_time(time)]),
+            PgValue::TimeArray(vec![native_to_time(time)]),
             PgType::TIME_ARRAY,
             &vec![time],
         )?;
         round_trip(
-            PgValue::Timestamp(naive_to_timestamp(ts)),
-            PgValue::Timestamp(naive_to_timestamp(ts)),
+            PgValue::Timestamp(postgres_to_timestamp(ts)),
+            PgValue::Timestamp(postgres_to_timestamp(ts)),
             PgType::TIMESTAMP,
             &ts,
         )?;
         round_trip(
-            PgValue::TimestampArray(vec![naive_to_timestamp(ts)]),
-            PgValue::TimestampArray(vec![naive_to_timestamp(ts)]),
+            PgValue::TimestampArray(vec![postgres_to_timestamp(ts)]),
+            PgValue::TimestampArray(vec![postgres_to_timestamp(ts)]),
             PgType::TIMESTAMP_ARRAY,
             &vec![ts],
         )?;
-        let utc = ts.and_utc();
+        let utc = PgTimestamp::Value(PrimitiveDateTime::new(day, time).assume_utc());
         round_trip(
             PgValue::TimestampTz(utc_to_timestamptz(utc)),
             PgValue::TimestampTz(utc_to_timestamptz(utc)),
@@ -1983,6 +2052,226 @@ mod tests {
             PgType::MACADDR8_ARRAY,
             &vec![mac],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn date_and_timestamp_infinities_use_postgres_sentinels() -> TestResult {
+        for (date, date_wire, timestamp_wire) in [
+            (Date::PositiveInfinity, i32::MAX, i64::MAX),
+            (Date::NegativeInfinity, i32::MIN, i64::MIN),
+        ] {
+            let timestamp = Timestamp {
+                date: date.clone(),
+                time: native_to_time(TimeTime::MIDNIGHT),
+            };
+            for (value, ty, expected) in [
+                (
+                    PgValue::Date(date),
+                    PgType::DATE,
+                    date_wire.to_be_bytes().to_vec(),
+                ),
+                (
+                    PgValue::Timestamp(timestamp.clone()),
+                    PgType::TIMESTAMP,
+                    timestamp_wire.to_be_bytes().to_vec(),
+                ),
+                (
+                    PgValue::TimestampTz(TimestampTz {
+                        timestamp,
+                        offset: Offset::WesternHemisphereSecs(0),
+                    }),
+                    PgType::TIMESTAMPTZ,
+                    timestamp_wire.to_be_bytes().to_vec(),
+                ),
+            ] {
+                let mut encoded = BytesMut::new();
+                value.to_sql_checked(&ty, &mut encoded)?;
+                assert_eq!(&encoded[..], expected, "{ty}");
+                let decoded = PgValue::from_sql(&ty, &encoded)?;
+                assert_eq!(format!("{decoded:?}"), format!("{value:?}"));
+            }
+        }
+        let dates = vec![
+            PgDate::NegInfinity,
+            PgDate::Value(TimeDate::from_calendar_date(2024, Month::February, 29)?),
+            PgDate::PosInfinity,
+        ];
+        let value = PgValue::DateArray(dates.iter().copied().map(postgres_to_date).collect());
+        round_trip(value.clone(), value, PgType::DATE_ARRAY, &dates)?;
+        let timestamps = vec![
+            PgTimestamp::NegInfinity,
+            PgTimestamp::Value(TimeDate::from_calendar_date(2024, Month::February, 29)?.midnight()),
+            PgTimestamp::PosInfinity,
+        ];
+        let value = PgValue::TimestampArray(
+            timestamps
+                .iter()
+                .copied()
+                .map(postgres_to_timestamp)
+                .collect(),
+        );
+        round_trip(value.clone(), value, PgType::TIMESTAMP_ARRAY, &timestamps)?;
+        let timestamps = vec![
+            PgTimestamp::NegInfinity,
+            PgTimestamp::Value(
+                TimeDate::from_calendar_date(2024, Month::February, 29)?
+                    .midnight()
+                    .assume_utc(),
+            ),
+            PgTimestamp::PosInfinity,
+        ];
+        let value =
+            PgValue::TimestampTzArray(timestamps.iter().copied().map(utc_to_timestamptz).collect());
+        round_trip(value.clone(), value, PgType::TIMESTAMPTZ_ARRAY, &timestamps)?;
+        Ok(())
+    }
+
+    #[test]
+    fn timestamp_offsets_are_applied_before_encoding() -> TestResult {
+        let date = TimeDate::from_calendar_date(2024, Month::February, 29)?;
+        for (offset, utc_hour) in [
+            (Offset::EasternHemisphereSecs(5 * 3600), 7),
+            (Offset::WesternHemisphereSecs(5 * 3600), 17),
+        ] {
+            let value = PgValue::TimestampTz(TimestampTz {
+                timestamp: Timestamp {
+                    date: Date::Ymd((2024, 2, 29)),
+                    time: native_to_time(TimeTime::from_hms_micro(12, 0, 0, 123456)?),
+                },
+                offset,
+            });
+            let native =
+                PgTimestamp::Value(date.with_hms_micro(utc_hour, 0, 0, 123456)?.assume_utc());
+            let expected = PgValue::TimestampTz(utc_to_timestamptz(native));
+            round_trip(value, expected, PgType::TIMESTAMPTZ, &native)?;
+        }
+        for year in [10_000, 262_142] {
+            let native = PgTimestamp::Value(
+                TimeDate::from_calendar_date(year, Month::January, 1)?.midnight(),
+            );
+            let value = PgValue::Timestamp(postgres_to_timestamp(native));
+            round_trip(value.clone(), value, PgType::TIMESTAMP, &native)?;
+        }
+        let out_of_range = TimestampTz {
+            timestamp: Timestamp {
+                date: postgres_to_date(PgDate::Value(TimeDate::MAX)),
+                time: native_to_time(TimeTime::from_hms(23, 59, 59)?),
+            },
+            offset: Offset::WesternHemisphereSecs(1),
+        };
+        assert!(timestamptz_to_utc(&out_of_range).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn out_of_range_times_do_not_wrap_to_midnight() -> TestResult {
+        for micros in [-1_i64, 86_400_000_000, i64::MIN, i64::MAX] {
+            assert!(PgValue::from_sql(&PgType::TIME, &micros.to_be_bytes()).is_err());
+            let mut array = BytesMut::new();
+            vec![TimeTime::MIDNIGHT].to_sql(&PgType::TIME_ARRAY, &mut array)?;
+            let start = array.len() - 8;
+            array[start..].copy_from_slice(&micros.to_be_bytes());
+            assert!(PgValue::from_sql(&PgType::TIME_ARRAY, &array).is_err());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Docker (postgres)"]
+    async fn date_time_values_round_trip_with_postgres() -> TestResult {
+        use testcontainers::{
+            GenericImage, ImageExt,
+            core::{IntoContainerPort, WaitFor},
+            runners::AsyncRunner,
+        };
+
+        let container = GenericImage::new("postgres", "16-alpine")
+            .with_exposed_port(5432.tcp())
+            .with_wait_for(WaitFor::message_on_stderr(
+                "database system is ready to accept connections",
+            ))
+            .with_env_var("POSTGRES_PASSWORD", "postgres")
+            .start()
+            .await?;
+        let port = container.get_host_port_ipv4(5432).await?;
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        let mut connected = None;
+        for _ in 0..40 {
+            match tokio_postgres::connect(&url, tokio_postgres::NoTls).await {
+                Ok(connection) => {
+                    connected = Some(connection);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            }
+        }
+        let (client, connection) = connected.ok_or("postgres did not become ready")?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        let infinite_timestamp = Timestamp {
+            date: Date::PositiveInfinity,
+            time: native_to_time(TimeTime::MIDNIGHT),
+        };
+        let local_timestamp = Timestamp {
+            date: Date::Ymd((2024, 2, 29)),
+            time: native_to_time(TimeTime::from_hms_micro(23, 0, 0, 123456)?),
+        };
+        let zoned = TimestampTz {
+            timestamp: local_timestamp.clone(),
+            offset: Offset::WesternHemisphereSecs(5 * 3600),
+        };
+        let normalized = utc_to_timestamptz(timestamptz_to_utc(&zoned)?);
+        let values = [
+            PgValue::Date(Date::NegativeInfinity),
+            PgValue::DateArray(vec![
+                Date::NegativeInfinity,
+                Date::Ymd((10_000, 1, 1)),
+                Date::PositiveInfinity,
+            ]),
+            PgValue::Timestamp(infinite_timestamp.clone()),
+            PgValue::TimestampArray(vec![local_timestamp, infinite_timestamp.clone()]),
+            PgValue::TimestampTz(zoned.clone()),
+            PgValue::TimestampTzArray(vec![
+                zoned,
+                TimestampTz {
+                    timestamp: infinite_timestamp,
+                    offset: Offset::WesternHemisphereSecs(0),
+                },
+            ]),
+            PgValue::Time(native_to_time(TimeTime::from_hms_micro(
+                23, 59, 59, 999999,
+            )?)),
+        ];
+        let params: Vec<&(dyn ToSql + Sync)> = values
+            .iter()
+            .map(|value| value as &(dyn ToSql + Sync))
+            .collect();
+        let row = client.query_one("SELECT $1::date, $2::date[], $3::timestamp, $4::timestamp[], $5::timestamptz, $6::timestamptz[], $7::time", &params).await?;
+        for (index, original) in values.iter().enumerate() {
+            let expected = match index {
+                4 => PgValue::TimestampTz(normalized.clone()),
+                5 => PgValue::TimestampTzArray(vec![
+                    normalized.clone(),
+                    TimestampTz {
+                        timestamp: Timestamp {
+                            date: Date::PositiveInfinity,
+                            time: native_to_time(TimeTime::MIDNIGHT),
+                        },
+                        offset: Offset::WesternHemisphereSecs(0),
+                    },
+                ]),
+                _ => original.clone(),
+            };
+            let decoded: PgValue = row.try_get(index)?;
+            assert_eq!(
+                format!("{decoded:?}"),
+                format!("{expected:?}"),
+                "column {index}"
+            );
+        }
         Ok(())
     }
 
@@ -2441,8 +2730,9 @@ mod tests {
         for offset in [
             Offset::EasternHemisphereSecs(86400),
             Offset::WesternHemisphereSecs(86400),
+            Offset::WesternHemisphereSecs(i32::MIN),
         ] {
-            assert!(offset_to_fixed(offset).is_err());
+            assert!(offset_to_utc_offset(offset).is_err());
         }
     }
 
