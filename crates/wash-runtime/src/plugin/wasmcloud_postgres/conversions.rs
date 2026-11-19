@@ -179,6 +179,74 @@ fn counted_points(
         .collect())
 }
 
+/// Checks that `count` items of at least `min_item_len` bytes each fit in
+/// `available` bytes.
+///
+/// postgres-types makes room for as many `hstore` entries or array elements as
+/// the value says it holds before it reads any of them, so a value that
+/// overstates its count would ask for that much memory up front. A count past
+/// what the value's own bytes could hold is refused here instead, which keeps
+/// the room made later in proportion to the value's length.
+fn check_count(
+    ty: &PgType,
+    what: &str,
+    count: usize,
+    available: usize,
+    min_item_len: usize,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if count > available / min_item_len {
+        return Err(format!(
+            "invalid {ty}, {count} {what} cannot fit in {available} bytes"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Checks an `hstore` value's entry count before postgres-types decodes it.
+///
+/// The value is an `i32` count, then for each entry an `i32` key length, the
+/// key, and an `i32` value length (`-1` for a null value) and the value. Each
+/// entry therefore takes at least 8 bytes.
+fn check_hstore_count(ty: &PgType, raw: &[u8]) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let (count, entries) = raw
+        .split_first_chunk::<4>()
+        .ok_or_else(|| format!("invalid {ty}, no entry count"))?;
+    let count = usize::try_from(i32::from_be_bytes(*count))
+        .map_err(|_| format!("invalid {ty}, negative entry count"))?;
+    check_count(ty, "entries", count, entries.len(), 8)
+}
+
+/// Checks an array value's element count before postgres-types decodes it.
+///
+/// The value is an `i32` dimension count, an `i32` null flag and the element
+/// type's `u32` oid, then each dimension's `i32` length and `i32` lower bound,
+/// then for each element an `i32` length (`-1` for null) and its bytes. Each
+/// element therefore takes at least 4 bytes, and the element count is the
+/// product of the dimension lengths.
+fn check_array_count(ty: &PgType, raw: &[u8]) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let (header, mut rest) = raw
+        .split_first_chunk::<12>()
+        .ok_or_else(|| format!("invalid {ty}, no array header"))?;
+    let dimensions = i32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+    let dimensions = usize::try_from(dimensions)
+        .map_err(|_| format!("invalid {ty}, negative dimension count"))?;
+    let mut elements: usize = if dimensions == 0 { 0 } else { 1 };
+    for _ in 0..dimensions {
+        let (dimension, after) = rest
+            .split_first_chunk::<8>()
+            .ok_or_else(|| format!("invalid {ty}, dimensions run past the value"))?;
+        let len = i32::from_be_bytes([dimension[0], dimension[1], dimension[2], dimension[3]]);
+        let len = usize::try_from(len)
+            .map_err(|_| format!("invalid {ty}, negative dimension length"))?;
+        elements = elements
+            .checked_mul(len)
+            .ok_or_else(|| format!("invalid {ty}, too many array elements"))?;
+        rest = after;
+    }
+    check_count(ty, "elements", elements, rest.len(), 4)
+}
+
 impl FromSql<'_> for PgPolygon {
     fn from_sql(ty: &PgType, raw: &[u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
         counted_points(ty, raw).map(PgPolygon)
@@ -1162,6 +1230,12 @@ impl ToSql for PgValue {
 
 impl FromSql<'_> for PgValue {
     fn from_sql(ty: &PgType, raw: &[u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        // Every array arm below goes through postgres-types' `Vec<T>` decoder,
+        // which makes room for the element count the value states. Check that
+        // count against the value's length once, here, before any of them run.
+        if let Kind::Array(_) = ty.kind() {
+            check_array_count(ty, raw)?;
+        }
         match ty {
             &tokio_postgres::types::Type::BOOL => Ok(PgValue::Bool(bool::from_sql(ty, raw)?)),
             &tokio_postgres::types::Type::BOOL_ARRAY => {
@@ -1500,8 +1574,14 @@ impl FromSql<'_> for PgValue {
                     .collect::<Vec<u64>>(),
             )),
 
-            // Extension types (matched by name since they have no built-in Type constant)
-            t if t.name() == "hstore" => {
+            // The hstore extension has no built-in Type constant or fixed oid, so
+            // it is matched by name. Any role that can create a type can also
+            // name one `hstore`, so also require a base type: the extension's is
+            // one, while the enums, composites, domains and ranges an ordinary
+            // role can create are not. The entry count is checked as well, so a
+            // value that is not really an hstore is an error, not an allocation.
+            t if t.name() == "hstore" && matches!(t.kind(), Kind::Simple) => {
+                check_hstore_count(ty, raw)?;
                 let map = HashMap::<String, Option<String>>::from_sql(ty, raw)?;
                 Ok(PgValue::Hstore(map.into_iter().collect()))
             }
@@ -2779,6 +2859,81 @@ mod tests {
             IsNull::Yes
         ));
         Ok(())
+    }
+
+    #[test]
+    fn hstore_by_name_alone_is_not_decoded_as_hstore() {
+        // `CREATE TYPE hstore AS ENUM ('zzzz')` sends its label as text. Read as
+        // an hstore, those bytes are an entry count of about two billion,
+        // which postgres-types would make room for (roughly 100 GB) up front.
+        let label = b"zzzz";
+        for kind in [
+            Kind::Enum(vec!["zzzz".into()]),
+            Kind::Composite(vec![]),
+            Kind::Domain(PgType::TEXT),
+        ] {
+            let ty = PgType::new("hstore".into(), 16384, kind, "public".into());
+            let err = PgValue::from_sql(&ty, label).unwrap_err();
+            assert!(err.to_string().contains("unsupported type"), "{err}");
+        }
+    }
+
+    #[test]
+    fn hstore_count_past_its_length_is_refused() {
+        let ty = PgType::new("hstore".into(), 16384, Kind::Simple, "public".into());
+        // The enum label above, under a real base type named hstore.
+        let err = PgValue::from_sql(&ty, b"zzzz").unwrap_err();
+        assert!(err.to_string().contains("cannot fit"), "{err}");
+        // One entry needs at least 8 bytes; 7 are not enough.
+        let mut wire = 1i32.to_be_bytes().to_vec();
+        wire.extend([0; 7]);
+        assert!(PgValue::from_sql(&ty, &wire).is_err());
+        assert!(PgValue::from_sql(&ty, &(-1i32).to_be_bytes()).is_err());
+        assert!(PgValue::from_sql(&ty, &[0; 3]).is_err());
+        // An empty hstore still decodes.
+        assert!(matches!(
+            PgValue::from_sql(&ty, &0i32.to_be_bytes()),
+            Ok(PgValue::Hstore(pairs)) if pairs.is_empty()
+        ));
+    }
+
+    #[test]
+    fn array_count_past_its_length_is_refused() {
+        fn header(dimensions: &[i32]) -> Vec<u8> {
+            let mut wire = Vec::new();
+            wire.extend(i32::try_from(dimensions.len()).unwrap().to_be_bytes());
+            wire.extend(0i32.to_be_bytes());
+            wire.extend(PgType::INT4.oid().to_be_bytes());
+            for len in dimensions {
+                wire.extend(len.to_be_bytes());
+                wire.extend(1i32.to_be_bytes());
+            }
+            wire
+        }
+        let decode = |wire: &[u8]| PgValue::from_sql(&PgType::INT4_ARRAY, wire);
+        // A server can state any count; this one would ask for about 8 GB.
+        let err = decode(&header(&[i32::MAX])).unwrap_err();
+        assert!(err.to_string().contains("cannot fit"), "{err}");
+        // Each element needs at least its 4-byte length, so two cannot fit in 4.
+        let mut wire = header(&[2]);
+        wire.extend(4i32.to_be_bytes());
+        let err = decode(&wire).unwrap_err();
+        assert!(err.to_string().contains("cannot fit"), "{err}");
+        // Two whole elements still decode.
+        wire.extend(7i32.to_be_bytes());
+        wire.extend(4i32.to_be_bytes());
+        wire.extend(8i32.to_be_bytes());
+        assert!(matches!(decode(&wire), Ok(PgValue::Int4Array(v)) if v == [7, 8]));
+        // A product of dimensions that overflows, and malformed headers.
+        assert!(decode(&header(&[i32::MAX, i32::MAX, i32::MAX])).is_err());
+        assert!(decode(&header(&[-1])).is_err());
+        let mut wire = header(&[]);
+        wire[..4].copy_from_slice(&(-1i32).to_be_bytes());
+        assert!(decode(&wire).is_err());
+        assert!(decode(&header(&[1])[..16]).is_err());
+        assert!(decode(&[0; 11]).is_err());
+        // An empty array still decodes.
+        assert!(matches!(decode(&header(&[])), Ok(PgValue::Int4Array(v)) if v.is_empty()));
     }
 
     #[test]
