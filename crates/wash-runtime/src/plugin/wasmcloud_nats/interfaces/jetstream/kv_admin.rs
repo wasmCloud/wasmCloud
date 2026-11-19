@@ -38,7 +38,12 @@ const ACCOUNT_LIMIT_CODES: &[jetstream::ErrorCode] = &[
     jetstream::ErrorCode::MAXIMUM_STREAMS_LIMIT,
     jetstream::ErrorCode::MEMORY_RESOURCES_EXCEEDED,
     jetstream::ErrorCode::STORAGE_RESOURCES_EXCEEDED,
+    STREAM_MAX_BYTES_OVER_ACCOUNT,
 ];
+
+/// The stream's `max_bytes` is over the account's per-stream limit. Not named
+/// in async-nats.
+const STREAM_MAX_BYTES_OVER_ACCOUNT: jetstream::ErrorCode = jetstream::ErrorCode(10122);
 
 /// The longest `max-age-ms` the server's signed nanosecond duration holds.
 const MAX_AGE_MS: u64 = i64::MAX as u64 / 1_000_000;
