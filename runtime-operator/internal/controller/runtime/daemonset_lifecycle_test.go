@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	daemonSetWorkloadResource = "workloads"
-	artifactPendingCase       = "artifact condition pending"
+	workloadResource    = "workloads"
+	artifactPendingCase = "artifact condition pending"
 )
 
 func TestDaemonSetScheduleWaitsForArtifacts(t *testing.T) {
@@ -146,7 +146,7 @@ func TestDaemonSetAdoptionPatchFailures(t *testing.T) {
 							if err := c.Delete(ctx, obj); err != nil {
 								return err
 							}
-							return apierrors.NewNotFound(schema.GroupResource{Resource: daemonSetWorkloadResource}, obj.GetName())
+							return apierrors.NewNotFound(schema.GroupResource{Resource: workloadResource}, obj.GetName())
 						}
 						return cause
 					}

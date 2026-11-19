@@ -62,13 +62,13 @@ func TestScaleUpCollisionReadFailure(t *testing.T) {
 	rs := unavailableReplicaSet()
 	r, _ := scaleUpReconciler(t, interceptor.Funcs{
 		Create: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
-			return apierrors.NewAlreadyExists(schema.GroupResource{Group: runtimev1alpha1.GroupVersion.Group, Resource: daemonSetWorkloadResource}, obj.GetName())
+			return apierrors.NewAlreadyExists(schema.GroupResource{Group: runtimev1alpha1.GroupVersion.Group, Resource: workloadResource}, obj.GetName())
 		},
 	}, rs)
 	r.APIReader = failingReader{}
 
 	err := r.reconcileScaleUp(context.Background(), rs)
-	if err == nil || !strings.Contains(err.Error(), "unexpected uncached read") {
+	if !errors.Is(err, errUncachedRead) {
 		t.Fatalf("scale up returned %v, want the read error", err)
 	}
 	if errors.Is(err, condition.ErrNoop()) {

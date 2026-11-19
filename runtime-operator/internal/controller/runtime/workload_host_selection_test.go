@@ -23,21 +23,29 @@ import (
 
 var errAPIUnavailable = apierrors.NewServiceUnavailable("apiserver unavailable")
 
-// schedulingClient is a fake client with the Host indexes the Workload
-// reconciler registers, extracted by the reconciler's own index functions.
-func schedulingClient(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) client.WithWatch {
+// workloadHostIndexes returns the index functions the Workload reconciler
+// registers, so tests index Hosts exactly as the manager would.
+func workloadHostIndexes(t *testing.T) map[string]client.IndexerFunc {
 	t.Helper()
 	m := newRecordingManager(t)
 	if err := (&WorkloadReconciler{Client: m.GetClient()}).SetupWithManager(m); err != nil {
 		t.Fatalf("set up workload reconciler: %v", err)
 	}
+	return m.indexes
+}
+
+// schedulingClient is a fake client with the Host indexes the Workload
+// reconciler registers.
+func schedulingClient(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) client.WithWatch {
+	t.Helper()
+	indexes := workloadHostIndexes(t)
 	builder := fake.NewClientBuilder().
 		WithScheme(newScaleTestScheme(t)).
 		WithObjects(objs...).
 		WithStatusSubresource(&runtimev1alpha1.Workload{}).
 		WithInterceptorFuncs(funcs)
 	for _, index := range []string{hostIDIndex, workloadSchedulableHostsIndex, hostEnvironmentIndex} {
-		builder = builder.WithIndex(&runtimev1alpha1.Host{}, index, m.indexes[index])
+		builder = builder.WithIndex(&runtimev1alpha1.Host{}, index, indexes[index])
 	}
 	return builder.Build()
 }

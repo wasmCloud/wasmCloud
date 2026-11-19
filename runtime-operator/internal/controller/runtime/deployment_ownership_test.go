@@ -73,7 +73,7 @@ func TestDeploymentScaleConfirmsDeployment(t *testing.T) {
 				return fake.NewClientBuilder().WithScheme(newScaleTestScheme(t)).WithObjects(wd.DeepCopy()).Build()
 			},
 			wantUpdate: true,
-			wantErr:    func(err error) bool { return err == nil || condition.IsStatusUnknown(err) },
+			wantErr:    func(err error) bool { return err == nil },
 		},
 		{
 			name: "changed since read",

@@ -80,10 +80,12 @@ func TestStacktraceForDetachedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	stack, _ := decodeLog(t, output.Bytes())["stacktrace"].(string)
-	lines := strings.Split(stack, "\n")
-	if len(lines) != 2 || !strings.HasSuffix(lines[0], ".capturedPC") ||
-		!strings.Contains(lines[1], "stacktrace_test.go:") {
-		t.Fatalf("detached record stack = %q", stack)
+	first, _, _ := strings.Cut(stack, "\n")
+	if !strings.HasSuffix(first, ".capturedPC") || !strings.Contains(stack, "stacktrace_test.go:") {
+		t.Fatalf("detached record stack does not start at the call site: %q", stack)
+	}
+	if strings.Contains(stack, "testing.tRunner") || strings.Contains(stack, "TestStacktraceForDetachedRecord") {
+		t.Fatalf("detached record stack includes the frames handling it: %q", stack)
 	}
 }
 

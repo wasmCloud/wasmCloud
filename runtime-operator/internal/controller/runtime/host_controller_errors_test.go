@@ -95,11 +95,13 @@ func TestHeartbeatHandlerIgnoresUnusableHeartbeats(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			writes, reads := 0, 0
-			if get := tc.funcs.Get; get != nil {
-				tc.funcs.Get = func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-					reads++
+			get := tc.funcs.Get
+			tc.funcs.Get = func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				reads++
+				if get != nil {
 					return get(ctx, c, key, obj, opts...)
 				}
+				return c.Get(ctx, key, obj, opts...)
 			}
 			tc.funcs.Create = func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 				writes++
