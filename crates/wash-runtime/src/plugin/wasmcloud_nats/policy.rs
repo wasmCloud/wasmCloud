@@ -592,23 +592,32 @@ mod tests {
 
     #[test]
     fn bucket_lifecycle_requires_bucket_allow_and_its_own_grant() {
-        for (reads, admin, allowed) in [
+        for (use_bucket, create, delete) in [
             (false, false, false),
-            (true, false, false),
+            (false, false, true),
             (false, true, false),
+            (false, true, true),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
             (true, true, true),
         ] {
             let p = PolicyEngine::new(
                 &PolicySpec {
-                    bucket_allow: if reads { vec!["cache".into()] } else { vec![] },
-                    bucket_create_allow: if admin { vec!["cache".into()] } else { vec![] },
-                    bucket_delete_allow: if admin { vec!["cache".into()] } else { vec![] },
+                    bucket_allow: if use_bucket {
+                        vec!["cache".into()]
+                    } else {
+                        vec![]
+                    },
+                    bucket_create_allow: if create { vec!["cache".into()] } else { vec![] },
+                    bucket_delete_allow: if delete { vec!["cache".into()] } else { vec![] },
                     ..Default::default()
                 },
                 Vec::new(),
             );
-            assert_eq!(p.check_bucket_create("cache").is_ok(), allowed);
-            assert_eq!(p.check_bucket_delete("cache").is_ok(), allowed);
+            assert_eq!(p.check_bucket("cache").is_ok(), use_bucket);
+            assert_eq!(p.check_bucket_create("cache").is_ok(), use_bucket && create);
+            assert_eq!(p.check_bucket_delete("cache").is_ok(), use_bucket && delete);
             assert_eq!(p.check_bucket_create("other"), Err(Denied::NotGranted));
         }
 

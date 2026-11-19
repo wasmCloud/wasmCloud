@@ -2862,10 +2862,127 @@ async fn kv_admin_any_name_creation_is_bounded_by_the_account() -> Result<()> {
     let refused = api_probe(&h, "kv-admin:create:dyn-c:0:-").await?;
     assert!(refused.starts_with("limit-exceeded:"), "{refused}");
     assert!(h.js.get_key_value("dyn-c").await.is_err());
+    h.js.get_key_value("dyn-a")
+        .await?
+        .put("sentinel", "kept".into())
+        .await?;
     host.workload_stop(wash_runtime::types::WorkloadStopRequest {
         workload_id: "wl-any-bounded".into(),
     })
     .await?;
+
+    // A restart can ensure its existing bucket even with no free stream slots.
+    host.workload_start(workload_request("wl-any-restarted", grant("bounded")))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(api_probe(&h, "kv-admin:create:dyn-a:0:-").await?, "created");
+    let before =
+        h.js.get_key_value("dyn-a")
+            .await?
+            .stream
+            .cached_info()
+            .config
+            .clone();
+    assert!(
+        api_probe(&h, "kv-admin:create:dyn-a:4096:-")
+            .await?
+            .starts_with("conflict:")
+    );
+    let after =
+        h.js.get_key_value("dyn-a")
+            .await?
+            .stream
+            .cached_info()
+            .config
+            .clone();
+    assert_eq!(before.max_bytes, after.max_bytes);
+    assert_eq!(before.num_replicas, after.num_replicas);
+    assert_eq!(
+        h.js.get_key_value("dyn-a").await?.get("sentinel").await?,
+        Some(bytes::Bytes::from_static(b"kept"))
+    );
+    assert_eq!(h.js.query_account().await?.streams, 2);
+    host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+        workload_id: "wl-any-restarted".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+/// Two hosts share the broker's account quota, including non-KV streams.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_two_hosts_share_an_account_budget() -> Result<()> {
+    let h = start_nats_with_accounts().await?;
+    h.js.create_stream(async_nats::jetstream::stream::Config {
+        name: "unrelated".into(),
+        subjects: vec!["other.events".into()],
+        max_bytes: 1048576,
+        ..Default::default()
+    })
+    .await?;
+    let left = start_host().await?;
+    let right = start_host().await?;
+    for (host, id, subject) in [
+        (&left, "wl-left", "test.left"),
+        (&right, "wl-right", "test.right"),
+    ] {
+        let response = host
+            .workload_start(workload_request(
+                id,
+                nats_async_interface(&[
+                    ("servers", &h.nats_url),
+                    ("username", "bounded"),
+                    ("password", "bounded"),
+                    ("subject-allow", subject),
+                    ("bucket-allow", "*"),
+                    ("bucket-create-allow", "*"),
+                    ("bucket-max-bytes", "1048576"),
+                    ("bucket-storage-allow", "memory"),
+                    ("core-subscriptions", subject),
+                ]),
+            ))
+            .await?;
+        anyhow::ensure!(
+            response.workload_status.workload_state != WorkloadState::Error,
+            "{id} failed to start: {}",
+            response.workload_status.message
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let created = timeout(
+        Duration::from_secs(20),
+        h.client
+            .request("test.left", "kv-admin:create:existing:0:-".into()),
+    )
+    .await??;
+    assert_eq!(created.payload.as_ref(), b"created");
+    // Both hosts bound before the quota filled. Neither has its own allowance
+    // or reserved slot; each new create sees the account's current limits.
+    let (left_result, right_result) = timeout(Duration::from_secs(20), async {
+        tokio::try_join!(
+            h.client
+                .request("test.left", "kv-admin:create:left:0:-".into()),
+            h.client
+                .request("test.right", "kv-admin:create:right:0:-".into()),
+        )
+    })
+    .await??;
+    let results = [
+        String::from_utf8(left_result.payload.to_vec())?,
+        String::from_utf8(right_result.payload.to_vec())?,
+    ];
+    assert!(
+        results.iter().all(|r| r.starts_with("limit-exceeded:")),
+        "{results:?}"
+    );
+    assert_eq!(h.js.query_account().await?.streams, 2);
+    for (host, id) in [(&left, "wl-left"), (&right, "wl-right")] {
+        host.workload_stop(wash_runtime::types::WorkloadStopRequest {
+            workload_id: id.into(),
+        })
+        .await?;
+    }
     Ok(())
 }
 
