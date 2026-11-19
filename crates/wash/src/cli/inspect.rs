@@ -142,7 +142,7 @@ mod tests {
         let decoded = wit_component::decode(&empty)?;
         let mut resolve = decoded.resolve().clone();
         let package = resolve.push_str("inspect.wit", PACKAGE_WIT)?;
-        let bytes = wit_component::encode(&resolve, package)?;
+        let bytes = wit_component::encode(&resolve, package, false)?;
         let path = temp.path().join("package.wasm");
         tokio::fs::write(&path, &bytes).await?;
         assert_output(command(&path).handle(&ctx).await?, PACKAGE_WIT)?;
