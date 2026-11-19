@@ -106,3 +106,53 @@ async fn test_p3_tls_tcp_round_trip() -> Result<()> {
 
     Ok(())
 }
+
+/// A host component plugin must resolve TLS imports as builtins and inherit
+/// the engine's trust provider in its own supervised store.
+#[cfg(all(
+    feature = "host-component-plugins",
+    feature = "oci",
+    feature = "wasi-config"
+))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_component_plugin_tls_uses_engine_trust_provider() -> Result<()> {
+    use wash_runtime::plugin::{
+        HostPlugin, component_host::ComponentHostPlugin, wasi_config::DynamicConfig,
+    };
+
+    install_default_crypto_provider();
+    let EchoServer {
+        addr,
+        cert_der,
+        ping_rx,
+    } = start_tls_echo_server().await?;
+    let engine = engine_with_p3_and_tls(&cert_der)?;
+    let config: Arc<dyn HostPlugin> = Arc::new(DynamicConfig::default());
+    let plugin = ComponentHostPlugin::builder()
+        .id("tls-echo-plugin")
+        .wasm(include_bytes!("wasm/tls_echo_plugin_p3.wasm"))
+        .engine(engine)
+        .native_plugins(HashMap::from([(config.id(), config)]))
+        .config(HashMap::from([("echo-addr".to_string(), addr.to_string())]))
+        .allowed_host_loopback_ports(Arc::from([AllowedLoopbackPort::tcp(addr.port())]))
+        .socket_policy(Arc::new(wash_runtime::sockets::policy::SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        }))
+        .build()
+        .await
+        .context("failed to load TLS component plugin")?;
+
+    plugin.start().await?;
+    let received = timeout(Duration::from_secs(15), ping_rx).await;
+    plugin.stop().await?;
+
+    let ping = received
+        .context("TLS component plugin did not reach the echo server")?
+        .context("echo server dropped its sender before receiving plugin PING")?;
+    assert_eq!(
+        ping, b"PING\r\n",
+        "plugin must complete the TLS handshake using the custom trust root"
+    );
+    Ok(())
+}
