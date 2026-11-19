@@ -851,17 +851,25 @@ async fn pull_component_layer(
 ///
 /// It is given the layer's declared size, which the manifest digest vouches
 /// for: a registry that sends more than it declared is cut off there rather
-/// than when its digest finally fails to match. The buffer is allocated once,
-/// at that size, so a component that fits is never copied while it grows.
+/// than when its digest finally fails to match.
+///
+/// The declared size is only a claim until the bytes arrive, so the buffer
+/// starts at no more than [`BOUNDED_BUFFER_INITIAL_CAPACITY`] and grows with
+/// what is actually received. Growth that cannot be allocated fails the pull
+/// instead of aborting the host.
 struct BoundedBuffer {
     data: Vec<u8>,
     limit: usize,
 }
 
+/// The most a pull reserves before any of its layer has arrived. Most
+/// components fit, so they are still never copied while the buffer grows.
+const BOUNDED_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024 * 1024;
+
 impl BoundedBuffer {
     fn with_limit(limit: usize) -> Self {
         Self {
-            data: Vec::with_capacity(limit),
+            data: Vec::with_capacity(limit.min(BOUNDED_BUFFER_INITIAL_CAPACITY)),
             limit,
         }
     }
@@ -878,6 +886,12 @@ impl tokio::io::AsyncWrite for BoundedBuffer {
             return std::task::Poll::Ready(Err(std::io::Error::other(format!(
                 "component layer is larger than the {} bytes its manifest declares",
                 this.limit
+            ))));
+        }
+
+        if let Err(error) = this.data.try_reserve(buf.len()) {
+            return std::task::Poll::Ready(Err(std::io::Error::other(format!(
+                "cannot allocate memory for the component layer: {error}"
             ))));
         }
         this.data.extend_from_slice(buf);
@@ -1168,6 +1182,38 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{err:#}").contains("larger than the"), "{err:#}");
+    }
+
+    #[test]
+    fn the_declared_size_is_not_reserved_up_front() {
+        let buffer = BoundedBuffer::with_limit(usize::MAX);
+        assert!(
+            buffer.data.capacity() <= BOUNDED_BUFFER_INITIAL_CAPACITY,
+            "{}",
+            buffer.data.capacity()
+        );
+
+        let small = BoundedBuffer::with_limit(16);
+        assert!(small.data.capacity() >= 16, "{}", small.data.capacity());
+    }
+
+    #[tokio::test]
+    async fn a_layer_declaring_more_than_memory_is_not_reserved() {
+        let wasm = component();
+        let (registry, config) = serving(test_registry::Image::build(
+            wasm.clone(),
+            Some(1 << 62),
+            Vec::new(),
+        ))
+        .await;
+        let (bytes, _) = pull_component(
+            &registry.reference(),
+            config.with_max_component_size_bytes(u64::MAX),
+            OciPullPolicy::Always,
+        )
+        .await
+        .expect("only the bytes that arrive are held");
+        assert_eq!(bytes, wasm);
     }
 
     #[tokio::test]
