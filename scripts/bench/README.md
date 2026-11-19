@@ -698,8 +698,8 @@ Apply a repository Actions policy for `bench.yml`, `bench-run.yml`,
 `bench-compare.yml`, `k6bench.yml`, `k6bench-run.yml`, `gpubench.yml`, and
 `gpubench-run.yml` that allows the `@wasmCloud/ci-maintainers` and
 `@wasmCloud/org-maintainers` teams to trigger them. It also allows
-`@automation-wasmcloud`, which publishes releases and triggers the automatic
-release benchmarks. The policy lives in GitHub settings, not in a workflow
+the Octo STS GitHub App (`octo-sts`), which publishes releases and triggers
+the automatic release benchmarks. The policy lives in GitHub settings, not in a workflow
 file, so a dispatch from another ref cannot edit it away.
 
 A repository admin with an authenticated `gh` CLI and `jq` applies or updates
@@ -711,7 +711,7 @@ the policy with:
 
 The script prints the stored policy. Check that `enforcement` is `active`, the
 seven workflow paths are included, and the allowed actors match the two teams
-and release account. Changes to those GitHub teams then take effect without
+and the Octo STS app. Changes to those GitHub teams then take effect without
 editing workflow YAML.
 
 ## 8. AWS bootstrap (S3 + CloudFront + IAM)
