@@ -833,8 +833,9 @@ pub struct HostCommand {
     ///
     /// Off by default. A guest also needs its own `allowedHostLoopbackPorts` entry
     /// naming the port, so neither the operator nor the workload author can
-    /// open this door alone. `127.0.0.1` keeps meaning the guest's own virtual
-    /// network either way.
+    /// open this door alone. HTTP and gRPC also require `allowedHosts` to
+    /// permit the name and a TCP port grant. For raw sockets, `127.0.0.1`
+    /// keeps meaning the guest's own virtual network.
     #[arg(long = "allow-host-loopback", default_value_t = false)]
     pub allow_host_loopback: bool,
 
