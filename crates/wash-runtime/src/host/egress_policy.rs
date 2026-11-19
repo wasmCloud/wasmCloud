@@ -59,8 +59,8 @@ impl EgressAddressPolicy {
 
     /// Whether `addr` may be dialed.
     ///
-    /// Evaluated against the canonical form, so an IPv4-mapped IPv6 address is
-    /// judged as the IPv4 address it is.
+    /// Evaluated against both the IPv6 address and any embedded IPv4 address,
+    /// including mapped, compatible, well-known NAT64, and 6to4 forms.
     #[must_use]
     pub fn permits(&self, addr: IpAddr) -> bool {
         let addr = addr.to_canonical();
@@ -70,8 +70,24 @@ impl EgressAddressPolicy {
         if !self.allow_private && is_private(addr) {
             return false;
         }
-        true
+        match addr {
+            IpAddr::V6(v6) => embedded_ipv4(v6).is_none_or(|v4| self.permits(v4.into())),
+            IpAddr::V4(_) => true,
+        }
     }
+}
+
+/// IPv4 destinations or gateways encoded in standard IPv6 transition forms.
+fn embedded_ipv4(addr: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = addr.segments();
+    let (high, low) = match segments {
+        // IPv4-compatible ::/96 and the well-known NAT64 prefix 64:ff9b::/96.
+        [0, 0, 0, 0, 0, 0, high, low] | [0x64, 0xff9b, 0, 0, 0, 0, high, low] => (high, low),
+        // 6to4 embeds the IPv4 gateway immediately after 2002::/16.
+        [0x2002, high, low, ..] => (high, low),
+        _ => return None,
+    };
+    Some(Ipv4Addr::from((u32::from(high) << 16) | u32::from(low)))
 }
 
 /// The address half of the egress gate, for callers that resolve a name
@@ -219,16 +235,17 @@ impl EgressAddressGate {
 /// Ranges that are never an ordinary egress destination: the machine itself,
 /// its link, its metadata service, and addresses that are not unicast.
 fn is_special(addr: IpAddr) -> bool {
-    // The IPv6 metadata address sits inside the unique-local range, so
-    // `allow_private` would otherwise wave it through. It is the single most
-    // valuable thing a guest reaches by resolving a name it controls, so it is
-    // denied on its own account rather than as part of a range.
+    // Cloud infrastructure endpoints need explicit denials when their ranges
+    // are otherwise permitted: AWS uses ULA, Alibaba uses CGNAT, and Azure's
+    // WireServer uses a public address.
     if addr == IpAddr::V6(METADATA_V6) {
         return true;
     }
     match addr {
         IpAddr::V4(v4) => {
-            v4.is_loopback()
+            v4 == ALIBABA_METADATA_V4
+                || v4 == AZURE_WIRESERVER_V4
+                || v4.is_loopback()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_multicast()
@@ -274,8 +291,14 @@ fn is_private(addr: IpAddr) -> bool {
 /// most valuable target a guest can reach by resolving a name it controls.
 pub const METADATA_V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
 
-/// The IPv6 instance-metadata address used by the major clouds.
+/// The IPv6 instance-metadata address used by AWS.
 pub const METADATA_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
+
+/// Alibaba Cloud's metadata endpoint, within the carrier-grade NAT range.
+const ALIBABA_METADATA_V4: Ipv4Addr = Ipv4Addr::new(100, 100, 100, 200);
+
+/// Azure's WireServer endpoint, outside the private and link-local ranges.
+const AZURE_WIRESERVER_V4: Ipv4Addr = Ipv4Addr::new(168, 63, 129, 16);
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -325,6 +348,58 @@ mod tests {
     }
 
     #[test]
+    fn embedded_ipv4_spellings_obey_the_address_policy() -> anyhow::Result<()> {
+        let default = EgressAddressPolicy::default();
+        let strict = EgressAddressPolicy {
+            allow_private: false,
+            ..default
+        };
+        let private_only = EgressAddressPolicy {
+            deny_special: false,
+            ..strict
+        };
+        for (address, special, private) in [
+            ("127.0.0.1", true, false),
+            ("0.0.0.0", true, false),
+            ("169.254.169.254", true, false),
+            ("100.100.100.200", true, true),
+            ("168.63.129.16", true, false),
+            ("224.0.0.1", true, false),
+            ("192.0.2.1", true, false),
+            ("240.0.0.1", true, false),
+            ("10.0.0.1", false, true),
+            ("172.16.0.1", false, true),
+            ("192.168.0.1", false, true),
+            ("100.64.0.1", false, true),
+            ("93.184.216.34", false, false),
+        ] {
+            let v4: Ipv4Addr = address.parse()?;
+            let [first, second, third, fourth] = v4.octets();
+            let high = u16::from_be_bytes([first, second]);
+            let low = u16::from_be_bytes([third, fourth]);
+            for encoded in [
+                v4.to_ipv6_mapped(),
+                Ipv6Addr::new(0, 0, 0, 0, 0, 0, high, low),
+                Ipv6Addr::new(0x64, 0xff9b, 0, 0, 0, 0, high, low),
+                Ipv6Addr::new(0x2002, high, low, 1, 2, 3, 4, 5),
+            ] {
+                assert_eq!(default.permits(encoded.into()), !special, "{encoded}");
+                assert_eq!(
+                    strict.permits(encoded.into()),
+                    !(special || private),
+                    "{encoded}"
+                );
+                assert_eq!(private_only.permits(encoded.into()), !private, "{encoded}");
+                assert!(
+                    EgressAddressPolicy::permissive().permits(encoded.into()),
+                    "{encoded}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn private_ranges_are_permitted_by_default_and_deniable() {
         let default = EgressAddressPolicy::default();
         let strict = EgressAddressPolicy {
@@ -349,6 +424,13 @@ mod tests {
         for ok in [
             "93.184.216.34",
             "8.8.8.8",
+            "100.100.100.199",
+            "100.100.100.201",
+            "168.63.129.15",
+            "168.63.129.17",
+            "2001:4860::a00:1",
+            "2001:4860::7f00:1",
+            "64:ff9b:0:1::a00:1",
             "2606:2800:220:1:248:1893:25c8:1946",
         ] {
             assert!(policy.permits(ip(ok)), "{ok} should be allowed");
@@ -367,6 +449,10 @@ mod tests {
         let policy = EgressAddressPolicy::default();
         assert!(!policy.permits(IpAddr::V4(METADATA_V4)));
         assert!(!policy.permits(IpAddr::V6(METADATA_V6)));
+        for address in [ALIBABA_METADATA_V4, AZURE_WIRESERVER_V4] {
+            assert!(!policy.permits(address.into()));
+            assert!(EgressAddressPolicy::permissive().permits(address.into()));
+        }
     }
 
     fn sock(s: &str) -> SocketAddr {

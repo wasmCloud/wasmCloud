@@ -4607,7 +4607,13 @@ async fn send_grpc_request(
         .and_then(|o| o.between_bytes_timeout)
         .unwrap_or(Duration::from_secs(600));
 
-    let use_tls = request.uri().scheme() == Some(&hyper::http::uri::Scheme::HTTPS);
+    // The permission hook derives ports from the URI scheme. Accept only the
+    // schemes whose default ports agree with this HTTP transport.
+    let use_tls = match request.uri().scheme_str() {
+        Some("http") => false,
+        Some("https") => true,
+        _ => return Err(Error::HttpRequestUriInvalid),
+    };
 
     let authority = request_authority(&request, use_tls).ok_or(Error::HttpRequestUriInvalid)?;
     let tcp_stream = connect_http_tcp(&authority, connect_timeout, gate.as_ref()).await?;
@@ -4908,6 +4914,40 @@ mod tests {
             first_byte_timeout: Some(Duration::from_secs(5)),
             between_bytes_timeout: Some(Duration::from_secs(5)),
         })
+    }
+
+    #[tokio::test]
+    async fn grpc_fallback_rejects_non_http_schemes_before_connecting() -> anyhow::Result<()> {
+        let tls = h2_client_config(&crate::host::http_client::default_client_tls_config());
+        let gate = crate::host::egress_policy::EgressAddressGate::from_socket_policy(
+            &crate::sockets::policy::SocketPolicy::default(),
+        );
+        for uri in [
+            "ftp://host.wasmcloud.internal/svc.Test/Call",
+            "ftp://host.wasmcloud.internal:21/svc.Test/Call",
+            "ws://host.wasmcloud.internal/svc.Test/Call",
+            "wss://host.wasmcloud.internal/svc.Test/Call",
+        ] {
+            let request = hyper::Request::builder()
+                .uri(uri)
+                .header(hyper::header::CONTENT_TYPE, "application/grpc")
+                .body(WasiBody::default())?;
+            let result = send_grpc_request(
+                request,
+                grpc_options(),
+                Arc::clone(&tls),
+                Some(gate.clone()),
+            )
+            .await;
+            assert!(
+                matches!(
+                    result,
+                    Err(wasmtime_wasi_http::Error::HttpRequestUriInvalid)
+                ),
+                "{uri}"
+            );
+        }
+        Ok(())
     }
 
     /// The gRPC egress fast path must verify TLS against the roots configured
