@@ -61,6 +61,9 @@ const (
 	workloadKind                       = "Workload"
 	workloadReplicaSetKind             = "WorkloadReplicaSet"
 	workloadDeploymentKind             = "WorkloadDeployment"
+	// hostAcceptsOwnerLabel is set by hosts that read Workload.owner. Older
+	// hosts refuse a start request with a field they do not know.
+	hostAcceptsOwnerLabel = "runtime.wasmcloud.dev/accepts-workload-owner"
 	// reasonOwnerChanged refuses a placement whose owner differs from the one
 	// recorded in status.owner.
 	reasonOwnerChanged = "OwnerChanged"
@@ -688,7 +691,9 @@ func (r *WorkloadReconciler) reconcilePlacement(ctx context.Context, workload *r
 		condition.ForceRequeue(ctx)
 		return condition.ErrNoop()
 	}
-	spec.Owner = &runtimev2.WorkloadOwner{Kind: owner.Kind, Name: owner.Name, Uid: string(owner.UID)}
+	if host != nil && host.Labels[hostAcceptsOwnerLabel] == "true" {
+		spec.Owner = &runtimev2.WorkloadOwner{Kind: owner.Kind, Name: owner.Name, Uid: string(owner.UID)}
+	}
 	req := &runtimev2.WorkloadStartRequest{WorkloadId: string(workload.GetUID()), Workload: spec}
 
 	client := NewWashHostClient(r.Bus, workload.Status.HostID)

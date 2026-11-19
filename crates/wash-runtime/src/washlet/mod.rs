@@ -2273,8 +2273,15 @@ where
     Ok(parsed.into())
 }
 
+/// Tells the operator this host reads `Workload.owner`. Older hosts refuse a
+/// start request with a field they do not know, so the operator sends an owner
+/// only to hosts with this label.
+pub const ACCEPTS_WORKLOAD_OWNER_LABEL: &str = "runtime.wasmcloud.dev/accepts-workload-owner";
+
 impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
     fn from(hb: crate::types::HostHeartbeat) -> Self {
+        let mut labels = hb.labels;
+        labels.insert(ACCEPTS_WORKLOAD_OWNER_LABEL.into(), "true".into());
         types::v2::HostHeartbeat {
             id: hb.id,
             hostname: hb.hostname,
@@ -2290,7 +2297,7 @@ impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
             workload_count: hb.workload_count,
             system_memory_total: hb.system_memory_total,
             system_memory_free: hb.system_memory_free,
-            labels: hb.labels,
+            labels,
             friendly_name: hb.friendly_name,
             http_port: hb.http_port.into(),
             environment: hb.environment,
@@ -2383,6 +2390,23 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    #[tokio::test]
+    async fn every_heartbeat_advertises_the_owner_field() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::new()
+            .with_engine(crate::engine::Engine::builder().build()?)
+            .with_label(ACCEPTS_WORKLOAD_OWNER_LABEL, "false")
+            .build()?;
+        let heartbeat: types::v2::HostHeartbeat = host.heartbeat().await?.into();
+        assert_eq!(
+            heartbeat
+                .labels
+                .get(ACCEPTS_WORKLOAD_OWNER_LABEL)
+                .map(String::as_str),
+            Some("true")
+        );
+        Ok(())
+    }
 
     #[test]
     fn a_whole_owner_crosses_the_wire_intact() -> anyhow::Result<()> {
