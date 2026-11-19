@@ -1,7 +1,7 @@
 //! An OCI Distribution Spec (v2) registry implemented as a WebAssembly component,
 //! backed by the async, native-stream `wasmcloud:blobstore@0.1.0` interface.
 //!
-//! The component is wasip3: it exports `wasi:http/handler@0.3.0` and stores every
+//! The component is wasip3: it exports `wasi:http/handler@0.3.2` and stores every
 //! blob, manifest, and tag as a blobstore object. Object bodies move as native
 //! component-model `stream<u8>` values (no `wasi:io`), and every blobstore call is
 //! `async`.

@@ -63,7 +63,7 @@ This component imports and exports the following [WIT interfaces](https://compon
 
 ```wit
 world http-client {
-  import wasi:http/outgoing-handler@0.2.2;
-  export wasi:http/incoming-handler@0.2.2;
+  import wasi:http/outgoing-handler@0.2.12;
+  export wasi:http/incoming-handler@0.2.12;
 }
 ```

@@ -3,7 +3,7 @@
 A minimal [OCI Distribution Spec][oci-dist] (v2) registry implemented as a single
 **wasip3** WebAssembly component. 
 
-This component exports `wasi:http/handler@0.3.0` to serve
+This component exports `wasi:http/handler@0.3.2` to serve
 the registry API and stores every blob, manifest, and tag through the async,
 native-stream [`wasmcloud:blobstore@0.1.0`][wasmcloud-blobstore] interface, so it
 runs against any blobstore backend (in-memory, filesystem, NATS, …) without code
@@ -67,11 +67,11 @@ wash build
 
 `wash build` runs the `cargo build --target wasm32-wasip2` from `.wash/config.yaml`;
 the linker componentizes the result into a wasip3 component (imports
-`wasmcloud:blobstore/*@0.1.0`, exports `wasi:http/handler@0.3.0`).
+`wasmcloud:blobstore/*@0.1.0`, exports `wasi:http/handler@0.3.2`).
 
 ## Required Capabilities
 
-1. `wasi:http` to receive registry requests (wasip3 `handler@0.3.0`)
+1. `wasi:http` to receive registry requests (wasip3 `handler@0.3.2`)
 2. `wasmcloud:blobstore` to persist blobs, manifests, and tags
 3. `wasi:random` to mint upload-session identifiers
 4. `wasmcloud:secrets` (`store` + `reveal`) to supply the HTTP Basic auth
