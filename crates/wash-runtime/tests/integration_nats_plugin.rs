@@ -119,9 +119,9 @@ async fn start_nats_version(version: &str, with_kv: bool) -> Result<Harness> {
     })
 }
 
-/// Two JetStream accounts: `BOUNDED` limits streams and storage, `OPEN` has no
-/// limits. Each has one user whose name and password are the account's, in
-/// lower case.
+/// JetStream accounts: `BOUNDED` limits streams and storage, `PERSTREAM` also
+/// caps each memory stream at 64 KiB, and `OPEN` has no limits. Each has one
+/// user whose name and password are the account's, in lower case.
 const ACCOUNTS_CONF: &str = r#"
 listen: 0.0.0.0:4222
 jetstream { store_dir: "/tmp/js" }
@@ -129,6 +129,10 @@ accounts {
   BOUNDED {
     jetstream { max_mem: 8M, max_file: 8M, max_streams: 2, max_consumers: 100 }
     users: [{ user: bounded, password: bounded }]
+  }
+  PERSTREAM {
+    jetstream { max_mem: 8M, max_file: 8M, max_streams: 5, max_consumers: 100, mem_max_stream_bytes: 64K }
+    users: [{ user: perstream, password: perstream }]
   }
   OPEN {
     jetstream: enabled
@@ -2862,6 +2866,103 @@ async fn kv_admin_any_name_creation_is_bounded_by_the_account() -> Result<()> {
         workload_id: "wl-any-bounded".into(),
     })
     .await?;
+    Ok(())
+}
+
+/// The operator's `*` needs a bounded account even when the workload narrows
+/// it: otherwise redeploying with new names would create buckets without
+/// limit.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_a_narrowed_operator_wildcard_still_needs_a_bounded_account() -> Result<()> {
+    let h = start_nats_with_accounts().await?;
+    let operator = |user: &str| {
+        PluginBindingSet::new(PLUGIN_NATS_ID)
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_base(declared(&[
+                ("servers", &h.nats_url),
+                ("username", user),
+                ("password", user),
+                ("subject-allow", "test.>"),
+                ("bucket-allow", "*"),
+                ("bucket-create-allow", "*"),
+                ("bucket-max-bytes", "1048576"),
+                ("bucket-storage-allow", "memory"),
+            ]))
+    };
+    let manifest = |create: Option<&'static str>| {
+        let mut config = vec![("core-subscriptions", "test.api")];
+        config.extend(create.map(|c| ("bucket-create-allow", c)));
+        nats_async_interface(&config)
+    };
+
+    let open = start_host_with(operator("open")).await?;
+    for (id, create) in [("wl-open-inherit", None), ("wl-open-narrow", Some("dyn-a"))] {
+        let message = expect_refused(&open, workload_request(id, manifest(create))).await?;
+        assert!(message.contains("no max streams"), "{create:?}: {message}");
+    }
+
+    let bounded = start_host_with(operator("bounded")).await?;
+    bounded
+        .workload_start(workload_request("wl-bounded", manifest(Some("dyn-a"))))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let probe = |spec: &'static str| {
+        let client = h.client.clone();
+        async move {
+            let response = timeout(
+                Duration::from_secs(20),
+                client.request("test.api", spec.into()),
+            )
+            .await??;
+            anyhow::Ok(String::from_utf8(response.payload.to_vec())?)
+        }
+    };
+    assert_eq!(probe("kv-admin:create:dyn-a:0:-").await?, "created");
+    // The narrowed grant holds.
+    assert!(
+        probe("kv-admin:create:dyn-b:0:-")
+            .await?
+            .starts_with("denied:not-granted:bucket:dyn-b")
+    );
+    Ok(())
+}
+
+/// A bucket over the account's per-stream byte limit is refused by the
+/// server as `limit-exceeded`.
+#[tokio::test]
+#[ignore = "requires Docker (NATS); run with `cargo test --include-ignored`"]
+async fn kv_admin_a_bucket_over_the_accounts_per_stream_limit_is_limit_exceeded() -> Result<()> {
+    let h = start_nats_with_accounts().await?;
+    let host = start_host().await?;
+    let client =
+        async_nats::ConnectOptions::with_user_and_password("perstream".into(), "perstream".into())
+            .connect(&h.nats_url)
+            .await?;
+    host.workload_start(workload_request(
+        "wl-perstream",
+        nats_async_interface(&[
+            ("servers", &h.nats_url),
+            ("username", "perstream"),
+            ("password", "perstream"),
+            ("subject-allow", "test.>"),
+            ("bucket-allow", "big"),
+            ("bucket-create-allow", "big"),
+            ("bucket-max-bytes", "1048576"),
+            ("bucket-storage-allow", "memory"),
+            ("core-subscriptions", "test.api"),
+        ]),
+    ))
+    .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // `max-bytes: 0` takes the 1 MiB ceiling, over the 64 KiB per stream.
+    let response = timeout(
+        Duration::from_secs(20),
+        client.request("test.api", "kv-admin:create:big:0:-".into()),
+    )
+    .await??;
+    let refused = String::from_utf8(response.payload.to_vec())?;
+    assert!(refused.starts_with("limit-exceeded:"), "{refused}");
     Ok(())
 }
 
