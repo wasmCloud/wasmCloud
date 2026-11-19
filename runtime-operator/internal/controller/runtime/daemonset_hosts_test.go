@@ -18,13 +18,12 @@ import (
 // and the Host Environment index the isolated host list needs.
 func isolatedDaemonSetReconciler(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *WorkloadDaemonSetReconciler {
 	t.Helper()
-	r := newDaemonSetReconciler(t)
-	c := daemonSetClientBuilder(t, r.Scheme, objs...).
+	s := newScaleTestScheme(t)
+	c := daemonSetClientBuilder(t, s, objs...).
 		WithIndex(&runtimev1alpha1.Host{}, hostEnvironmentIndex, workloadHostIndexes(t)[hostEnvironmentIndex]).
 		WithInterceptorFuncs(funcs).
 		Build()
-	r.Client, r.APIReader, r.AllowSharedHosts = c, c, false
-	return r
+	return &WorkloadDaemonSetReconciler{Client: c, APIReader: c, Scheme: s, OperatorNamespace: testNamespace}
 }
 
 func hostInEnvironment(hostID, environment string) *runtimev1alpha1.Host {
@@ -120,9 +119,14 @@ func TestDaemonSetSchedule_DepartedHostDeleteFailure(t *testing.T) {
 		t.Fatalf("delete host: %v", err)
 	}
 
+	// Only the departed host's instance fails to delete, so the error can
+	// come from nowhere else.
 	r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
-		Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
-			return errAPIUnavailable
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if w, ok := obj.(*runtimev1alpha1.Workload); ok && w.Spec.HostID == dsHostB {
+				return errAPIUnavailable
+			}
+			return c.Delete(ctx, obj, opts...)
 		},
 	})
 	if err := r.reconcileSchedule(context.Background(), ds); !errors.Is(err, errAPIUnavailable) {

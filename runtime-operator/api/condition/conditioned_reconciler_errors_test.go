@@ -83,6 +83,10 @@ func TestReconcilerContextHelpersOutsideAPass(t *testing.T) {
 	ForceRequeue(ctx)
 	RequireOptimisticLock(ctx)
 	// Each call gets its own placeholder, so nothing leaks between callers.
+	first, second := GetReconcilerContext(ctx), GetReconcilerContext(ctx)
+	if first == second {
+		t.Error("callers outside a pass share one placeholder context")
+	}
 	if got := GetReconcilerContext(ctx); *got != (ReconcilerContext{}) {
 		t.Errorf("placeholder context kept state between calls: %+v", got)
 	}

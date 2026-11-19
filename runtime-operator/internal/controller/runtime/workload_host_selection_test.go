@@ -138,8 +138,14 @@ func TestFindFreeHostRechecksIndexedHosts(t *testing.T) {
 	r := &WorkloadReconciler{
 		Client: schedulingClient(t, interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-				// Answer as an index that has not caught up would.
-				list.(*runtimev1alpha1.HostList).Items = []runtimev1alpha1.Host{*stale}
+				hosts, ok := list.(*runtimev1alpha1.HostList)
+				if !ok {
+					return c.List(ctx, list, opts...)
+				}
+				// Answer as an index that has not caught up would: the
+				// Host is listed as schedulable though its own conditions
+				// now say otherwise.
+				hosts.Items = []runtimev1alpha1.Host{*stale}
 				return nil
 			},
 		}),
@@ -230,20 +236,22 @@ func TestHostSelectionPlacesPinnedWorkloadWithoutReadingHost(t *testing.T) {
 		"not registered": {},
 		"read fails":     {List: failHostList},
 	} {
-		r := &WorkloadReconciler{
-			Client:            schedulingClient(t, funcs),
-			OperatorNamespace: testNamespace,
-			AllowSharedHosts:  true,
-		}
-		workload := configuredWorkload()
-		workload.Spec.HostID = testHeartbeatHostID
+		t.Run(name, func(t *testing.T) {
+			r := &WorkloadReconciler{
+				Client:            schedulingClient(t, funcs),
+				OperatorNamespace: testNamespace,
+				AllowSharedHosts:  true,
+			}
+			workload := configuredWorkload()
+			workload.Spec.HostID = testHeartbeatHostID
 
-		if err := r.reconcileHostSelection(context.Background(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
-			t.Fatalf("%s: host selection returned %v, want a skip once placed", name, err)
-		}
-		if workload.Status.HostID != testHeartbeatHostID || workload.Status.Environment != "" {
-			t.Errorf("%s: placed on %q in %q", name, workload.Status.HostID, workload.Status.Environment)
-		}
+			if err := r.reconcileHostSelection(context.Background(), workload); !errors.Is(err, condition.ErrSkipReconciliation()) {
+				t.Fatalf("host selection returned %v, want a skip once placed", err)
+			}
+			if workload.Status.HostID != testHeartbeatHostID || workload.Status.Environment != "" {
+				t.Errorf("placed on %q in %q", workload.Status.HostID, workload.Status.Environment)
+			}
+		})
 	}
 }
 
