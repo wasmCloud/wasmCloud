@@ -16,8 +16,8 @@ need_id() {
 
 ci_id="$(need_id "$(gh api orgs/wasmCloud/teams/ci-maintainers --jq .id)" ci-maintainers)"
 org_id="$(need_id "$(gh api orgs/wasmCloud/teams/org-maintainers --jq .id)" org-maintainers)"
-# The release workflow publishes releases using this account's PAT.
-release_id="$(need_id "$(gh api users/automation-wasmcloud --jq .id)" automation-wasmcloud)"
+# The release workflow publishes releases using the Octo STS GitHub App.
+release_id="$(need_id "$(gh api apps/octo-sts --jq .id)" octo-sts)"
 
 policy_id="$(gh api -H "$api_version" "repos/$repo/actions/policies?has_parents=false" |
   jq -r --arg name "$policy_name" '.policies[] | select(.name == $name) | .id')"
@@ -52,7 +52,7 @@ jq -n \
         allowed_actors: [
           {id: $ci, type: "Team"},
           {id: $org, type: "Team"},
-          {id: $release, type: "User"}
+          {id: $release, type: "App"}
         ]
       }
     }]
