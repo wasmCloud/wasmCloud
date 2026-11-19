@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tokio::io::AsyncReadExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tracing::debug;
 
 /// The random secret entry names are keyed with, in the cache root.
@@ -140,7 +140,7 @@ impl CacheManager {
         write_replacing(
             &self.get_cache_dir(reference),
             "credential",
-            self.credential_proof().into_bytes(),
+            &[self.credential_proof().as_bytes()],
         )
         .await
     }
@@ -185,11 +185,9 @@ impl CacheManager {
             .await
             .with_context(|| format!("failed to create cache directory {}", cache_dir.display()))?;
 
-        let mut entry = Vec::with_capacity(digest.len() + 1 + data.len());
-        entry.extend_from_slice(digest.as_bytes());
-        entry.push(b'\n');
-        entry.extend_from_slice(data);
-        write_replacing(&cache_dir, "entry", entry).await?;
+        // Written in parts, so the component is never copied into a second
+        // buffer just to sit behind its digest.
+        write_replacing(&cache_dir, "entry", &[digest.as_bytes(), b"\n", data]).await?;
         self.record_credential(reference).await
     }
 }
@@ -307,12 +305,12 @@ async fn is_legacy_entry(path: &Path, name: &std::ffi::OsStr) -> bool {
         && tokio::fs::metadata(path.join("digest")).await.is_ok()
 }
 
-/// Replace `dir/name` with `data` without a reader ever seeing it partly
-/// written.
-async fn write_replacing(dir: &Path, name: &str, data: Vec<u8>) -> Result<()> {
+/// Replace `dir/name` with `parts`, concatenated, without a reader ever
+/// seeing it partly written.
+async fn write_replacing(dir: &Path, name: &str, parts: &[&[u8]]) -> Result<()> {
     let path = dir.join(name);
     let temp = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
-    if let Err(err) = tokio::fs::write(&temp, data).await {
+    if let Err(err) = write_parts(&temp, parts).await {
         let _ = tokio::fs::remove_file(&temp).await;
         return Err(err).with_context(|| format!("failed to write cache file {}", temp.display()));
     }
@@ -321,6 +319,16 @@ async fn write_replacing(dir: &Path, name: &str, data: Vec<u8>) -> Result<()> {
         return Err(err).with_context(|| format!("failed to write cache file {}", path.display()));
     }
     Ok(())
+}
+
+async fn write_parts(path: &Path, parts: &[&[u8]]) -> std::io::Result<()> {
+    let mut file = tokio::fs::File::create(path).await?;
+    for part in parts {
+        file.write_all(part).await?;
+    }
+    // A tokio file finishes its last write in the background: flush before the
+    // rename publishes it.
+    file.flush().await
 }
 
 /// The cache root's secret, created on first use and readable only by its

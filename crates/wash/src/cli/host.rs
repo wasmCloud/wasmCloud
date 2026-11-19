@@ -1746,6 +1746,7 @@ impl CliCommand for HostCommand {
                 insecure: self.allow_insecure_registries,
                 cache_dir: self.oci_cache_dir.clone(),
                 timeout: Some(self.registry_pull_timeout),
+                ..Default::default()
             };
             let native_plugins = cluster_host_builder.native_plugins();
             let host_ref = cluster_host_builder.host_ref();

@@ -348,9 +348,30 @@ pub struct OciConfig {
     /// `cache.key` (owner-only on Unix); removing it orphans every entry.
     pub cache_dir: Option<PathBuf>,
     /// Timeout for OCI operations (pull, push, etc.)
-    /// If None, uses default timeout from oci-client
+    /// If None, a pull has no overall deadline, but still fails once the
+    /// registry sends nothing for [`PULL_READ_TIMEOUT`].
     pub timeout: Option<Duration>,
+    /// The largest component, in bytes, a pull accepts. If None,
+    /// [`DEFAULT_MAX_COMPONENT_SIZE`] applies.
+    ///
+    /// A pull holds the whole component in memory, so this bounds what one
+    /// registry can make the host allocate. A layer that declares more is
+    /// refused before it is downloaded, and one that sends more than it
+    /// declared is cut off.
+    pub max_component_size: Option<u64>,
 }
+
+/// The largest component a pull accepts when [`OciConfig::max_component_size`]
+/// is unset.
+pub const DEFAULT_MAX_COMPONENT_SIZE: u64 = 256 * 1024 * 1024;
+
+/// How long a pull waits for the registry to send anything before failing.
+/// It applies to each read, so a large component that keeps arriving is never
+/// cut off; [`OciConfig::timeout`] is the overall deadline.
+pub const PULL_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long a pull waits to connect to the registry.
+pub const PULL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl OciConfig {
     /// Create a new OciConfig with a specific cache directory
@@ -389,6 +410,18 @@ impl OciConfig {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
+    }
+
+    /// Set the largest component, in bytes, a pull accepts.
+    pub fn with_max_component_size(mut self, max_component_size: u64) -> Self {
+        self.max_component_size = Some(max_component_size);
+        self
+    }
+
+    /// The largest component a pull accepts, the default applied.
+    pub fn effective_max_component_size(&self) -> u64 {
+        self.max_component_size
+            .unwrap_or(DEFAULT_MAX_COMPONENT_SIZE)
     }
 }
 
@@ -512,6 +545,7 @@ pub(crate) async fn pull_component_bytes(
             cache_dir: config.cache_dir.clone(),
             pull_policy: pull_policy.clone(),
             timeout: config.timeout,
+            max_component_size: config.effective_max_component_size(),
             trust: trust.id,
         };
         let pulled = pull_coalescer()
@@ -571,6 +605,8 @@ struct PullKey {
     /// A caller joining a pull waits as long as that pull is allowed to take,
     /// so callers that set different timeouts must not wait on each other.
     timeout: Option<Duration>,
+    /// A caller with a lower limit must not be answered by a larger pull.
+    max_component_size: u64,
     trust: TrustId,
 }
 
@@ -735,32 +771,16 @@ async fn pull_uncoalesced(
 
     let client = pull_client(reference_parsed, config.insecure, auth, trust).await?;
 
-    // Pull the component using oci-client. Boxed: its future is large, and
-    // would otherwise sit inline in the coalesced pull's.
-    let pull_future = Box::pin(client.pull(
+    // Boxed: its future is large, and would otherwise sit inline in the
+    // coalesced pull's.
+    let (component_data, digest) = Box::pin(pull_component_layer(
+        &client,
         reference_parsed,
         auth,
-        vec![
-            WASM_LAYER_MEDIA_TYPE,
-            #[allow(deprecated)]
-            WASMCLOUD_MEDIA_TYPE,
-        ],
-    ));
-
-    let image_data = pull_future
-        .await
-        .with_context(|| format!("failed to pull component from {reference}"))?;
-
-    // Extract the component bytes from the first layer
-    let component_data = image_data
-        .layers
-        .first()
-        .ok_or_else(|| anyhow!("no layers found in pulled artifact"))?
-        .data
-        .clone();
-    let digest = image_data
-        .digest
-        .ok_or_else(|| anyhow!("no digest found in pulled artifact"))?;
+        config.effective_max_component_size(),
+    ))
+    .await
+    .with_context(|| format!("failed to pull component from {reference}"))?;
 
     // Validate that it's a valid WebAssembly component
     validate_component(&component_data)
@@ -779,6 +799,104 @@ async fn pull_uncoalesced(
         bytes: component_data,
         digest,
     }))
+}
+
+/// Fetch the manifest and only the component layer, with no more than
+/// `max_size` bytes of it in memory.
+///
+/// `Client::pull` would also download the config and every other layer, each
+/// into a buffer that grows for as long as the registry keeps sending. The
+/// digests are checked the same way: the manifest against the reference and
+/// the `Docker-Content-Digest` header, the layer as it streams in.
+async fn pull_component_layer(
+    client: &Client,
+    reference: &Reference,
+    auth: &RegistryAuth,
+    max_size: u64,
+) -> Result<(bytes::Bytes, String)> {
+    #[allow(deprecated)]
+    const ACCEPTED: [&str; 2] = [WASM_LAYER_MEDIA_TYPE, WASMCLOUD_MEDIA_TYPE];
+
+    let (manifest, digest) = client.pull_image_manifest(reference, auth).await?;
+    // The same rule `Client::pull` applies: an artifact with any other kind of
+    // layer is not a component image.
+    if let Some(layer) = manifest
+        .layers
+        .iter()
+        .find(|layer| !ACCEPTED.contains(&layer.media_type.as_str()))
+    {
+        bail!("incompatible layer media type: {}", layer.media_type);
+    }
+    let layer = manifest
+        .layers
+        .first()
+        .ok_or_else(|| anyhow!("no layers found in pulled artifact"))?;
+    let declared = u64::try_from(layer.size)
+        .map_err(|_| anyhow!("component layer declares a negative size ({})", layer.size))?;
+    if declared > max_size {
+        bail!(
+            "component layer declares {declared} bytes, over the {max_size}-byte limit \
+             (raise `max_component_size` to pull it)"
+        );
+    }
+    let declared =
+        usize::try_from(declared).context("component layer is too large for this platform")?;
+
+    let mut out = BoundedBuffer::with_limit(declared);
+    client.pull_blob(reference, layer, &mut out).await?;
+    Ok((out.data.into(), digest))
+}
+
+/// An in-memory writer that refuses to grow past `limit` bytes.
+///
+/// It is given the layer's declared size, which the manifest digest vouches
+/// for: a registry that sends more than it declared is cut off there rather
+/// than when its digest finally fails to match. The buffer is allocated once,
+/// at that size, so a component that fits is never copied while it grows.
+struct BoundedBuffer {
+    data: Vec<u8>,
+    limit: usize,
+}
+
+impl BoundedBuffer {
+    fn with_limit(limit: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(limit),
+            limit,
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for BoundedBuffer {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        if buf.len() > this.limit - this.data.len() {
+            return std::task::Poll::Ready(Err(std::io::Error::other(format!(
+                "component layer is larger than the {} bytes its manifest declares",
+                this.limit
+            ))));
+        }
+        this.data.extend_from_slice(buf);
+        std::task::Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
 }
 
 /// Push a WebAssembly component to an OCI registry
@@ -973,6 +1091,143 @@ pub async fn cleanup_cache(cache_dir: impl AsRef<Path>, age: Duration) -> Result
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    /// A registry serving `image`, and a config that pulls from it over HTTP
+    /// with the credentials it accepts.
+    async fn serving(image: test_registry::Image) -> (test_registry::Registry, OciConfig) {
+        let registry = test_registry::Registry::start().await;
+        *registry.image.write().unwrap() = image;
+        let config = OciConfig {
+            credentials: Some(("user".into(), "secret".into())),
+            insecure: true,
+            timeout: Some(Duration::from_secs(30)),
+            ..Default::default()
+        };
+        (registry, config)
+    }
+
+    fn component() -> Vec<u8> {
+        wat::parse_str("(component)").unwrap()
+    }
+
+    fn blob_requests(registry: &test_registry::Registry) -> Vec<String> {
+        let paths = registry.paths.lock().unwrap();
+        paths
+            .iter()
+            .filter(|p| p.contains("/blobs/"))
+            .cloned()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_layer_declared_over_the_limit_is_refused_before_download() {
+        let (registry, config) = serving(test_registry::Image::build(
+            component(),
+            Some(1 << 40),
+            Vec::new(),
+        ))
+        .await;
+        let err = pull_component(&registry.reference(), config, OciPullPolicy::Always)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("over the"), "{err:#}");
+        assert_eq!(blob_requests(&registry), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn the_limit_is_configurable() {
+        let wasm = component();
+        let limit = wasm.len() as u64 - 1;
+        let (registry, config) = serving(test_registry::Image::build(wasm, None, Vec::new())).await;
+        let err = pull_component(
+            &registry.reference(),
+            config.clone().with_max_component_size(limit),
+            OciPullPolicy::Always,
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("over the"), "{err:#}");
+        assert_eq!(blob_requests(&registry), Vec::<String>::new());
+
+        pull_component(&registry.reference(), config, OciPullPolicy::Always)
+            .await
+            .expect("the default limit admits it");
+    }
+
+    #[tokio::test]
+    async fn a_layer_larger_than_declared_is_cut_off() {
+        let wasm = component();
+        let declared = wasm.len() as i64 - 1;
+        let (registry, config) = serving(test_registry::Image::build(
+            wasm,
+            Some(declared),
+            Vec::new(),
+        ))
+        .await;
+        let err = pull_component(&registry.reference(), config, OciPullPolicy::Always)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("larger than the"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_negative_declared_size_is_refused() {
+        let (registry, config) = serving(test_registry::Image::build(
+            component(),
+            Some(-1),
+            Vec::new(),
+        ))
+        .await;
+        let err = pull_component(&registry.reference(), config, OciPullPolicy::Always)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("negative size"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn only_the_component_layer_is_downloaded() {
+        let wasm = component();
+        let (registry, config) = serving(test_registry::Image::build(
+            wasm.clone(),
+            None,
+            vec![b"second layer".to_vec(), b"third layer".to_vec()],
+        ))
+        .await;
+        let (bytes, _) = pull_component(&registry.reference(), config, OciPullPolicy::Always)
+            .await
+            .unwrap();
+        assert_eq!(bytes, wasm);
+        let image = registry.image.read().unwrap();
+        let blobs = blob_requests(&registry);
+        assert_eq!(blobs.len(), 1, "{blobs:?}");
+        assert!(blobs[0].ends_with(image.wasm_digest()), "{blobs:?}");
+        for extra in image.extra_layer_digests() {
+            assert!(!blobs.iter().any(|b| b.ends_with(&extra)), "{blobs:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bounded_pull_round_trips_through_the_cache() {
+        let wasm = component();
+        let cache = tempfile::TempDir::new().unwrap();
+        let (registry, mut config) =
+            serving(test_registry::Image::build(wasm.clone(), None, Vec::new())).await;
+        config.cache_dir = Some(cache.path().to_path_buf());
+        let (pulled, digest) =
+            pull_component(&registry.reference(), config.clone(), OciPullPolicy::Always)
+                .await
+                .unwrap();
+        assert_eq!(pulled, wasm);
+        // Offline: only the cache entry written above can answer.
+        registry
+            .unavailable
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let (cached, cached_digest) =
+            pull_component(&registry.reference(), config, OciPullPolicy::Never)
+                .await
+                .unwrap();
+        assert_eq!((cached, cached_digest), (wasm, digest));
+    }
 
     #[test]
     fn reference_validation_preserves_valid_references() {

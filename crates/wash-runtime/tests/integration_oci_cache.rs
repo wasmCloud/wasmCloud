@@ -21,6 +21,7 @@ async fn private_cached_images_do_not_cross_credentials() {
         cache_dir: Some(cache.path().to_owned()),
         insecure: true,
         timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
     };
     for reference in [
         registry.reference(),
@@ -71,6 +72,7 @@ async fn a_password_rotation_revalidates_instead_of_downloading() {
         cache_dir: Some(cache.path().to_owned()),
         insecure: true,
         timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
     };
     let reference = format!("{}/private/component:v1", registry.addr);
     pull_component(&reference, config("secret"), OciPullPolicy::IfNotPresent)
@@ -151,6 +153,7 @@ async fn a_plain_http_cache_hit_cannot_satisfy_an_https_pull() {
         cache_dir: Some(cache.path().to_owned()),
         insecure: true,
         timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
     };
     let reference = registry.reference();
     pull_component(&reference, config.clone(), OciPullPolicy::IfNotPresent)
@@ -192,6 +195,7 @@ async fn a_pinned_disk_hit_still_validates_the_registry() {
         cache_dir: Some(cache.path().to_owned()),
         insecure: true,
         timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
     };
     let reference = registry.reference();
     // Always has a different completed-result key, so the subsequent
