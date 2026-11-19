@@ -247,6 +247,25 @@ fn check_array_count(ty: &PgType, raw: &[u8]) -> Result<(), Box<dyn Error + Sync
     check_count(ty, "elements", elements, rest.len(), 4)
 }
 
+/// An `int2vector` inside an `int2vector[]`.
+///
+/// postgres-types decodes each element of an array with the element type's own
+/// decoder, not through `PgValue`, so the inner `Vec<i16>` would make room for
+/// whatever count the element states. The element's count is checked against
+/// its own length first, as the outer array's is.
+struct PgInt2Vector(Vec<i16>);
+
+impl FromSql<'_> for PgInt2Vector {
+    fn from_sql(ty: &PgType, raw: &[u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        check_array_count(ty, raw)?;
+        Vec::<i16>::from_sql(ty, raw).map(PgInt2Vector)
+    }
+
+    fn accepts(ty: &PgType) -> bool {
+        *ty == PgType::INT2_VECTOR
+    }
+}
+
 impl FromSql<'_> for PgPolygon {
     fn from_sql(ty: &PgType, raw: &[u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
         counted_points(ty, raw).map(PgPolygon)
@@ -1315,7 +1334,10 @@ impl FromSql<'_> for PgValue {
                 Ok(PgValue::Int2Vector(Vec::<i16>::from_sql(ty, raw)?))
             }
             &tokio_postgres::types::Type::INT2_VECTOR_ARRAY => Ok(PgValue::Int2VectorArray(
-                Vec::<Vec<i16>>::from_sql(ty, raw)?,
+                Vec::<PgInt2Vector>::from_sql(ty, raw)?
+                    .into_iter()
+                    .map(|v| v.0)
+                    .collect(),
             )),
             &tokio_postgres::types::Type::INT4 => Ok(PgValue::Int4(i32::from_sql(ty, raw)?)),
             &tokio_postgres::types::Type::INT4_RANGE
@@ -2934,6 +2956,43 @@ mod tests {
         assert!(decode(&[0; 11]).is_err());
         // An empty array still decodes.
         assert!(matches!(decode(&header(&[])), Ok(PgValue::Int4Array(v)) if v.is_empty()));
+    }
+
+    #[test]
+    fn nested_int2vector_count_past_its_length_is_refused() {
+        fn array(oid: u32, elements: &[&[u8]]) -> Vec<u8> {
+            let mut wire = 1i32.to_be_bytes().to_vec();
+            wire.extend(0i32.to_be_bytes());
+            wire.extend(oid.to_be_bytes());
+            wire.extend(i32::try_from(elements.len()).unwrap().to_be_bytes());
+            wire.extend(1i32.to_be_bytes());
+            for element in elements {
+                wire.extend(i32::try_from(element.len()).unwrap().to_be_bytes());
+                wire.extend(*element);
+            }
+            wire
+        }
+        let decode = |wire: &[u8]| PgValue::from_sql(&PgType::INT2_VECTOR_ARRAY, wire);
+        // The outer array is well formed; its one int2vector states i32::MAX
+        // elements, which `Vec<i16>` alone would make about 4 GB of room for.
+        let mut inner = 1i32.to_be_bytes().to_vec();
+        inner.extend(0i32.to_be_bytes());
+        inner.extend(PgType::INT2.oid().to_be_bytes());
+        inner.extend(i32::MAX.to_be_bytes());
+        inner.extend(1i32.to_be_bytes());
+        let outer = array(PgType::INT2_VECTOR.oid(), &[&inner]);
+        let err = decode(&outer).unwrap_err();
+        assert!(err.to_string().contains("cannot fit"), "{err}");
+        // A whole int2vector still decodes.
+        let mut one = 1i32.to_be_bytes().to_vec();
+        one.extend(0i32.to_be_bytes());
+        one.extend(PgType::INT2.oid().to_be_bytes());
+        one.extend(1i32.to_be_bytes());
+        one.extend(1i32.to_be_bytes());
+        one.extend(2i32.to_be_bytes());
+        one.extend(5i16.to_be_bytes());
+        let outer = array(PgType::INT2_VECTOR.oid(), &[&one]);
+        assert!(matches!(decode(&outer), Ok(PgValue::Int2VectorArray(v)) if v == [vec![5]]));
     }
 
     #[test]
