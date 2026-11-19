@@ -1,0 +1,26 @@
+build:
+  command: cargo build --target wasm32-wasip2 --release --locked
+  component_path: target/wasm32-wasip2/release/http_egress_secrets.wasm
+
+dev:
+  # Trust the mock servers' CA for the component's outgoing HTTPS.
+  http_client_ca_paths:
+    - mock/certs/ca.pem
+  # API_TOKEN holds a placeholder. wash dev writes the value of
+  # .secrets/acme-token in its place, only as a bearer token, only to the Acme
+  # API, and only on GET under /v1.
+  secrets:
+    - env: API_TOKEN
+      fromFile: .secrets/acme-token
+      destinations:
+        - https://host.wasmcloud.internal:8443
+      routes:
+        - GET /v1
+
+workload:
+  # Both mock servers run on this machine, reached by its reserved name.
+  allowedHosts:
+    - host.wasmcloud.internal
+  allowedHostLoopbackPorts:
+    - 8443
+    - 9443

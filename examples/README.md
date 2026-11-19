@@ -12,6 +12,7 @@ Looking for examples in other languages? Checkout our docs at [wasmcloud.com/doc
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | [blobby](./blobby/)                                                | Simple file server demonstrating CRUD operations against the `wasi:blobstore` interface.                                                   |
 | [grpc-hello-world](./grpc-hello-world/)                            | gRPC client and server components showing how to make and serve gRPC calls from a wasmCloud component.                                     |
+| [http-egress-secrets](./http-egress-secrets/)                      | HTTP client that calls an API with a token it never holds: `wash dev` substitutes it for a placeholder on the way out.                     |
 | [otel-config](./otel-config/)                                      | HTTP service instrumented with OpenTelemetry tracing, logs, and metrics via `wasi:otel`, with the OTel `Resource` built from `wasi:config`. |
 | [qrcode](./qrcode/)                                                | HTTP service that generates QR codes.                                                                                                      |
 

@@ -1,0 +1,12 @@
+# Rust build artifacts
+target/
+
+# WIT dependencies
+wit/deps
+
+# Demo credentials and certificates, made by mock/setup.sh
+.secrets/
+mock/certs/
+
+# Trash
+.DS_Store

@@ -52,6 +52,7 @@ jobs:
           {"key": "grpc-hello-world-server",  "filter": "grpc-hello-world",   "workdir": "examples/grpc-hello-world/component-server", "image": "ghcr.io/wasmcloud/components/grpc-hello-world-server", "needs_protoc": true},
           {"key": "local-ingress-callee",     "filter": "local-ingress",      "workdir": "examples/local-ingress/callee"},
           {"key": "local-ingress-caller",     "filter": "local-ingress",      "workdir": "examples/local-ingress/caller"},
+          {"key": "http-egress-secrets",      "workdir": "examples/http-egress-secrets"},
           {"key": "http-hello-world-persistent-storage", "workdir": "examples/http-hello-world-persistent-storage", "image": "ghcr.io/wasmcloud/components/http-hello-world-persistent-storage"},
           {"key": "nats-jetstream-replay",    "workdir": "examples/nats-jetstream-replay",               "image": "ghcr.io/wasmcloud/components/nats-jetstream-replay"},
           {"key": "oci-registry",            "workdir": "examples/oci-registry",                       "image": "ghcr.io/wasmcloud/components/oci-registry"},
