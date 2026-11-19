@@ -750,24 +750,59 @@ func heldState(ctx context.Context, host *WashHostClient, workloadID string) (ru
 	return status.GetWorkloadState(), nil
 }
 
+// checkVolumeMounts refuses a mount that names no volume in the spec. The host
+// would start the component without it, logging only a warning. Admission
+// cannot check this within its cost budget, so the operator does, before a
+// host is chosen.
+func checkVolumeMounts(spec *runtimev1alpha1.WorkloadSpec) error {
+	defined := make(map[string]bool, len(spec.Volumes))
+	for _, v := range spec.Volumes {
+		defined[v.Name] = true
+	}
+	check := func(owner string, resources *runtimev1alpha1.LocalResources) error {
+		if resources == nil {
+			return nil
+		}
+		for _, m := range resources.VolumeMounts {
+			if !defined[m.Name] {
+				return fmt.Errorf("%s mounts volume %q, which is not defined in volumes", owner, m.Name)
+			}
+		}
+		return nil
+	}
+	for _, c := range spec.Components {
+		if err := check(fmt.Sprintf("component %q", c.Name), c.LocalResources); err != nil {
+			return err
+		}
+	}
+	if spec.Service != nil {
+		return check("service", spec.Service.LocalResources)
+	}
+	return nil
+}
+
 // materializeWorkload is the Workload as the host is sent it, without its
 // annotations: every ConfigMap, Secret and registry credential it names, read
 // from its namespace.
 func (r *WorkloadReconciler) materializeWorkload(ctx context.Context, workload *runtimev1alpha1.Workload) (*runtimev2.Workload, error) {
+	if err := checkVolumeMounts(&workload.Spec); err != nil {
+		return nil, err
+	}
 	volumes := make([]*runtimev2.Volume, 0, len(workload.Spec.Volumes))
 	for _, v := range workload.Spec.Volumes {
 		vol := &runtimev2.Volume{
 			Name: v.Name,
 		}
-		switch {
-		case v.EphemeralVolume != nil:
-			vol.VolumeType = &runtimev2.Volume_EmptyDir{}
-		case v.HostPathVolume != nil:
+		// Admission allows at most one type. A volume with none is an
+		// emptyDir, said here rather than left to the host's default.
+		if v.HostPathVolume != nil {
 			vol.VolumeType = &runtimev2.Volume_HostPath{
 				HostPath: &runtimev2.HostPathVolume{
 					LocalPath: v.HostPathVolume.Path,
 				},
 			}
+		} else {
+			vol.VolumeType = &runtimev2.Volume_EmptyDir{EmptyDir: &runtimev2.EmptyDirVolume{}}
 		}
 
 		volumes = append(volumes, vol)

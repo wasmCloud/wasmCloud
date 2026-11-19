@@ -745,12 +745,14 @@ spec:
                         type: object
                       volumes:
                         items:
-                          description: Volume represents a named volume that can be
-                            mounted by components.
+                          description: |-
+                            Volume represents a named volume that can be mounted by components.
+                            At most one volume type may be set; a volume with none is ephemeral.
                           properties:
                             ephemeral:
-                              description: EphemeralVolume represents a temporary
-                                directory that shares a workload's lifetime.
+                              description: |-
+                                EphemeralVolume represents a temporary directory that shares a workload's lifetime.
+                                It is the default when no volume type is set.
                               type: object
                             hostPath:
                               description: HostPathVolume represents a pre-existing
@@ -766,11 +768,20 @@ spec:
                             name:
                               description: Name of the volume. Must be a DNS_LABEL
                                 and unique within the Workload.
+                              maxLength: 63
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                               type: string
                           required:
                           - name
                           type: object
+                          x-kubernetes-validations:
+                          - message: ephemeral and hostPath are mutually exclusive
+                            rule: '!(has(self.ephemeral) && has(self.hostPath))'
+                        maxItems: 64
                         type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
                     type: object
                 required:
                 - spec

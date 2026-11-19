@@ -179,16 +179,7 @@ func newPinnedWorkload(ctx context.Context, name string) *runtimev1alpha1.Worklo
 
 func newPinnedWorkloadOn(ctx context.Context, name, hostID string) *runtimev1alpha1.Workload {
 	GinkgoHelper()
-	w := &runtimev1alpha1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
-		Spec: runtimev1alpha1.WorkloadSpec{
-			HostID: hostID,
-			Components: []runtimev1alpha1.WorkloadComponent{{
-				Name:  "http",
-				Image: "example.com/http:1",
-			}},
-		},
-	}
+	w := newWorkload(name, hostID)
 	Expect(k8sClient.Create(ctx, w)).To(Succeed())
 	return w
 }
@@ -463,4 +454,18 @@ func touchWorkload(ctx context.Context, key types.NamespacedName, value string) 
 	w := &runtimev1alpha1.Workload{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name}}
 	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{"test/touch":%q}}}`, value))
 	Expect(k8sClient.Patch(ctx, w, client.RawPatch(types.MergePatchType, patch))).To(Succeed())
+}
+
+// newWorkload is a minimal valid Workload pinned to hostID.
+func newWorkload(name, hostID string) *runtimev1alpha1.Workload {
+	return &runtimev1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		Spec: runtimev1alpha1.WorkloadSpec{
+			HostID: hostID,
+			Components: []runtimev1alpha1.WorkloadComponent{{
+				Name:  "http",
+				Image: "example.com/http:1",
+			}},
+		},
+	}
 }
