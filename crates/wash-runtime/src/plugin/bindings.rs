@@ -268,9 +268,10 @@ impl BindingSchema {
 
     /// Declare narrowable keys whose unset value grants a default ceiling.
     ///
-    /// Defaults form the lowest host layer, before operator config and the
-    /// workload's narrowing check. Use only values the plugin already uses
-    /// when a key is unset; ordinary allowlists should keep granting nothing.
+    /// Defaults fill keys left unset by operator config and applicable default
+    /// bundles, before the workload's narrowing check. Use only values the
+    /// plugin already uses when a key is unset; ordinary allowlists should
+    /// keep granting nothing.
     #[must_use]
     pub fn and_host_ceiling_defaults<I, K, V>(mut self, defaults: I) -> Self
     where
@@ -881,8 +882,7 @@ impl PluginBindingSet {
         self.host_layer_with(binding, &BindingSchema::empty())
     }
 
-    /// [`Self::host_layer`], over schema defaults and collapsing spellings of
-    /// one key.
+    /// [`Self::host_layer`], collapsing two spellings of one key.
     ///
     /// The operator's own layers need this as much as the workload's: a base
     /// that writes `Subject_Allow` and a binding that writes `subject-allow`
@@ -896,7 +896,6 @@ impl PluginBindingSet {
         // without first running the conflict validation performed at startup
         // and by `resolve`.
         let mut layer = Config::new();
-        extend_layer(&mut layer, &schema.ceiling_defaults, schema);
         extend_layer(&mut layer, &self.base, schema);
         if let Some(named) = self.bindings.get(binding) {
             extend_layer(&mut layer, named, schema);
@@ -1173,6 +1172,7 @@ impl PluginBindingSet {
         }
 
         let mut resolved = self.host_layer_with(binding, schema);
+        self.apply_defaults(binding, &mut resolved, workload, schema, &BTreeSet::new());
         if self.workload_config.reports() {
             let findings = self.findings(binding, workload, &resolved, schema, narrows);
             if !findings.is_empty() {
@@ -1192,7 +1192,6 @@ impl PluginBindingSet {
         for (key, value) in workload {
             layer_insert(&mut resolved, key, value, schema);
         }
-        self.apply_default_bundles(binding, &mut resolved, schema, &BTreeSet::new());
 
         // After the bundles, so a default that supplies the address counts,
         // and outside the policy branch above, because this is not a question
@@ -1328,13 +1327,16 @@ impl PluginBindingSet {
         findings
     }
 
-    /// Apply every default bundle whose anchor nobody set. A key in `pending`
-    /// counts as set, since a plugin secret supplies it at bind, and so does a
-    /// key [withheld](Self::withhold) from the workload.
-    fn apply_default_bundles(
+    /// Fill the host layer from applicable bundles, then schema defaults.
+    ///
+    /// Workload values suppress anchored bundles, but land only after their
+    /// grant has been checked against this host layer. Pending and withheld
+    /// secret keys count as set so a fallback cannot replace them.
+    fn apply_defaults(
         &self,
         binding: &str,
         resolved: &mut Config,
+        workload: &Config,
         schema: &BindingSchema,
         pending: &BTreeSet<String>,
     ) {
@@ -1344,8 +1346,15 @@ impl PluginBindingSet {
                 || pending.contains(&canonical)
                 || self.withheld.contains(&canonical)
         };
+        let overrides_anchor = |resolved: &Config, key: &str| {
+            lookup(workload, key, schema).is_some() || is_set(resolved, key)
+        };
         for bundle in &self.default_bundles {
-            if let Some(key) = bundle.unless_any.iter().find(|key| is_set(resolved, key)) {
+            if let Some(key) = bundle
+                .unless_any
+                .iter()
+                .find(|key| overrides_anchor(resolved, key))
+            {
                 debug!(
                     plugin_id = %self.plugin_id,
                     binding = describe_binding(binding),
@@ -1355,7 +1364,7 @@ impl PluginBindingSet {
                 );
                 continue;
             }
-            if is_set(resolved, &bundle.anchor) {
+            if overrides_anchor(resolved, &bundle.anchor) {
                 debug!(
                     plugin_id = %self.plugin_id,
                     binding = describe_binding(binding),
@@ -1376,6 +1385,11 @@ impl PluginBindingSet {
                 if !is_set(resolved, key) {
                     resolved.insert(key.clone(), value.clone());
                 }
+            }
+        }
+        for (key, value) in &schema.ceiling_defaults {
+            if !is_set(resolved, key) {
+                resolved.insert(key.clone(), value.clone());
             }
         }
     }
@@ -1406,7 +1420,7 @@ impl PluginBindingSet {
         self.bindings.keys().map(move |name| {
             let pending = self.pending_secret_keys(name, schema);
             let mut layer = self.host_layer_with(name, schema);
-            self.apply_default_bundles(name, &mut layer, schema, &pending);
+            self.apply_defaults(name, &mut layer, &Config::new(), schema, &pending);
             (name.as_str(), layer, pending)
         })
     }
@@ -2386,6 +2400,56 @@ mod tests {
             .resolve("disk", &Config::new(), &schema, equal)
             .unwrap();
         assert_eq!(lookup(&named, "storage", &schema).unwrap().expose(), "file");
+    }
+
+    #[test]
+    fn operator_bundles_precede_schema_ceilings() {
+        let schema = BindingSchema::with_host_owned_keys(["servers", "tls-ca"])
+            .and_host_ceiling_defaults([("storage", "file")]);
+        let set = PluginBindingSet::new("example")
+            .with_workload_config(WorkloadConfigPolicy::Deny)
+            .with_binding("inherited", Config::new())
+            .with_default_bundle(
+                "servers",
+                [
+                    ("servers", "nats://host:4222"),
+                    ("tls-ca", "/host-ca.crt"),
+                    ("storage", "memory"),
+                ],
+            );
+        let equal: NarrowsFn<'_> = &|_, host, workload| host == workload;
+
+        let inherited = set.resolve("", &Config::new(), &schema, equal).unwrap();
+        assert_eq!(inherited["storage"], "memory");
+        let (_, startup, _) = set.host_layers(&schema).next().unwrap();
+        assert_eq!(startup["storage"], "memory");
+        assert!(
+            set.resolve("", &map(&[("storage", "file")]), &schema, equal)
+                .is_err()
+        );
+        assert!(
+            set.resolve("", &map(&[("storage", "memory")]), &schema, equal)
+                .is_ok()
+        );
+
+        let elsewhere = set
+            .with_workload_config(WorkloadConfigPolicy::Allow)
+            .resolve(
+                "",
+                &map(&[("servers", "nats://elsewhere:4222")]),
+                &schema,
+                equal,
+            )
+            .unwrap();
+        assert_eq!(elsewhere["servers"], "nats://elsewhere:4222");
+        assert_eq!(elsewhere["storage"], "file");
+        assert!(!elsewhere.contains_key("tls-ca"));
+
+        let anchored = PluginBindingSet::new("example")
+            .with_default_bundle("storage", [("storage", "memory")])
+            .resolve("", &Config::new(), &schema, equal)
+            .unwrap();
+        assert_eq!(anchored["storage"], "memory");
     }
 
     #[test]
