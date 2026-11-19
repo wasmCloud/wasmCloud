@@ -22,6 +22,8 @@ use tokio::time::timeout;
 use wash_runtime::host::HostApi;
 use wash_runtime::types::{LocalResources, Service, Workload, WorkloadStartRequest};
 
+#[path = "../benches/common/mod.rs"]
+mod bench_common;
 mod common;
 use common::{
     http_only_host_interfaces, json_u64_field, start_host_with_dynamic_router,
@@ -29,6 +31,26 @@ use common::{
 };
 
 const SVC_COUNTER_WASM: &[u8] = include_bytes!("wasm/svc_counter.wasm");
+
+#[tokio::test]
+async fn test_benchmark_service_can_proxy_to_loopback_backends() -> Result<()> {
+    for flavor in [bench_common::Flavor::P2, bench_common::Flavor::P3] {
+        let service = bench_common::start_service_host().await?;
+        let backend = bench_common::start_backend_host(flavor).await?;
+        let result = bench_common::checked_request(
+            &bench_common::bench_client(),
+            service.addr,
+            Some(backend.addr),
+            flavor.expected_body(),
+        )
+        .await;
+        service.shutdown().await;
+        backend.shutdown().await;
+        result
+            .with_context(|| format!("benchmark service failed to reach its {flavor:?} backend"))?;
+    }
+    Ok(())
+}
 
 /// Parse `{"cli_ticks":N,"http_calls":M}` without pulling in a JSON dep.
 fn parse_counter(body: &str) -> (u64, u64) {
