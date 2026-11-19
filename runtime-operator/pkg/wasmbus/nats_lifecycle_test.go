@@ -169,18 +169,18 @@ func TestNatsSubscriptionDrainAfterConnectionClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stopped := make(chan struct{})
 	sub.Handle(func(*Message) {})
 	nc.Close()
 
-	go func() {
-		if err := sub.Drain(); err == nil {
+	// Drain returns only once the handler goroutine has exited, so its
+	// returning at all shows the handler stopped.
+	drained := make(chan error, 1)
+	go func() { drained <- sub.Drain() }()
+	select {
+	case err := <-drained:
+		if err == nil {
 			t.Error("drained a subscription on a closed connection without an error")
 		}
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Drain hung on a closed connection")
 	}

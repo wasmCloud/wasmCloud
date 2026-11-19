@@ -8,11 +8,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
-	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
@@ -20,24 +18,9 @@ import (
 // and the Host Environment index the isolated host list needs.
 func isolatedDaemonSetReconciler(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *WorkloadDaemonSetReconciler {
 	t.Helper()
-	r := newDaemonSetReconciler(t, objs...)
-	m := newRecordingManager(t)
-	if err := (&WorkloadReconciler{Client: m.GetClient()}).SetupWithManager(m); err != nil {
-		t.Fatalf("set up workload reconciler: %v", err)
-	}
-	daemonSetGvk, err := gvkForType(&runtimev1alpha1.WorkloadDaemonSet{}, r.Scheme)
-	if err != nil {
-		t.Fatalf("gvk: %v", err)
-	}
-	c := fake.NewClientBuilder().WithScheme(r.Scheme).WithObjects(objs...).
-		WithStatusSubresource(&runtimev1alpha1.WorkloadDaemonSet{}).
-		WithIndex(&runtimev1alpha1.Host{}, hostEnvironmentIndex, m.indexes[hostEnvironmentIndex]).
-		WithIndex(&runtimev1alpha1.Workload{}, workloadDaemonSetOwnerIndex, func(obj client.Object) []string {
-			if ownerUID, ok := controllerUID(obj, daemonSetGvk); ok {
-				return []string{ownerUID}
-			}
-			return nil
-		}).
+	r := newDaemonSetReconciler(t)
+	c := daemonSetClientBuilder(t, r.Scheme, objs...).
+		WithIndex(&runtimev1alpha1.Host{}, hostEnvironmentIndex, workloadHostIndexes(t)[hostEnvironmentIndex]).
 		WithInterceptorFuncs(funcs).
 		Build()
 	r.Client, r.APIReader, r.AllowSharedHosts = c, c, false
@@ -158,7 +141,7 @@ func TestDaemonSetSchedule_CollisionReadFailure(t *testing.T) {
 	r.APIReader = failingReader{}
 
 	err := r.syncHost(context.Background(), ds, template, hash, dsHostA, &daemonSetHost{}, 1, map[string]bool{})
-	if err == nil || errors.Is(err, condition.ErrNoop()) {
+	if !errors.Is(err, errUncachedRead) {
 		t.Fatalf("syncHost returned %v, want the read error", err)
 	}
 }

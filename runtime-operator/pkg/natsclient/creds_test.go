@@ -125,6 +125,9 @@ func TestNatsClientFlagsKeepPresetGrace(t *testing.T) {
 // the failure is logged once per distinct error rather than on every attempt.
 // The log names the path and never the old secret.
 func TestNatsSecretFileReadFailureLogsOnce(t *testing.T) {
+	// Swapping the package logger is safe only while tests in this package
+	// run serially and close their connections, so no NATS callback can be
+	// reading it. Keep this test off t.Parallel.
 	var output bytes.Buffer
 	previous := log
 	log = funcr.New(func(prefix, args string) { output.WriteString(args + "\n") }, funcr.Options{})

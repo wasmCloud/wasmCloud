@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -73,13 +74,25 @@ func testDaemonSet(replicas int32) *runtimev1alpha1.WorkloadDaemonSet {
 func newDaemonSetReconciler(t *testing.T, objs ...client.Object) *WorkloadDaemonSetReconciler {
 	t.Helper()
 	s := newScaleTestScheme(t)
+	c := daemonSetClientBuilder(t, s, objs...).Build()
+	return &WorkloadDaemonSetReconciler{
+		Client:            c,
+		APIReader:         c,
+		Scheme:            s,
+		OperatorNamespace: testNamespace,
+		AllowSharedHosts:  true,
+	}
+}
 
+// daemonSetClientBuilder is the fake client the DaemonSet tests share, with
+// the owner index the reconciler lists its Workloads by.
+func daemonSetClientBuilder(t *testing.T, s *runtime.Scheme, objs ...client.Object) *fake.ClientBuilder {
+	t.Helper()
 	daemonSetGvk, err := gvkForType(&runtimev1alpha1.WorkloadDaemonSet{}, s)
 	if err != nil {
 		t.Fatalf("gvk: %v", err)
 	}
-
-	c := fake.NewClientBuilder().
+	return fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
 		WithStatusSubresource(&runtimev1alpha1.WorkloadDaemonSet{}).
@@ -89,16 +102,7 @@ func newDaemonSetReconciler(t *testing.T, objs ...client.Object) *WorkloadDaemon
 					return []string{ownerUID}
 				}
 				return nil
-			}).
-		Build()
-
-	return &WorkloadDaemonSetReconciler{
-		Client:            c,
-		APIReader:         c,
-		Scheme:            s,
-		OperatorNamespace: testNamespace,
-		AllowSharedHosts:  true,
-	}
+			})
 }
 
 // workloadsByHost lists the DaemonSet's live Workloads keyed by pinned HostID.
@@ -336,14 +340,18 @@ func TestDaemonSetSchedule_TerminatingOrphanHoldsItsSlot(t *testing.T) {
 }
 
 // failingReader rejects every read past the cache.
+// errUncachedRead is what failingReader returns, so tests can tell its reads
+// from other failures.
+var errUncachedRead = errors.New("unexpected uncached read")
+
 type failingReader struct{}
 
 func (failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
-	return errors.New("unexpected uncached read")
+	return errUncachedRead
 }
 
 func (failingReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
-	return errors.New("unexpected uncached read")
+	return errUncachedRead
 }
 
 // predecessorInstance is what a deleted DaemonSet of the same name leaves until

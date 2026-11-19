@@ -2,6 +2,7 @@ package condition
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -162,23 +163,35 @@ func TestConditionedReconcilerRetryStatusConflictsReadFailure(t *testing.T) {
 	}
 }
 
-// reapplyStatus sends nothing when the pass changed nothing, and keeps a
-// metadata change from the pass while pinning the patch to the fresh read.
+// reapplyStatus sends nothing when the pass changed nothing. Otherwise its
+// patch keeps the pass's metadata change and is pinned to the fresh read.
 func TestReapplyStatus(t *testing.T) {
 	scheme := conditionedScheme(t)
 	key := client.ObjectKey{Namespace: testNamespace, Name: testName}
 
-	newReconciler := func(t *testing.T) (*ConditionedReconciler[*conditionedResource], client.Client, *int, *conditionedResource) {
+	type sentPatches struct {
+		count int
+		last  map[string]any
+	}
+	newReconciler := func(t *testing.T) (*ConditionedReconciler[*conditionedResource], client.Client, *sentPatches, *conditionedResource) {
 		t.Helper()
 		obj := &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: key.Namespace, Name: key.Name, UID: "uid"}}
-		patches := 0
+		patches := &sentPatches{}
 		kubeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithObjects(obj).
 			WithStatusSubresource(obj).
 			WithInterceptorFuncs(interceptor.Funcs{
 				SubResourcePatch: func(ctx context.Context, c client.Client, sub string, o client.Object, p client.Patch, opts ...client.SubResourcePatchOption) error {
-					patches++
+					patches.count++
+					data, err := p.Data(o)
+					if err != nil {
+						return err
+					}
+					patches.last = map[string]any{}
+					if err := json.Unmarshal(data, &patches.last); err != nil {
+						return err
+					}
 					return c.SubResource(sub).Patch(ctx, o, p, opts...)
 				},
 			}).
@@ -189,7 +202,7 @@ func TestReapplyStatus(t *testing.T) {
 		}
 		r := NewConditionedReconciler(kubeClient, scheme, original, time.Second)
 		r.RetryStatusConflicts(kubeClient, nil)
-		return r, kubeClient, &patches, original
+		return r, kubeClient, patches, original
 	}
 
 	t.Run("no changes", func(t *testing.T) {
@@ -197,8 +210,8 @@ func TestReapplyStatus(t *testing.T) {
 		if err := r.reapplyStatus(context.Background(), original, original.DeepCopy()); err != nil {
 			t.Fatalf("reapply: %v", err)
 		}
-		if *patches != 0 {
-			t.Errorf("an empty diff sent %d patches", *patches)
+		if patches.count != 0 {
+			t.Errorf("an empty diff sent %d patches", patches.count)
 		}
 	})
 
@@ -218,8 +231,18 @@ func TestReapplyStatus(t *testing.T) {
 		if err := r.reapplyStatus(context.Background(), original, desired); err != nil {
 			t.Fatalf("reapply: %v", err)
 		}
-		if *patches != 1 {
-			t.Errorf("sent %d patches, want 1", *patches)
+		if patches.count != 1 {
+			t.Fatalf("sent %d patches, want 1", patches.count)
+		}
+		// The patch keeps the pass's metadata change and is pinned to the
+		// fresh read, so a later writer makes it conflict instead of being
+		// overwritten.
+		metadata, _ := patches.last["metadata"].(map[string]any)
+		if labels, _ := metadata["labels"].(map[string]any); labels["pass"] != "seen" {
+			t.Errorf("the patch dropped the pass's label change: %v", patches.last)
+		}
+		if metadata["resourceVersion"] != other.ResourceVersion {
+			t.Errorf("patch resourceVersion = %v, want the fresh read's %s", metadata["resourceVersion"], other.ResourceVersion)
 		}
 		stored := &conditionedResource{}
 		if err := kubeClient.Get(context.Background(), key, stored); err != nil {
@@ -227,11 +250,6 @@ func TestReapplyStatus(t *testing.T) {
 		}
 		if stored.Status.GetCondition(testCondition).Status != ConditionTrue {
 			t.Errorf("the pass's condition was not written: %+v", stored.Status.Conditions)
-		}
-		// Merging the other writer's conditions back in is the rebase hook's
-		// job; without one the pass's list replaces theirs.
-		if stored.ResourceVersion == other.ResourceVersion {
-			t.Errorf("the reapplied patch did not produce a new resourceVersion")
 		}
 	})
 }
