@@ -13,8 +13,8 @@ package acme:eventscaller@0.1.0;
 /// matches neither of them, and the deploy fails at instantiation on an
 /// unresolved import instead.
 world caller {
-    import wasi:http/types@0.3.0;
+    import wasi:http/types@0.3.2;
     import acme:events/control@0.1.0;
     export acme:events/handler@0.1.0;
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
 }

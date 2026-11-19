@@ -28,8 +28,8 @@ interface consumer {
 }
 
 world consumer-component {
-    import wasi:cli/types@0.3.0;
-    import wasi:clocks/types@0.3.0;
+    import wasi:cli/types@0.3.2;
+    import wasi:clocks/types@0.3.2;
     import factory;
 
     export consumer;

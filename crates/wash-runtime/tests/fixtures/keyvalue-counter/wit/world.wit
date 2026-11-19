@@ -9,5 +9,5 @@ package wasmcloud:keyvalue-counter;
 world keyvalue-counter {
     import wasi:keyvalue/store@0.2.0-draft;
     import wasi:keyvalue/atomics@0.2.0-draft;
-    export wasi:http/incoming-handler@0.2.2;
+    export wasi:http/incoming-handler@0.2.12;
 }

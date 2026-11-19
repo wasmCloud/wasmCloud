@@ -9,7 +9,7 @@ mod bindings {
         async: [
             "import:wasmcloud:resource-test/factory@0.1.0#make-token",
             "import:wasmcloud:resource-test/sink@0.1.0#accept",
-            "export:wasi:http/handler@0.3.0#handle",
+            "export:wasi:http/handler@0.3.2#handle",
         ],
     });
 }

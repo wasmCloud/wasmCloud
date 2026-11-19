@@ -16,10 +16,10 @@ package wasmcloud:msg-sleeper-p3;
 /// component exporting a messaging handler takes a different validation path
 /// there — it would be required to export `wasi:cli/run` as well.
 world msg-sleeper-p3 {
-    import wasi:http/types@0.3.0;
-    import wasi:clocks/types@0.3.0;
-    import wasi:clocks/monotonic-clock@0.3.0;
+    import wasi:http/types@0.3.2;
+    import wasi:clocks/types@0.3.2;
+    import wasi:clocks/monotonic-clock@0.3.2;
 
-    export wasi:http/handler@0.3.0;
+    export wasi:http/handler@0.3.2;
     export wasmcloud:messaging/handler@0.3.0;
 }

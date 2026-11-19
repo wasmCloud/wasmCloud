@@ -1,7 +1,9 @@
 [overrides]
-"wasi:cli" = { path = "../p2-wit-deps/wasi-cli-0.2.2" }
-"wasi:clocks" = { path = "../p2-wit-deps/wasi-clocks-0.2.2" }
-"wasi:http" = { path = "../p2-wit-deps/wasi-http-0.2.2" }
-"wasi:io" = { path = "../p2-wit-deps/wasi-io-0.2.2" }
-"wasi:random" = { path = "../p2-wit-deps/wasi-random-0.2.2" }
+"wasi:cli" = { path = "../p2-wit-deps/wasi-cli-0.2.12" }
+"wasi:clocks" = { path = "../p2-wit-deps/wasi-clocks-0.2.12" }
+"wasi:filesystem" = { path = "../p2-wit-deps/wasi-filesystem-0.2.12" }
+"wasi:http" = { path = "../p2-wit-deps/wasi-http-0.2.12" }
+"wasi:io" = { path = "../p2-wit-deps/wasi-io-0.2.12" }
+"wasi:random" = { path = "../p2-wit-deps/wasi-random-0.2.12" }
+"wasi:sockets" = { path = "../p2-wit-deps/wasi-sockets-0.2.12" }
 "acme:httpegress" = { path = "../acme-httpegress" }

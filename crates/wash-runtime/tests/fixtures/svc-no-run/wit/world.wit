@@ -9,6 +9,6 @@ package wasmcloud:test-p3@0.1.0;
 /// Paired with `svc-counter` (the same counter, but *with* a `cli/run` tick
 /// loop), so the two fixtures differ only in whether `cli/run` is present.
 world svc-no-run {
-    import wasi:http/types@0.3.0;
-    export wasi:http/handler@0.3.0;
+    import wasi:http/types@0.3.2;
+    export wasi:http/handler@0.3.2;
 }
