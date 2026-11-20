@@ -277,6 +277,27 @@ async fn unconfigured_signals_are_safe_and_missing_metrics_are_reported() {
 #[tokio::test]
 async fn guest_log_severity_picks_the_host_log_level() {
     use tracing::Level;
+    const CHILD: &str = "WASH_TEST_OTEL_LOG_LEVELS";
+
+    // Callsite interest is process-global. Capture events without parallel tests
+    // registering the same callsites under a different default subscriber.
+    if std::env::var_os(CHILD).is_none() {
+        let (_, module) = module_path!().split_once("::").unwrap();
+        let test = format!("{module}::guest_log_severity_picks_the_host_log_level");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test, "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "guest log severity capture failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
     let levels = Levels::default();
     let _guard =
         tracing::subscriber::set_default(tracing_subscriber::registry().with(levels.clone()));
