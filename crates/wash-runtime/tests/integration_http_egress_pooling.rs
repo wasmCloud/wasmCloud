@@ -82,7 +82,11 @@ impl UpstreamStats {
 /// Keep-alive HTTP/1.1 server that records [`UpstreamStats`] and answers every
 /// request with `200 ok`.
 async fn spawn_counting_server() -> Result<(std::net::SocketAddr, UpstreamStats)> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    spawn_counting_server_on("127.0.0.1:0").await
+}
+
+async fn spawn_counting_server_on(bind: &str) -> Result<(std::net::SocketAddr, UpstreamStats)> {
+    let listener = tokio::net::TcpListener::bind(bind).await?;
     let addr = listener.local_addr()?;
     let stats = UpstreamStats::new();
     let accept_stats = stats.clone();
@@ -222,46 +226,52 @@ fn egress_workload_with(
 
 #[tokio::test]
 async fn literal_loopback_reuses_connections_and_keeps_the_original_allowlist() -> Result<()> {
-    let (upstream, stats) = spawn_counting_server().await?;
-    let (ingress, host) = start_host().await?;
-    let target = upstream.to_string();
-    let mut workload = egress_workload("literal-loopback", &target);
-    workload.workload.components[0]
-        .local_resources
-        .allowed_hosts = vec![target.parse()?].into();
-    host.workload_start(workload).await?;
-    let client = reqwest::Client::new();
-    for _ in 0..5 {
+    for (bind, authority) in [
+        ("127.0.0.1:0", "127.0.0.1"),
+        ("[::1]:0", "[::1]"),
+        ("127.0.0.1:0", "[::ffff:127.0.0.1]"),
+    ] {
+        let (upstream, stats) = spawn_counting_server_on(bind).await?;
+        let (ingress, host) = start_host().await?;
+        let target = format!("{authority}:{}", upstream.port());
+        let mut workload = egress_workload("literal-loopback", &target);
+        workload.workload.components[0]
+            .local_resources
+            .allowed_hosts = vec![target.parse()?].into();
+        host.workload_start(workload).await?;
+        let client = reqwest::Client::new();
+        for _ in 0..5 {
+            let response = client
+                .get(format!("http://{ingress}/fetch?target={target}"))
+                .header("HOST", "test")
+                .send()
+                .await?;
+            let status = response.status();
+            let body = response.text().await?;
+            assert_eq!(status, 200, "{body}");
+            assert!(body.contains("upstream 200"), "{body}");
+        }
+        // A port grant does not make the two authorities interchangeable in
+        // allowedHosts, even when a connection to the backend is already pooled.
         let response = client
-            .get(format!("http://{ingress}/fetch?target={target}"))
+            .get(format!(
+                "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
+                upstream.port()
+            ))
             .header("HOST", "test")
             .send()
             .await?;
-        let status = response.status();
-        let body = response.text().await?;
-        assert_eq!(status, 200, "{body}");
-        assert!(body.contains("upstream 200"), "{body}");
-    }
-    // A port grant does not make the two authorities interchangeable in
-    // allowedHosts, even when a connection to the backend is already pooled.
-    let response = client
-        .get(format!(
-            "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
-            upstream.port()
-        ))
-        .header("HOST", "test")
-        .send()
+        assert_eq!(response.status(), 502);
+        assert_eq!(
+            stats.opened(),
+            1,
+            "literal requests should reuse a connection"
+        );
+        host.workload_stop(WorkloadStopRequest {
+            workload_id: "literal-loopback".into(),
+        })
         .await?;
-    assert_eq!(response.status(), 502);
-    assert_eq!(
-        stats.opened(),
-        1,
-        "literal requests should reuse a connection"
-    );
-    host.workload_stop(WorkloadStopRequest {
-        workload_id: "literal-loopback".into(),
-    })
-    .await?;
+    }
     Ok(())
 }
 

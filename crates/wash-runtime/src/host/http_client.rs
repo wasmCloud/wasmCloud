@@ -1273,7 +1273,10 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         // to the wrapping HttpsConnector.
         http.enforce_http(false);
         http.set_nodelay(true);
-        let mut inner = hyper_rustls::HttpsConnector::from((http, Arc::clone(&self.tls)));
+        let mut inner = hyper_rustls::HttpsConnector::from((
+            LoopbackHttpConnector(http),
+            Arc::clone(&self.tls),
+        ));
         let workload = self.workload.clone();
         let quota = self.quota.clone();
         let permit_wait = self.permit_wait;
@@ -1304,6 +1307,50 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
                 inner: stream,
                 _slot: slot,
             })
+        })
+    }
+}
+
+/// Canonicalize mapped loopback literals only for the TCP connection. Windows
+/// creates IPv6-only sockets by default, so dialing a mapped address through
+/// an IPv6 socket fails. This sits beneath the TLS connector, which still
+/// verifies the original URI's identity; the HTTP request is also unchanged.
+struct LoopbackHttpConnector(HttpConnector<GatedResolver>);
+
+impl tower_service::Service<hyper::Uri> for LoopbackHttpConnector {
+    type Response = TokioIo<TcpStream>;
+    type Error = BoxError;
+    type Future = std::pin::Pin<Box<dyn Future<Output = Result<Self::Response, BoxError>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, uri: hyper::Uri) -> Self::Future {
+        let mut http = self.0.clone();
+        Box::pin(async move {
+            let mut uri = uri;
+            if let Some(ip) = uri_ip(&uri)
+                && let Some(target) = host_loopback_addr(
+                    uri.host().unwrap_or_default(),
+                    uri.port_u16().unwrap_or_else(|| {
+                        if uri.scheme_str() == Some("https") {
+                            443
+                        } else {
+                            80
+                        }
+                    }),
+                )
+                && ip != target.ip()
+            {
+                let mut parts = uri.into_parts();
+                parts.authority = Some(target.to_string().parse()?);
+                uri = hyper::Uri::from_parts(parts)?;
+            }
+            Ok(http.call(uri).await?)
         })
     }
 }
@@ -3288,7 +3335,8 @@ mod tests {
                         request(&format!("http://{hostname}:{}/", http_addr.port())),
                         test_options(),
                     )
-                    .await?;
+                    .await
+                    .with_context(|| format!("HTTP to {hostname}:{http_addr}"))?;
                 assert_eq!(response.status(), 200);
                 let (response, _io) = client
                     .send_grpc_request(
@@ -3298,14 +3346,16 @@ mod tests {
                         )),
                         test_options(),
                     )
-                    .await?;
+                    .await
+                    .with_context(|| format!("gRPC to {hostname}:{grpc_addr}"))?;
                 assert_eq!(response.status(), 200);
                 let stream = connect_http_tcp(
                     &format!("{hostname}:{}", http_addr.port()),
                     Duration::from_secs(5),
                     Some(&host_loopback_gate()),
                 )
-                .await?;
+                .await
+                .with_context(|| format!("unpooled TCP to {hostname}:{http_addr}"))?;
                 assert_eq!(stream.peer_addr()?, http_addr);
             }
             for uri in [
@@ -3506,7 +3556,12 @@ mod tests {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
         crate::init_crypto();
-        let certified_key = rcgen::generate_simple_self_signed(vec![name.to_string()]).unwrap();
+        let certified_key = rcgen::generate_simple_self_signed(vec![
+            name.trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string(),
+        ])
+        .unwrap();
         let ca_pem = certified_key.cert.pem();
         let key_der =
             rustls::pki_types::PrivateKeyDer::try_from(certified_key.signing_key.serialize_der())
@@ -3516,7 +3571,12 @@ mod tests {
             .with_single_cert(vec![certified_key.cert.der().clone()], key_der)
             .unwrap();
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bind = if name == "[::1]" {
+            "[::1]:0"
+        } else {
+            "127.0.0.1:0"
+        };
+        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let names = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen_names = Arc::clone(&names);
@@ -3560,7 +3620,13 @@ mod tests {
     /// against it.
     #[tokio::test]
     async fn tls_through_the_gate_keeps_the_hostname() {
-        for hostname in ["localhost", "host.wasmcloud.internal", "127.0.0.1"] {
+        for hostname in [
+            "localhost",
+            "host.wasmcloud.internal",
+            "127.0.0.1",
+            "[::1]",
+            "[::ffff:127.0.0.1]",
+        ] {
             let (port, ca_pem, names) = sni_recording_tls_server(hostname).await;
             let dir = tempfile::tempdir().unwrap();
             let ca_path = dir.path().join("ca.pem");
@@ -3592,11 +3658,12 @@ mod tests {
                 .await
                 .expect("a permitted host must be reachable over TLS");
             assert_eq!(response.status(), 200);
-            let expected = if hostname == "127.0.0.1" {
-                vec![format!("{hostname}:{port}")]
-            } else {
-                vec![hostname.to_string(), format!("{hostname}:{port}")]
-            };
+            let expected =
+                if uri_ip(&format!("https://{hostname}:{port}/").parse().unwrap()).is_some() {
+                    vec![format!("{hostname}:{port}")]
+                } else {
+                    vec![hostname.to_string(), format!("{hostname}:{port}")]
+                };
             assert_eq!(*names.lock().unwrap(), expected);
         }
     }
