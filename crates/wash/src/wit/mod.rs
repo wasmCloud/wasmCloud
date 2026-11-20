@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 use url::Url;
 use wasm_pkg_client::{
     ContentDigest, CustomConfig, PackageRef, Registry, RegistryMapping, RegistryMetadata,
@@ -262,6 +262,15 @@ async fn discard_cache_entry(path: &Path) -> Result<()> {
             path.display()
         )
     })
+}
+
+/// Held by the wash process that is checking or filling the package cache.
+const CACHE_LOCK_FILE: &str = ".wash-cache.lock";
+
+/// The package cache, held by this process until dropped. Another process's
+/// scrub would otherwise delete a blob this one is still writing. Not reentrant.
+struct CacheLock {
+    _file: std::fs::File,
 }
 
 #[cfg(windows)]
@@ -617,6 +626,48 @@ impl WkgFetcher {
         )
     }
 
+    /// Take the cache lock, waiting while another wash process holds it. Where
+    /// it cannot be taken (a read-only cache, a filesystem without locks), the
+    /// cache is used unlocked, as before the lock existed.
+    async fn lock_cache(&self) -> Option<CacheLock> {
+        let path = self.cache_dir.join(CACHE_LOCK_FILE);
+        let opened = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .or_else(|_| std::fs::File::open(&path));
+        let file = match opened {
+            Ok(file) => file,
+            Err(error) => {
+                warn!(path = %path.display(), %error, "cannot open the WIT package cache lock; using the cache unlocked");
+                return None;
+            }
+        };
+        match file.try_lock() {
+            Ok(()) => return Some(CacheLock { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => info!(
+                path = %path.display(),
+                "waiting for another wash process to release the WIT package cache lock"
+            ),
+            Err(std::fs::TryLockError::Error(error)) => {
+                warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using it unlocked");
+                return None;
+            }
+        }
+        match tokio::task::spawn_blocking(move || file.lock().map(|()| file)).await {
+            Ok(Ok(file)) => Some(CacheLock { _file: file }),
+            Ok(Err(error)) => {
+                warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using it unlocked");
+                None
+            }
+            Err(error) => {
+                warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using it unlocked");
+                None
+            }
+        }
+    }
+
     async fn discard_invalid_cache_entries(&self) -> Result<()> {
         let cache_dir = &self.cache_dir;
         let mut entries = tokio::fs::read_dir(cache_dir).await.with_context(|| {
@@ -803,6 +854,7 @@ impl WkgFetcher {
         let wit_dir = wit_dir.as_ref();
         let manifest = self.resolution_manifest(wit_dir)?;
         self.warn_of_unused_namespace_sources(&manifest);
+        let _cache = self.lock_cache().await;
         let mut attempt = 1;
         loop {
             self.discard_invalid_cache_entries().await?;
@@ -840,6 +892,7 @@ impl WkgFetcher {
     )> {
         let wit_dir = wit_dir.as_ref();
         let manifest = self.resolution_manifest(wit_dir)?;
+        let _cache = self.lock_cache().await;
         let mut attempt = 1;
         loop {
             self.discard_invalid_cache_entries().await?;
@@ -956,6 +1009,7 @@ impl WkgFetcher {
         let local = package_override
             .as_ref()
             .is_some_and(|package_override| package_override.path.is_some());
+        let _cache = self.lock_cache().await;
         let client = self.client();
 
         // The lock file goes in so that a version it already pins is the one selected here, the
