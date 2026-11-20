@@ -33,6 +33,9 @@ use client::{TrustId, TrustSnapshot, pull_client};
 mod credentials;
 mod disk_cache;
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod metadata_tests;
+#[cfg(test)]
 #[path = "../tests/common/oci_ca.rs"]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test_ca;
@@ -40,6 +43,7 @@ mod test_ca;
 #[path = "../tests/common/oci_registry.rs"]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test_registry;
+mod transport;
 use coalescer::Coalescer;
 use credentials::CredentialResolver;
 #[cfg(test)]
@@ -281,7 +285,9 @@ fn usable_ca_certificates(loaded: rustls_native_certs::CertificateResult) -> Vec
 /// instead, which turns an `insecure` registry back to HTTPS and drops every
 /// extra trust root.
 fn oci_client(config: ClientConfig) -> Result<Client> {
-    Client::try_from(config).context("failed to build the OCI client")
+    let transport =
+        transport::RegistryTransport::new(&config).context("failed to build the OCI client")?;
+    Ok(Client::new_with_transport(config, transport))
 }
 
 /// The extra CA certificates for a `ClientConfig`: the `SSL_CERT_FILE` /
@@ -357,7 +363,9 @@ pub struct OciConfig {
     /// A pull holds the whole component in memory, so this bounds what one
     /// registry can make the host allocate. A layer that declares more is
     /// refused before it is downloaded, and one that sends more than it
-    /// declared is cut off.
+    /// declared is cut off. Cache hits obey the same limit, including entries
+    /// written under a larger ceiling. Registry metadata (manifests, indices,
+    /// authentication and error responses) has a separate 4 MiB byte ceiling.
     pub max_component_size_bytes: Option<u64>,
 }
 
@@ -719,7 +727,9 @@ async fn pull_uncoalesced(
         // Check cache first
         if *pull_policy != OciPullPolicy::Always && cache_manager.is_cached(reference).await {
             debug!("Found cached artifact");
-            let (component_data, digest) = cache_manager.read_cached(reference).await?;
+            let (component_data, digest) = cache_manager
+                .read_cached(reference, config.effective_max_component_size_bytes())
+                .await?;
 
             // Never explicitly requests offline reuse. The cache key covers
             // configured extra roots, but cannot encode all native trust-store
@@ -843,8 +853,8 @@ async fn pull_component_layer(
         usize::try_from(declared).context("component layer is too large for this platform")?;
 
     let mut out = BoundedBuffer::with_limit(declared);
-    client.pull_blob(reference, layer, &mut out).await?;
-    Ok((out.data.into(), digest))
+    transport::pull_blob(client, reference, layer, &mut out).await?;
+    Ok((out.into_bytes()?, digest))
 }
 
 /// An in-memory writer that refuses to grow past `limit` bytes.
@@ -853,26 +863,57 @@ async fn pull_component_layer(
 /// for: a registry that sends more than it declared is cut off there rather
 /// than when its digest finally fails to match.
 ///
-/// The declared size is only a claim until the bytes arrive, so the buffer
-/// starts at no more than [`BOUNDED_BUFFER_INITIAL_CAPACITY`] and grows with
-/// what is actually received. Growth that cannot be allocated fails the pull
-/// instead of aborting the host.
+/// The declared size is only a claim until the bytes arrive. The buffer starts
+/// empty and grows fallibly with received bytes, without reserving beyond the
+/// declared size. Allocation failures fail the pull instead of aborting the host.
 struct BoundedBuffer {
     data: Vec<u8>,
     limit: usize,
 }
 
-/// The most a pull reserves before any of its layer has arrived. Most
-/// components fit, so they are still never copied while the buffer grows.
-const BOUNDED_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024 * 1024;
-
 impl BoundedBuffer {
     fn with_limit(limit: usize) -> Self {
         Self {
-            data: Vec::with_capacity(limit.min(BOUNDED_BUFFER_INITIAL_CAPACITY)),
+            data: Vec::new(),
             limit,
         }
     }
+
+    fn into_bytes(self) -> Result<bytes::Bytes> {
+        let data =
+            compact_component_bytes(self.data).context("failed to compact component bytes")?;
+        Ok(data.into())
+    }
+}
+
+/// Release spare capacity with a fallible allocation. `Vec::shrink_to_fit`
+/// can abort on allocation failure, including when it moves a large buffer.
+fn compact_component_bytes(data: Vec<u8>) -> Result<Vec<u8>, std::collections::TryReserveError> {
+    if data.capacity() == data.len() {
+        return Ok(data);
+    }
+    let mut compact = Vec::new();
+    compact.try_reserve_exact(data.len())?;
+    compact.extend_from_slice(&data);
+    Ok(compact)
+}
+
+/// Grow geometrically without reserving beyond the caller's byte ceiling.
+/// The caller checks that the appended bytes fit before reserving them.
+fn reserve_component_bytes(
+    data: &mut Vec<u8>,
+    additional: usize,
+    limit: usize,
+) -> Result<(), std::collections::TryReserveError> {
+    if additional > data.capacity() - data.len() {
+        let capacity = data
+            .capacity()
+            .saturating_mul(2)
+            .max(data.len().saturating_add(additional))
+            .min(limit);
+        data.try_reserve_exact(capacity - data.len())?;
+    }
+    Ok(())
 }
 
 impl tokio::io::AsyncWrite for BoundedBuffer {
@@ -889,7 +930,7 @@ impl tokio::io::AsyncWrite for BoundedBuffer {
             ))));
         }
 
-        if let Err(error) = this.data.try_reserve(buf.len()) {
+        if let Err(error) = reserve_component_bytes(&mut this.data, buf.len(), this.limit) {
             return std::task::Poll::Ready(Err(std::io::Error::other(format!(
                 "cannot allocate memory for the component layer: {error}"
             ))));
@@ -982,10 +1023,19 @@ pub async fn push_component(
     let (wasm_config, image_layer) = WasmConfig::from_raw_component(component_data.to_vec(), None)
         .with_context(|| "failed to create WebAssembly configuration from component")?;
 
-    let layers = vec![image_layer];
+    let layers = vec![oci_client::client::ImageLayer::new(
+        image_layer.data,
+        image_layer.media_type,
+        image_layer.annotations,
+    )];
     let config_obj = wasm_config
         .to_config()
         .with_context(|| "failed to convert WebAssembly config")?;
+    let config_obj = oci_client::client::Config::new(
+        config_obj.data,
+        config_obj.media_type,
+        config_obj.annotations,
+    );
 
     // Create custom manifest with annotations if provided
     let manifest = annotations.filter(|a| !a.is_empty()).map(|annotations| {
@@ -1169,6 +1219,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_components_obey_a_lowered_limit_for_both_cache_policies() {
+        let wasm = component();
+        let (registry, mut config) =
+            serving(test_registry::Image::build(wasm.clone(), None, Vec::new())).await;
+        let cache = tempfile::TempDir::new().unwrap();
+        config.cache_dir = Some(cache.path().to_path_buf());
+        let reference = registry.reference();
+        pull_component(&reference, config.clone(), OciPullPolicy::Always)
+            .await
+            .unwrap();
+
+        // Every failed smaller pull leaves the larger entry intact and reusable
+        // by a caller whose own limit admits it.
+        for policy in [OciPullPolicy::Never, OciPullPolicy::IfNotPresent] {
+            let exact = config
+                .clone()
+                .with_max_component_size_bytes(wasm.len() as u64);
+            let (bytes, _) = pull_component(&reference, exact, policy.clone())
+                .await
+                .unwrap();
+            assert_eq!(bytes, wasm);
+            let lower = config
+                .clone()
+                .with_max_component_size_bytes(wasm.len() as u64 - 1);
+            let error = pull_component(&reference, lower, policy).await.unwrap_err();
+            assert!(format!("{error:#}").contains("cached component is over"));
+        }
+    }
+
+    #[tokio::test]
     async fn a_layer_larger_than_declared_is_cut_off() {
         let wasm = component();
         let declared = wasm.len() as i64 - 1;
@@ -1187,14 +1267,43 @@ mod tests {
     #[test]
     fn the_declared_size_is_not_reserved_up_front() {
         let buffer = BoundedBuffer::with_limit(usize::MAX);
-        assert!(
-            buffer.data.capacity() <= BOUNDED_BUFFER_INITIAL_CAPACITY,
-            "{}",
-            buffer.data.capacity()
-        );
+        assert_eq!(buffer.data.capacity(), 0);
 
         let small = BoundedBuffer::with_limit(16);
-        assert!(small.data.capacity() >= 16, "{}", small.data.capacity());
+        assert_eq!(small.data.capacity(), 0);
+    }
+
+    #[tokio::test]
+    async fn layer_capacity_stays_within_a_non_power_of_two_limit() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let limit = 8 * 1024 * 1024 + 17;
+        let mut buffer = BoundedBuffer::with_limit(limit);
+        let chunk = [0; 16 * 1024];
+        while buffer.data.len() < limit {
+            let count = (limit - buffer.data.len()).min(chunk.len());
+            buffer.write_all(&chunk[..count]).await.unwrap();
+            assert!(
+                buffer.data.capacity() <= limit,
+                "{}",
+                buffer.data.capacity()
+            );
+        }
+        assert!(buffer.write_all(b"x").await.is_err());
+        assert_eq!(buffer.into_bytes().unwrap().len(), limit);
+    }
+
+    #[tokio::test]
+    async fn a_completed_layer_releases_unused_capacity_before_reuse() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let mut buffer = BoundedBuffer::with_limit(17);
+        buffer.write_all(b"small").await.unwrap();
+        buffer.write_all(b"x").await.unwrap();
+        assert!(buffer.data.capacity() > buffer.data.len());
+        let bytes = buffer.into_bytes().unwrap();
+        assert_eq!(&bytes[..], b"smallx");
+        assert_eq!(bytes.try_into_mut().unwrap().capacity(), 6);
     }
 
     #[tokio::test]
@@ -1956,7 +2065,10 @@ mod tests {
         assert!(cache_manager.is_cached(reference).await);
 
         // Should be able to read the cached data and digest
-        let (cached_data, cached_digest) = cache_manager.read_cached(reference).await.unwrap();
+        let (cached_data, cached_digest) = cache_manager
+            .read_cached(reference, DEFAULT_MAX_COMPONENT_SIZE_BYTES)
+            .await
+            .unwrap();
         assert_eq!(cached_data, test_data);
         assert_eq!(cached_digest, test_digest);
     }

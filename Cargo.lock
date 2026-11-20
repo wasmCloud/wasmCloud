@@ -3548,7 +3548,7 @@ dependencies = [
  "http-auth",
  "jsonwebtoken",
  "lazy_static",
- "oci-spec",
+ "oci-spec 0.9.0",
  "olpc-cjson",
  "regex",
  "reqwest 0.13.4",
@@ -3559,6 +3559,38 @@ dependencies = [
  "tokio",
  "tracing",
  "unicase",
+]
+
+[[package]]
+name = "oci-client"
+version = "0.18.0"
+source = "git+https://github.com/oras-project/rust-oci-client?rev=bad27c452bee88555b60c9a274fc94b2e1b397f7#bad27c452bee88555b60c9a274fc94b2e1b397f7"
+dependencies = [
+ "base64 0.23.0",
+ "bytes",
+ "chrono",
+ "futures-channel",
+ "futures-util",
+ "hex",
+ "http",
+ "http-auth",
+ "http-body",
+ "http-body-util",
+ "oci-spec 0.10.0",
+ "olpc-cjson",
+ "regex",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "tokio",
+ "tower",
+ "tracing",
+ "unicase",
+ "url",
+ "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]
@@ -3579,6 +3611,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "oci-spec"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3df6f876ad774d6a676f7e968f5c3edacc32f90e65fe680a8b686235396556fb"
+dependencies = [
+ "const_format",
+ "derive_builder",
+ "getset",
+ "regex",
+ "serde",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "oci-wasm"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3586,7 +3635,7 @@ checksum = "87689298bd74f0f2675fcac99956a34c31098ca3bdced3d7635e71dc03c5ca21"
 dependencies = [
  "anyhow",
  "chrono",
- "oci-client",
+ "oci-client 0.17.0",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6330,7 +6379,7 @@ dependencies = [
  "humantime",
  "hyper",
  "mimalloc",
- "oci-client",
+ "oci-client 0.17.0",
  "rcgen",
  "reqwest 0.12.28",
  "reqwest 0.13.4",
@@ -6403,7 +6452,7 @@ dependencies = [
  "names",
  "nkeys",
  "object_store",
- "oci-client",
+ "oci-client 0.18.0",
  "oci-wasm",
  "opentelemetry",
  "opentelemetry-appender-tracing",
@@ -6420,6 +6469,7 @@ dependencies = [
  "rcgen",
  "redis",
  "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "rustix",
  "rustls",
  "rustls-native-certs",
@@ -6690,7 +6740,7 @@ dependencies = [
  "docker_credential",
  "etcetera 0.11.0",
  "futures-util",
- "oci-client",
+ "oci-client 0.17.0",
  "oci-wasm",
  "petgraph 0.8.3",
  "reqwest 0.13.4",

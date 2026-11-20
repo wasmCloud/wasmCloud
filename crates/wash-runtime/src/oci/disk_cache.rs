@@ -8,13 +8,17 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::{
+    AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _, AsyncWriteExt as _, BufReader,
+};
 use tracing::debug;
 
 /// The random secret entry names are keyed with, in the cache root.
 const KEY_FILE: &str = "cache.key";
 /// Prefix of every entry this version reads and writes.
 const ENTRY_PREFIX: &str = "v3-";
+/// Enough for SHA-256 and SHA-512 digests, without trusting a file's header length.
+const MAX_DIGEST_LEN: u64 = 256;
 
 /// Who an entry was fetched as: the registry user, not the password that
 /// proved it, so rotating a password keeps the user's entries. `Never` also
@@ -153,13 +157,17 @@ impl CacheManager {
     }
 
     /// Read cached artifact, returning (component_data, digest)
-    pub(super) async fn read_cached(&self, reference: &str) -> Result<(Vec<u8>, String)> {
+    pub(super) async fn read_cached(
+        &self,
+        reference: &str,
+        max_size: u64,
+    ) -> Result<(Vec<u8>, String)> {
         let entry_path = self.get_entry_path(reference);
         debug!(entry_path = %entry_path.display(), "reading cached artifact");
         let file = tokio::fs::File::open(&entry_path).await.with_context(|| {
             format!("failed to open cached artifact at {}", entry_path.display())
         })?;
-        read_entry(file)
+        read_entry(file, max_size)
             .await
             .with_context(|| format!("invalid cached artifact at {}", entry_path.display()))
     }
@@ -192,25 +200,69 @@ impl CacheManager {
     }
 }
 
-async fn read_entry(mut file: tokio::fs::File) -> Result<(Vec<u8>, String)> {
-    let capacity = usize::try_from(file.metadata().await?.len())
-        .context("cached artifact is too large for this platform")?;
-    let mut entry = Vec::with_capacity(capacity);
-    file.read_to_end(&mut entry).await?;
-    let newline = entry
-        .iter()
-        .position(|b| *b == b'\n')
-        .context("cached artifact has no digest")?;
-    let digest = std::str::from_utf8(
-        entry
-            .get(..newline)
-            .context("invalid cached digest length")?,
-    )
-    .context("cached artifact has an invalid digest")?
-    .to_owned();
-    // Keep the large allocation with the component, not the short digest.
-    drop(entry.drain(..=newline));
-    Ok((entry, digest))
+async fn read_entry(file: tokio::fs::File, max_size: u64) -> Result<(Vec<u8>, String)> {
+    let entry_len = file.metadata().await?.len();
+    read_entry_from(file, entry_len, max_size).await
+}
+
+async fn read_entry_from(
+    reader: impl AsyncRead + Unpin,
+    entry_len: u64,
+    max_size: u64,
+) -> Result<(Vec<u8>, String)> {
+    let too_large = || anyhow::anyhow!("cached component is over the {max_size}-byte limit");
+    if entry_len > max_size.saturating_add(MAX_DIGEST_LEN + 1) {
+        return Err(too_large());
+    }
+
+    let mut reader = BufReader::new(reader);
+    let mut header = Vec::new();
+    (&mut reader)
+        .take(MAX_DIGEST_LEN + 1)
+        .read_until(b'\n', &mut header)
+        .await?;
+    if header.last() != Some(&b'\n') {
+        bail!("cached artifact has no bounded digest");
+    }
+    let component_len = entry_len
+        .checked_sub(header.len() as u64)
+        .context("cached artifact is truncated")?;
+    if component_len > max_size {
+        return Err(too_large());
+    }
+    header.pop();
+    let digest = String::from_utf8(header).context("cached artifact has an invalid digest")?;
+
+    // File metadata may be stale. Bound every read and allocate only for bytes
+    // received, so a growing or sparse entry cannot reserve arbitrary memory.
+    let mut component = Vec::new();
+    let mut chunk = [0; 16 * 1024];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+        if read as u64 > max_size.saturating_sub(component.len() as u64) {
+            return Err(too_large());
+        }
+        super::reserve_component_bytes(
+            &mut component,
+            read,
+            usize::try_from(max_size).unwrap_or(usize::MAX),
+        )
+        .context("failed to allocate cached component bytes")?;
+        component.extend_from_slice(
+            chunk
+                .get(..read)
+                .context("invalid cached component read length")?,
+        );
+    }
+    if component.len() as u64 != component_len {
+        bail!("cached artifact changed length while reading");
+    }
+    let component = super::compact_component_bytes(component)
+        .context("failed to compact cached component bytes")?;
+    Ok((component, digest))
 }
 
 /// Expire old artifacts from the cache, and remove entries written before
@@ -408,6 +460,79 @@ mod tests {
         .unwrap()
     }
 
+    #[tokio::test]
+    async fn oversized_entries_are_refused_before_reading_their_contents() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("entry");
+        let file = tokio::fs::File::create(&path).await.unwrap();
+        file.set_len(1 << 20).await.unwrap();
+        drop(file);
+        let file = tokio::fs::File::open(path).await.unwrap();
+        let error = read_entry(file, 8).await.unwrap_err();
+        assert!(error.to_string().contains("over the 8-byte limit"));
+        let error = read_entry_from(tokio::io::empty(), 1 << 40, 8)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("over the 8-byte limit"));
+    }
+
+    #[tokio::test]
+    async fn cache_read_checks_exact_payload_length_and_growth() {
+        let entry = b"sha256:test\n123456789";
+        let exact = read_entry_from(&entry[..], entry.len() as u64, 9)
+            .await
+            .unwrap();
+        assert_eq!(exact.0, b"123456789");
+        assert_eq!(exact.1, "sha256:test");
+        for entry_len in [entry.len() as u64, entry.len() as u64 - 1] {
+            let error = read_entry_from(&entry[..], entry_len, 8).await.unwrap_err();
+            assert!(error.to_string().contains("over the 8-byte limit"));
+        }
+        let empty = b"sha256:empty\n";
+        assert!(
+            read_entry_from(&empty[..], empty.len() as u64, 0)
+                .await
+                .unwrap()
+                .0
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_length_changes_are_refused_even_within_the_size_ceiling() {
+        let entry = b"sha256:test\n123456789";
+        for entry_len in [entry.len() as u64 - 1, entry.len() as u64 + 1] {
+            let error = read_entry_from(&entry[..], entry_len, 16)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("changed length while reading"));
+        }
+    }
+
+    #[tokio::test]
+    async fn cache_digest_header_cannot_consume_the_component_budget() {
+        let mut entry = vec![b'x'; MAX_DIGEST_LEN as usize + 1];
+        entry.push(b'\n');
+        let error = read_entry_from(&entry[..], entry.len() as u64, 1024)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no bounded digest"));
+    }
+
+    #[tokio::test]
+    async fn cache_capacity_is_bounded_and_unused_space_is_released() {
+        let payload_len = 16 * 1024 + 1;
+        let mut entry = b"sha256:test\n".to_vec();
+        entry.resize(entry.len() + payload_len, b'x');
+        for limit in [payload_len as u64, payload_len as u64 + 1] {
+            let (payload, _) = read_entry_from(&entry[..], entry.len() as u64, limit)
+                .await
+                .unwrap();
+            assert_eq!(payload.len(), payload_len);
+            assert_eq!(payload.capacity(), payload_len);
+        }
+    }
+
     /// Writers racing on one reference each publish a whole entry, so every
     /// read returns a digest with the bytes that were written with it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -433,7 +558,10 @@ mod tests {
         }
         while !writers.is_empty() {
             if cache.is_cached(reference).await {
-                let (data, digest) = cache.read_cached(reference).await.unwrap();
+                let (data, digest) = cache
+                    .read_cached(reference, super::super::DEFAULT_MAX_COMPONENT_SIZE_BYTES)
+                    .await
+                    .unwrap();
                 let expected = versions.iter().find(|(d, _)| *d == digest).unwrap();
                 assert!(
                     data == expected.1,
@@ -446,7 +574,10 @@ mod tests {
                 tokio::task::yield_now().await;
             }
         }
-        let (data, digest) = cache.read_cached(reference).await.unwrap();
+        let (data, digest) = cache
+            .read_cached(reference, super::super::DEFAULT_MAX_COMPONENT_SIZE_BYTES)
+            .await
+            .unwrap();
         let expected = versions.iter().find(|(d, _)| *d == digest).unwrap();
         assert!(data == expected.1);
         let leftovers: Vec<_> = std::fs::read_dir(cache.get_cache_dir(reference))
@@ -477,10 +608,15 @@ mod tests {
             .await
             .unwrap();
 
-        let (data, digest) = read_entry(reader).await.unwrap();
+        let (data, digest) = read_entry(reader, super::super::DEFAULT_MAX_COMPONENT_SIZE_BYTES)
+            .await
+            .unwrap();
         assert_eq!(data, b"component A");
         assert_eq!(digest, "sha256:A");
-        let (data, digest) = cache.read_cached(reference).await.unwrap();
+        let (data, digest) = cache
+            .read_cached(reference, super::super::DEFAULT_MAX_COMPONENT_SIZE_BYTES)
+            .await
+            .unwrap();
         assert_eq!(data, b"component B");
         assert_eq!(digest, "sha256:B");
     }
@@ -496,7 +632,10 @@ mod tests {
             .await
             .unwrap();
 
-        let (cached_data, digest) = cache.read_cached(reference).await.unwrap();
+        let (cached_data, digest) = cache
+            .read_cached(reference, super::super::DEFAULT_MAX_COMPONENT_SIZE_BYTES)
+            .await
+            .unwrap();
         assert_eq!(cached_data, data);
         assert_eq!(digest, "sha256:large");
         assert!(digest.capacity() <= 1024, "capacity: {}", digest.capacity());
@@ -514,7 +653,12 @@ mod tests {
         std::fs::write(path.join("digest"), "sha256:other").unwrap();
 
         assert!(!cache.is_cached(reference).await);
-        assert!(cache.read_cached(reference).await.is_err());
+        assert!(
+            cache
+                .read_cached(reference, super::super::DEFAULT_MAX_COMPONENT_SIZE_BYTES)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
