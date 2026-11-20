@@ -836,8 +836,8 @@ pub struct HostCommand {
     /// port. It grants no raw socket access to the host. For the reserved name,
     /// a guest also needs its own `allowedHostLoopbackPorts` entry
     /// naming the port, so neither the operator nor the workload author can
-    /// open this door alone. HTTP and gRPC need a TCP port grant, and no
-    /// `allowedHosts` entry. For raw sockets, `127.0.0.1` keeps meaning the
+    /// open this door alone. HTTP and gRPC also need `allowedHosts` to permit
+    /// the request's scheme, host, and port. For raw sockets, `127.0.0.1` keeps meaning the
     /// guest's own virtual network.
     #[arg(long = "allow-host-loopback", default_value_t = false)]
     pub allow_host_loopback: bool,

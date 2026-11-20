@@ -140,7 +140,7 @@ For a full walkthrough (component development, persistent storage, Kubernetes de
 
 Outbound HTTP and gRPC apply the host's address policy after resolving a permitted hostname.
 For HTTP-only local backends, explicitly grant a URL such as `http://localhost:3000` in `allowedHosts` and enable host loopback.
-For shared HTTP and raw socket access, use `host.wasmcloud.internal` with an `allowedHostLoopbackPorts` grant (no `allowedHosts` entry needed);
+For shared HTTP and raw socket access, use `host.wasmcloud.internal` with an `allowedHostLoopbackPorts` grant and an `allowedHosts` entry for HTTP;
 see the [HTTP egress breaking-change release note](docs/release-notes/http-egress-address-policy.md) for migration instructions, including `wash dev`.
 
 ## The platform

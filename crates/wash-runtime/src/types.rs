@@ -144,9 +144,9 @@ pub struct LocalResources {
     /// resolve path matches against the typed enum directly.
     pub allowed_ip_name_lookups: Arc<[AllowedIpName]>,
     /// Ports on the machine's own loopback this component may reach through
-    /// `host.wasmcloud.internal`. This is the component's whole grant for that
-    /// name, over HTTP and gRPC as well as raw sockets: `allowed_hosts` is not
-    /// consulted for it, and does not stand in for it.
+    /// `host.wasmcloud.internal`. HTTP and gRPC additionally require
+    /// `allowed_hosts` to permit the request's scheme, host, and port.
+    /// Neither grant stands in for the other.
     ///
     /// **Empty = deny host-loopback access through the reserved name**. Exact
     /// HTTP loopback URL grants in `allowed_hosts` are independent. A non-empty list is

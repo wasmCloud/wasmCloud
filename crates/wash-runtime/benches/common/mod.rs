@@ -192,8 +192,14 @@ pub async fn start_service_host(
             digest: None,
             bytes: bytes::Bytes::from_static(HTTP_SVC_PROXY_WASM),
             local_resources: LocalResources {
-                // The port grant is the whole spec-side grant for
-                // `host.wasmcloud.internal`; no `allowedHosts` entry needed.
+                allowed_hosts: backend
+                    .map(|addr| {
+                        format!("http://host.wasmcloud.internal:{}", addr.port())
+                            .parse()
+                            .expect("valid benchmark URL")
+                    })
+                    .into_iter()
+                    .collect(),
                 allowed_host_loopback_ports: backend
                     .map(|addr| AllowedLoopbackPort::tcp(addr.port()))
                     .into_iter()
