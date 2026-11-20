@@ -432,13 +432,13 @@ pub struct Engine {
     /// somewhere else would miss the env override (applied inside
     /// [`new_pooling_config`]) and drift the moment either side changed.
     pool_totals: Option<pool_usage::PoolTotals>,
-    /// The linkers every workload component starts from, built once and
-    /// shared (see [`BaseLinkers`]).
+    /// The linkers every workload component and service starts from, built
+    /// once and shared (see [`BaseLinkers`]).
     base_linkers: Arc<BaseLinkers>,
 }
 
 /// The WASI linker, with and without `wasi:http`, that every workload
-/// component starts from.
+/// component and service starts from.
 ///
 /// Building one is the largest part of what an idle workload costs the host:
 /// about 140 KiB for WASI and 180 KiB with `wasi:http`, most of a
@@ -999,20 +999,7 @@ impl Engine {
             .load_live_component(service.bytes, service.digest, Blocking::Allowed)
             .context("failed to create component from bytes")?;
 
-        // Create a linker for this component
-        let mut linker: Linker<SharedCtx> = Linker::new(&self.inner);
-
-        // Add WASI interfaces to the linker (with custom socket implementation)
-        add_wasi_to_linker(&mut linker).context("failed to add WASI to linker")?;
-
-        // Add HTTP interfaces to the linker if the component uses them
-        if uses_wasi_http(&wasmtime_component) {
-            wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
-                .map_err(anyhow::Error::from)
-                .context("failed to add wasi:http/types to linker")?;
-            wasmtime_wasi_http::p3::add_to_linker(&mut linker)
-                .map_err(|e| anyhow::anyhow!(e).context("failed to add wasi:http p3 to linker"))?;
-        }
+        let linker = self.base_linker(uses_wasi_http(&wasmtime_component))?;
 
         // Build volume mounts for this component by looking up validated volumes
         let mut component_volume_mounts = Vec::new();
@@ -1269,8 +1256,8 @@ impl Engine {
         Ok(workload_component)
     }
 
-    /// The shared linker a workload component starts from: WASI (with our
-    /// socket implementation), plus `wasi:http` when the component uses it.
+    /// The shared linker a workload component or service starts from: WASI
+    /// (with our socket implementation), plus `wasi:http` when it uses HTTP.
     /// See [`BaseLinkers`].
     fn base_linker(&self, with_http: bool) -> anyhow::Result<Arc<Linker<SharedCtx>>> {
         let slot = if with_http {
@@ -1297,9 +1284,9 @@ impl Engine {
     /// Compile a host component plugin and build a linker with WASI (and
     /// `wasi:http` if the component uses it) added.
     ///
-    /// Unlike a workload component, a host component plugin is host-scoped: it is
-    /// instantiated once at host start into its own long-lived store. The caller
-    /// may install additional shims on the returned [`Linker`] (e.g. to route a
+    /// Unlike workload components and services, a host component plugin is
+    /// host-scoped: instantiated once at host start into its own long-lived store.
+    /// The caller may install additional shims on the returned [`Linker`] (e.g. to route a
     /// plugin's own capability imports back to itself) before calling
     /// [`Linker::instantiate_pre`]; the [`Component`] is returned alongside for
     /// exported- and imported-type introspection.
