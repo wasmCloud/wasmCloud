@@ -510,19 +510,27 @@ pub(crate) async fn connect_http_tcp(
     Ok(stream)
 }
 
-/// The reserved host name is resolved locally, never through DNS. Its
+/// The reserved host name and explicit loopback literals route locally. Their
 /// component-level grant is checked by `CtxHttpHooks` before dispatch, on
 /// every request, so sharing a workload's pool cannot share a component's
-/// permission. The URI stays intact for HTTP Host and TLS SNI.
+/// permission. The URI stays intact for HTTP Host and TLS verification.
 pub(crate) fn host_loopback_addr(host: &str, port: u16) -> Option<SocketAddr> {
     use crate::sockets::internal_names::{self, InternalName};
 
-    match internal_names::resolve(host) {
-        Some(Ok(InternalName::Host)) => {
-            Some(SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port))
-        }
-        _ => None,
+    if matches!(internal_names::resolve(host), Some(Ok(InternalName::Host))) {
+        return Some(SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port));
     }
+    // Only the URI's explicit literals opt into host loopback. DNS answers
+    // remain subject to the ordinary range policy, including localhost.
+    let ip = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .ok()?
+        .to_canonical();
+    let loopback = ip == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        || ip == std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+    loopback.then_some(SocketAddr::new(ip, port))
 }
 
 /// The guest-visible error for an address the egress gate refused: distinct
@@ -1275,7 +1283,11 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
             // so the resolver never sees one. Judged before a permit is taken,
             // so a refusal spends no quota.
             if let (Some(gate), Some(ip)) = (&gate, uri_ip(&uri)) {
-                gate.filter([SocketAddr::new(ip, port)])?;
+                if let Some(addr) = host_loopback_addr(uri.host().unwrap_or_default(), port) {
+                    gate.check_host_loopback(addr)?;
+                } else {
+                    gate.filter([SocketAddr::new(ip, port)])?;
+                }
             }
             let slot = quota
                 .acquire_outbound_http(permit_wait)
@@ -2084,8 +2096,15 @@ mod tests {
     async fn spawn_counting_server_with_delay(
         delay: Duration,
     ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+        spawn_counting_server_on("127.0.0.1:0", delay).await
+    }
+
+    async fn spawn_counting_server_on(
+        bind: &str,
+        delay: Duration,
+    ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let conns_clone = conns.clone();
@@ -2136,7 +2155,13 @@ mod tests {
     /// backend presents.
     async fn spawn_counting_h2c_server()
     -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        spawn_counting_h2c_server_on("127.0.0.1:0").await
+    }
+
+    async fn spawn_counting_h2c_server_on(
+        bind: &str,
+    ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let conns_clone = conns.clone();
@@ -3240,49 +3265,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_reserved_host_name_reaches_loopback_for_http_and_grpc() -> anyhow::Result<()> {
-        let (http_addr, _) = spawn_counting_server().await;
-        let (grpc_addr, _) = spawn_counting_h2c_server().await;
-        let clients = WorkloadClients::new(default_client_tls_config());
-        clients.install_egress_gate(host_loopback_gate());
-        let client = clients.client("workload");
-        let (response, _io) = client
-            .send_request(
-                request(&format!(
-                    "http://host.wasmcloud.internal:{}/",
-                    http_addr.port()
-                )),
-                test_options(),
-            )
-            .await?;
-        assert_eq!(response.status(), 200);
-        let (response, _io) = client
-            .send_grpc_request(
-                grpc_request(&format!(
-                    "http://host.wasmcloud.internal:{}/svc.Test/Call",
-                    grpc_addr.port()
-                )),
-                test_options(),
-            )
-            .await?;
-        assert_eq!(response.status(), 200);
-        let stream = connect_http_tcp(
-            &format!("HOST.WASMCLOUD.INTERNAL.:{}", http_addr.port()),
-            Duration::from_secs(5),
-            Some(&host_loopback_gate()),
-        )
-        .await?;
-        assert_eq!(stream.peer_addr()?, http_addr);
-        for uri in [
-            format!("http://localhost:{}/", http_addr.port()),
-            format!("http://127.255.255.254:{}/", http_addr.port()),
-            "http://169.254.169.254/".into(),
-        ] {
-            let result = client.send_request(request(&uri), test_options()).await;
-            assert!(
-                matches!(result, Err(HttpError::DestinationIpProhibited)),
-                "{uri} must still pass the ordinary address gate"
-            );
+    async fn host_loopback_aliases_reach_http_and_grpc() -> anyhow::Result<()> {
+        for bind in ["127.0.0.1:0", "[::1]:0"] {
+            let (http_addr, _) = spawn_counting_server_on(bind, Duration::ZERO).await;
+            let (grpc_addr, _) = spawn_counting_h2c_server_on(bind).await;
+            let clients = WorkloadClients::new(default_client_tls_config());
+            clients.install_egress_gate(host_loopback_gate());
+            let client = clients.client("workload");
+            let hostnames: &[&str] = if http_addr.is_ipv6() {
+                &["[::1]"]
+            } else {
+                &[
+                    "host.wasmcloud.internal",
+                    "HOST.WASMCLOUD.INTERNAL.",
+                    "127.0.0.1",
+                    "[::ffff:127.0.0.1]",
+                ]
+            };
+            for hostname in hostnames {
+                let (response, _io) = client
+                    .send_request(
+                        request(&format!("http://{hostname}:{}/", http_addr.port())),
+                        test_options(),
+                    )
+                    .await?;
+                assert_eq!(response.status(), 200);
+                let (response, _io) = client
+                    .send_grpc_request(
+                        grpc_request(&format!(
+                            "http://{hostname}:{}/svc.Test/Call",
+                            grpc_addr.port()
+                        )),
+                        test_options(),
+                    )
+                    .await?;
+                assert_eq!(response.status(), 200);
+                let stream = connect_http_tcp(
+                    &format!("{hostname}:{}", http_addr.port()),
+                    Duration::from_secs(5),
+                    Some(&host_loopback_gate()),
+                )
+                .await?;
+                assert_eq!(stream.peer_addr()?, http_addr);
+            }
+            for uri in [
+                format!("http://localhost:{}/", http_addr.port()),
+                format!("http://127.255.255.254:{}/", http_addr.port()),
+                "http://169.254.169.254/".into(),
+            ] {
+                let result = client.send_request(request(&uri), test_options()).await;
+                assert!(
+                    matches!(result, Err(HttpError::DestinationIpProhibited)),
+                    "{uri} must still pass the ordinary address gate"
+                );
+            }
         }
         Ok(())
     }
@@ -3297,32 +3333,39 @@ mod tests {
         let (addr, connections) = spawn_counting_server().await;
         let table = PortTable::new();
         let _owned = table.reserve(Protocol::Tcp, addr, PortOwner::Host("ingress".into()))?;
-        for policy in [
-            SocketPolicy::default(),
-            SocketPolicy {
-                host_loopback_enabled: true,
-                host_owned_ports: Some(table),
-                ..Default::default()
-            },
+        for hostname in [
+            "host.wasmcloud.internal",
+            "127.0.0.1",
+            "[::1]",
+            "[::ffff:127.0.0.1]",
         ] {
-            let gate = EgressAddressGate::from_socket_policy(&policy);
-            let clients = WorkloadClients::new(default_client_tls_config());
-            clients.install_egress_gate(gate.clone());
-            let result = clients
-                .client("workload")
-                .send_request(
-                    request(&format!("http://host.wasmcloud.internal:{}/", addr.port())),
-                    test_options(),
+            for policy in [
+                SocketPolicy::default(),
+                SocketPolicy {
+                    host_loopback_enabled: true,
+                    host_owned_ports: Some(Arc::clone(&table)),
+                    ..Default::default()
+                },
+            ] {
+                let gate = EgressAddressGate::from_socket_policy(&policy);
+                let clients = WorkloadClients::new(default_client_tls_config());
+                clients.install_egress_gate(gate.clone());
+                let result = clients
+                    .client("workload")
+                    .send_request(
+                        request(&format!("http://{hostname}:{}/", addr.port())),
+                        test_options(),
+                    )
+                    .await;
+                assert!(matches!(result, Err(HttpError::DestinationIpProhibited)));
+                let result = connect_http_tcp(
+                    &format!("{hostname}:{}", addr.port()),
+                    Duration::from_secs(5),
+                    Some(&gate),
                 )
                 .await;
-            assert!(matches!(result, Err(HttpError::DestinationIpProhibited)));
-            let result = connect_http_tcp(
-                &format!("host.wasmcloud.internal:{}", addr.port()),
-                Duration::from_secs(5),
-                Some(&gate),
-            )
-            .await;
-            assert!(matches!(result, Err(HttpError::DestinationIpProhibited)));
+                assert!(matches!(result, Err(HttpError::DestinationIpProhibited)));
+            }
         }
         assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 0);
         Ok(())
@@ -3352,7 +3395,11 @@ mod tests {
             );
         }
         assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert!(meters.denied(crate::sockets::DenyReason::BlockedRange) >= 2);
+        assert!(meters.denied(crate::sockets::DenyReason::BlockedRange) >= 1);
+        assert_eq!(
+            meters.denied(crate::sockets::DenyReason::HostLoopbackNotPermitted),
+            1
+        );
     }
 
     /// The metadata address in its IPv4-mapped spelling, as a literal: judged
@@ -3513,7 +3560,7 @@ mod tests {
     /// against it.
     #[tokio::test]
     async fn tls_through_the_gate_keeps_the_hostname() {
-        for hostname in ["localhost", "host.wasmcloud.internal"] {
+        for hostname in ["localhost", "host.wasmcloud.internal", "127.0.0.1"] {
             let (port, ca_pem, names) = sni_recording_tls_server(hostname).await;
             let dir = tempfile::tempdir().unwrap();
             let ca_path = dir.path().join("ca.pem");
@@ -3545,10 +3592,12 @@ mod tests {
                 .await
                 .expect("a permitted host must be reachable over TLS");
             assert_eq!(response.status(), 200);
-            assert_eq!(
-                *names.lock().unwrap(),
-                [hostname.to_string(), format!("{hostname}:{port}")]
-            );
+            let expected = if hostname == "127.0.0.1" {
+                vec![format!("{hostname}:{port}")]
+            } else {
+                vec![hostname.to_string(), format!("{hostname}:{port}")]
+            };
+            assert_eq!(*names.lock().unwrap(), expected);
         }
     }
 }
