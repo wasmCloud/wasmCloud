@@ -202,6 +202,50 @@ impl<Id: Clone + Send + Sync + 'static> Multiplexer<Id> {
         }
     }
 
+    /// Whether a workload's plain (unlabeled) `interface` has a default (`""`)
+    /// route on this multiplexer — the answer a plugin that defers unnamed
+    /// instances gives to [`crate::plugin::HostPlugin::routes_unnamed_instance`],
+    /// so a plain import is served here instead of by a standalone plugin.
+    ///
+    /// A route is any of:
+    ///
+    /// * the operator declared the unnamed binding itself
+    ///   ([`crate::plugin::bindings::UNNAMED_BINDING`] under `declared`);
+    /// * the operator's layer for the unnamed binding — its base config, which
+    ///   is what `host.plugins` calls the entry's own `config` — names a
+    ///   `backend`;
+    /// * the workload's own plain entry names a `backend`.
+    ///
+    /// Each one is somebody choosing a multiplexer backend for this import; a
+    /// standalone plugin has no `backend` to choose, so naming one there was
+    /// never read. Note that a base is also the layer every named binding
+    /// inherits: a `backend` written there for the labels moves plain imports
+    /// too.
+    ///
+    /// Never for a plain import with no route: it stays with the standalone
+    /// plugin, rather than landing on this multiplexer's default backend type.
+    pub fn routes_unnamed(
+        &self,
+        interface: &WitInterface,
+        declared: &crate::plugin::PluginBindingSet,
+    ) -> bool {
+        if interface.name.is_some()
+            || interface.namespace != self.namespace
+            || interface.package != self.package
+        {
+            return false;
+        }
+        let unnamed = crate::plugin::bindings::UNNAMED_BINDING;
+        if declared.binding_names().any(|name| name == unnamed) {
+            return true;
+        }
+        declared
+            .host_layer(unnamed)
+            .value(BACKEND_CONFIG_KEY)
+            .is_some()
+            || interface.config.value(BACKEND_CONFIG_KEY).is_some()
+    }
+
     /// Install the ceiling declared for the owning plugin, checked on every
     /// later [`Multiplexer::instantiate`]. The whole of a multiplexed plugin's
     /// [`crate::plugin::HostPlugin::configure_egress_policy`].
@@ -682,6 +726,82 @@ mod tests {
         // workload has no plain-import default to fall back to).
         mux.set_default("wl-2", &registry(&[("team-a", 1)]));
         assert_eq!(mux.default_for("wl-2"), None);
+    }
+
+    fn plain(name: Option<&str>, config: &[(&str, &str)]) -> WitInterface {
+        WitInterface {
+            namespace: "wasi".to_string(),
+            package: "keyvalue".to_string(),
+            interfaces: ["store".to_string()].into_iter().collect(),
+            version: None,
+            config: config
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+            name: name.map(String::from),
+        }
+    }
+
+    fn base(pairs: &[(&str, &str)]) -> Config {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    /// Nothing declared, labels only, or a base naming no backend: no default
+    /// route, so a plain import stays with the standalone plugin.
+    #[test]
+    fn no_default_route_unless_somebody_names_one() {
+        use crate::plugin::PluginBindingSet;
+        let mux = mux();
+        let kv = plain(None, &[]);
+        assert!(!mux.routes_unnamed(&kv, &PluginBindingSet::new("kv")));
+        let labels_only =
+            PluginBindingSet::new("kv").with_binding("team-a", base(&[("backend", "redis")]));
+        assert!(
+            !mux.routes_unnamed(&kv, &labels_only),
+            "a label's own backend says nothing about the plain import"
+        );
+        let base_root_only = PluginBindingSet::new("kv").with_base(base(&[("root", "/srv/kv")]));
+        assert!(!mux.routes_unnamed(&kv, &base_root_only));
+        // A plain entry with config but no `backend` is not a route either.
+        assert!(!mux.routes_unnamed(
+            &plain(None, &[("bucket", "x")]),
+            &PluginBindingSet::new("kv")
+        ));
+    }
+
+    /// Each of the three routes, and only for a plain import of this
+    /// multiplexer's own package.
+    #[test]
+    fn a_declared_unnamed_binding_or_a_named_backend_is_a_default_route() {
+        use crate::plugin::PluginBindingSet;
+        let mux = mux();
+        let declared = PluginBindingSet::new("kv")
+            .with_binding(crate::plugin::bindings::UNNAMED_BINDING, Config::new());
+        assert!(mux.routes_unnamed(&plain(None, &[]), &declared));
+        let base_backend = PluginBindingSet::new("kv")
+            .with_base(base(&[("backend", "redis"), ("url", "redis://h:6379")]))
+            .with_binding("team-a", Config::new());
+        assert!(
+            mux.routes_unnamed(&plain(None, &[]), &base_backend),
+            "the base is the unnamed binding's layer; its backend is a route"
+        );
+        assert!(mux.routes_unnamed(
+            &plain(None, &[("backend", "filesystem")]),
+            &PluginBindingSet::new("kv")
+        ));
+
+        for routed in [&declared, &base_backend] {
+            assert!(
+                !mux.routes_unnamed(&plain(Some("team-a"), &[]), routed),
+                "a labeled import is routed by its label, not the default route"
+            );
+            let mut other = plain(None, &[("backend", "filesystem")]);
+            other.package = "blobstore".to_string();
+            assert!(!mux.routes_unnamed(&other, routed));
+        }
     }
 
     #[test]

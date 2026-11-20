@@ -14,6 +14,11 @@
 //! through the backend stored on the resource (`BlobContainer`/`OutgoingBlob`),
 //! so they need no label of their own.
 //!
+//! A plain (unlabeled) `wasi:blobstore/blobstore` import is left to the
+//! standalone `wasi-blobstore` plugin unless this workload has a default (`""`)
+//! route here ([`Multiplexer::routes_unnamed`]): then the host routes it to
+//! this plugin, which links the plain instance to that route's backend.
+//!
 //! The same [`BlobBackend`] trait also backs the async `wasmcloud:blobstore`
 //! surface (see [`super::multiplexed_async`]); this module owns the trait,
 //! the backends/providers, and the `wasi:blobstore` (wasi:io-based) host layer.
@@ -69,6 +74,10 @@ const DEFAULT_MAX_OBJECT_SIZE: usize = 64 * 1024 * 1024;
 
 const DEFAULT_BACKEND: &str = "in-memory";
 pub(crate) const MULTIPLEXED_BLOBSTORE_ID: &str = "wasi-blobstore-multiplexed";
+
+/// The instance a plain (unlabeled) `wasi:blobstore/blobstore` import links
+/// under — the name the standalone plugins define.
+const PLAIN_BLOBSTORE: &str = "wasi:blobstore/blobstore@0.2.0-draft";
 
 /// Backend-agnostic container metadata; converted into the per-surface bindgen
 /// types by the host layers.
@@ -643,6 +652,17 @@ impl HostPlugin for MultiplexedBlobstore {
         true
     }
 
+    /// A plain import comes here only when the workload has a default route
+    /// on this plugin; otherwise the standalone `wasi-blobstore` plugin keeps
+    /// it.
+    fn routes_unnamed_instance(
+        &self,
+        interface: &WitInterface,
+        declared: &crate::plugin::PluginBindingSet,
+    ) -> bool {
+        self.mux.routes_unnamed(interface, declared)
+    }
+
     async fn on_workload_item_bind<'a>(
         &self,
         item: &mut WorkloadItem<'a>,
@@ -670,6 +690,21 @@ impl HostPlugin for MultiplexedBlobstore {
             |name| self.mux.resolve(&registry, name),
             extract_active_ctx,
         )?;
+        // A plain import reaches this plugin only through the workload's
+        // default route (`routes_unnamed_instance`), and is the registry's `""`
+        // entry: link the plain `blobstore` instance to that one backend, the
+        // way a label links its own. Nothing else defines it, because the host
+        // hands a plain entry to exactly one plugin.
+        if let Some(default) = registry.get(crate::plugin::bindings::UNNAMED_BINDING) {
+            bindings::named_imports::wasi::blobstore::blobstore::add_to_linker_instance::<
+                _,
+                SharedCtx,
+            >(
+                &mut linker.instance(PLAIN_BLOBSTORE)?,
+                default.clone(),
+                extract_active_ctx,
+            )?;
+        }
         bindings::wasi::blobstore::container::add_to_linker::<_, SharedCtx>(
             linker,
             extract_active_ctx,
@@ -850,6 +885,29 @@ mod tests {
         assert!(dir.join("bucket").join("k").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The plugin answers the host's default-route question for a plain
+    /// import through its multiplexer: a declared unnamed binding (an S3 one,
+    /// say — there is no standalone S3 plugin) routes it here, nothing declared
+    /// leaves it to the standalone `wasi-blobstore`.
+    #[test]
+    fn a_plain_import_routes_here_only_with_a_default_route() {
+        use crate::plugin::PluginBindingSet;
+        let plugin = MultiplexedBlobstore::new();
+        let plain = blob_iface(None, None, None);
+        assert!(
+            !plugin
+                .routes_unnamed_instance(&plain, &PluginBindingSet::new(MULTIPLEXED_BLOBSTORE_ID))
+        );
+        let declared = PluginBindingSet::new(MULTIPLEXED_BLOBSTORE_ID).with_binding(
+            crate::plugin::bindings::UNNAMED_BINDING,
+            crate::wit::Config::from_iter([("backend".to_string(), "s3".to_string())]),
+        );
+        assert!(plugin.routes_unnamed_instance(&plain, &declared));
+        assert!(
+            !plugin.routes_unnamed_instance(&blob_iface(Some("team-a"), None, None), &declared)
+        );
     }
 
     #[tokio::test]

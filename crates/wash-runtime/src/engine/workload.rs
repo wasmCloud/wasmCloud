@@ -7603,10 +7603,6 @@ mod tests {
             crate::plugin::PluginBindings::new(),
             crate::plugin::PluginBindings::new().with_plugin(
                 crate::plugin::PluginBindingSet::new("wasi-blobstore-multiplexed")
-                    .with_base(crate::wit::Config::from_iter([(
-                        "backend".to_string(),
-                        "in-memory".to_string(),
-                    )]))
                     .with_binding("tenant-a", Default::default()),
             ),
         ] {
@@ -7679,6 +7675,100 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen, vec![None, Some("tenant-a".to_string())]);
+    }
+
+    /// The invariant, against the REAL sync blobstore multiplexer: it is never
+    /// the default for a plain import. With no declared unnamed binding and no
+    /// `backend` on the base or on the plain entry, the plain import binds the
+    /// standalone — whatever else the operator declared. Naming a `backend` on
+    /// either is what moves it.
+    #[cfg(all(
+        feature = "wasi-blobstore",
+        feature = "wasm_component_model_implements"
+    ))]
+    #[tokio::test]
+    async fn test_the_sync_multiplexer_is_never_the_default_for_a_plain_import() {
+        use crate::plugin::wasi_blobstore::{InMemoryProvider, MultiplexedBlobstore};
+        let config = |pairs: &[(&str, &str)]| -> crate::wit::Config {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect()
+        };
+        let set = || crate::plugin::PluginBindingSet::new("wasi-blobstore-multiplexed");
+        let iface = WitInterface::from("wasi:blobstore/container");
+        let mut with_backend = iface.clone();
+        with_backend.config = config(&[("backend", "in-memory")]);
+        let mut without_backend = iface.clone();
+        without_backend.config = config(&[("some-key", "x")]);
+
+        let cases = [
+            (
+                "nothing declared",
+                iface.clone(),
+                crate::plugin::PluginBindings::new(),
+                false,
+            ),
+            (
+                "a label with its own backend",
+                iface.clone(),
+                crate::plugin::PluginBindings::new().with_plugin(
+                    set().with_binding("tenant-a", config(&[("backend", "in-memory")])),
+                ),
+                false,
+            ),
+            (
+                "a base without a backend",
+                iface.clone(),
+                crate::plugin::PluginBindings::new()
+                    .with_plugin(set().with_base(config(&[("root", "/srv/blobs")]))),
+                false,
+            ),
+            (
+                "a plain entry without a backend",
+                without_backend,
+                crate::plugin::PluginBindings::new(),
+                false,
+            ),
+            (
+                "a base naming a backend",
+                iface.clone(),
+                crate::plugin::PluginBindings::new()
+                    .with_plugin(set().with_base(config(&[("backend", "in-memory")]))),
+                true,
+            ),
+            (
+                "a plain entry naming a backend",
+                with_backend,
+                crate::plugin::PluginBindings::new(),
+                true,
+            ),
+        ];
+        for (case, entry, declared, routed) in cases {
+            let standalone = Arc::new(MockPlugin::new(
+                "wasi-blobstore",
+                vec![iface.clone()],
+                vec![],
+            ));
+            let mux: Arc<dyn HostPlugin> =
+                Arc::new(MultiplexedBlobstore::new().with_provider(Arc::new(InMemoryProvider)));
+            let mut plugins: PluginMap = HashMap::new();
+            plugins.insert(standalone.id(), standalone.clone() as Arc<dyn HostPlugin>);
+            plugins.insert(mux.id(), mux);
+
+            let mut workload = workload_with(vec![entry]);
+            let bound = workload
+                .bind_plugins(&plugins, &declared)
+                .await
+                .unwrap_or_else(|e| panic!("{case}: {e:#}"));
+            let ids: Vec<&str> = bound.iter().map(|(p, _)| p.id()).collect();
+            let expected = if routed {
+                "wasi-blobstore-multiplexed"
+            } else {
+                "wasi-blobstore"
+            };
+            assert_eq!(ids, vec![expected], "{case}");
+        }
     }
 
     /// An `(implements ..)` label declared under a plugin's `host.plugins`
