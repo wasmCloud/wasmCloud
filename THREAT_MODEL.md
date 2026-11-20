@@ -81,6 +81,9 @@ A breach of one is a vulnerability unless mentioned in [Known limitations](#know
 3. **Isolation.** A workload cannot read or modify another workload's memory, files, connections or state unless they are explicitly shared, and reaches another workload's services only through interfaces linked between them.
 4. **Host.** A workload cannot reach the host's own credentials, configuration, kernel filesystems or listeners. It reaches the machine's loopback only when the operator and its spec both allow it, and never a port the host owns that way.
 5. **Egress.** Raw socket and `wasi:http` egress reach only the addresses that the spec and the host's address policy permit, which by default excludes loopback, link-local (including cloud metadata) and multicast.
+   An exact HTTP or HTTPS loopback URL in `allowedHosts` grants only that host, scheme, and effective port through `wasi:http`, with the operator's loopback enablement.
+   Wildcards and arbitrary names resolving to loopback do not grant that exception; host-owned ports stay refused and grants are checked before pooled reuse.
+   It grants no raw socket access to the host.
    HTTP and gRPC can reach `host.wasmcloud.internal` only with the host's loopback enablement and the calling component's explicit TCP port grant in `allowedHostLoopbackPorts`,
    checked on every request even when components in a workload share a connection pool.
    That port grant is the spec's grant for this route, as it is for raw sockets; `allowedHosts`, even `*`, neither replaces nor widens it.

@@ -580,11 +580,12 @@ struct CtxHttpHooks {
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
     socket_addr_check: crate::sockets::SocketAddrCheck,
+    http_egress_gate: Option<crate::host::egress_policy::EgressAddressGate>,
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
     warned_unserved: bool,
-    /// Set once this store has explained a refused `host.wasmcloud.internal`
-    /// request, so a guest retrying it does not repeat the explanation.
+    /// Set once this store has explained a refused HTTP loopback request, so
+    /// a guest retrying it does not repeat the explanation.
     warned_host_loopback: bool,
 }
 
@@ -601,6 +602,42 @@ impl WasiHttpHooks for CtxHttpHooks {
         options: Option<wasmtime_wasi_http::RequestOptions>,
         fut: crate::host::http::RequestIoFuture,
     ) -> crate::host::http::SendFuture {
+        // This grant belongs to wasi:http only. Raw socket loopback stays on
+        // the virtual network and the host sentinel still needs its port grant.
+        if let Some(host) = request.uri().host()
+            && let Some(addrs) = crate::host::http_client::http_loopback_addrs(
+                host,
+                request.uri().port_u16().unwrap_or_else(|| {
+                    crate::host::allowed_hosts::default_port(
+                        request.uri().scheme_str().unwrap_or("http"),
+                    )
+                    .unwrap_or(80)
+                }),
+            )
+            && (!self
+                .allowed_hosts
+                .iter()
+                .any(|entry| entry.grants_http_loopback(request.uri()))
+                || self.http_egress_gate.as_ref().is_none_or(|gate| {
+                    addrs
+                        .iter()
+                        .any(|addr| gate.check_host_loopback(*addr).is_err())
+                }))
+        {
+            if !self.warned_host_loopback {
+                self.warned_host_loopback = true;
+                tracing::warn!(
+                    workload_id = %self.workload_id,
+                    host,
+                    scheme = request.uri().scheme_str().unwrap_or("http"),
+                    port = ?request.uri().port_u16(),
+                    "refused an HTTP loopback request: explicitly list this HTTP(S) host and port \
+                     in `allowedHosts` and enable `wash host --allow-host-loopback`; wildcard \
+                     entries do not grant host loopback and host-owned ports are never granted"
+                );
+            }
+            return crate::host::http::deny_request(request);
+        }
         // Check the active component on every request, before a pooled socket
         // can be reused by another component in the same workload. The socket
         // policy owns both halves of the grant and the host's reservations.
@@ -796,6 +833,7 @@ impl CtxBuilder {
             workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts,
             socket_addr_check: sockets.socket_addr_check.clone(),
+            http_egress_gate: sockets.http_egress_gate.clone(),
             warned_unserved: false,
             warned_host_loopback: false,
         };
@@ -947,6 +985,69 @@ mod tests {
     fn setup() {
         #[cfg(feature = "wasi-tls")]
         crate::init_crypto();
+    }
+
+    #[tokio::test]
+    async fn explicit_http_loopback_grants_do_not_grant_host_sockets() -> anyhow::Result<()> {
+        use crate::sockets::{Plane, SocketAddrUse, WasiSocketsCtx, policy::SocketPolicy};
+
+        setup();
+        for (enabled, entries) in [
+            (true, vec!["http://localhost:3000"]),
+            (false, vec!["http://localhost:3000"]),
+            (true, vec!["*"]),
+            (true, vec![]),
+        ] {
+            let allowed_hosts: Arc<[AllowedHost]> =
+                entries.iter().map(|entry| entry.parse().unwrap()).collect();
+            let policy = Arc::new(SocketPolicy {
+                host_loopback_enabled: enabled,
+                allowed_hosts: Arc::clone(&allowed_hosts),
+                ..Default::default()
+            });
+            let sockets = WasiSocketsCtx::for_store(policy, Arc::default(), Arc::default());
+            for addr in ["127.0.0.1:3000", "[::1]:3000", "[::ffff:127.0.0.1]:3000"] {
+                assert_eq!(
+                    sockets
+                        .socket_addr_check
+                        .check(addr.parse()?, SocketAddrUse::TcpConnect)?
+                        .plane,
+                    Plane::Virtual
+                );
+            }
+            assert!(
+                sockets
+                    .socket_addr_check
+                    .check("127.255.255.254:3000".parse()?, SocketAddrUse::TcpConnect)
+                    .is_err()
+            );
+
+            let mut ctx = Ctx::builder("shared-workload", "component")
+                .with_allowed_hosts(allowed_hosts)
+                .with_sockets(sockets)
+                .build();
+            let request = hyper::Request::builder()
+                .uri("http://localhost:3000/")
+                .body(wasmtime_wasi_http::WasiBody::default())?;
+            let result = Box::into_pin(ctx.http_hooks.send_request(
+                request,
+                None,
+                Box::new(async { Ok(()) }),
+            ))
+            .await;
+            if enabled && entries == ["http://localhost:3000"] {
+                assert!(matches!(
+                    result,
+                    Err(wasmtime_wasi_http::Error::InternalError(_))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[test]

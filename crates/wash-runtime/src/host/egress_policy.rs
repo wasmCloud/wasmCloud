@@ -167,12 +167,11 @@ impl EgressAddressGate {
                         tracing::warn!(
                             %addr,
                             reason = reason.as_str(),
-                            "HTTP egress address policy refused a loopback address; to reach a \
-                             backend on this machine, address it as \
-                             `host.wasmcloud.internal:{port}`, list TCP port {port} in the \
-                             component's `allowedHostLoopbackPorts`, and allow host loopback on \
-                             the host (`wash host --allow-host-loopback`)",
-                            port = addr.port(),
+                            "HTTP egress address policy refused a loopback DNS answer; for an \
+                             HTTP-only backend, use `localhost` with an exact HTTP(S) URL in \
+                             `allowedHosts` and enable `wash host --allow-host-loopback`; for \
+                             shared HTTP and raw socket access, use `host.wasmcloud.internal` \
+                             with an `allowedHostLoopbackPorts` grant"
                         );
                     } else {
                         tracing::warn!(
