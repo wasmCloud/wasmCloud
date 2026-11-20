@@ -48,14 +48,10 @@ impl core::fmt::Display for PortOwner {
 
 /// A virtual network that survives its owner being restarted.
 ///
-/// A supervised guest gets a *fresh* [`loopback::Network`] per incarnation, and
-/// tearing a store down does not unregister the virtual ports its sockets held
-/// — those registrations are released by the guest dropping each socket, which
-/// a faulted incarnation never gets to do. Sharing one network across
-/// incarnations would therefore leave the old listener's port occupied and the
-/// new incarnation's bind failing with `AddressInUse` forever.
+/// A supervised guest gets a *fresh* [`loopback::Network`] per incarnation, so
+/// the new incarnation starts with none of the old one's virtual endpoints.
 ///
-/// So the network is replaced on each restart and reached through this handle.
+/// The network is replaced on each restart and reached through this handle.
 /// A [`PublishedPort`] holds the handle rather than the network, which is what
 /// lets the real listener stay bound across a restart: connections arriving
 /// while the new incarnation is coming up simply wait out the readiness window

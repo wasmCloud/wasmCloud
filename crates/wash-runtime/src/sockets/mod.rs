@@ -53,7 +53,7 @@ pub struct WasiSocketsCtx {
     /// The egress allowlist `socket_addr_check` decides against. Held here as
     /// well because a name it permits connecting to may also be resolved.
     pub(crate) allowed_hosts: Arc<[crate::host::allowed_hosts::AllowedHost]>,
-    pub(crate) loopback: Arc<std::sync::Mutex<loopback::Network>>,
+    pub(crate) loopback: LoopbackLease,
     /// What this store's lookups returned. Shared with `socket_addr_check`,
     /// which is how a name entry in `allowedHosts` permits a socket.
     pub(crate) resolved_names: Arc<resolved_names::ResolvedNames>,
@@ -80,9 +80,54 @@ impl WasiSocketsCtx {
             allowed_network_uses: AllowedNetworkUses::default(),
             allowed_ip_name_lookups,
             allowed_hosts,
-            loopback,
+            loopback: loopback.into(),
             resolved_names,
         }
+    }
+}
+
+/// One store's use of its workload's loopback network. A torn-down store does
+/// not drop its sockets one by one, so dropping this frees the ports they held.
+pub(crate) struct LoopbackLease {
+    network: Arc<std::sync::Mutex<loopback::Network>>,
+    owner: loopback::Owner,
+}
+
+impl LoopbackLease {
+    pub(crate) fn owner(&self) -> loopback::Owner {
+        self.owner
+    }
+}
+
+impl From<Arc<std::sync::Mutex<loopback::Network>>> for LoopbackLease {
+    fn from(network: Arc<std::sync::Mutex<loopback::Network>>) -> Self {
+        Self {
+            network,
+            owner: loopback::Owner::new(),
+        }
+    }
+}
+
+impl Default for LoopbackLease {
+    fn default() -> Self {
+        Self::from(Arc::default())
+    }
+}
+
+impl Deref for LoopbackLease {
+    type Target = Arc<std::sync::Mutex<loopback::Network>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.network
+    }
+}
+
+impl Drop for LoopbackLease {
+    fn drop(&mut self) {
+        self.network
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .release(self.owner);
     }
 }
 

@@ -156,13 +156,19 @@ where
         let Some((res, permit)) = self.pending.take() else {
             return Poll::Pending;
         };
-        let socket = TcpSocket::new_accept(res, &self.options, self.family)
+        let WasiSocketsCtxView { ctx, .. } = (self.getter)(store.data_mut());
+        let owner = ctx.loopback.owner();
+        let socket = TcpSocket::new_accept(res, &self.options, self.family, owner)
             .map(|mut socket| {
                 socket.hold_quota_slot(permit);
                 socket
             })
             .unwrap_or_else(|err| {
-                TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(err, self.family))
+                TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(
+                    err,
+                    self.family,
+                    owner,
+                ))
             });
         let WasiSocketsCtxView { table, .. } = (self.getter)(store.data_mut());
         let socket = table
@@ -1180,9 +1186,11 @@ where
         let Some(pending) = this.pending.take() else {
             return Poll::Pending;
         };
+        let WasiSocketsCtxView { ctx, .. } = (this.getter)(store.data_mut());
+        let owner = ctx.loopback.owner();
         let socket = match pending {
             MergedAccept::Network(res, permit) => {
-                TcpSocket::new_accept(res, &this.options, this.loopback_props.family)
+                TcpSocket::new_accept(res, &this.options, this.loopback_props.family, owner)
                     .map(|mut socket| {
                         socket.hold_quota_slot(permit);
                         socket
@@ -1191,6 +1199,7 @@ where
                         TcpSocket::Network(super::tcp::NetworkTcpSocket::new_error(
                             err,
                             this.loopback_props.family,
+                            owner,
                         ))
                     })
             }
@@ -1245,6 +1254,17 @@ mod tests {
                 table: ResourceTable::new(),
             },
         )
+    }
+
+    /// A store on `network`, as the stores of one workload share theirs.
+    fn store_on(
+        network: Arc<std::sync::Mutex<super::super::loopback::Network>>,
+    ) -> wasmtime::Store<Data> {
+        let mut store = store(SocketAddrCheck::new(|addr, _| {
+            AddrDecision::allow_by_address(addr)
+        }));
+        store.data_mut().ctx.loopback = network.into();
+        store
     }
 
     struct Chunks<T>(mpsc::UnboundedSender<Vec<T>>);
@@ -1506,6 +1526,49 @@ mod tests {
             refusal_limit_result(&cx, true),
             Poll::Ready(Ok(StreamResult::Cancelled))
         ));
+    }
+
+    /// Dropping a store whose guest still holds a listener frees its port for
+    /// the next store on the same network.
+    #[tokio::test]
+    async fn dropping_a_store_releases_its_listening_port() {
+        let network = Arc::default();
+        let mut first = store_on(Arc::clone(&network));
+        let listener = HostTcpSocket::create(&mut view(first.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        HostTcpSocket::bind(
+            &mut view(first.data_mut()),
+            Resource::new_borrow(listener),
+            "127.0.0.1:0".parse::<SocketAddr>().unwrap().into(),
+        )
+        .await
+        .unwrap();
+        let accepts = <WasiSockets as HostTcpSocketWithStore<Data>>::listen(
+            Access::<Data, WasiSockets>::new(first.as_context_mut(), view),
+            Resource::new_borrow(listener),
+        )
+        .await
+        .unwrap();
+        let _accepted = chunks(&mut first, accepts);
+        let addr = HostTcpSocket::get_local_address(
+            &mut view(first.data_mut()),
+            Resource::new_borrow(listener),
+        )
+        .unwrap();
+        drop(first);
+
+        let mut second = store_on(network);
+        let socket = HostTcpSocket::create(&mut view(second.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        HostTcpSocket::bind(
+            &mut view(second.data_mut()),
+            Resource::new_borrow(socket),
+            addr,
+        )
+        .await
+        .expect("the port of a dropped store is free");
     }
 
     #[tokio::test]
