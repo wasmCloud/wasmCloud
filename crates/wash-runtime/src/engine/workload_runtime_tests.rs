@@ -292,6 +292,11 @@ struct RecordingPlugin {
     unbind_gate: Option<Arc<tokio::sync::Semaphore>>,
     entered: tokio::sync::Notify,
     overrides: WitWorld,
+    /// The workload it was handed, kept as a plugin may keep it.
+    kept: Mutex<Option<ResolvedWorkload>>,
+    /// A path whose presence the plugin records when it is unbound.
+    scratch: Option<std::path::PathBuf>,
+    saw_scratch: Mutex<Option<bool>>,
 }
 
 impl RecordingPlugin {
@@ -305,6 +310,9 @@ impl RecordingPlugin {
             unbind_gate: None,
             entered: tokio::sync::Notify::new(),
             overrides: WitWorld::default(),
+            kept: Mutex::default(),
+            scratch: None,
+            saw_scratch: Mutex::default(),
         }
     }
 
@@ -367,9 +375,13 @@ impl HostPlugin for RecordingPlugin {
         } else {
             assert!(workload.components.read().await[id].metadata.is_sealed());
         }
+        *self.kept.lock().unwrap() = Some(workload.clone());
         self.callback(Callback::Resolved)
     }
     async fn on_workload_unbind(&self, _: &str, _: WitInterfaces<'_>) -> anyhow::Result<()> {
+        if let Some(scratch) = &self.scratch {
+            *self.saw_scratch.lock().unwrap() = Some(scratch.exists());
+        }
         self.entered.notify_one();
         if let Some(gate) = &self.unbind_gate {
             gate.acquire().await?.forget();
@@ -454,6 +466,117 @@ async fn every_failed_plugin_callback_releases_component_and_service_bindings() 
             }
         }
     }
+    Ok(())
+}
+
+/// A stop removes the workload's scratch at once, while something such as a
+/// plugin still holds the workload.
+#[tokio::test]
+async fn release_removes_scratch_while_the_workload_is_held() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let resources = WorkloadResources::default();
+    let mut resolved = requesting(&[], false)
+        .with_scratch(Some(scratch))
+        .resolve_for_start(
+            None,
+            &Default::default(),
+            &crate::host::HostRef::detached(),
+            &Default::default(),
+            Some(&resources),
+        )
+        .await?;
+    resources.commit(&mut resolved);
+    WorkloadResources::for_teardown(&resolved)
+        .release("contracts")
+        .await?;
+    assert!(
+        !dir.exists(),
+        "the stop left the scratch to the last handle"
+    );
+    Ok(())
+}
+
+/// A stop removes the scratch after the plugins are unbound, as the unjournaled
+/// teardown does, and also when an unbind fails.
+#[tokio::test]
+async fn release_removes_scratch_after_unbinding_even_on_failure() -> anyhow::Result<()> {
+    for fail in [false, true] {
+        let tmp = tempfile::tempdir()?;
+        let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+        let dir = scratch.path().to_path_buf();
+        let events = Arc::default();
+        let mut plugin = RecordingPlugin::new("recording", API, &events);
+        plugin.scratch = Some(dir.clone());
+        if fail {
+            plugin.unbind_failures.store(1, Ordering::SeqCst);
+        }
+        let plugin = Arc::new(plugin);
+        let registered = HashMap::from([("recording", Arc::clone(&plugin) as Arc<dyn HostPlugin>)]);
+        let resources = WorkloadResources::default();
+        let mut resolved = requesting(&[API], false)
+            .with_scratch(Some(scratch))
+            .resolve_for_start(
+                Some(&registered),
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+                Some(&resources),
+            )
+            .await?;
+        resources.commit(&mut resolved);
+        let released = WorkloadResources::for_teardown(&resolved)
+            .release("contracts")
+            .await;
+        plugin.kept.lock().unwrap().take();
+        assert_eq!(released.is_err(), fail, "{released:?}");
+        assert_eq!(
+            *plugin.saw_scratch.lock().unwrap(),
+            Some(true),
+            "fail={fail}: the scratch was gone before the plugin was unbound"
+        );
+        assert!(!dir.exists(), "fail={fail}: the stop left the scratch");
+    }
+    Ok(())
+}
+
+/// A plugin may keep the workload it is handed. When the resolve fails after
+/// that, the kept copy reads as released and its scratch is gone.
+#[tokio::test]
+async fn failed_resolve_releases_the_workload_a_plugin_kept() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let events = Arc::default();
+    let mut plugin = RecordingPlugin::new("recording", API, &events);
+    plugin.fail = Some(Callback::Resolved);
+    let plugin = Arc::new(plugin);
+    let plugins = HashMap::from([("recording", Arc::clone(&plugin) as Arc<dyn HostPlugin>)]);
+    requesting(&[API], false)
+        .with_scratch(Some(scratch))
+        .resolve(
+            Some(&plugins),
+            &Default::default(),
+            &crate::host::HostRef::detached(),
+            &Default::default(),
+        )
+        .await
+        .unwrap_err();
+    let kept = plugin
+        .kept
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the plugin was handed the workload");
+    assert!(
+        kept.released(),
+        "the failed resolve left the workload open to dispatch"
+    );
+    assert!(
+        !dir.exists(),
+        "the failed resolve left the scratch to the last handle"
+    );
     Ok(())
 }
 
