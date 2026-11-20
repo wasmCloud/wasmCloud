@@ -77,7 +77,7 @@ func jittered(delay time.Duration) time.Duration {
 
 // next removes and returns the longest-waiting request on host, so a released
 // slot goes to it rather than to whichever retry happens to fire first.
-func (b *busyBackoff) next(host string) (reconcile.Request, bool) {
+func (b *busyBackoff) next(host string) (string, waiter, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var (
@@ -90,10 +90,35 @@ func (b *busyBackoff) next(host string) (reconcile.Request, bool) {
 		}
 	}
 	if oldest == "" {
-		return reconcile.Request{}, false
+		return "", waiter{}, false
 	}
 	b.forget(oldest)
-	return found.req, true
+	return oldest, found, true
+}
+
+// restore puts back a waiter next removed but could not wake, keeping when it
+// started waiting so it does not lose its place to later arrivals.
+func (b *busyBackoff) restore(host, key string, w waiter) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.waiting == nil {
+		b.waiting = make(map[string]map[string]waiter)
+	}
+	if b.hostOf == nil {
+		b.hostOf = make(map[string]string)
+	}
+	if current, ok := b.waiting[host][key]; ok && current.since.Before(w.since) {
+		return
+	}
+	if prev, ok := b.hostOf[key]; ok && prev != host {
+		// It has since moved to another host; that wait is the current one.
+		return
+	}
+	if b.waiting[host] == nil {
+		b.waiting[host] = make(map[string]waiter)
+	}
+	b.waiting[host][key] = w
+	b.hostOf[key] = host
 }
 
 // done removes key from the waiters once it ran or no longer needs a slot.
@@ -229,14 +254,17 @@ func (r *WorkloadReconciler) wakeWaiter(pool string, cleanup bool) {
 	if wake == nil {
 		return
 	}
-	req, ok := r.busyWaits.next(pool)
+	key, waiting, ok := r.busyWaits.next(pool)
 	if !ok {
 		return
 	}
 	w := &runtimev1alpha1.Workload{}
-	w.Name, w.Namespace = req.Name, req.Namespace
+	w.Name, w.Namespace = waiting.req.Name, waiting.req.Namespace
 	select {
 	case wake <- event.GenericEvent{Object: w}:
 	default:
+		// The wake buffer is full; the waiter falls back to its requeue and
+		// keeps its place for the next released slot.
+		r.busyWaits.restore(pool, key, waiting)
 	}
 }

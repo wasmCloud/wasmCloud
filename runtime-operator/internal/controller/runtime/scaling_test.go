@@ -17,7 +17,9 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -103,6 +105,93 @@ func TestReplicaCleanupDeletesOneBatchPerPassAndRequeuesOnChangedIntent(t *testi
 	}
 	if n := deletes.Load(); n != 3 {
 		t.Fatalf("cleanup deleted against a stale ReplicaSet: %d deletes", n)
+	}
+}
+
+// A delete guarded by a resourceVersion from a stale cache conflicts. A victim
+// the API shows already deleting counts as deleted; one that changed while
+// live is spared and the pass requeues, instead of ScaleDown failing.
+func TestReplicaScaleDownToleratesConflictsFromAStaleCache(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		liveChanged bool
+	}{{"already deleting", false}, {"changed while live", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			rs := cleanupReplicaSet()
+			rs.Spec.Replicas = new(int32(0))
+			victim := cleanupWorkload(rs, "victim")
+			victim.UID = "victim-uid"
+			fresh := victim.DeepCopy()
+			fresh.ResourceVersion = ""
+			if !tc.liveChanged {
+				now := metav1.Now()
+				fresh.DeletionTimestamp = &now
+				fresh.Finalizers = []string{workloadFinalizerName}
+			}
+			r := newCleanupReconciler(t, interceptor.Funcs{
+				Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+					return apierrors.NewConflict(schema.GroupResource{Resource: "workloads"}, victim.Name, errors.New("stale resourceVersion"))
+				},
+			}, rs, victim)
+			r.APIReader = fake.NewClientBuilder().WithScheme(r.Scheme).WithObjects(rs.DeepCopy(), fresh).Build()
+			err := r.reconcileScaleDown(t.Context(), rs)
+			if tc.liveChanged {
+				if !condition.IsStatusUnknown(err) {
+					t.Fatalf("a changed live victim reported %v, want a retry", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("an already-deleting victim failed scale-down: %v", err)
+			}
+		})
+	}
+}
+
+// When the excess spans batches, the first batch still takes the unavailable
+// replica, not the lowest-named healthy one.
+func TestReplicaScaleDownBatchTakesUnavailableFirst(t *testing.T) {
+	rs := cleanupReplicaSet()
+	rs.Spec.Replicas = new(int32(1))
+	var objects []client.Object
+	objects = append(objects, rs)
+	for _, name := range []string{"a-good", "b-good"} {
+		w := cleanupWorkload(rs, name)
+		w.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+		objects = append(objects, w)
+	}
+	bad := failedCleanupWorkload(rs, "c-bad", time.Now())
+	objects = append(objects, bad)
+	r := newCleanupReconciler(t, interceptor.Funcs{}, objects...)
+	r.BatchSize = 1
+	if err := r.reconcileScaleDown(t.Context(), rs); !condition.IsStatusUnknown(err) {
+		t.Fatalf("partial scale-down reported %v", err)
+	}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(bad), &runtimev1alpha1.Workload{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("first batch kept the unavailable replica: %v", err)
+	}
+}
+
+func TestDroppedSlotWakeKeepsTheWaitersPlace(t *testing.T) {
+	r := &WorkloadReconciler{liveWake: make(chan event.GenericEvent, 1)}
+	r.liveWake <- event.GenericEvent{} // the wake buffer is full
+	oldest := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: testNamespace, Name: "oldest"}}
+	newer := reconcile.Request{NamespacedName: client.ObjectKey{Namespace: testNamespace, Name: "newer"}}
+	r.busyWaits.retry("pool", "oldest", oldest, 1)
+	time.Sleep(time.Millisecond)
+	r.busyWaits.retry("pool", "newer", newer, 1)
+	r.wakeWaiter("pool", false)
+	// The oldest waiter's own requeue fires: it keeps its original place.
+	r.busyWaits.retry("pool", "oldest", oldest, 1)
+	<-r.liveWake
+	r.wakeWaiter("pool", false)
+	select {
+	case e := <-r.liveWake:
+		if e.Object.GetName() != oldest.Name {
+			t.Fatalf("woke %s before the longest waiter", e.Object.GetName())
+		}
+	default:
+		t.Fatal("a released slot did not wake a waiter")
 	}
 }
 
@@ -524,6 +613,88 @@ func TestNewEndpointSliceSkipsAForeignHolderOfItsName(t *testing.T) {
 	}
 	if len(list.Items) != 2 || total != 101 {
 		t.Fatalf("got %d slices with %d endpoints", len(list.Items), total)
+	}
+}
+
+// A pass planned against a cache that had not seen a slice it created can
+// publish an endpoint in two slices. The slice's arrival wakes the Service,
+// and that pass keeps the endpoint in one slice only.
+func TestEndpointSliceDuplicateFromStaleCacheIsRemoved(t *testing.T) {
+	svc := newRouteService(testServiceName)
+	w := newAvailableWorkload("ready", svc.Name, testHostID)
+	r := newRouteReconciler(t, svc, w, newHost("ready", testHostID, testPodIP, routeTestPort))
+	runReconcile(t, r, svc.Name)
+	desired := getSlice(t, r, svc.Name).DeepCopy()
+	desired.ResourceVersion = ""
+	desired.Endpoints = nil
+	for i := range 101 {
+		desired.Endpoints = append(desired.Endpoints, discoveryv1.Endpoint{Addresses: []string{fmt.Sprintf("10.0.0.%d", i+1)}})
+	}
+	if err := r.syncSlices(t.Context(), desired); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce the stale pass's result: one endpoint withdrawn, and the
+	// overflow slice's endpoint also packed into the base slice.
+	base, overflow := &discoveryv1.EndpointSlice{}, &discoveryv1.EndpointSlice{}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(desired), base); err != nil {
+		t.Fatal(err)
+	}
+	overflowKey := client.ObjectKey{Namespace: desired.Namespace, Name: endpointSliceName(fmt.Sprintf("%s-%d", desired.Name, 1))}
+	if err := r.Get(t.Context(), overflowKey, overflow); err != nil {
+		t.Fatal(err)
+	}
+	if len(overflow.Endpoints) != 1 {
+		t.Fatalf("overflow slice has %d endpoints", len(overflow.Endpoints))
+	}
+	base.Endpoints = append(base.Endpoints[1:], overflow.Endpoints[0])
+	if err := r.Update(t.Context(), base); err != nil {
+		t.Fatal(err)
+	}
+	desired.Endpoints = desired.Endpoints[1:]
+	if got := managedSliceServiceRequest(t.Context(), overflow); len(got) != 1 || got[0].Name != svc.Name {
+		t.Fatalf("a managed slice event mapped to %v", got)
+	}
+	if err := r.syncSlices(t.Context(), desired); err != nil {
+		t.Fatal(err)
+	}
+	list := &discoveryv1.EndpointSliceList{}
+	if err := r.List(t.Context(), list); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, slice := range list.Items {
+		for _, ep := range slice.Endpoints {
+			if seen[ep.Addresses[0]] {
+				t.Fatalf("endpoint %s still published twice", ep.Addresses[0])
+			}
+			seen[ep.Addresses[0]] = true
+		}
+	}
+	if len(seen) != 100 || len(list.Items) != 1 {
+		t.Fatalf("got %d slices with %d endpoints, want 1 with 100", len(list.Items), len(seen))
+	}
+}
+
+func TestManagedSliceServiceRequestIgnoresOtherControllers(t *testing.T) {
+	svc := newRouteService(testServiceName)
+	svc.UID = "svc-uid"
+	owned := &discoveryv1.EndpointSlice{}
+	owned.Namespace = svc.Namespace
+	owned.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(svc, corev1.SchemeGroupVersion.WithKind("Service"))}
+	// An owned slice without the route-manager label is still ours.
+	if got := managedSliceServiceRequest(t.Context(), owned); len(got) != 1 || got[0].Name != svc.Name {
+		t.Fatalf("unlabeled owned slice mapped to %v", got)
+	}
+	builtin := owned.DeepCopy()
+	builtin.Labels = map[string]string{discoveryv1.LabelManagedBy: "endpointslice-controller.k8s.io"}
+	if got := managedSliceServiceRequest(t.Context(), builtin); len(got) != 0 {
+		t.Fatalf("built-in slice mapped to %v", got)
+	}
+	foreign := &discoveryv1.EndpointSlice{}
+	foreign.Namespace = svc.Namespace
+	foreign.Labels = map[string]string{discoveryv1.LabelServiceName: svc.Name}
+	if got := managedSliceServiceRequest(t.Context(), foreign); len(got) != 0 {
+		t.Fatalf("unmanaged slice mapped to %v", got)
 	}
 }
 

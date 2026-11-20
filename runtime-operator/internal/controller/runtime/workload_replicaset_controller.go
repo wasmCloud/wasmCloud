@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -433,9 +434,10 @@ func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Con
 	return r.deleteReplicaBatch(ctx, replicaSet, victims)
 }
 
-// deleteReplicaBatch deletes up to one batch of victims, lowest names first so
-// every pass chooses the same ones, and requeues while more remain. Scale-down,
-// previous-revision and unhealthy cleanup all delete through it.
+// deleteReplicaBatch deletes up to one batch of victims, unavailable ones
+// first and then lowest names, so every pass chooses the same ones, and
+// requeues while more remain. Scale-down, previous-revision and unhealthy
+// cleanup all delete through it.
 func (r *WorkloadReplicaSetReconciler) deleteReplicaBatch(ctx context.Context, rs *runtimev1alpha1.WorkloadReplicaSet, victims []runtimev1alpha1.Workload) error {
 	if len(victims) == 0 {
 		return nil
@@ -443,12 +445,21 @@ func (r *WorkloadReplicaSetReconciler) deleteReplicaBatch(ctx context.Context, r
 	if err := r.confirmScale(ctx, rs); err != nil {
 		return err
 	}
-	slices.SortFunc(victims, func(a, b runtimev1alpha1.Workload) int { return cmp.Compare(a.Name, b.Name) })
+	slices.SortFunc(victims, func(a, b runtimev1alpha1.Workload) int {
+		if aUp, bUp := a.Status.IsAvailable(), b.Status.IsAvailable(); aUp != bUp {
+			if aUp {
+				return 1
+			}
+			return -1
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
 	count := min(len(victims), r.batchSize())
 	if len(victims) > count {
 		condition.ForceRequeue(ctx)
 	}
 	defer invalidateScaleConfirmation(ctx)
+	var changed atomic.Bool
 	deletes, deleteCtx := errgroup.WithContext(ctx)
 	deletes.SetLimit(r.concurrency())
 	for i := range count {
@@ -457,10 +468,40 @@ func (r *WorkloadReplicaSetReconciler) deleteReplicaBatch(ctx context.Context, r
 			if err := deleteCtx.Err(); err != nil {
 				return err
 			}
-			return deleteObservedObject(deleteCtx, r.Client, workload)
+			spared, err := r.deleteReplica(deleteCtx, workload)
+			if spared {
+				changed.Store(true)
+			}
+			return err
 		})
 	}
-	return deletes.Wait()
+	if err := deletes.Wait(); err != nil {
+		return err
+	}
+	if changed.Load() {
+		condition.ForceRequeue(ctx)
+		return condition.ErrStatusUnknown(fmt.Errorf("a replica changed since it was read; retrying"))
+	}
+	return nil
+}
+
+// deleteReplica deletes a victim chosen from the cache, guarded by its UID and
+// resource version. A conflict means that snapshot was stale: a victim the API
+// shows already deleting, replaced or gone counts as deleted, and one that
+// changed while live is spared so the next pass chooses again from fresh data.
+func (r *WorkloadReplicaSetReconciler) deleteReplica(ctx context.Context, workload *runtimev1alpha1.Workload) (spared bool, err error) {
+	err = deleteObservedObject(ctx, r.Client, workload)
+	if !apierrors.IsConflict(err) || r.APIReader == nil {
+		return false, err
+	}
+	current := &runtimev1alpha1.Workload{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(workload), current); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	if current.UID != workload.UID || !current.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	return true, nil
 }
 
 // isFailedPastGracePeriod reports whether workload is not ready, has failed,

@@ -229,16 +229,16 @@ func (r *WorkloadRouteReconciler) syncSlices(ctx context.Context, desired *disco
 		client.MatchingLabels{discoveryv1.LabelServiceName: desired.Labels[discoveryv1.LabelServiceName]}); err != nil {
 		return err
 	}
+	// A slice another controller manages, such as the built-in one for a
+	// Service with a selector, is never adopted.
+	var ownerUID types.UID
+	if len(desired.OwnerReferences) > 0 {
+		ownerUID = desired.OwnerReferences[0].UID
+	}
 	list := &discoveryv1.EndpointSliceList{Items: make([]discoveryv1.EndpointSlice, 0, len(all.Items))}
 	for i := range all.Items {
-		item := &all.Items[i]
-		owner := metav1.GetControllerOfNoCopy(item)
-		// A slice another controller manages, such as the built-in one for
-		// a Service with a selector, is never adopted.
-		_, managedElsewhere := item.Labels[discoveryv1.LabelManagedBy]
-		ours := owner != nil && len(desired.OwnerReferences) > 0 && owner.UID == desired.OwnerReferences[0].UID && !managedElsewhere
-		if item.Labels[routeManagerLabel] == "true" || ours {
-			list.Items = append(list.Items, *item)
+		if managesSlice(&all.Items[i], ownerUID) {
+			list.Items = append(list.Items, all.Items[i])
 		}
 	}
 	// Read the legacy deterministic name too, so damaged labels can be repaired.
@@ -322,6 +322,40 @@ func freeSliceName(base string, occupied map[string]bool) string {
 			return name
 		}
 	}
+}
+
+// managesSlice reports whether this controller manages slice for the Service
+// with ownerUID: it carries the route-manager label, or that Service controls
+// it and no other controller claims it.
+func managesSlice(slice client.Object, ownerUID types.UID) bool {
+	labels := slice.GetLabels()
+	if labels[routeManagerLabel] == "true" {
+		return true
+	}
+	if _, managedElsewhere := labels[discoveryv1.LabelManagedBy]; managedElsewhere {
+		return false
+	}
+	owner := metav1.GetControllerOfNoCopy(slice)
+	return owner != nil && owner.UID == ownerUID
+}
+
+// managedSliceServiceRequest maps an EndpointSlice this controller manages to
+// its Service. Slices another controller manages map to nothing.
+func managedSliceServiceRequest(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	name := labels[discoveryv1.LabelServiceName]
+	if owner := metav1.GetControllerOfNoCopy(obj); owner != nil && owner.Kind == "Service" && owner.APIVersion == "v1" {
+		if !managesSlice(obj, owner.UID) {
+			return nil
+		}
+		name = owner.Name
+	} else if labels[routeManagerLabel] != "true" {
+		return nil
+	}
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: name}}}
 }
 
 // errSliceNotYetCached means a slice this controller created is not in its
@@ -515,6 +549,11 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Watches(&runtimev1alpha1.Workload{}, coalesce(handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest))).
 		Watches(&corev1.Service{}, coalesce(handler.EnqueueRequestsFromMapFunc(referencedServiceRequest))).
+		// A slice reaching the cache, or changing outside this controller,
+		// gets a pass: one planned against a cache that had not yet seen a
+		// slice it created can publish an endpoint twice, and the next pass
+		// removes the duplicate.
+		Watches(&discoveryv1.EndpointSlice{}, coalesce(handler.EnqueueRequestsFromMapFunc(managedSliceServiceRequest))).
 		Named("workload-route").
 		Complete(r)
 }

@@ -205,11 +205,14 @@ can set the corresponding fields on `EmbeddedOperatorConfig`:
 | `--ready-requeue-interval` | 0 | Healthy-object polling interval; zero retains controller defaults |
 
 ReplicaSet scaling rechecks the parent through an uncached read before each
-batch. Deletes retain UID and resourceVersion preconditions. Scale-down removes
-unavailable children first, then retains a deterministic prefix of the rest,
-and counts terminating children as already selected, so retries do not choose
-extra victims. Each cleanup pass deletes at most one batch: unhealthy-child
-cleanup waits while previous revisions still need more than one batch. Operator-created
+batch. Deletes retain UID and resourceVersion preconditions. A delete that
+conflicts because the cache was stale rereads the child uncached: one already
+deleting or replaced counts as deleted, and one that changed while live is left
+for the next pass to choose again. Scale-down and cleanup remove unavailable
+children first, then a deterministic prefix by name, and count terminating
+children as already selected, so retries do not choose extra victims. Each
+cleanup pass deletes at most one batch: unhealthy-child cleanup waits while
+previous revisions still need more than one batch. Operator-created
 Workloads carry their cleanup finalizer from creation. Failed stops on Ready
 hosts retain the finalizer and back off together. After a failed stop, queued
 cleanup on a Host that is missing or not available (failed, or Unknown after
@@ -219,9 +222,15 @@ Suppression alone never authorizes that shortcut for a Ready Host. A cancelled
 reconcile or a failed Host lookup does not count as a failed stop.
 
 Child and route events coalesce over 100 milliseconds without extending the
-deadline when new events arrive. Routes omit terminating workloads, resolve
+deadline when new events arrive; initial-list events keep their low priority on
+controller-runtime's priority queue. Routes omit terminating workloads, resolve
 each host once per pass, and use EndpointSlices of at most 100 endpoints.
-Existing slice membership is preserved when endpoints disappear.
+Existing slice membership is preserved when endpoints disappear. The route
+controller manages slices that carry its label or that the Service controls
+without another controller's `endpointslice.kubernetes.io/managed-by` label, and
+watches them: a slice that loses its label is adopted and repaired, and an
+endpoint a pass published twice against a stale cache is deduplicated when the
+new slice reaches the cache.
 
 Hosts supporting `workload.status.batch` answer up to 128 status queries in one
 RPC. The operator groups assignments with a local host/bucket index and reuses
@@ -231,10 +240,10 @@ request/reply observations, not an atomic fleet snapshot. Operator restart drops
 the cache and rebuilds it from fresh queries. Hosts that do not answer, or return
 an invalid response, use the existing individual status RPC; batch capability is
 retried after one minute. When a host that answered batches before stops
-answering, that Sync fails without a second timeout and the host is probed again
-on the next one, so a host rolled back to a release without batch support falls
-back instead of failing until its support record expires. An unsupported batch probe can add up to one second
-before fallback; sharing observations can add up to 30 seconds to failure
+answering, that Sync fails without a second timeout and the host is probed
+again on the next one, so a host rolled back to a release without batch support
+falls back instead of failing until its support record expires. An unsupported
+batch probe can add up to one second before fallback; sharing observations can add up to 30 seconds to failure
 detection beyond the configured polling interval. Individual start/stop
 confirmations remain uncached.
 
@@ -242,8 +251,9 @@ The runtime applies the normal status handler to every batch entry, including
 custom authorization. Requests are limited to 128 IDs of at most 128 bytes each;
 diagnostic messages in batch replies are truncated to 1 KiB at a UTF-8 boundary.
 The existing query admission limit also applies to batch requests, and the
-lookups of every batch on a host share one pool of 16, so batching does not
-multiply the number of status handler calls in flight.
+lookups of every batch on a host share one pool the size of that limit (64), so
+batching neither multiplies the status handler calls in flight nor runs a full
+batch slower than the same lookups sent individually.
 
 Use controller-runtime queue/worker metrics and API-server request metrics to
 tune these limits. Measure traffic withdrawal, actual runtime cleanup, and

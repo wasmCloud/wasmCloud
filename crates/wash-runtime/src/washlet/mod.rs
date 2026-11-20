@@ -1875,7 +1875,11 @@ fn workload_start_error(workload_id: &str, message: String) -> types::v2::Worklo
 }
 
 /// Status lookups all `workload.status.batch` requests on a host run at once.
-const STATUS_BATCH_CONCURRENCY: usize = 16;
+/// It matches the query admission limit, so batching never has less lookup
+/// parallelism than the same lookups sent as individual `workload.status`
+/// requests: under a slow status handler, a full batch finishes in the time
+/// those requests would.
+const STATUS_BATCH_CONCURRENCY: usize = MAX_PENDING_QUERIES;
 
 fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatus {
     types::v2::WorkloadStatus {
