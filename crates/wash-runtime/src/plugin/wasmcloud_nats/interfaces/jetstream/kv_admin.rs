@@ -4,7 +4,7 @@
 //! A create is further limited by `bucket-max-bytes` (each bucket's size) and
 //! `bucket-storage-allow` (file, memory, or both).
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_nats::jetstream;
 use async_nats::jetstream::context::{
@@ -90,43 +90,25 @@ impl<T: 'static + Send> labeled_kv_admin::HostWithStore<T> for SharedCtx {
             }
             Err(e) => return Ok(Err(CreateBucketError::Nats(e))),
         };
-        // Open before creating. JetStream's stream create is idempotent and
-        // async-nats drops the server's `did_create`, so a create that
-        // succeeds cannot tell a new bucket from an identical existing one,
-        // and "created" would be logged for every ensure of a live bucket.
-        let store = match conn.jetstream.get_key_value(&bucket).await {
-            Ok(store) => match check_existing(&conn, &requested, store) {
-                Ok(store) => {
+        // Create first, so an ensure needs only `STREAM.CREATE`. The create is
+        // idempotent and async-nats drops the server's `did_create`, so the
+        // returned stream info tells a new bucket from a matching live one.
+        let sent = SystemTime::now();
+        let store = match conn.jetstream.create_key_value(kv_config).await {
+            Ok(store) => {
+                if is_new(&store, sent) {
+                    tracing::info!(bucket, "wasmcloud:nats created KV bucket");
+                } else {
                     tracing::debug!(bucket, "wasmcloud:nats opened existing KV bucket");
-                    store
                 }
-                Err(e) => return Ok(Err(e)),
-            },
-            Err(e) => match bucket_lookup_err(&bucket, e) {
-                types::NatsError::NotFound(_) => {
-                    match conn.jetstream.create_key_value(kv_config).await {
-                        // A concurrent ensure that created the same config
-                        // first also lands here, so two racing callers may
-                        // both log the create.
-                        Ok(store) => {
-                            tracing::info!(bucket, "wasmcloud:nats created KV bucket");
-                            store
-                        }
-                        Err(e) => match classify_create_err(&bucket, e) {
-                            // Created with another config since the lookup.
-                            CreateFailure::Conflict => {
-                                match adopt_existing(&conn, &requested).await {
-                                    Ok(store) => store,
-                                    Err(e) => return Ok(Err(e)),
-                                }
-                            }
-                            CreateFailure::Other(e) => {
-                                return Ok(Err(CreateBucketError::Nats(e)));
-                            }
-                        },
-                    }
-                }
-                other => return Ok(Err(CreateBucketError::Nats(other))),
+                store
+            }
+            Err(e) => match classify_create_err(&bucket, e) {
+                CreateFailure::Conflict => match adopt_existing(&conn, &requested).await {
+                    Ok(store) => store,
+                    Err(e) => return Ok(Err(e)),
+                },
+                CreateFailure::Other(e) => return Ok(Err(CreateBucketError::Nats(e))),
             },
         };
         let resource = accessor.with(|mut a| a.get().table.push(BucketHandle { store, conn }))?;
@@ -183,6 +165,20 @@ async fn read_config(
     ))
 }
 
+/// How far the server's clock may trail the host's before a bucket it has
+/// just created looks older than the request.
+const CLOCK_SKEW: Duration = Duration::from_secs(5);
+
+/// Whether a successful create made the bucket rather than matched a live one.
+///
+/// A bucket that has held a message is not new. An empty one is new when the
+/// server created it after `sent`, within [`CLOCK_SKEW`], so an empty bucket
+/// ensured again inside that window still logs as created.
+fn is_new(store: &jetstream::kv::Store, sent: SystemTime) -> bool {
+    let info = store.stream.cached_info();
+    info.state.last_sequence == 0 && SystemTime::from(info.created) + CLOCK_SKEW >= sent
+}
+
 /// A create that hit an existing bucket: opens it when it matches what the
 /// guest asked for, otherwise hands back what it has.
 async fn adopt_existing(
@@ -197,17 +193,6 @@ async fn adopt_existing(
         .get_key_value(bucket)
         .await
         .map_err(|e| CreateBucketError::Nats(bucket_lookup_err(bucket, e)))?;
-    check_existing(conn, requested, store)
-}
-
-/// Opens an existing bucket when it matches what the guest asked for,
-/// otherwise hands back what it has.
-fn check_existing(
-    conn: &ConnHandle,
-    requested: &kv_admin::BucketConfig,
-    store: jetstream::kv::Store,
-) -> Result<jetstream::kv::Store, CreateBucketError> {
-    let bucket = &requested.bucket;
     let info = store.stream.cached_info();
     let existing = from_stream_config(store.name.clone(), &info.config);
     if !matches_request(&conn.policy, requested, &existing) {

@@ -1373,12 +1373,13 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BucketEvents {
 }
 
 /// Only a create that makes the bucket logs it as created; ensuring a live
-/// bucket, or being refused one, does not.
+/// bucket, or being refused one, does not. The write between the creates
+/// keeps the second off the server's clock.
 #[tokio::test]
 #[ignore = "requires Docker (NATS) or NATS_URL"]
 async fn kv_admin_logs_a_bucket_as_created_only_when_it_is() -> anyhow::Result<()> {
     use kv_admin::CreateBucketError as CreateErr;
-    use labeled_kv::HostBucket as BucketDrop;
+    use labeled_kv::{HostBucket as BucketDrop, HostBucketWithStore as Bucket};
     use labeled_kv_admin::HostWithStore as Admin;
     use tracing::Level;
     use tracing_subscriber::layer::SubscriberExt as _;
@@ -1443,6 +1444,15 @@ async fn kv_admin_logs_a_bucket_as_created_only_when_it_is() -> anyhow::Result<(
                 <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
                     .await?
                     .unwrap();
+            <SharedCtx as Bucket<_>>::put(
+                accessor,
+                admin.clone(),
+                borrow(&created),
+                "k".into(),
+                b"v".to_vec(),
+            )
+            .await?
+            .unwrap();
             let ensured =
                 <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
                     .await?
@@ -1479,5 +1489,84 @@ async fn kv_admin_logs_a_bucket_as_created_only_when_it_is() -> anyhow::Result<(
         ]
     );
     fx.plugin.connections.shutdown().await;
+    Ok(())
+}
+
+/// Credentials that may create a bucket but not read stream info still
+/// create it, and ensure it again.
+#[tokio::test]
+#[ignore = "requires Docker (NATS)"]
+async fn kv_admin_creates_without_stream_info_permission() -> anyhow::Result<()> {
+    use labeled_kv::HostBucket as BucketDrop;
+    use labeled_kv_admin::HostWithStore as Admin;
+    let name = format!("CONTRACT-{}", uuid::Uuid::new_v4().simple());
+    let server = NatsServer::with_config(&format!(
+        r#"
+listen: 0.0.0.0:4222
+jetstream {{ store_dir: "/tmp/js" }}
+authorization {{
+  users: [{{
+    user: creator, password: creator,
+    permissions: {{
+      publish: {{ allow: ["$JS.API.INFO", "$JS.API.STREAM.CREATE.KV_{name}"], deny: ["$JS.API.STREAM.INFO.>"] }},
+      subscribe: {{ allow: [">"] }}
+    }}
+  }}]
+}}
+"#
+    ))
+    .await?;
+    let plugin = Arc::new(WasmcloudNats::new());
+    let creator = acquire(
+        &plugin,
+        "workload",
+        "creator",
+        &NatsConfig::from_map(&crate::wit::Config::from([
+            ("servers", server.url.clone()),
+            ("username", "creator".into()),
+            ("password", "creator".into()),
+            ("bucket-allow", name.clone()),
+            ("bucket-create-allow", name.clone()),
+            ("bucket-max-bytes", "1048576".into()),
+            ("bucket-storage-allow", "memory".into()),
+            ("request-timeout-ms", "1000".into()),
+        ]))?,
+    )
+    .await?;
+    let config = kv_admin::BucketConfig {
+        bucket: name.clone(),
+        history: 1,
+        max_age_ms: 0,
+        max_bytes: 0,
+        max_value_size: 0,
+        storage: kv_admin::StorageType::Memory,
+        limit_marker_ttl_ms: None,
+    };
+    let mut store = new_store("workload", Some(&plugin))?;
+    let ran = tokio::time::timeout(
+        Duration::from_secs(60),
+        store.run_concurrent(async |store_accessor| {
+            let host_accessor = store_accessor.with_getter::<SharedCtx>(extract_active_ctx);
+            let accessor = &host_accessor;
+            for _ in 0..2 {
+                let handle = <SharedCtx as Admin<_>>::create_bucket(
+                    accessor,
+                    creator.clone(),
+                    config.clone(),
+                )
+                .await?
+                .unwrap_or_else(|e| panic!("create without stream info failed: {e:?}"));
+                sync_call!(store_accessor, |active| BucketDrop::drop(
+                    &mut active,
+                    creator.clone(),
+                    handle
+                ))?;
+            }
+            Ok::<_, wasmtime::Error>(())
+        }),
+    )
+    .await?;
+    finished(ran)?;
+    plugin.connections.shutdown().await;
     Ok(())
 }
