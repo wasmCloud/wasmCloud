@@ -1,10 +1,9 @@
 //! Port allowlist for reaching the machine's own loopback.
 //!
-//! Through raw `wasi:sockets`, `127.0.0.1` means the guest's virtual network, not the machine the
+//! A guest's `127.0.0.1` means its own virtual network, not the machine the
 //! host runs on. `host.wasmcloud.internal` names the machine — the Docker
 //! `host.docker.internal` idea — and this allowlist is what decides whether a
 //! given guest may go through that door, and to which ports.
-//! HTTP and gRPC also accept explicit loopback literals with the same grants.
 //!
 //! # Accepted forms
 //!

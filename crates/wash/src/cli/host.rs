@@ -829,13 +829,13 @@ pub struct HostCommand {
     pub wasi_otel: bool,
 
     /// Let workloads and plugins reach the machine's own loopback through
-    /// `host.wasmcloud.internal` (or explicit `127.0.0.1` / `::1` HTTP and gRPC destinations).
+    /// `host.wasmcloud.internal`.
     ///
     /// Off by default. A guest also needs its own `allowedHostLoopbackPorts` entry
     /// naming the port, so neither the operator nor the workload author can
-    /// open this door alone. HTTP and gRPC also require `allowedHosts` to
-    /// permit the name and a TCP port grant. For raw sockets, `127.0.0.1`
-    /// keeps meaning the guest's own virtual network.
+    /// open this door alone. HTTP and gRPC need a TCP port grant, and no
+    /// `allowedHosts` entry. For raw sockets, `127.0.0.1` keeps meaning the
+    /// guest's own virtual network.
     #[arg(long = "allow-host-loopback", default_value_t = false)]
     pub allow_host_loopback: bool,
 
@@ -1513,6 +1513,7 @@ impl CliCommand for HostCommand {
             egress_addrs: wash_runtime::host::egress_policy::EgressAddressPolicy {
                 deny_special: self.deny_special_ranges,
                 allow_private: !self.deny_private_ranges,
+                allow_loopback: false,
             },
             quotas: Some(Arc::clone(&quotas)),
             // Published as metrics, so the socket policy's would-deny counters

@@ -139,7 +139,7 @@ curl localhost:8000
 For a full walkthrough (component development, persistent storage, Kubernetes deployment), see [wasmcloud.com/docs/quickstart](https://wasmcloud.com/docs/quickstart).
 
 Outbound HTTP and gRPC apply the host's address policy after resolving a permitted hostname.
-For local backends, use `host.wasmcloud.internal`, `127.0.0.1`, or `::1` with an explicit port grant;
+For local backends, use `host.wasmcloud.internal` with an `allowedHostLoopbackPorts` grant (no `allowedHosts` entry needed);
 see the [HTTP egress breaking-change release note](docs/release-notes/http-egress-address-policy.md) for migration instructions, including `wash dev`.
 
 ## The platform

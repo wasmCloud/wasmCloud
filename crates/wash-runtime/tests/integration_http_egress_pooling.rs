@@ -82,11 +82,7 @@ impl UpstreamStats {
 /// Keep-alive HTTP/1.1 server that records [`UpstreamStats`] and answers every
 /// request with `200 ok`.
 async fn spawn_counting_server() -> Result<(std::net::SocketAddr, UpstreamStats)> {
-    spawn_counting_server_on("127.0.0.1:0").await
-}
-
-async fn spawn_counting_server_on(bind: &str) -> Result<(std::net::SocketAddr, UpstreamStats)> {
-    let listener = tokio::net::TcpListener::bind(bind).await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let stats = UpstreamStats::new();
     let accept_stats = stats.clone();
@@ -176,10 +172,6 @@ fn egress_workload_with(
     max_concurrency: i32,
 ) -> WorkloadStartRequest {
     let upstream: std::net::SocketAddr = allowed_host.parse().expect("upstream address");
-    let allowed: wash_runtime::host::allowed_hosts::AllowedHost =
-        format!("host.wasmcloud.internal:{}", upstream.port())
-            .parse()
-            .expect("test gave an invalid allowed_hosts entry");
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
@@ -197,7 +189,9 @@ fn egress_workload_with(
                     config: HashMap::new(),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
-                    allowed_hosts: vec![allowed].into(),
+                    // The port grant alone is the spec's grant for
+                    // `host.wasmcloud.internal`; no `allowedHosts` entry.
+                    allowed_hosts: Arc::default(),
                     allowed_ip_name_lookups: Default::default(),
                     allowed_host_loopback_ports: vec![AllowedLoopbackPort::tcp(upstream.port())]
                         .into(),
@@ -225,57 +219,6 @@ fn egress_workload_with(
 }
 
 #[tokio::test]
-async fn literal_loopback_reuses_connections_and_keeps_the_original_allowlist() -> Result<()> {
-    for (bind, authority) in [
-        ("127.0.0.1:0", "127.0.0.1"),
-        ("[::1]:0", "[::1]"),
-        ("127.0.0.1:0", "[::ffff:127.0.0.1]"),
-    ] {
-        let (upstream, stats) = spawn_counting_server_on(bind).await?;
-        let (ingress, host) = start_host().await?;
-        let target = format!("{authority}:{}", upstream.port());
-        let mut workload = egress_workload("literal-loopback", &target);
-        workload.workload.components[0]
-            .local_resources
-            .allowed_hosts = vec![target.parse()?].into();
-        host.workload_start(workload).await?;
-        let client = reqwest::Client::new();
-        for _ in 0..5 {
-            let response = client
-                .get(format!("http://{ingress}/fetch?target={target}"))
-                .header("HOST", "test")
-                .send()
-                .await?;
-            let status = response.status();
-            let body = response.text().await?;
-            assert_eq!(status, 200, "{body}");
-            assert!(body.contains("upstream 200"), "{body}");
-        }
-        // A port grant does not make the two authorities interchangeable in
-        // allowedHosts, even when a connection to the backend is already pooled.
-        let response = client
-            .get(format!(
-                "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
-                upstream.port()
-            ))
-            .header("HOST", "test")
-            .send()
-            .await?;
-        assert_eq!(response.status(), 502);
-        assert_eq!(
-            stats.opened(),
-            1,
-            "literal requests should reuse a connection"
-        );
-        host.workload_stop(WorkloadStopRequest {
-            workload_id: "literal-loopback".into(),
-        })
-        .await?;
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
     let (upstream, stats) = spawn_counting_server().await?;
     let (ingress, host) = start_host().await?;
@@ -283,24 +226,59 @@ async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
     workload.workload.components[0]
         .local_resources
         .allowed_host_loopback_ports = Arc::default();
+    // An allow-all `allowedHosts` does not stand in for the port grant.
     workload.workload.components[0]
         .local_resources
         .allowed_hosts = vec!["*".parse()?].into();
     host.workload_start(workload).await?;
-    for target in [
-        format!("host.wasmcloud.internal:{}", upstream.port()),
-        upstream.to_string(),
-    ] {
-        let response = reqwest::Client::new()
-            .get(format!("http://{ingress}/fetch?target={target}"))
-            .header("HOST", "test")
-            .send()
-            .await?;
-        assert_eq!(response.status(), 502);
-    }
+    let response = reqwest::Client::new()
+        .get(format!(
+            "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
+            upstream.port()
+        ))
+        .header("HOST", "test")
+        .send()
+        .await?;
+    assert_eq!(response.status(), 502);
     assert_eq!(stats.opened.load(Ordering::SeqCst), 0);
     host.workload_stop(WorkloadStopRequest {
         workload_id: "without-loopback-grant".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+/// The port grant admits `host.wasmcloud.internal` on that port only. It does
+/// not open the component's `allowedHosts` to anything else, including the
+/// same backend under its loopback address.
+#[tokio::test]
+async fn host_loopback_port_grant_does_not_widen_allowed_hosts() -> Result<()> {
+    let (upstream, stats) = spawn_counting_server().await?;
+    let (other, other_stats) = spawn_counting_server().await?;
+    let (ingress, host) = start_host().await?;
+    host.workload_start(egress_workload("grant-scope", &upstream.to_string()))
+        .await?;
+    let client = reqwest::Client::new();
+    let fetch = |target: String| {
+        client
+            .get(format!("http://{ingress}/fetch?target={target}"))
+            .header("HOST", "test")
+            .send()
+    };
+    let response = fetch(format!("host.wasmcloud.internal:{}", upstream.port())).await?;
+    assert_eq!(response.status(), 200, "{}", response.text().await?);
+    for target in [
+        format!("host.wasmcloud.internal:{}", other.port()),
+        upstream.to_string(),
+        format!("localhost:{}", upstream.port()),
+    ] {
+        let response = fetch(target.clone()).await?;
+        assert_eq!(response.status(), 502, "{target} must stay refused");
+    }
+    assert_eq!(stats.opened.load(Ordering::SeqCst), 1);
+    assert_eq!(other_stats.opened.load(Ordering::SeqCst), 0);
+    host.workload_stop(WorkloadStopRequest {
+        workload_id: "grant-scope".into(),
     })
     .await?;
     Ok(())
