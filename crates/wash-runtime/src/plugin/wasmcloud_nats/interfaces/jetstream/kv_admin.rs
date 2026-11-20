@@ -4,7 +4,7 @@
 //! A create is further limited by `bucket-max-bytes` (each bucket's size) and
 //! `bucket-storage-allow` (file, memory, or both).
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use async_nats::jetstream;
 use async_nats::jetstream::context::{
@@ -91,16 +91,11 @@ impl<T: 'static + Send> labeled_kv_admin::HostWithStore<T> for SharedCtx {
             Err(e) => return Ok(Err(CreateBucketError::Nats(e))),
         };
         // Create first, so an ensure needs only `STREAM.CREATE`. The create is
-        // idempotent and async-nats drops the server's `did_create`, so the
-        // returned stream info tells a new bucket from a matching live one.
-        let sent = SystemTime::now();
+        // idempotent and async-nats drops the server's `did_create`, so a
+        // success may be a new bucket or a matching live one.
         let store = match conn.jetstream.create_key_value(kv_config).await {
             Ok(store) => {
-                if is_new(&store, sent) {
-                    tracing::info!(bucket, "wasmcloud:nats created KV bucket");
-                } else {
-                    tracing::debug!(bucket, "wasmcloud:nats opened existing KV bucket");
-                }
+                tracing::debug!(bucket, "wasmcloud:nats ensured KV bucket");
                 store
             }
             Err(e) => match classify_create_err(&bucket, e) {
@@ -163,20 +158,6 @@ async fn read_config(
         store.name.clone(),
         &store.stream.cached_info().config,
     ))
-}
-
-/// How far the server's clock may trail the host's before a bucket it has
-/// just created looks older than the request.
-const CLOCK_SKEW: Duration = Duration::from_secs(5);
-
-/// Whether a successful create made the bucket rather than matched a live one.
-///
-/// A bucket that has held a message is not new. An empty one is new when the
-/// server created it after `sent`, within [`CLOCK_SKEW`], so an empty bucket
-/// ensured again inside that window still logs as created.
-fn is_new(store: &jetstream::kv::Store, sent: SystemTime) -> bool {
-    let info = store.stream.cached_info();
-    info.state.last_sequence == 0 && SystemTime::from(info.created) + CLOCK_SKEW >= sent
 }
 
 /// A create that hit an existing bucket: opens it when it matches what the
