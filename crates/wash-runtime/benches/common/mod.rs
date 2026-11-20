@@ -172,7 +172,11 @@ pub async fn start_backend_host(flavor: Flavor) -> anyhow::Result<BenchHost> {
 /// Start a host running the `svc-http-proxy` service workload. Loopback
 /// egress is allowed so the routed benchmarks can reach a backend host.
 pub async fn start_service_host() -> anyhow::Result<BenchHost> {
-    start_host_and_workload(|host| Workload {
+    start_host_and_workload(service_workload).await
+}
+
+pub fn service_workload(host: &str) -> Workload {
+    Workload {
         namespace: "bench".to_string(),
         name: "bench-service".to_string(),
         annotations: HashMap::new(),
@@ -188,8 +192,7 @@ pub async fn start_service_host() -> anyhow::Result<BenchHost> {
         components: vec![],
         host_interfaces: http_host_interfaces(host),
         volumes: vec![],
-    })
-    .await
+    }
 }
 
 pub fn bench_client() -> reqwest::Client {

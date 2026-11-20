@@ -37,6 +37,7 @@ on:
         options:
           - http_invoke
           - service_http
+          - service_init
           - gungraun
           - wasmtime_baseline
           - wasmtime_serve
