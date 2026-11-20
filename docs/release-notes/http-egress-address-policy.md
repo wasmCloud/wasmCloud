@@ -5,7 +5,7 @@ The default enforcing policy blocks loopback, link-local addresses (including cl
 even when `allowedHosts` permits the hostname or address literal.
 Requests to a prohibited address return `DestinationIpProhibited`,
 and the host logs a warning; for a loopback address, the warning names the fix below.
-This affects `wash host` and embedded hosts. `wash dev` keeps reaching `localhost` (see below).
+This affects `wash host`, embedded hosts, and `wash dev`.
 
 ## Reaching a backend on the host's loopback
 
@@ -21,6 +21,7 @@ workload:
 ```
 
 The operator's half is `wash host --allow-host-loopback`, or `networking.allowHostLoopback: true` on the chart's applicable `runtime.hostGroups` entry.
+`wash dev` already enables the operator's half; the component still needs its port grant.
 A request needs both halves. An absent grant, the wrong port or transport, or a port owned by the host is refused.
 Each component's grant is checked on every request, including reuse of a workload's pooled connection.
 HTTP, HTTPS, pooled gRPC, and the gRPC fallback use this route.
@@ -32,12 +33,4 @@ a loopback grant does not permit them to reach loopback or metadata addresses.
 `--socket-egress=count` counts ordinary address-policy refusals without enforcing them,
 but the explicit host-loopback route still requires both grants and refuses host-owned ports.
 
-## `wash dev`
-
-`wash dev` lets HTTP and gRPC reach the developer's loopback directly, so `http://localhost:3000` keeps working with no port grant.
-Link-local and metadata addresses stay refused, and so do the ports the dev session itself listens on.
-`host.wasmcloud.internal` also works in `wash dev` with an `allowedHostLoopbackPorts` grant;
-use it to write a project that runs unchanged on `wash host` and in Kubernetes.
-
-Embedded hosts can opt into the same behaviour with `EgressAddressPolicy { allow_loopback: true, .. }`.
 Raw `wasi:sockets` loopback is unaffected: it remains the workload's virtual network.
