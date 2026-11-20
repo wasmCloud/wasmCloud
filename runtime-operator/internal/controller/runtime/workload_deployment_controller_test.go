@@ -23,6 +23,7 @@ import (
 const (
 	testNamespace      = "wasmcloud-system"
 	testDeploymentName = "messaging-echo"
+	testDeploymentUID  = "wd-uid"
 	testReplicaSetName = "messaging-echo-current"
 	testPrevSetName    = "messaging-echo-prev"
 )
@@ -51,7 +52,7 @@ func readyDeployment(prevSetName string) *runtimev1alpha1.WorkloadDeployment {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: testNamespace,
 			Name:      testDeploymentName,
-			UID:       "wd-uid",
+			UID:       testDeploymentUID,
 		},
 		Spec: runtimev1alpha1.WorkloadDeploymentSpec{
 			WorkloadReplicaSetSpec: runtimev1alpha1.WorkloadReplicaSetSpec{
@@ -95,7 +96,7 @@ func baseReplicaSet(name string) *runtimev1alpha1.WorkloadReplicaSet {
 				Kind:       "WorkloadDeployment",
 				Name:       testDeploymentName,
 				Controller: ptrTrue(),
-				UID:        "wd-uid",
+				UID:        testDeploymentUID,
 			}},
 		},
 		Spec: runtimev1alpha1.WorkloadReplicaSetSpec{
@@ -151,28 +152,30 @@ func newScaleReconciler(t *testing.T, objs ...client.Object) *WorkloadDeployment
 func newScaleReconcilerWith(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) *WorkloadDeploymentReconciler {
 	t.Helper()
 	s := newScaleTestScheme(t)
-
-	// Mirror SetupWithManager's index, reconcileScale's List() call uses
-	// it to find sibling ReplicaSets to clean up.
-	deploymentGvk, err := gvkForType(&runtimev1alpha1.WorkloadDeployment{}, s)
-	if err != nil {
-		t.Fatalf("gvk: %v", err)
-	}
-
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithIndex(&runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentOwnerIndex,
-			func(obj client.Object) []string {
-				if ownerUID, ok := controllerUID(obj, deploymentGvk); ok {
-					return []string{ownerUID}
-				}
-				return nil
-			}).
+		WithIndex(&runtimev1alpha1.WorkloadReplicaSet{}, workloadDeploymentOwnerIndex, replicaSetOwnerIndex(t, s)).
 		WithInterceptorFuncs(funcs).
 		Build()
 
 	return &WorkloadDeploymentReconciler{Client: c, Scheme: s}
+}
+
+// replicaSetOwnerIndex mirrors SetupWithManager's index; reconcileScale's
+// List() call uses it to find sibling ReplicaSets to clean up.
+func replicaSetOwnerIndex(t *testing.T, s *runtime.Scheme) client.IndexerFunc {
+	t.Helper()
+	deploymentGvk, err := gvkForType(&runtimev1alpha1.WorkloadDeployment{}, s)
+	if err != nil {
+		t.Fatalf("gvk: %v", err)
+	}
+	return func(obj client.Object) []string {
+		if ownerUID, ok := controllerUID(obj, deploymentGvk); ok {
+			return []string{ownerUID}
+		}
+		return nil
+	}
 }
 
 // Deleting and re-applying a Deployment reuses its name. The old ReplicaSets

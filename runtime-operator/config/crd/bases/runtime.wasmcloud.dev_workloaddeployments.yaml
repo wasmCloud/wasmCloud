@@ -858,6 +858,12 @@ spec:
                   current replica count. Mirrors .status.replicas.current as a flat int.
                 format: int32
                 type: integer
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the generation the Ready condition was last found
+                  True for. Clients such as `kubectl wait` compare it with metadata.generation.
+                format: int64
+                type: integer
               previousReplicaSet:
                 description: |-
                   LocalObjectReference contains enough information to let you locate the

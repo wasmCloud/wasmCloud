@@ -47,6 +47,10 @@ type WorkloadDeploymentSpec struct {
 // WorkloadDeploymentStatus defines the observed state of WorkloadDeployment.
 type WorkloadDeploymentStatus struct {
 	condition.ConditionedStatus `json:",inline"`
+	// ObservedGeneration is the generation the Ready condition was last found
+	// True for. Clients such as `kubectl wait` compare it with metadata.generation.
+	// +kubebuilder:validation:Optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +kubebuilder:validation:Optional
 	CurrentReplicaSet *corev1.LocalObjectReference `json:"currentReplicaSet,omitempty"`
 	// +kubebuilder:validation:Optional
