@@ -3472,6 +3472,8 @@ impl UnresolvedWorkload {
             .map(|(id, component)| (id.clone(), Arc::from(component.name()), component.world()))
             .collect();
 
+        let service_world = self.service.as_ref().map(|service| service.world());
+
         // A component named after a declared `hostInterfaces` label shadows it.
         // The host wins (see `served_within_workload`), but the manifest reads
         // as though the component should serve that label. Only worth saying
@@ -3493,10 +3495,9 @@ impl UnresolvedWorkload {
             let imported = component_worlds
                 .iter()
                 .any(|(_, _, world)| imports_under_label(entry, world, label))
-                || self
-                    .service
+                || service_world
                     .as_ref()
-                    .is_some_and(|s| imports_under_label(entry, &s.world(), label));
+                    .is_some_and(|world| imports_under_label(entry, world, label));
             if shadowed && imported {
                 warn!(
                     label,
@@ -3506,18 +3507,16 @@ impl UnresolvedWorkload {
             }
         }
 
-        if let Some(service) = self.service.as_ref() {
-            let world = service.world();
-
+        if let Some((service, world)) = self.service.as_ref().zip(service_world.as_ref()) {
             trace!(?world, "comparing service world to host interfaces");
             // An entry this item uses any of, not every name on it: the entry
             // covers what the whole workload uses (see [`WitWorld::uses`]).
             let required_interfaces: HashSet<WitInterface> = host_interfaces
                 .iter()
                 .filter(|wit_interface| world.uses(wit_interface))
-                .filter(|wit_interface| !served_by_host(wit_interface, &world))
+                .filter(|wit_interface| !served_by_host(wit_interface, world))
                 .filter(|wit_interface| {
-                    !served_within_workload(wit_interface, service.id(), &world, &component_worlds)
+                    !served_within_workload(wit_interface, service.id(), world, &component_worlds)
                 })
                 .cloned()
                 .collect();
@@ -3562,14 +3561,13 @@ impl UnresolvedWorkload {
                 if !world.includes_bidirectional(entry) || !p.claims(entry) {
                     continue;
                 }
-                if let Some(service) = &self.service {
-                    let service_world = service.world();
-                    if overrides.imports.iter().any(|o| service_world.uses(o)) {
-                        unmatched_interfaces
-                            .entry(IdFlavor::Service(Arc::from(service.id())))
-                            .or_default()
-                            .insert(entry.clone());
-                    }
+                if let Some((service, world)) = self.service.as_ref().zip(service_world.as_ref())
+                    && overrides.imports.iter().any(|o| world.uses(o))
+                {
+                    unmatched_interfaces
+                        .entry(IdFlavor::Service(Arc::from(service.id())))
+                        .or_default()
+                        .insert(entry.clone());
                 }
                 for (id, _name, component_world) in &component_worlds {
                     if !overrides.imports.iter().any(|o| component_world.uses(o)) {
@@ -3596,7 +3594,6 @@ impl UnresolvedWorkload {
         // `on_workload_item_bind`. Built-in WASI packages are the host's, not a
         // plugin's, and an entry some item already requires (a WASI override's,
         // say) binds through that item.
-        let service_world = self.service.as_ref().map(|service| service.world());
         let mut declared_only: HashSet<WitInterface> = host_interfaces
             .iter()
             .filter(|entry| entry.name.is_some() || !entry.is_host_builtin())
