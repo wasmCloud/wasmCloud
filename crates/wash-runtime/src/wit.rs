@@ -250,9 +250,13 @@ impl WitInterface {
     }
 
     /// Merges another WitInterface into this one, returning a boolean
-    /// indicating whether the merge was successful (aka if the [`WitInterface::instance`]s matched).
+    /// indicating whether the namespace, package, name, and exact version matched.
     pub fn merge(&mut self, other: &WitInterface) -> bool {
-        if self.instance() != other.instance() {
+        if self.namespace != other.namespace
+            || self.package != other.package
+            || self.name != other.name
+            || self.version != other.version
+        {
             return false;
         }
 
@@ -1066,6 +1070,61 @@ mod tests {
 
         // One named, one unnamed => different instances => merge fails
         assert!(!iface1.merge(&iface2));
+    }
+
+    #[test]
+    fn test_merge_exact_identity_and_config() {
+        for (left, right, matches) in [
+            ("wasi:keyvalue", "wasi:keyvalue", true),
+            ("wasi:keyvalue@0.2.0", "wasi:keyvalue@0.2.0", true),
+            (
+                "wasi:keyvalue@0.2.0-rc.1+build.1",
+                "wasi:keyvalue@0.2.0-rc.1+build.1",
+                true,
+            ),
+            ("wasi:keyvalue", "custom:keyvalue", false),
+            ("wasi:keyvalue", "wasi:blobstore", false),
+            ("wasi:keyvalue", "wasi:keyvalue@0.2.0", false),
+            ("wasi:keyvalue@0.2.0", "wasi:keyvalue", false),
+            ("wasi:keyvalue@0.2.0", "wasi:keyvalue@0.2.1", false),
+            (
+                "wasi:keyvalue@0.2.0-rc.1",
+                "wasi:keyvalue@0.2.0-rc.2",
+                false,
+            ),
+            (
+                "wasi:keyvalue@0.2.0+build.1",
+                "wasi:keyvalue@0.2.0+build.2",
+                false,
+            ),
+        ] {
+            let mut target = WitInterface::from(left);
+            target.interfaces.insert("store".into());
+            target.config = [("retained", "original"), ("overridden", "old")].into();
+            let original = target.clone();
+            let mut source = WitInterface::from(right);
+            source.interfaces.insert("atomics".into());
+            source.config = [("overridden", "new"), ("added", "value")].into();
+
+            assert_eq!(target.merge(&source), matches, "{left} / {right}");
+            if matches {
+                assert_eq!(
+                    target.interfaces,
+                    HashSet::from(["store".into(), "atomics".into()])
+                );
+                assert_eq!(
+                    target.config,
+                    [
+                        ("retained", "original"),
+                        ("overridden", "new"),
+                        ("added", "value")
+                    ]
+                    .into()
+                );
+            } else {
+                assert_eq!(target, original);
+            }
+        }
     }
 
     #[test]
