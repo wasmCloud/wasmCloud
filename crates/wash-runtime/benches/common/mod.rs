@@ -117,7 +117,7 @@ pub async fn start_host_and_workload(
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();
 
-    // Benchmark peers use scoped host-loopback grants under the default policy.
+    // The host side of the loopback grant; each workload names its own port.
     let engine = Engine::builder()
         .with_socket_policy(Arc::new(SocketPolicy {
             host_loopback_enabled: true,
@@ -178,8 +178,9 @@ pub async fn start_backend_host(flavor: Flavor) -> anyhow::Result<BenchHost> {
     .await
 }
 
-/// Start a host running the `svc-http-proxy` service workload. Loopback
-/// egress is allowed so the routed benchmarks can reach a backend host.
+/// Start a host running the `svc-http-proxy` service workload. With a
+/// `backend`, the service is granted that port on the host's loopback so the
+/// routed benchmarks can reach it as `host.wasmcloud.internal`.
 pub async fn start_service_host(
     backend: Option<std::net::SocketAddr>,
 ) -> anyhow::Result<BenchHost> {
@@ -191,10 +192,8 @@ pub async fn start_service_host(
             digest: None,
             bytes: bytes::Bytes::from_static(HTTP_SVC_PROXY_WASM),
             local_resources: LocalResources {
-                allowed_hosts: backend
-                    .map(|addr| addr.to_string().parse().expect("valid allowed host"))
-                    .into_iter()
-                    .collect(),
+                // The port grant is the whole spec-side grant for
+                // `host.wasmcloud.internal`; no `allowedHosts` entry needed.
                 allowed_host_loopback_ports: backend
                     .map(|addr| AllowedLoopbackPort::tcp(addr.port()))
                     .into_iter()
@@ -230,7 +229,12 @@ pub async fn service_request(
 ) -> anyhow::Result<bytes::Bytes> {
     let mut req = client.get(format!("http://{addr}/"));
     if let Some(backend) = backend {
-        req = req.header("x-backend", backend.to_string());
+        // The backend listens on this machine's loopback, which a guest
+        // reaches by name under the default address policy.
+        req = req.header(
+            "x-backend",
+            format!("host.wasmcloud.internal:{}", backend.port()),
+        );
     }
     tokio::time::timeout(REQUEST_TIMEOUT, async {
         let resp = req.send().await?;

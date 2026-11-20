@@ -583,7 +583,16 @@ struct CtxHttpHooks {
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
     warned_unserved: bool,
+    /// Set once this store has explained a refused `host.wasmcloud.internal`
+    /// request, so a guest retrying it does not repeat the explanation.
+    warned_host_loopback: bool,
 }
+
+/// The allowlist handed on for a request to `host.wasmcloud.internal` that has
+/// already passed its component's host-loopback grant. The request's URI is
+/// fixed by then, so this permits only that request.
+static HOST_LOOPBACK_GRANTED: std::sync::LazyLock<Arc<[AllowedHost]>> =
+    std::sync::LazyLock::new(|| Arc::from([AllowedHost::Any]));
 
 impl WasiHttpHooks for CtxHttpHooks {
     fn send_request(
@@ -595,6 +604,13 @@ impl WasiHttpHooks for CtxHttpHooks {
         // Check the active component on every request, before a pooled socket
         // can be reused by another component in the same workload. The socket
         // policy owns both halves of the grant and the host's reservations.
+        //
+        // That grant is the spec's whole say over this destination, as it is
+        // for raw sockets: `allowedHostLoopbackPorts` names the port, and the
+        // host's `--allow-host-loopback` is the operator's half. Requiring an
+        // `allowedHosts` entry for the same port as well would only make the
+        // spec say it twice, so a granted request skips that list.
+        let mut allowed_hosts = &self.allowed_hosts;
         if let Some(host) = request.uri().host()
             && let Some(target) = crate::host::http_client::host_loopback_addr(
                 host,
@@ -606,29 +622,35 @@ impl WasiHttpHooks for CtxHttpHooks {
                 }),
             )
         {
-            let sentinel_ip = crate::sockets::internal_names::HOST_SENTINEL;
-            let sentinel_ip = if target.is_ipv6() {
-                std::net::IpAddr::V6(sentinel_ip.to_ipv6_mapped())
-            } else {
-                sentinel_ip.into()
-            };
-            let sentinel = std::net::SocketAddr::new(sentinel_ip, target.port());
+            let sentinel = std::net::SocketAddr::new(
+                crate::sockets::internal_names::HOST_SENTINEL.into(),
+                target.port(),
+            );
             let allowed = self
                 .socket_addr_check
                 .check(sentinel, crate::sockets::SocketAddrUse::TcpConnect);
             if !matches!(allowed, Ok(allowed) if allowed.plane == crate::sockets::Plane::Host && allowed.addr == target)
             {
+                if !self.warned_host_loopback {
+                    self.warned_host_loopback = true;
+                    tracing::warn!(
+                        workload_id = %self.workload_id,
+                        port = target.port(),
+                        "refused an HTTP request to host.wasmcloud.internal: the host must allow \
+                         host loopback (`wash host --allow-host-loopback`, or \
+                         `networking.allowHostLoopback` in the chart) and the component must \
+                         list this TCP port in `allowedHostLoopbackPorts`; a port the host \
+                         itself listens on is never granted"
+                    );
+                }
                 return crate::host::http::deny_request(request);
             }
+            allowed_hosts = &HOST_LOOPBACK_GRANTED;
         }
         match self.host.handler() {
-            Ok(handler) => handler.outgoing_request(
-                &self.workload_id,
-                request,
-                options,
-                fut,
-                &self.allowed_hosts,
-            ),
+            Ok(handler) => {
+                handler.outgoing_request(&self.workload_id, request, options, fut, allowed_hosts)
+            }
             Err(message) => {
                 // The hook cannot trap, so the guest gets a handleable error
                 // and the host gets told once. A guest left calling out to a
@@ -775,6 +797,7 @@ impl CtxBuilder {
             allowed_hosts: self.allowed_hosts,
             socket_addr_check: sockets.socket_addr_check.clone(),
             warned_unserved: false,
+            warned_host_loopback: false,
         };
 
         Ctx {
@@ -835,103 +858,87 @@ mod tests {
             "127.0.0.1:8000".parse()?,
             PortOwner::Host("ingress".into()),
         )?;
-        let _owned_v6 = table.reserve(
-            Protocol::Tcp,
-            "[::1]:8000".parse()?,
-            PortOwner::Host("ingress-v6".into()),
-        )?;
-        for authority in [
-            "host.wasmcloud.internal",
-            "127.0.0.1",
-            "[::1]",
-            "[::ffff:127.0.0.1]",
+        for (enabled, ports, uri, permitted) in [
+            (
+                false,
+                vec![AllowedLoopbackPort::tcp(3000)],
+                "http://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (true, vec![], "http://host.wasmcloud.internal:3000/", false),
+            (
+                true,
+                vec![AllowedLoopbackPort::udp(3000)],
+                "http://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(3001)],
+                "http://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(3000)],
+                "http://host.wasmcloud.internal:3000/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(3000)],
+                "http://HOST.WASMCLOUD.INTERNAL.:3000/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(80)],
+                "http://host.wasmcloud.internal/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(443)],
+                "https://host.wasmcloud.internal/",
+                true,
+            ),
+            (
+                true,
+                vec![AllowedLoopbackPort::tcp(8000)],
+                "http://host.wasmcloud.internal:8000/",
+                false,
+            ),
         ] {
-            for (enabled, ports, uri, permitted) in [
-                (
-                    false,
-                    vec![AllowedLoopbackPort::tcp(3000)],
-                    "http://host.wasmcloud.internal:3000/",
-                    false,
-                ),
-                (true, vec![], "http://host.wasmcloud.internal:3000/", false),
-                (
-                    true,
-                    vec![AllowedLoopbackPort::udp(3000)],
-                    "http://host.wasmcloud.internal:3000/",
-                    false,
-                ),
-                (
-                    true,
-                    vec![AllowedLoopbackPort::tcp(3001)],
-                    "http://host.wasmcloud.internal:3000/",
-                    false,
-                ),
-                (
-                    true,
-                    vec![AllowedLoopbackPort::tcp(3000)],
-                    "http://host.wasmcloud.internal:3000/",
-                    true,
-                ),
-                (
-                    true,
-                    vec![AllowedLoopbackPort::tcp(3000)],
-                    "http://HOST.WASMCLOUD.INTERNAL.:3000/",
-                    true,
-                ),
-                (
-                    true,
-                    vec![AllowedLoopbackPort::tcp(80)],
-                    "http://host.wasmcloud.internal/",
-                    true,
-                ),
-                (
-                    true,
-                    vec![AllowedLoopbackPort::tcp(443)],
-                    "https://host.wasmcloud.internal/",
-                    true,
-                ),
-                (
-                    true,
-                    vec![AllowedLoopbackPort::tcp(8000)],
-                    "http://host.wasmcloud.internal:8000/",
-                    false,
-                ),
-            ] {
-                let policy = Arc::new(SocketPolicy {
-                    host_loopback_enabled: enabled,
-                    host_loopback: ports.into(),
-                    host_owned_ports: Some(Arc::clone(&table)),
-                    ..Default::default()
-                });
-                let sockets = crate::sockets::WasiSocketsCtx::for_store(
-                    policy,
-                    Arc::default(),
-                    Arc::default(),
+            let policy = Arc::new(SocketPolicy {
+                host_loopback_enabled: enabled,
+                host_loopback: ports.into(),
+                host_owned_ports: Some(Arc::clone(&table)),
+                ..Default::default()
+            });
+            let sockets =
+                crate::sockets::WasiSocketsCtx::for_store(policy, Arc::default(), Arc::default());
+            let mut ctx = Ctx::builder("same-workload", "component")
+                .with_sockets(sockets)
+                .build();
+            let request = hyper::Request::builder()
+                .uri(uri)
+                .body(wasmtime_wasi_http::WasiBody::default())?;
+            let result = Box::into_pin(ctx.http_hooks.send_request(
+                request,
+                None,
+                Box::new(async { Ok(()) }),
+            ))
+            .await;
+            if permitted {
+                assert!(
+                    matches!(result, Err(wasmtime_wasi_http::Error::InternalError(_))),
+                    "{uri}: expected dispatch to the missing handler"
                 );
-                let mut ctx = Ctx::builder("same-workload", "component")
-                    .with_sockets(sockets)
-                    .build();
-                let uri = uri.replace("host.wasmcloud.internal", authority);
-                let request = hyper::Request::builder()
-                    .uri(&uri)
-                    .body(wasmtime_wasi_http::WasiBody::default())?;
-                let result = Box::into_pin(ctx.http_hooks.send_request(
-                    request,
-                    None,
-                    Box::new(async { Ok(()) }),
-                ))
-                .await;
-                if permitted {
-                    assert!(
-                        matches!(result, Err(wasmtime_wasi_http::Error::InternalError(_))),
-                        "{uri}: expected dispatch to the missing handler"
-                    );
-                } else {
-                    assert!(
-                        matches!(result, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
-                        "{uri}: expected the port grant to refuse dispatch"
-                    );
-                }
+            } else {
+                assert!(
+                    matches!(result, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
+                    "{uri}: expected the port grant to refuse dispatch"
+                );
             }
         }
         Ok(())

@@ -36,6 +36,16 @@ pub struct EgressAddressPolicy {
     /// Permit RFC1918 / ULA / carrier-grade NAT ranges. On by default: reaching
     /// a sibling service on a private address is the ordinary case.
     pub allow_private: bool,
+    /// Permit the machine's loopback (`127.0.0.0/8`, `::1`) while
+    /// `deny_special` still refuses the other special ranges. Off by default.
+    ///
+    /// For development hosts, where a component calling a backend on
+    /// `localhost` is the ordinary case and every guest belongs to the
+    /// developer. Ports the host itself owns stay refused. Production hosts
+    /// grant loopback per component through `host.wasmcloud.internal` and
+    /// `allowedHostLoopbackPorts` instead. Raw sockets are unaffected: their
+    /// loopback is the guest's virtual network.
+    pub allow_loopback: bool,
 }
 
 impl Default for EgressAddressPolicy {
@@ -43,6 +53,7 @@ impl Default for EgressAddressPolicy {
         Self {
             deny_special: true,
             allow_private: true,
+            allow_loopback: false,
         }
     }
 }
@@ -54,6 +65,7 @@ impl EgressAddressPolicy {
         Self {
             deny_special: false,
             allow_private: true,
+            allow_loopback: true,
         }
     }
 
@@ -64,7 +76,7 @@ impl EgressAddressPolicy {
     #[must_use]
     pub fn permits(&self, addr: IpAddr) -> bool {
         let addr = addr.to_canonical();
-        if self.deny_special && is_special(addr) {
+        if self.deny_special && is_special(addr) && !(self.allow_loopback && addr.is_loopback()) {
             return false;
         }
         if !self.allow_private && is_private(addr) {
@@ -159,11 +171,28 @@ impl EgressAddressGate {
                     if let Some(meters) = &self.meters {
                         meters.record_deny(reason);
                     }
-                    tracing::warn!(
-                        %addr,
-                        reason = reason.as_str(),
-                        "HTTP egress address policy refused a resolved address"
-                    );
+                    if reason == DenyReason::BlockedRange && addr.ip().to_canonical().is_loopback()
+                    {
+                        // The usual cause is a backend addressed as
+                        // `localhost` or `127.0.0.1` from before the address
+                        // policy applied to HTTP. Say how to reach it now.
+                        tracing::warn!(
+                            %addr,
+                            reason = reason.as_str(),
+                            "HTTP egress address policy refused a loopback address; to reach a \
+                             backend on this machine, address it as \
+                             `host.wasmcloud.internal:{port}`, list TCP port {port} in the \
+                             component's `allowedHostLoopbackPorts`, and allow host loopback on \
+                             the host (`wash host --allow-host-loopback`)",
+                            port = addr.port(),
+                        );
+                    } else {
+                        tracing::warn!(
+                            %addr,
+                            reason = reason.as_str(),
+                            "HTTP egress address policy refused a resolved address"
+                        );
+                    }
                     refused.get_or_insert(reason);
                 }
                 EgressMode::Count => {
@@ -415,6 +444,63 @@ mod tests {
         ] {
             assert!(default.permits(ip(private)), "{private} should be allowed");
             assert!(!strict.permits(ip(private)), "{private} should be denied");
+        }
+    }
+
+    #[test]
+    fn allow_loopback_reopens_only_loopback() {
+        let policy = EgressAddressPolicy {
+            allow_loopback: true,
+            ..Default::default()
+        };
+        for loopback in ["127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1"] {
+            assert!(policy.permits(ip(loopback)), "{loopback} should be allowed");
+            assert!(
+                !EgressAddressPolicy::default().permits(ip(loopback)),
+                "{loopback} should stay denied by default"
+            );
+        }
+        for special in [
+            "169.254.169.254",
+            "fd00:ec2::254",
+            "fe80::1",
+            "0.0.0.0",
+            "::",
+            "224.0.0.1",
+        ] {
+            assert!(!policy.permits(ip(special)), "{special} should be denied");
+        }
+    }
+
+    #[test]
+    fn a_loopback_gate_still_refuses_host_owned_ports() {
+        let table = PortTable::new();
+        let owned: SocketAddr = "127.0.0.1:8000".parse().unwrap();
+        let _owned = table
+            .reserve(
+                Protocol::Tcp,
+                owned,
+                crate::host::ports::PortOwner::Host("ingress".into()),
+            )
+            .unwrap();
+        let gate = EgressAddressGate::from_socket_policy(&SocketPolicy {
+            egress_addrs: EgressAddressPolicy {
+                allow_loopback: true,
+                ..Default::default()
+            },
+            host_owned_ports: Some(table),
+            ..Default::default()
+        });
+        assert_eq!(
+            gate.filter(["127.0.0.1:3000".parse().unwrap()]).unwrap(),
+            ["127.0.0.1:3000".parse::<SocketAddr>().unwrap()]
+        );
+        for refused in ["127.0.0.1:8000", "[::1]:8000"] {
+            assert_eq!(
+                gate.filter([refused.parse().unwrap()]),
+                Err(EgressRefused(DenyReason::HostOwnedPort)),
+                "{refused}"
+            );
         }
     }
 
