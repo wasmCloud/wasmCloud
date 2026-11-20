@@ -30,6 +30,9 @@ type HostResolver interface {
 type HostRegistry interface {
 	RegisterHost(ctx context.Context, key types.NamespacedName, hostID string, hostname string, port int) error
 	DeregisterHost(ctx context.Context, key types.NamespacedName) error
+	// SuspendHost stops traffic to a host that is not Ready but keeps its
+	// workload routes, so they serve again when the host is Ready.
+	SuspendHost(ctx context.Context, key types.NamespacedName) error
 }
 
 // WorkloadRegistry tracks which workloads serve which hostname. As with
@@ -92,43 +95,28 @@ func (ht *HostTracker) Resolve(ctx context.Context, req *http.Request) LookupRes
 		}
 	}
 
-	if workloads.Len() == 0 {
-		scheme, endpoint := ht.Fallback.NoWorkloads(req.Host)
+	// pick a random workload whose host takes traffic; a suspended host has
+	// no entry in ht.hosts
+	for workloadID := range workloads {
+		hostID, ok := ht.workloads[workloadID]
+		if !ok {
+			continue
+		}
+		hostname, ok := ht.hosts[hostID]
+		if !ok {
+			continue
+		}
 		return LookupResult{
-			Hostname: endpoint,
-			Scheme:   scheme,
+			Hostname:   hostname,
+			Scheme:     "http",
+			WorkloadID: workloadID,
 		}
 	}
 
-	// pick a random workload
-	workloadID := workloads.UnsortedList()[0]
-
-	// find the host for the workload
-	// (should always exist if the workload exists)
-	hostID, ok := ht.workloads[workloadID]
-	if !ok {
-		scheme, endpoint := ht.Fallback.NoWorkloads(req.Host)
-		return LookupResult{
-			Hostname: endpoint,
-			Scheme:   scheme,
-		}
-	}
-
-	// find the hostname:port for the host
-	// (should always exist if the host is healthy)
-	hostname, ok := ht.hosts[hostID]
-	if !ok {
-		scheme, endpoint := ht.Fallback.NoWorkloads(req.Host)
-		return LookupResult{
-			Hostname: endpoint,
-			Scheme:   scheme,
-		}
-	}
-
+	scheme, endpoint := ht.Fallback.NoWorkloads(req.Host)
 	return LookupResult{
-		Hostname:   hostname,
-		Scheme:     "http",
-		WorkloadID: workloadID,
+		Hostname: endpoint,
+		Scheme:   scheme,
 	}
 }
 
@@ -158,6 +146,16 @@ func (ht *HostTracker) DeregisterHost(ctx context.Context, key types.NamespacedN
 	}
 	delete(ht.hostKeys, key)
 	ht.removeHost(hostID)
+	return nil
+}
+
+func (ht *HostTracker) SuspendHost(ctx context.Context, key types.NamespacedName) error {
+	ht.lock.Lock()
+	defer ht.lock.Unlock()
+
+	if hostID, ok := ht.hostKeys[key]; ok {
+		delete(ht.hosts, hostID)
+	}
 	return nil
 }
 

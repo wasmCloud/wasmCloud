@@ -159,8 +159,8 @@ func (a *HostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			return ctrl.Result{}, err
 		}
 	} else {
-		if err := a.Registry.DeregisterHost(ctx, req.NamespacedName); err != nil {
-			log.Error(err, "failed to deregister host")
+		if err := a.Registry.SuspendHost(ctx, req.NamespacedName); err != nil {
+			log.Error(err, "failed to suspend host")
 			return ctrl.Result{}, err
 		}
 	}

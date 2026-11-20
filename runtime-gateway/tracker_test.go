@@ -227,3 +227,33 @@ func TestHostTrackerWorkloadMovePreservesSharedRoute(t *testing.T) {
 		t.Fatalf("route after host address update = %+v, want %+v", got, want)
 	}
 }
+
+// A suspended host that is then deleted loses its workload routes, as one
+// deleted while Ready does.
+func TestHostTrackerDeregisterSuspendedHostDropsItsWorkloads(t *testing.T) {
+	ctx := t.Context()
+	ht := newHostTracker(testFallback{})
+	hostKey := types.NamespacedName{Namespace: "ns", Name: "host-a"}
+	workloadKey := types.NamespacedName{Namespace: "ns", Name: "workload-a"}
+	if err := ht.RegisterHost(ctx, hostKey, "host-id", "10.0.0.1", 8080); err != nil {
+		t.Fatal(err)
+	}
+	if err := ht.RegisterWorkload(ctx, workloadKey, "host-id", "workload-id", "a.example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ht.SuspendHost(ctx, hostKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := ht.DeregisterHost(ctx, hostKey); err != nil {
+		t.Fatal(err)
+	}
+	if len(ht.workloadKeys) != 0 {
+		t.Errorf("workloadKeys = %v, want the deleted host's workloads dropped", ht.workloadKeys)
+	}
+	if err := ht.RegisterHost(ctx, types.NamespacedName{Namespace: "ns", Name: "host-b"}, "host-id", "10.0.0.2", 8080); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, ht, "a.example"); got.Hostname != fallbackEndpoint {
+		t.Errorf("Resolve() = %+v after the host was deleted, want the fallback", got)
+	}
+}
