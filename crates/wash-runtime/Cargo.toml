@@ -33,7 +33,7 @@ workspace = true
 
 [features]
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements", "wasmcloud-nats"]
-oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:hmac", "dep:wit-component"]
+oci = ["dep:oci-client", "dep:oci-wasm", "dep:reqwest-oci", "dep:docker_credential", "dep:hmac", "dep:wit-component"]
 wasi-otel = []
 washlet = ["oci", "dep:nkeys"]
 wasi-config = []
@@ -153,6 +153,7 @@ opentelemetry-semantic-conventions = { workspace = true, features = ["semconv_ex
 docker_credential = { workspace = true, optional = true }
 nkeys = { workspace = true, optional = true }
 oci-client = { workspace = true, optional = true, features = ["rustls-tls"] }
+reqwest-oci = { workspace = true, optional = true, features = ["rustls", "stream"] }
 oci-wasm = { workspace = true, optional = true, features = ["rustls-tls"] }
 sha2 = { workspace = true }
 wit-component = { workspace = true, optional = true }

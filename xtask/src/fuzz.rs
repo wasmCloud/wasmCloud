@@ -112,8 +112,20 @@ fn prepare_rust(harness: &Path, source: &Path) -> Result<()> {
         let dependency = dependencies
             .get(name)
             .with_context(|| format!("release workspace has no {name} dependency"))?;
-        if dependency.get("path").is_some() || dependency.get("git").is_some() {
-            bail!("cannot stage registry parser dependency {name}: {dependency}");
+        if dependency.get("path").is_some() {
+            bail!("cannot stage local parser dependency {name}: {dependency}");
+        }
+        if dependency.get("git").is_some()
+            && (dependency.get("branch").is_some()
+                || dependency.get("tag").is_some()
+                || !dependency
+                    .get("rev")
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|rev| {
+                        rev.len() == 40 && rev.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    }))
+        {
+            bail!("Git parser dependency {name} must pin a full commit: {dependency}");
         }
         parser_dependencies.insert(name.to_string(), dependency.clone());
     }
@@ -288,6 +300,37 @@ serde_json = "1"
         )?;
         prepare(&harness()?, source.path(), Language::Rust)?;
         assert!(fs::read_to_string(lock)?.contains("1.0.102"));
+        verify_lock(source.path())
+    }
+
+    #[test]
+    fn stages_git_parser_dependencies_only_with_a_full_commit_pin() -> Result<()> {
+        let source = source()?;
+        let registry = "version = \"0.16\"";
+        let git = "git = \"https://github.com/oras-project/rust-oci-client\"";
+        let rev = "bad27c452bee88555b60c9a274fc94b2e1b397f7";
+        for selector in [
+            "",
+            ", branch = \"main\"",
+            ", tag = \"v0.18.0\"",
+            ", rev = \"bad27c45\"",
+        ] {
+            fs::write(
+                source.path().join("Cargo.toml"),
+                RELEASE_MANIFEST.replace(registry, &format!("{git}{selector}")),
+            )?;
+            assert!(prepare(&harness()?, source.path(), Language::Rust).is_err());
+        }
+        fs::write(
+            source.path().join("Cargo.toml"),
+            RELEASE_MANIFEST.replace(registry, &format!("{git}, rev = \"{rev}\"")),
+        )?;
+        prepare(&harness()?, source.path(), Language::Rust)?;
+        let manifest: toml::Value = read_toml(&source.path().join("fuzz/Cargo.toml"))?;
+        assert_eq!(
+            manifest["workspace"]["dependencies"]["oci-client"]["rev"].as_str(),
+            Some(rev)
+        );
         verify_lock(source.path())
     }
 

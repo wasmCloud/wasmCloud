@@ -2,7 +2,7 @@
 
 use std::{io::ErrorKind, time::Duration};
 
-use oci_client::errors::{OciDistributionError, OciErrorCode};
+use oci_client_wit::errors::{OciDistributionError, OciErrorCode};
 use tracing::warn;
 
 pub(super) const WIT_FETCH_MAX_ATTEMPTS: u32 = 3;
@@ -88,7 +88,7 @@ fn is_transient_io_error(error: &std::io::Error) -> bool {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use oci_client::errors::{OciEnvelope, OciError};
+    use oci_client_wit::errors::{OciEnvelope, OciError};
 
     fn registry_fetch_error(error: OciDistributionError) -> anyhow::Error {
         wasm_pkg_client::Error::RegistryError(anyhow::Error::new(error)).into()

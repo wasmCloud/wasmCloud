@@ -68,9 +68,9 @@ figment = { workspace = true, features = ["json", "env", "toml"] }
 flate2 = { workspace = true, features = ["rust_backend"] }
 humansize = { workspace = true }
 humantime = { workspace = true }
-oci-client = { workspace = true }
+oci-client-wit = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
-reqwest-oci = { package = "reqwest", version = "0.13", default-features = false }
+reqwest-oci = { workspace = true }
 sha2 = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
