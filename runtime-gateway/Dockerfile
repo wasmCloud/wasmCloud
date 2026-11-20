@@ -15,6 +15,6 @@ COPY --from=runtime-operator . ../runtime-operator/
 COPY . .
 RUN CGO_ENABLED=0 go build -o /go/bin/runtime-gateway ./
 
-FROM cgr.dev/chainguard/static:latest@sha256:fc42af33e643f20d08baf03cddcc1c02ba57052dfb02edb0d79f3fc47bcea8d9 AS release
+FROM cgr.dev/chainguard/static:latest@sha256:8658e9eaeb2294fa0e49b0667f7d66b4e21fa7690b8d2a4c30cd1d013ceb9eb7 AS release
 COPY --from=builder /go/bin/runtime-gateway /usr/local/bin/runtime-gateway
 ENTRYPOINT ["/usr/local/bin/runtime-gateway"]
