@@ -250,6 +250,10 @@ func (s *statusBatches) query(ctx context.Context, r *WorkloadReconciler, host s
 		if silent {
 			// The host answered batches before; it is not answering anything
 			// now, and the Sync failing says so sooner than a second timeout.
+			// It is no longer proven: the next fetch probes again, and a
+			// host that stopped serving batches (a rollback) then falls back
+			// to the individual status RPC instead of failing every Sync.
+			delete(s.supported, host)
 			return time.Time{}, fmt.Errorf("%w: %w", errHostSilent, err)
 		}
 		// Older hosts do not answer this subject. Retry capability periodically

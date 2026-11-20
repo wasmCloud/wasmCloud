@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -11,8 +12,11 @@ func TestRunRejectsInvalidScalingBounds(t *testing.T) {
 		"--replica-concurrency=-1", "--ready-requeue-interval=-1s",
 	} {
 		t.Run(arg, func(t *testing.T) {
-			if err := runWith(t.Context(), []string{arg}, offlineConfig); err == nil {
-				t.Fatal("accepted invalid scaling bounds")
+			// Assert the scaling refusal itself: run also fails later for
+			// unrelated missing configuration.
+			err := runWith(t.Context(), []string{arg}, offlineConfig)
+			if err == nil || !strings.Contains(err.Error(), "scaling concurrency and batch sizes must be positive") {
+				t.Fatalf("accepted invalid scaling bounds: %v", err)
 			}
 		})
 	}

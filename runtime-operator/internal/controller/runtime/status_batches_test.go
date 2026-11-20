@@ -227,6 +227,15 @@ func TestSilentProvenHostFailsSyncWithoutAnotherTimeout(t *testing.T) {
 	if _, err := s.status(t.Context(), r, w); !errors.Is(err, errHostSilent) {
 		t.Fatalf("silent proven host: %v", err)
 	}
+	// One silent batch unproves the host. A rolled-back host that no longer
+	// serves batches is probed again and falls back rather than failing
+	// every Sync until the support TTL lapses.
+	if got, err := s.status(t.Context(), r, w); got != nil || err != nil {
+		t.Fatalf("silent host was not probed again: %v %v", got, err)
+	}
+	if !time.Now().Before(s.unsupported[batchHost]) {
+		t.Fatal("a failed re-probe did not mark the host unsupported")
+	}
 	// An unproven host that does not answer is an older host: fall back.
 	s = &statusBatches{}
 	if got, err := s.status(t.Context(), r, w); got != nil || err != nil {

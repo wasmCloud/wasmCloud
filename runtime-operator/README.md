@@ -205,9 +205,11 @@ can set the corresponding fields on `EmbeddedOperatorConfig`:
 | `--ready-requeue-interval` | 0 | Healthy-object polling interval; zero retains controller defaults |
 
 ReplicaSet scaling rechecks the parent through an uncached read before each
-batch. Deletes retain UID and resourceVersion preconditions. Scale-down retains
-a deterministic prefix of live children and counts terminating children as
-already selected, so retries do not choose extra victims. Operator-created
+batch. Deletes retain UID and resourceVersion preconditions. Scale-down removes
+unavailable children first, then retains a deterministic prefix of the rest,
+and counts terminating children as already selected, so retries do not choose
+extra victims. Each cleanup pass deletes at most one batch: unhealthy-child
+cleanup waits while previous revisions still need more than one batch. Operator-created
 Workloads carry their cleanup finalizer from creation. Failed stops on Ready
 hosts retain the finalizer and back off together. After a failed stop, queued
 cleanup on a Host that is missing or not available (failed, or Unknown after
@@ -228,7 +230,10 @@ missing or mismatched response entries invalidate the batch. These are bounded
 request/reply observations, not an atomic fleet snapshot. Operator restart drops
 the cache and rebuilds it from fresh queries. Hosts that do not answer, or return
 an invalid response, use the existing individual status RPC; batch capability is
-retried after one minute. An unsupported batch probe can add up to one second
+retried after one minute. When a host that answered batches before stops
+answering, that Sync fails without a second timeout and the host is probed again
+on the next one, so a host rolled back to a release without batch support falls
+back instead of failing until its support record expires. An unsupported batch probe can add up to one second
 before fallback; sharing observations can add up to 30 seconds to failure
 detection beyond the configured polling interval. Individual start/stop
 confirmations remain uncached.

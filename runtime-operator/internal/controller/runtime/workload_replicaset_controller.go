@@ -103,7 +103,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleUp(ctx context.Context, rep
 		return err
 	}
 
-	expectedReplicas := int(*replicaSet.Spec.Replicas)
+	expectedReplicas := max(0, int(*replicaSet.Spec.Replicas))
 
 	// Terminating children keep their names reserved but no longer count as
 	// replicas, as in scale-down. Cleanup is throttled per host, so counting
@@ -237,7 +237,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 
 	expectedReplicas := 0
 	if replicaSet.Spec.Replicas != nil {
-		expectedReplicas = int(*replicaSet.Spec.Replicas)
+		expectedReplicas = max(0, int(*replicaSet.Spec.Replicas))
 	}
 
 	workloads := &runtimev1alpha1.WorkloadList{}
@@ -252,15 +252,25 @@ func (r *WorkloadReplicaSetReconciler) reconcileScaleDown(ctx context.Context, r
 		return err
 	}
 
-	// Terminating replicas already satisfy earlier deletion decisions. Retain
-	// the same lexicographic prefix on every pass, independent of list order.
+	// Terminating replicas already satisfy earlier deletion decisions. Keep
+	// available replicas first, then the lexicographic prefix, so the excess
+	// taken from the end removes unavailable replicas before healthy ones and
+	// is independent of list order.
 	live := make([]runtimev1alpha1.Workload, 0, len(workloads.Items))
 	for _, w := range workloads.Items {
 		if w.DeletionTimestamp.IsZero() {
 			live = append(live, w)
 		}
 	}
-	slices.SortFunc(live, func(a, b runtimev1alpha1.Workload) int { return cmp.Compare(a.Name, b.Name) })
+	slices.SortFunc(live, func(a, b runtimev1alpha1.Workload) int {
+		if aUp, bUp := a.Status.IsAvailable(), b.Status.IsAvailable(); aUp != bUp {
+			if aUp {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
 	excess := len(live) - expectedReplicas
 	if excess <= 0 {
 		return nil
@@ -289,7 +299,7 @@ func (r *WorkloadReplicaSetReconciler) reconcileReady(ctx context.Context, repli
 
 	expectedReplicas := int32(0)
 	if replicaSet.Spec.Replicas != nil {
-		expectedReplicas = *replicaSet.Spec.Replicas
+		expectedReplicas = max(0, *replicaSet.Spec.Replicas)
 	}
 
 	workloads := &runtimev1alpha1.WorkloadList{}
@@ -356,14 +366,23 @@ func (r *WorkloadReplicaSetReconciler) reconcileCleanup(ctx context.Context, rep
 		return nil
 	}
 
-	if err := r.cleanupPreviousRevisionsWorkloads(ctx, replicaSet); err != nil {
-		return err
+	more, err := r.cleanupPreviousRevisionsWorkloads(ctx, replicaSet)
+	if err == nil && !more {
+		// Unhealthy cleanup waits while previous revisions still need more
+		// than this pass's batch, so a pass deletes at most one batch.
+		err = r.cleanupUnhealthyWorkloads(ctx, replicaSet)
 	}
-
-	return r.cleanupUnhealthyWorkloads(ctx, replicaSet)
+	if condition.IsStatusUnknown(err) {
+		// The ReplicaSet changed between batches. confirmScale has already
+		// requested a requeue; as a post-hook, this is not a failure.
+		return nil
+	}
+	return err
 }
 
-func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {
+// cleanupPreviousRevisionsWorkloads deletes one batch of Workloads from
+// earlier template revisions and reports whether more remain.
+func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) (bool, error) {
 	workloads := &runtimev1alpha1.WorkloadList{}
 	if err := r.List(
 		ctx,
@@ -373,7 +392,7 @@ func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx con
 			workloadReplicaSetOwnerIndex: string(replicaSet.UID),
 		},
 	); err != nil {
-		return err
+		return false, err
 	}
 
 	currentGeneration := replicaSet.Spec.Template.Hash()
@@ -386,7 +405,10 @@ func (r *WorkloadReplicaSetReconciler) cleanupPreviousRevisionsWorkloads(ctx con
 			victims = append(victims, workload)
 		}
 	}
-	return r.deleteReplicaBatch(ctx, replicaSet, victims)
+	if err := r.deleteReplicaBatch(ctx, replicaSet, victims); err != nil {
+		return false, err
+	}
+	return len(victims) > r.batchSize(), nil
 }
 
 func (r *WorkloadReplicaSetReconciler) cleanupUnhealthyWorkloads(ctx context.Context, replicaSet *runtimev1alpha1.WorkloadReplicaSet) error {

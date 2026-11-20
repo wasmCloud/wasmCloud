@@ -15,6 +15,7 @@ import (
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -64,6 +65,70 @@ func TestReplicaBatchesYieldAndPreserveTerminatingVictims(t *testing.T) {
 	}
 	if live != 1 || len(list.Items) != 3 {
 		t.Fatalf("live=%d total=%d; repeated scale-down selected extra victims", live, len(list.Items))
+	}
+}
+
+func TestReplicaCleanupDeletesOneBatchPerPassAndRequeuesOnChangedIntent(t *testing.T) {
+	rs := cleanupReplicaSet()
+	rs.Spec.Replicas = new(int32(5))
+	objects := []client.Object{rs}
+	for i := range 5 {
+		previous := cleanupWorkload(rs, fmt.Sprintf("previous-%d", i))
+		previous.Annotations[workloadReplicaSetGenerationAnnotation] = cleanupPreviousHash
+		objects = append(objects, previous, failedCleanupWorkload(rs, fmt.Sprintf("failed-%d", i), time.Now().Add(-time.Hour)))
+	}
+	var deletes atomic.Int32
+	r := newCleanupReconciler(t, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			deletes.Add(1)
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, objects...)
+	r.BatchSize, r.Concurrency, r.APIReader = 3, 2, r.Client
+	if err := r.reconcileCleanup(t.Context(), rs); err != nil {
+		t.Fatal(err)
+	}
+	if n := deletes.Load(); n != 3 {
+		t.Fatalf("one cleanup pass issued %d deletes with a batch of 3", n)
+	}
+	// The ReplicaSet changes before the next batch: the post-hook requeues
+	// rather than failing the reconcile.
+	changed := rs.DeepCopy()
+	changed.Spec.Replicas = new(int32(6))
+	if err := r.Update(t.Context(), changed); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileCleanup(t.Context(), rs); err != nil {
+		t.Fatalf("changed intent failed cleanup: %v", err)
+	}
+	if n := deletes.Load(); n != 3 {
+		t.Fatalf("cleanup deleted against a stale ReplicaSet: %d deletes", n)
+	}
+}
+
+func TestReplicaScaleDownRemovesUnavailableReplicasFirst(t *testing.T) {
+	rs := cleanupReplicaSet()
+	rs.Spec.Replicas = new(int32(1))
+	bad := failedCleanupWorkload(rs, "a-bad", time.Now())
+	good := cleanupWorkload(rs, "b-good")
+	good.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+	r := newCleanupReconciler(t, interceptor.Funcs{}, rs, bad, good)
+	if err := r.reconcileScaleDown(t.Context(), rs); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(good), &runtimev1alpha1.Workload{}); err != nil {
+		t.Fatalf("scale-down removed the available replica: %v", err)
+	}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(bad), &runtimev1alpha1.Workload{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("scale-down kept the unavailable replica: %v", err)
+	}
+	// A negative replica count scales to zero instead of panicking.
+	rs.Spec.Replicas = new(int32(-1))
+	if err := r.reconcileScaleDown(t.Context(), rs); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(t.Context(), client.ObjectKeyFromObject(good), &runtimev1alpha1.Workload{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("negative replicas kept a replica: %v", err)
 	}
 }
 
@@ -459,5 +524,71 @@ func TestNewEndpointSliceSkipsAForeignHolderOfItsName(t *testing.T) {
 	}
 	if len(list.Items) != 2 || total != 101 {
 		t.Fatalf("got %d slices with %d endpoints", len(list.Items), total)
+	}
+}
+
+func TestEndpointSliceThatLostItsLabelIsAdopted(t *testing.T) {
+	svc := newRouteService(testServiceName)
+	w := newAvailableWorkload("ready", svc.Name, testHostID)
+	r := newRouteReconciler(t, svc, w, newHost("ready", testHostID, testPodIP, routeTestPort))
+	runReconcile(t, r, svc.Name)
+	desired := getSlice(t, r, svc.Name).DeepCopy()
+	desired.ResourceVersion = ""
+	desired.Endpoints = nil
+	for i := range 251 {
+		desired.Endpoints = append(desired.Endpoints, discoveryv1.Endpoint{Addresses: []string{fmt.Sprintf("10.0.%d.%d", i/250, i%250+1)}})
+	}
+	if err := r.syncSlices(t.Context(), desired); err != nil {
+		t.Fatal(err)
+	}
+	// Strip the route-manager label from an overflow slice.
+	overflow := &discoveryv1.EndpointSlice{}
+	key := client.ObjectKey{Namespace: desired.Namespace, Name: endpointSliceName(fmt.Sprintf("%s-%d", desired.Name, 1))}
+	if err := r.Get(t.Context(), key, overflow); err != nil {
+		t.Fatal(err)
+	}
+	delete(overflow.Labels, routeManagerLabel)
+	if err := r.Update(t.Context(), overflow); err != nil {
+		t.Fatal(err)
+	}
+	// A slice the built-in controller manages for this Service is left alone.
+	builtin := &discoveryv1.EndpointSlice{AddressType: discoveryv1.AddressTypeIPv4}
+	builtin.Name, builtin.Namespace = "builtin", desired.Namespace
+	builtin.Labels = map[string]string{
+		discoveryv1.LabelServiceName: svc.Name,
+		discoveryv1.LabelManagedBy:   "endpointslice-controller.k8s.io",
+	}
+	builtin.OwnerReferences = desired.OwnerReferences
+	if err := r.Create(t.Context(), builtin); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.syncSlices(t.Context(), desired); err != nil {
+		t.Fatalf("an unlabeled owned slice blocked routing: %v", err)
+	}
+	list := &discoveryv1.EndpointSliceList{}
+	if err := r.List(t.Context(), list, client.MatchingLabels{routeManagerLabel: "true"}); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, slice := range list.Items {
+		for _, ep := range slice.Endpoints {
+			if seen[ep.Addresses[0]] {
+				t.Fatalf("endpoint %s published twice", ep.Addresses[0])
+			}
+			seen[ep.Addresses[0]] = true
+		}
+	}
+	if len(list.Items) != 3 || len(seen) != 251 {
+		t.Fatalf("got %d labeled slices with %d endpoints", len(list.Items), len(seen))
+	}
+	desired.Endpoints = nil
+	if err := r.syncSlices(t.Context(), desired); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.List(t.Context(), list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].Name != builtin.Name {
+		t.Fatalf("expected only the built-in slice to remain, got %d slices", len(list.Items))
 	}
 }

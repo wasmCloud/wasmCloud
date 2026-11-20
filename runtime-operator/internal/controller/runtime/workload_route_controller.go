@@ -221,9 +221,25 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 // Preserve existing membership so deleting one endpoint changes only its slice.
 // Fill available capacity before allocating another bounded slice.
 func (r *WorkloadRouteReconciler) syncSlices(ctx context.Context, desired *discoveryv1.EndpointSlice) error {
-	list := &discoveryv1.EndpointSliceList{}
-	if err := r.List(ctx, list, client.InNamespace(desired.Namespace), client.MatchingLabels(desired.Labels)); err != nil {
+	// List by service name only and keep slices that carry the route-manager
+	// label or that this Service controls, so a slice whose label was removed
+	// is adopted and repaired rather than left advertising stale endpoints.
+	all := &discoveryv1.EndpointSliceList{}
+	if err := r.List(ctx, all, client.InNamespace(desired.Namespace),
+		client.MatchingLabels{discoveryv1.LabelServiceName: desired.Labels[discoveryv1.LabelServiceName]}); err != nil {
 		return err
+	}
+	list := &discoveryv1.EndpointSliceList{Items: make([]discoveryv1.EndpointSlice, 0, len(all.Items))}
+	for i := range all.Items {
+		item := &all.Items[i]
+		owner := metav1.GetControllerOfNoCopy(item)
+		// A slice another controller manages, such as the built-in one for
+		// a Service with a selector, is never adopted.
+		_, managedElsewhere := item.Labels[discoveryv1.LabelManagedBy]
+		ours := owner != nil && len(desired.OwnerReferences) > 0 && owner.UID == desired.OwnerReferences[0].UID && !managedElsewhere
+		if item.Labels[routeManagerLabel] == "true" || ours {
+			list.Items = append(list.Items, *item)
+		}
 	}
 	// Read the legacy deterministic name too, so damaged labels can be repaired.
 	legacy := &discoveryv1.EndpointSlice{}
