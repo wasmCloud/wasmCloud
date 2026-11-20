@@ -3,6 +3,12 @@
 #![cfg_attr(all(test, coverage_nightly), allow(unstable_features))]
 #![doc = include_str!("../README.md")]
 
+// These optional dependencies are consumed by the benchmark executables.
+#[cfg(feature = "bench-mimalloc")]
+use mimalloc as _;
+#[cfg(all(feature = "bench-jemalloc", not(target_env = "msvc")))]
+use tikv_jemallocator as _;
+
 pub mod duration;
 pub mod engine;
 /// Setting a named environment variable in a test without racing the others.
