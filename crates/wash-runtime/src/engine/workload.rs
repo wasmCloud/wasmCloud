@@ -7644,7 +7644,8 @@ mod tests {
     }
 
     /// Labels are routed as before beside a default route: a labeled entry
-    /// and the plain one both land on the multiplexer, as one bind.
+    /// and the plain one both land on the multiplexer, as one bind — and the
+    /// declared unnamed binding does not close the list of labels.
     #[tokio::test]
     async fn test_a_default_route_leaves_labels_where_they_were() {
         let iface = WitInterface::from("wasi:blobstore/container");
@@ -7654,10 +7655,9 @@ mod tests {
         labeled.name = Some("tenant-a".to_string());
         let declared = crate::plugin::PluginBindings::new().with_plugin(
             crate::plugin::PluginBindingSet::new("wasi-blobstore-multiplexed")
-                .with_binding(crate::plugin::bindings::UNNAMED_BINDING, Default::default())
-                // Under the default `deny`, a declared unnamed binding counts
-                // as declaring bindings, so the label is declared too.
-                .with_binding("tenant-a", Default::default()),
+                // Only the default route: under the default `deny` the
+                // undeclared label is still allowed, as with nothing declared.
+                .with_binding(crate::plugin::bindings::UNNAMED_BINDING, Default::default()),
         );
         let mut workload = workload_with(vec![iface.clone(), labeled]);
         let bound = workload.bind_plugins(&plugins, &declared).await.unwrap();
