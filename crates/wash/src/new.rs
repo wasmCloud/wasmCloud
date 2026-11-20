@@ -189,7 +189,9 @@ mod tests {
     use tokio::process::Command;
 
     async fn run_git_in_repo(repo: &Path, args: &[&str]) {
+        // Fixture commits and lightweight tags need no signing identity.
         let output = Command::new("git")
+            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
             .args(args)
             .current_dir(repo)
             .output()
