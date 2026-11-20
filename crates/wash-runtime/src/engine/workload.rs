@@ -5534,6 +5534,71 @@ mod tests {
         }
     }
 
+    #[test]
+    fn services_share_engine_linkers_without_sharing_bindings() -> anyhow::Result<()> {
+        let engine = crate::engine::Engine::builder()
+            .with_pooling_allocator(false)
+            .without_max_process_memory()
+            .build()?;
+        let mut previous_base = None;
+        for http_import in ["", r#"(import "wasi:http/types@0.2.0" (instance))"#] {
+            let bytes = bytes::Bytes::from(wat::parse_str(format!(
+                r#"(component
+                    {http_import}
+                    (import "test:service/probe" (instance (export "probe" (func))))
+                    (instance $run)
+                    (export "wasi:cli/run@0.2.0" (instance $run)))"#,
+            ))?);
+            let input = crate::types::Workload {
+                name: "shared-linker".into(),
+                namespace: "test".into(),
+                annotations: Default::default(),
+                service: Some(crate::types::Service {
+                    bytes: bytes.clone(),
+                    digest: None,
+                    local_resources: Default::default(),
+                    max_restarts: 0,
+                }),
+                components: vec![crate::types::Component {
+                    name: "component".into(),
+                    bytes,
+                    ..Default::default()
+                }],
+                host_interfaces: vec![],
+                volumes: vec![],
+            };
+            let mut first = engine.initialize_workload("first", input.clone())?;
+            let second = engine.clone().initialize_workload("second", input)?;
+            let mut service = first.service.take().unwrap();
+            let sibling = second.service.as_ref().unwrap();
+            let component = first.components.values().next().unwrap();
+            let shared = Arc::clone(open_linker_of(&service.metadata));
+            assert!(Arc::ptr_eq(&shared, open_linker_of(&sibling.metadata)));
+            assert!(Arc::ptr_eq(&shared, linker_of(component)));
+            assert!(service.pre_instantiate_raw().is_err());
+
+            service
+                .metadata
+                .linker()?
+                .instance("test:service/probe")?
+                .func_wrap("probe", |_, (): ()| Ok(()))?;
+            service.pre_instantiate_raw()?;
+            assert!(sibling.pre_instantiate_raw().is_err());
+            assert!(component.pre_instantiate_ref().is_err());
+            assert!(!Arc::ptr_eq(&shared, open_linker_of(&service.metadata)));
+            assert!(Arc::ptr_eq(&shared, open_linker_of(&sibling.metadata)));
+            assert!(Arc::ptr_eq(&shared, linker_of(component)));
+            if let Some(previous) = previous_base {
+                assert!(
+                    !Arc::ptr_eq(&previous, &shared),
+                    "HTTP bindings must have a separate base from WASI-only bindings"
+                );
+            }
+            previous_base = Some(shared);
+        }
+        Ok(())
+    }
+
     /// Whether a link is kept: cached while open, or standing once sealed.
     fn kept_link(component: &WorkloadComponent) -> bool {
         match &component.metadata.link {
