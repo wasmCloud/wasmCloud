@@ -65,6 +65,35 @@ impl HttpGuest for Component {
             let read = chunk.len() as u64;
             drop(rx);
             format!("{{\"result\":{read},\"expected\":{full}}}")
+        } else if path.starts_with("/produce-trap") {
+            // The backend traps after writing every byte but before closing the
+            // stream; a reader that sees the stream finish was misled.
+            let expected: u64 = 10_000;
+            let mut rx = ops::produce_then_trap(expected).await;
+            let mut total: u64 = 0;
+            loop {
+                let (result, chunk) = rx.read(Vec::with_capacity(4096)).await;
+                total += chunk.len() as u64;
+                if matches!(result, wit_bindgen::StreamResult::Dropped) {
+                    break;
+                }
+            }
+            format!("{{\"result\":{total},\"expected\":{expected}}}")
+        } else if path.starts_with("/produce-late") {
+            // Leaves the result stream unread past the host's drain limit, then
+            // reads it; a stream cut by that limit must not read as finished.
+            let expected: u64 = 70_000;
+            let mut rx = ops::produce(expected).await;
+            bindings::wasi::clocks::monotonic_clock::wait_for(3_000_000_000).await;
+            let mut total: u64 = 0;
+            loop {
+                let (result, chunk) = rx.read(Vec::with_capacity(4096)).await;
+                total += chunk.len() as u64;
+                if matches!(result, wit_bindgen::StreamResult::Dropped) {
+                    break;
+                }
+            }
+            format!("{{\"result\":{total},\"expected\":{expected}}}")
         } else if path.starts_with("/produce") {
             let expected: u64 = 70_000;
             let mut rx = ops::produce(expected).await;
