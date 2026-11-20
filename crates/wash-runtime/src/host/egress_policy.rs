@@ -159,11 +159,27 @@ impl EgressAddressGate {
                     if let Some(meters) = &self.meters {
                         meters.record_deny(reason);
                     }
-                    tracing::warn!(
-                        %addr,
-                        reason = reason.as_str(),
-                        "HTTP egress address policy refused a resolved address"
-                    );
+                    if reason == DenyReason::BlockedRange && addr.ip().to_canonical().is_loopback()
+                    {
+                        // The usual cause is a backend addressed as
+                        // `localhost` or `127.0.0.1` from before the address
+                        // policy applied to HTTP. Say how to reach it now.
+                        tracing::warn!(
+                            %addr,
+                            reason = reason.as_str(),
+                            "HTTP egress address policy refused a loopback DNS answer; for an \
+                             HTTP-only backend, use `localhost` with an exact HTTP(S) URL in \
+                             `allowedHosts` and enable `wash host --allow-host-loopback`; for \
+                             shared HTTP and raw socket access, use `host.wasmcloud.internal` \
+                             with an `allowedHostLoopbackPorts` grant"
+                        );
+                    } else {
+                        tracing::warn!(
+                            %addr,
+                            reason = reason.as_str(),
+                            "HTTP egress address policy refused a resolved address"
+                        );
+                    }
                     refused.get_or_insert(reason);
                 }
                 EgressMode::Count => {

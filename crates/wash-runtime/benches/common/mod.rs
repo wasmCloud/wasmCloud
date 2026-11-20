@@ -10,8 +10,10 @@ use wash_runtime::{
     engine::Engine,
     host::{
         Host, HostApi, HostBuilder,
+        allowed_loopback::AllowedLoopbackPort,
         http::{DevRouter, Ingress},
     },
+    sockets::policy::SocketPolicy,
     types::{
         Component, LocalResources, Service, Workload, WorkloadStartRequest, WorkloadState,
         WorkloadStopRequest,
@@ -115,8 +117,15 @@ pub async fn start_host_and_workload(
     let ingress = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
     let addr = ingress.addr();
 
+    // The host side of the loopback grant; each workload names its own port.
+    let engine = Engine::builder()
+        .with_socket_policy(Arc::new(SocketPolicy {
+            host_loopback_enabled: true,
+            ..Default::default()
+        }))
+        .build()?;
     let host = HostBuilder::new()
-        .with_engine(engine())
+        .with_engine(engine)
         .with_http_handler(Arc::new(ingress))
         .build()?;
     let host = host.start().await?;
@@ -169,9 +178,12 @@ pub async fn start_backend_host(flavor: Flavor) -> anyhow::Result<BenchHost> {
     .await
 }
 
-/// Start a host running the `svc-http-proxy` service workload. Loopback
-/// egress is allowed so the routed benchmarks can reach a backend host.
-pub async fn start_service_host() -> anyhow::Result<BenchHost> {
+/// Start a host running the `svc-http-proxy` service workload. With a
+/// `backend`, the service is granted that port on the host's loopback so the
+/// routed benchmarks can reach it as `host.wasmcloud.internal`.
+pub async fn start_service_host(
+    backend: Option<std::net::SocketAddr>,
+) -> anyhow::Result<BenchHost> {
     start_host_and_workload(|host| Workload {
         namespace: "bench".to_string(),
         name: "bench-service".to_string(),
@@ -180,7 +192,18 @@ pub async fn start_service_host() -> anyhow::Result<BenchHost> {
             digest: None,
             bytes: bytes::Bytes::from_static(HTTP_SVC_PROXY_WASM),
             local_resources: LocalResources {
-                allowed_hosts: vec!["127.0.0.1".parse().expect("valid allowed host")].into(),
+                allowed_hosts: backend
+                    .map(|addr| {
+                        format!("http://host.wasmcloud.internal:{}", addr.port())
+                            .parse()
+                            .expect("valid benchmark URL")
+                    })
+                    .into_iter()
+                    .collect(),
+                allowed_host_loopback_ports: backend
+                    .map(|addr| AllowedLoopbackPort::tcp(addr.port()))
+                    .into_iter()
+                    .collect(),
                 ..LocalResources::default()
             },
             max_restarts: 0,
@@ -212,7 +235,12 @@ pub async fn service_request(
 ) -> anyhow::Result<bytes::Bytes> {
     let mut req = client.get(format!("http://{addr}/"));
     if let Some(backend) = backend {
-        req = req.header("x-backend", backend.to_string());
+        // The backend listens on this machine's loopback, which a guest
+        // reaches by name under the default address policy.
+        req = req.header(
+            "x-backend",
+            format!("host.wasmcloud.internal:{}", backend.port()),
+        );
     }
     tokio::time::timeout(REQUEST_TIMEOUT, async {
         let resp = req.send().await?;

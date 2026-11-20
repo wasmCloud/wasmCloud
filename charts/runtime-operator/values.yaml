@@ -1084,10 +1084,13 @@ runtime:
       # the *host's* half of a two-sided grant: a workload or plugin must also
       # declare what it wants, so neither side can open a door alone.
       networking:
-        # -- Let guests reach the machine's own loopback through the reserved
+        # -- Enable HTTP-only loopback access with an exact HTTP(S) loopback
+        # URL in the component's `allowedHosts`; this grants no raw socket
+        # access. Also let guests reach loopback through the reserved
         # name `host.wasmcloud.internal`. A guest also needs its own
-        # `allowedHostLoopbackPorts` entry naming the port. HTTP and gRPC also
-        # require `allowedHosts` to permit the name and a TCP port grant.
+        # `allowedHostLoopbackPorts` entry naming the port; for HTTP and gRPC
+        # that must be a TCP port, and `allowedHosts` must also permit the
+        # request's scheme, host, and port.
         # For raw sockets, `127.0.0.1` keeps meaning the guest's virtual network.
         allowHostLoopback: false
         # -- How the egress policy is applied: `enforce` or `count`. It covers

@@ -129,6 +129,9 @@ pub struct LocalResources {
     /// land here with an unintentionally-empty list. Strings from the
     /// wire (proto / wash YAML) are parsed at conversion time, so the
     /// request hot path matches against the typed enum directly.
+    /// An exact HTTP(S) loopback URL also grants that endpoint over `wasi:http`
+    /// when the host enables loopback. Wildcards do not grant this exception,
+    /// and it does not grant raw socket access to the host.
     pub allowed_hosts: Arc<[AllowedHost]>,
     /// Which names the component may resolve through
     /// `wasi:sockets/ip-name-lookup` (`resolve-addresses`), beyond the hosts
@@ -141,9 +144,12 @@ pub struct LocalResources {
     /// resolve path matches against the typed enum directly.
     pub allowed_ip_name_lookups: Arc<[AllowedIpName]>,
     /// Ports on the machine's own loopback this component may reach through
-    /// `host.wasmcloud.internal`.
+    /// `host.wasmcloud.internal`. HTTP and gRPC additionally require
+    /// `allowed_hosts` to permit the request's scheme, host, and port.
+    /// Neither grant stands in for the other.
     ///
-    /// **Empty = deny every host-loopback connection**, and a non-empty list is
+    /// **Empty = deny host-loopback access through the reserved name**. Exact
+    /// HTTP loopback URL grants in `allowed_hosts` are independent. A non-empty list is
     /// still inert unless the host itself was started with
     /// `--allow-host-loopback`: neither a workload author nor an operator can
     /// open this door alone. See [`crate::host::allowed_loopback`] for the

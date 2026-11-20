@@ -580,9 +580,13 @@ struct CtxHttpHooks {
     workload_id: Arc<str>,
     allowed_hosts: Arc<[AllowedHost]>,
     socket_addr_check: crate::sockets::SocketAddrCheck,
+    http_egress_gate: Option<crate::host::egress_policy::EgressAddressGate>,
     /// Set once this store has reported that its egress cannot be served, so a
     /// guest that keeps calling out does not repeat the warning per call.
     warned_unserved: bool,
+    /// Set once this store has explained a refused HTTP loopback request, so
+    /// a guest retrying it does not repeat the explanation.
+    warned_host_loopback: bool,
 }
 
 impl WasiHttpHooks for CtxHttpHooks {
@@ -592,9 +596,50 @@ impl WasiHttpHooks for CtxHttpHooks {
         options: Option<wasmtime_wasi_http::RequestOptions>,
         fut: crate::host::http::RequestIoFuture,
     ) -> crate::host::http::SendFuture {
+        // This grant belongs to wasi:http only. Raw socket loopback stays on
+        // the virtual network and the host sentinel still needs its port grant.
+        if let Some(host) = request.uri().host()
+            && let Some(addrs) = crate::host::http_client::http_loopback_addrs(
+                host,
+                request.uri().port_u16().unwrap_or_else(|| {
+                    crate::host::allowed_hosts::default_port(
+                        request.uri().scheme_str().unwrap_or("http"),
+                    )
+                    .unwrap_or(80)
+                }),
+            )
+            && (!self
+                .allowed_hosts
+                .iter()
+                .any(|entry| entry.grants_http_loopback(request.uri()))
+                || self.http_egress_gate.as_ref().is_none_or(|gate| {
+                    addrs
+                        .iter()
+                        .any(|addr| gate.check_host_loopback(*addr).is_err())
+                }))
+        {
+            if !self.warned_host_loopback {
+                self.warned_host_loopback = true;
+                tracing::warn!(
+                    workload_id = %self.workload_id,
+                    host,
+                    scheme = request.uri().scheme_str().unwrap_or("http"),
+                    port = ?request.uri().port_u16(),
+                    "refused an HTTP loopback request: explicitly list this HTTP(S) host and port \
+                     in `allowedHosts` and enable `wash host --allow-host-loopback`; wildcard \
+                     entries do not grant host loopback and host-owned ports are never granted"
+                );
+            }
+            return crate::host::http::deny_request(request);
+        }
         // Check the active component on every request, before a pooled socket
         // can be reused by another component in the same workload. The socket
         // policy owns both halves of the grant and the host's reservations.
+        //
+        // The TCP port grant authorizes host access. HTTP must also satisfy
+        // allowedHosts, including any scheme restriction on that endpoint.
+        let granted_hosts;
+        let mut allowed_hosts: &[AllowedHost] = &self.allowed_hosts;
         if let Some(host) = request.uri().host()
             && let Some(target) = crate::host::http_client::host_loopback_addr(
                 host,
@@ -615,17 +660,49 @@ impl WasiHttpHooks for CtxHttpHooks {
                 .check(sentinel, crate::sockets::SocketAddrUse::TcpConnect);
             if !matches!(allowed, Ok(allowed) if allowed.plane == crate::sockets::Plane::Host && allowed.addr == target)
             {
+                if !self.warned_host_loopback {
+                    self.warned_host_loopback = true;
+                    tracing::warn!(
+                        workload_id = %self.workload_id,
+                        port = target.port(),
+                        "refused an HTTP request to host.wasmcloud.internal: the host must allow \
+                         host loopback (`wash host --allow-host-loopback`, or \
+                         `networking.allowHostLoopback` in the chart) and the component must \
+                         list this TCP port in `allowedHostLoopbackPorts`; a port the host \
+                         itself listens on is never granted"
+                    );
+                }
                 return crate::host::http::deny_request(request);
             }
+            if crate::host::http::check_allowed_hosts(&request, &self.allowed_hosts).is_err() {
+                if !self.warned_host_loopback {
+                    self.warned_host_loopback = true;
+                    tracing::warn!(
+                        workload_id = %self.workload_id,
+                        host,
+                        port = target.port(),
+                        "refused an HTTP host-loopback request: allowedHosts must permit its \
+                         scheme, host and port in addition to the TCP loopback grant"
+                    );
+                }
+                return crate::host::http::deny_request(request);
+            }
+            let Some(scheme @ ("http" | "https")) = request.uri().scheme_str() else {
+                return crate::host::http::deny_request(request);
+            };
+            let Ok(granted) = format!("{scheme}://{host}:{}", target.port()).parse::<AllowedHost>()
+            else {
+                return crate::host::http::deny_request(request);
+            };
+            // Custom handlers receive only the URL authorized for this call,
+            // with no authority to change its scheme, host, or effective port.
+            granted_hosts = [granted];
+            allowed_hosts = &granted_hosts;
         }
         match self.host.handler() {
-            Ok(handler) => handler.outgoing_request(
-                &self.workload_id,
-                request,
-                options,
-                fut,
-                &self.allowed_hosts,
-            ),
+            Ok(handler) => {
+                handler.outgoing_request(&self.workload_id, request, options, fut, allowed_hosts)
+            }
             Err(message) => {
                 // The hook cannot trap, so the guest gets a handleable error
                 // and the host gets told once. A guest left calling out to a
@@ -771,7 +848,9 @@ impl CtxBuilder {
             workload_id: self.workload_id.clone(),
             allowed_hosts: self.allowed_hosts,
             socket_addr_check: sockets.socket_addr_check.clone(),
+            http_egress_gate: sockets.http_egress_gate.clone(),
             warned_unserved: false,
+            warned_host_loopback: false,
         };
 
         Ctx {
@@ -893,6 +972,7 @@ mod tests {
                 crate::sockets::WasiSocketsCtx::for_store(policy, Arc::default(), Arc::default());
             let mut ctx = Ctx::builder("same-workload", "component")
                 .with_sockets(sockets)
+                .with_allowed_hosts(Arc::from([AllowedHost::Any]))
                 .build();
             let request = hyper::Request::builder()
                 .uri(uri)
@@ -918,9 +998,253 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Default)]
+    struct LoopbackGrantRecorder(std::sync::Mutex<Vec<Vec<AllowedHost>>>);
+
+    #[async_trait::async_trait]
+    impl crate::host::http::HostHandler for LoopbackGrantRecorder {
+        async fn start(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn port(&self) -> u16 {
+            0
+        }
+        async fn on_workload_resolved(
+            &self,
+            _: &crate::engine::workload::ResolvedWorkload,
+            _: &str,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn on_workload_unbind(&self, _: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn outgoing_request(
+            &self,
+            _: &str,
+            _: hyper::Request<wasmtime_wasi_http::WasiBody>,
+            _: Option<wasmtime_wasi_http::RequestOptions>,
+            _: crate::host::http::RequestIoFuture,
+            allowed_hosts: &[AllowedHost],
+        ) -> crate::host::http::SendFuture {
+            self.0.lock().unwrap().push(allowed_hosts.to_vec());
+            Box::new(async {
+                Err(wasmtime_wasi_http::Error::InternalError(Some(
+                    "recorded request".into(),
+                )))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn host_loopback_preserves_http_policy_and_passes_only_an_exact_grant()
+    -> anyhow::Result<()> {
+        use crate::host::allowed_loopback::AllowedLoopbackPort;
+        use crate::sockets::policy::SocketPolicy;
+
+        setup();
+        let policy = Arc::new(SocketPolicy {
+            host_loopback_enabled: true,
+            host_loopback: [80, 443, 3000, 3001]
+                .into_iter()
+                .map(AllowedLoopbackPort::tcp)
+                .collect(),
+            ..Default::default()
+        });
+        let recorder = Arc::new(LoopbackGrantRecorder::default());
+        let engine = crate::engine::Engine::builder()
+            .with_socket_policy(Arc::clone(&policy))
+            .build()?;
+        let host = crate::host::HostBuilder::new()
+            .with_engine(engine)
+            .with_http_handler(recorder.clone())
+            .build()?;
+        for (entry, uri, permitted) in [
+            (
+                Some("https://host.wasmcloud.internal:3000"),
+                "http://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (
+                Some("https://host.wasmcloud.internal:3000"),
+                "https://host.wasmcloud.internal:3000/",
+                true,
+            ),
+            (
+                Some("http://host.wasmcloud.internal:3000"),
+                "https://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (
+                Some("https://host.wasmcloud.internal:3000"),
+                "https://host.wasmcloud.internal:3001/",
+                false,
+            ),
+            (
+                Some("https://host.wasmcloud.internal"),
+                "https://HOST.WASMCLOUD.INTERNAL./",
+                true,
+            ),
+            (
+                Some("https://host.wasmcloud.internal"),
+                "https://host.wasmcloud.internal:443/",
+                true,
+            ),
+            (
+                Some("https://host.wasmcloud.internal"),
+                "https://host.wasmcloud.internal:3000/",
+                false,
+            ),
+            (
+                Some("host.wasmcloud.internal:80"),
+                "http://host.wasmcloud.internal/",
+                true,
+            ),
+            (Some("*"), "http://host.wasmcloud.internal:3000/", true),
+            (None, "http://host.wasmcloud.internal:3000/", false),
+        ] {
+            let allowed_hosts = entry
+                .map(str::parse::<AllowedHost>)
+                .transpose()?
+                .into_iter()
+                .collect();
+            let sockets = crate::sockets::WasiSocketsCtx::for_store(
+                Arc::clone(&policy),
+                Arc::default(),
+                Arc::default(),
+            );
+            let mut ctx = Ctx::builder("shared-workload", "component")
+                .with_sockets(sockets)
+                .with_allowed_hosts(allowed_hosts)
+                .with_host(&host.host_ref())
+                .build();
+            let before = recorder.0.lock().unwrap().len();
+            let request = hyper::Request::builder()
+                .uri(uri)
+                .body(wasmtime_wasi_http::WasiBody::default())?;
+            let result = Box::into_pin(ctx.http_hooks.send_request(
+                request,
+                None,
+                Box::new(async { Ok(()) }),
+            ))
+            .await;
+            let records = recorder.0.lock().unwrap();
+            if !permitted {
+                assert!(
+                    matches!(result, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
+                    "{entry:?}: {uri}"
+                );
+                assert_eq!(
+                    records.len(),
+                    before,
+                    "a denied request must not reach the custom handler"
+                );
+                continue;
+            }
+            assert!(
+                matches!(result, Err(wasmtime_wasi_http::Error::InternalError(_))),
+                "{uri}"
+            );
+            let grant = records.last().unwrap();
+            assert_eq!(grant.len(), 1);
+            assert!(!matches!(grant[0], AllowedHost::Any));
+            let uri: hyper::Uri = uri.parse()?;
+            assert!(
+                grant[0].matches(&uri),
+                "the scoped grant must match the original request"
+            );
+            let scheme = uri.scheme_str().unwrap();
+            let host = uri.host().unwrap();
+            let port = uri
+                .port_u16()
+                .or_else(|| crate::host::allowed_hosts::default_port(scheme))
+                .unwrap();
+            for forbidden in [
+                format!("{scheme}://example.com:{port}/"),
+                format!("{scheme}://{host}:{}/", port + 1),
+                format!(
+                    "{}://{host}:{port}/",
+                    if scheme == "https" { "http" } else { "https" }
+                ),
+            ] {
+                assert!(
+                    !grant[0].matches(&forbidden.parse()?),
+                    "the custom handler must not be granted {forbidden}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn setup() {
         #[cfg(feature = "wasi-tls")]
         crate::init_crypto();
+    }
+
+    #[tokio::test]
+    async fn explicit_http_loopback_grants_do_not_grant_host_sockets() -> anyhow::Result<()> {
+        use crate::sockets::{Plane, SocketAddrUse, WasiSocketsCtx, policy::SocketPolicy};
+
+        setup();
+        for (enabled, entries) in [
+            (true, vec!["http://localhost:3000"]),
+            (false, vec!["http://localhost:3000"]),
+            (true, vec!["*"]),
+            (true, vec![]),
+        ] {
+            let allowed_hosts: Arc<[AllowedHost]> =
+                entries.iter().map(|entry| entry.parse().unwrap()).collect();
+            let policy = Arc::new(SocketPolicy {
+                host_loopback_enabled: enabled,
+                allowed_hosts: Arc::clone(&allowed_hosts),
+                ..Default::default()
+            });
+            let sockets = WasiSocketsCtx::for_store(policy, Arc::default(), Arc::default());
+            for addr in ["127.0.0.1:3000", "[::1]:3000", "[::ffff:127.0.0.1]:3000"] {
+                assert_eq!(
+                    sockets
+                        .socket_addr_check
+                        .check(addr.parse()?, SocketAddrUse::TcpConnect)?
+                        .plane,
+                    Plane::Virtual
+                );
+            }
+            assert!(
+                sockets
+                    .socket_addr_check
+                    .check("127.255.255.254:3000".parse()?, SocketAddrUse::TcpConnect)
+                    .is_err()
+            );
+
+            let mut ctx = Ctx::builder("shared-workload", "component")
+                .with_allowed_hosts(allowed_hosts)
+                .with_sockets(sockets)
+                .build();
+            let request = hyper::Request::builder()
+                .uri("http://localhost:3000/")
+                .body(wasmtime_wasi_http::WasiBody::default())?;
+            let result = Box::into_pin(ctx.http_hooks.send_request(
+                request,
+                None,
+                Box::new(async { Ok(()) }),
+            ))
+            .await;
+            if enabled && entries == ["http://localhost:3000"] {
+                assert!(matches!(
+                    result,
+                    Err(wasmtime_wasi_http::Error::InternalError(_))
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(wasmtime_wasi_http::Error::HttpRequestDenied)
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[test]

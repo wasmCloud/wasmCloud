@@ -2282,7 +2282,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let allow_any = [AllowedHost::Any];
+        let allowed: [AllowedHost; 1] = [format!("http://localhost:{port}").parse().unwrap()];
         for (handler, grpc) in [(&pooled, false), (&pooled, true), (&unpooled, true)] {
             let mut request = hyper::Request::builder()
                 .method(hyper::Method::POST)
@@ -2298,15 +2298,12 @@ mod tests {
                 request,
                 None,
                 Box::new(async { Ok(()) }),
-                &allow_any,
+                &allowed,
             ))
             .await;
             assert!(
-                matches!(
-                    sent,
-                    Err(wasmtime_wasi_http::Error::DestinationIpProhibited)
-                ),
-                "grpc={grpc}: expected DestinationIpProhibited, got {:?}",
+                matches!(sent, Err(wasmtime_wasi_http::Error::HttpRequestDenied)),
+                "grpc={grpc}: the operator must enable host loopback even with an exact URL grant, got {:?}",
                 sent.err()
             );
         }

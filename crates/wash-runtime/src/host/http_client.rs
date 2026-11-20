@@ -483,6 +483,17 @@ pub(crate) async fn connect_http_tcp(
     };
     let connect = async {
         if let Ok(authority) = authority.parse::<hyper::http::uri::Authority>()
+            && let Some(addrs) =
+                http_loopback_addrs(authority.host(), authority.port_u16().unwrap_or(80))
+        {
+            if let Some(gate) = gate {
+                for addr in &addrs {
+                    gate.check_host_loopback(*addr).map_err(refused_error)?;
+                }
+            }
+            return TcpStream::connect(&addrs[..]).await.map_err(io_error);
+        }
+        if let Ok(authority) = authority.parse::<hyper::http::uri::Authority>()
             && let Some(addr) =
                 host_loopback_addr(authority.host(), authority.port_u16().unwrap_or(80))
         {
@@ -523,6 +534,29 @@ pub(crate) fn host_loopback_addr(host: &str, port: u16) -> Option<SocketAddr> {
         }
         _ => None,
     }
+}
+
+/// HTTP loopback is resolved internally, preserving the URI for Host and SNI.
+/// The store checks its exact URL grant on every request before pool reuse;
+/// transports retain the operator gate and host-owned port checks.
+pub(crate) fn http_loopback_addrs(host: &str, port: u16) -> Option<Vec<SocketAddr>> {
+    if host
+        .strip_suffix('.')
+        .unwrap_or(host)
+        .eq_ignore_ascii_case("localhost")
+    {
+        return Some(vec![
+            SocketAddr::new(std::net::Ipv6Addr::LOCALHOST.into(), port),
+            SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port),
+        ]);
+    }
+    let ip = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .ok()?
+        .to_canonical();
+    ip.is_loopback().then(|| vec![SocketAddr::new(ip, port)])
 }
 
 /// The guest-visible error for an address the egress gate refused: distinct
@@ -1265,7 +1299,10 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         // to the wrapping HttpsConnector.
         http.enforce_http(false);
         http.set_nodelay(true);
-        let mut inner = hyper_rustls::HttpsConnector::from((http, Arc::clone(&self.tls)));
+        let mut inner = hyper_rustls::HttpsConnector::from((
+            CanonicalHttpConnector(http),
+            Arc::clone(&self.tls),
+        ));
         let workload = self.workload.clone();
         let quota = self.quota.clone();
         let permit_wait = self.permit_wait;
@@ -1275,7 +1312,12 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
             // so the resolver never sees one. Judged before a permit is taken,
             // so a refusal spends no quota.
             if let (Some(gate), Some(ip)) = (&gate, uri_ip(&uri)) {
-                gate.filter([SocketAddr::new(ip, port)])?;
+                let addr = SocketAddr::new(ip.to_canonical(), port);
+                if addr.ip().is_loopback() {
+                    gate.check_host_loopback(addr)?;
+                } else {
+                    gate.filter([addr])?;
+                }
             }
             let slot = quota
                 .acquire_outbound_http(permit_wait)
@@ -1305,6 +1347,51 @@ fn uri_ip(uri: &hyper::Uri) -> Option<std::net::IpAddr> {
         .ok()
 }
 
+/// Canonicalize the TCP destination below the TLS connector, so a mapped
+/// IPv4 address uses an IPv4 socket even on IPv6-only Windows sockets. TLS
+/// verification, the HTTP Host header, and the pool key keep the original URI.
+#[derive(Clone)]
+struct CanonicalHttpConnector(HttpConnector<GatedResolver>);
+
+impl tower_service::Service<hyper::Uri> for CanonicalHttpConnector {
+    type Response = TokioIo<TcpStream>;
+    type Error = BoxError;
+    type Future = std::pin::Pin<Box<dyn Future<Output = Result<Self::Response, BoxError>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        tower_service::Service::poll_ready(&mut self.0, cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, uri: hyper::Uri) -> Self::Future {
+        let uri = match canonical_tcp_uri(uri) {
+            Ok(uri) => uri,
+            Err(error) => return Box::pin(async { Err(error) }),
+        };
+        let connecting = tower_service::Service::call(&mut self.0, uri);
+        Box::pin(async move { connecting.await.map_err(Into::into) })
+    }
+}
+
+fn canonical_tcp_uri(uri: hyper::Uri) -> Result<hyper::Uri, BoxError> {
+    let Some(ip) = uri_ip(&uri) else {
+        return Ok(uri);
+    };
+    let canonical = ip.to_canonical();
+    if canonical == ip {
+        return Ok(uri);
+    }
+    let authority = match uri.port_u16() {
+        Some(port) => format!("{canonical}:{port}"),
+        None => canonical.to_string(),
+    };
+    let mut parts = uri.into_parts();
+    parts.authority = Some(authority.parse()?);
+    Ok(hyper::Uri::from_parts(parts)?)
+}
+
 /// Name resolution that hands the connector only the addresses the host's
 /// [`EgressAddressGate`] permits, so the connection lands on an address that
 /// was checked rather than on one resolved separately.
@@ -1330,6 +1417,17 @@ impl tower_service::Service<hyper_util::client::legacy::connect::dns::Name> for 
     }
 
     fn call(&mut self, name: hyper_util::client::legacy::connect::dns::Name) -> Self::Future {
+        if let Some(addrs) = http_loopback_addrs(name.as_str(), self.port) {
+            let decision = self.gate.as_ref().map_or(Ok(()), |gate| {
+                addrs
+                    .iter()
+                    .try_for_each(|addr| gate.check_host_loopback(*addr))
+            });
+            return Box::pin(async move {
+                decision?;
+                Ok(addrs.into_iter())
+            });
+        }
         if let Some(addr) = host_loopback_addr(name.as_str(), self.port) {
             let decision = self
                 .gate
@@ -2084,8 +2182,15 @@ mod tests {
     async fn spawn_counting_server_with_delay(
         delay: Duration,
     ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+        spawn_counting_server_on("127.0.0.1:0", delay).await
+    }
+
+    async fn spawn_counting_server_on(
+        bind: &str,
+        delay: Duration,
+    ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let conns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let conns_clone = conns.clone();
@@ -3273,12 +3378,8 @@ mod tests {
         )
         .await?;
         assert_eq!(stream.peer_addr()?, http_addr);
-        for uri in [
-            format!("http://localhost:{}/", http_addr.port()),
-            format!("http://127.255.255.254:{}/", http_addr.port()),
-            "http://169.254.169.254/".into(),
-        ] {
-            let result = client.send_request(request(&uri), test_options()).await;
+        for uri in ["http://169.254.169.254/", "http://[64:ff9b::7f00:1]/"] {
+            let result = client.send_request(request(uri), test_options()).await;
             assert!(
                 matches!(result, Err(HttpError::DestinationIpProhibited)),
                 "{uri} must still pass the ordinary address gate"
@@ -3352,7 +3453,7 @@ mod tests {
             );
         }
         assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert!(meters.denied(crate::sockets::DenyReason::BlockedRange) >= 2);
+        assert!(meters.denied(crate::sockets::DenyReason::HostLoopbackNotPermitted) >= 2);
     }
 
     /// The metadata address in its IPv4-mapped spelling, as a literal: judged
@@ -3380,26 +3481,23 @@ mod tests {
         }
     }
 
-    /// The default: the connection goes through, and the refusal enforcement
-    /// would have made is on the counter.
+    /// Explicit host-loopback access remains closed in count mode.
     #[tokio::test]
-    async fn count_mode_severs_nothing_and_counts() {
+    async fn count_mode_does_not_open_http_loopback() {
         let (addr, conns) = spawn_counting_server().await;
         let (client, meters) = gated_client(
             crate::sockets::policy::EgressMode::Count,
             default_client_tls_config(),
         );
-        let (response, _io) = client
+        let result = client
             .send_request(
                 request(&format!("http://localhost:{}/", addr.port())),
                 test_options(),
             )
-            .await
-            .expect("count mode must not refuse");
-        assert_eq!(response.status(), 200);
-        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert!(meters.would_deny(crate::sockets::DenyReason::BlockedRange) >= 1);
-        assert_eq!(meters.denied(crate::sockets::DenyReason::BlockedRange), 0);
+            .await;
+        assert!(matches!(result, Err(HttpError::DestinationIpProhibited)));
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(meters.denied(crate::sockets::DenyReason::HostLoopbackNotPermitted) >= 1);
     }
 
     #[tokio::test]
@@ -3446,9 +3544,214 @@ mod tests {
         );
         connect_http_tcp(&authority, Duration::from_secs(5), Some(&counting))
             .await
-            .expect("count mode must connect");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 1);
+            .expect_err("count mode must retain the host loopback gate");
+        assert_eq!(conns.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn http_loopback_exception_never_applies_to_ordinary_dns_answers() {
+        let gate = host_loopback_gate();
+        assert!(http_loopback_addrs("backend.example", 3000).is_none());
+        for target in [
+            "127.0.0.1:3000",
+            "[::1]:3000",
+            "[::ffff:127.0.0.1]:3000",
+            "169.254.169.254:80",
+            "[fd00:ec2::254]:80",
+            "[64:ff9b::7f00:1]:3000",
+            "[2002:7f00:1::]:3000",
+            "[::127.0.0.1]:3000",
+        ] {
+            assert!(gate.filter([target.parse().unwrap()]).is_err(), "{target}");
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_http_grants_are_checked_before_reusing_a_workloads_pool() -> anyhow::Result<()>
+    {
+        use crate::host::declared_port::Protocol;
+        use crate::host::http::{DevRouter, HostHandler, Ingress};
+        use crate::host::ports::{PortOwner, PortTable};
+        use crate::sockets::policy::SocketPolicy;
+
+        let http_backend = spawn_counting_server().await;
+        let grpc_backend = spawn_counting_h2c_server().await;
+        for ((addr, connections), grpc) in [(http_backend, false), (grpc_backend, true)] {
+            let server = Ingress::new(DevRouter::default(), "127.0.0.1:0".parse()?).await?;
+            let table = PortTable::new();
+            server.install_egress_gate(EgressAddressGate::from_socket_policy(&SocketPolicy {
+                host_loopback_enabled: true,
+                host_owned_ports: Some(Arc::clone(&table)),
+                ..Default::default()
+            }));
+            let uri = format!("http://localhost:{}/", addr.port());
+            let grant = [uri.parse::<crate::host::allowed_hosts::AllowedHost>()?];
+            let build_request = || {
+                if grpc {
+                    grpc_request(&uri)
+                } else {
+                    request(&uri)
+                }
+            };
+            for allowed in [
+                &grant[..],
+                &[crate::host::allowed_hosts::AllowedHost::Any][..],
+                &[][..],
+                &grant[..],
+            ] {
+                let result = Box::into_pin(server.outgoing_request(
+                    "shared-workload",
+                    build_request(),
+                    test_options(),
+                    Box::new(async { Ok(()) }),
+                    allowed,
+                ))
+                .await;
+                if allowed == grant {
+                    let (response, _io) = result?;
+                    assert_eq!(response.status(), 200);
+                    response.into_body().collect().await?;
+                } else {
+                    assert!(matches!(result, Err(HttpError::HttpRequestDenied)));
+                }
+            }
+            assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
+            let _owned = table.reserve(Protocol::Tcp, addr, PortOwner::Host("ingress".into()))?;
+            let result = Box::into_pin(server.outgoing_request(
+                "shared-workload",
+                build_request(),
+                test_options(),
+                Box::new(async { Ok(()) }),
+                &grant,
+            ))
+            .await;
+            assert!(
+                matches!(result, Err(HttpError::HttpRequestDenied)),
+                "a pooled connection cannot bypass a new host port reservation"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_loopback_transport_supports_pooled_http_grpc_and_fallback() -> anyhow::Result<()>
+    {
+        let (http_addr, _) = spawn_counting_server().await;
+        let (grpc_addr, _) = spawn_counting_h2c_server().await;
+        let clients = WorkloadClients::new(default_client_tls_config());
+        clients.install_egress_gate(host_loopback_gate());
+        let client = clients.client("workload");
+        for uri in [
+            format!("http://localhost:{}/", http_addr.port()),
+            format!("http://{http_addr}/"),
+        ] {
+            let (response, _io) = client.send_request(request(&uri), test_options()).await?;
+            assert_eq!(response.status(), 200);
+            response.into_body().collect().await?;
+        }
+        let (response, _io) = client
+            .send_grpc_request(
+                grpc_request(&format!(
+                    "http://localhost:{}/svc.Test/Call",
+                    grpc_addr.port()
+                )),
+                test_options(),
+            )
+            .await?;
+        assert_eq!(response.status(), 200);
+        let stream = connect_http_tcp(
+            &format!("localhost:{}", http_addr.port()),
+            Duration::from_secs(5),
+            Some(&host_loopback_gate()),
+        )
+        .await?;
+        assert_eq!(stream.peer_addr()?, http_addr);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn http_loopback_transport_supports_ipv6_and_mapped_literals() -> anyhow::Result<()> {
+        let (v4, _) = spawn_counting_server().await;
+        let (v6, _) = spawn_counting_server_on("[::1]:0", Duration::ZERO).await;
+        let clients = WorkloadClients::new(default_client_tls_config());
+        clients.install_egress_gate(host_loopback_gate());
+        let client = clients.client("workload");
+        for authority in [
+            format!("[::ffff:127.0.0.1]:{}", v4.port()),
+            v6.to_string(),
+            format!("localhost:{}", v6.port()),
+        ] {
+            let (response, _io) = client
+                .send_request(request(&format!("http://{authority}/")), test_options())
+                .await
+                .with_context(|| format!("pooled HTTP to {authority} failed"))?;
+            assert_eq!(response.status(), 200);
+            response.into_body().collect().await?;
+            let stream = connect_http_tcp(
+                &authority,
+                Duration::from_secs(5),
+                Some(&host_loopback_gate()),
+            )
+            .await?;
+            assert!(stream.peer_addr()?.ip().is_loopback());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tcp_dialing_canonicalizes_only_ipv4_mapped_literals() -> anyhow::Result<()> {
+        for (original, expected) in [
+            (
+                "http://[::ffff:127.0.0.1]/path?query=1",
+                "http://127.0.0.1/path?query=1",
+            ),
+            (
+                "https://[::ffff:7f00:1]:443/path",
+                "https://127.0.0.1:443/path",
+            ),
+            ("http://[::1]:3000/path", "http://[::1]:3000/path"),
+            ("https://localhost:3000/path", "https://localhost:3000/path"),
+            (
+                "https://host.wasmcloud.internal:3000/path",
+                "https://host.wasmcloud.internal:3000/path",
+            ),
+        ] {
+            assert_eq!(
+                canonical_tcp_uri(original.parse()?).unwrap(),
+                expected.parse::<hyper::Uri>()?
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mapped_tcp_dialing_preserves_tls_identity_and_http_host() -> anyhow::Result<()> {
+        let (port, ca_pem, names) = sni_recording_tls_server("::ffff:127.0.0.1").await;
+        let dir = tempfile::tempdir()?;
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem)?;
+        let clients = WorkloadClients::new(
+            ClientTlsOptions {
+                roots: TrustRoots::ExtraOnly,
+                extra_ca_paths: vec![ca_path],
+                ..Default::default()
+            }
+            .build()?,
+        );
+        clients.install_egress_gate(host_loopback_gate());
+        let authority = format!("[::ffff:127.0.0.1]:{port}");
+        let (response, _io) = clients
+            .client("workload")
+            .send_request(request(&format!("https://{authority}/")), test_options())
+            .await?;
+        assert_eq!(response.status(), 200);
+        response.into_body().collect().await?;
+        assert_eq!(
+            *names.lock().unwrap(),
+            [authority],
+            "IP TLS uses no SNI; the HTTP Host must retain its original mapped spelling"
+        );
+        Ok(())
     }
 
     /// A TLS server behind a private CA that records TLS SNI followed by the
@@ -3525,17 +3828,8 @@ mod tests {
             }
             .build()
             .unwrap();
-            // Enforcing, with the ranges this test's loopback server needs.
-            let (gate, _) = egress_gate(
-                crate::sockets::policy::EgressMode::Enforce,
-                crate::host::egress_policy::EgressAddressPolicy::permissive(),
-            );
             let clients = WorkloadClients::new(tls);
-            clients.install_egress_gate(if hostname == "localhost" {
-                gate
-            } else {
-                host_loopback_gate()
-            });
+            clients.install_egress_gate(host_loopback_gate());
             let (response, _io) = clients
                 .client("workload")
                 .send_request(

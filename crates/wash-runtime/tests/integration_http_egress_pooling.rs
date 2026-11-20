@@ -143,11 +143,18 @@ impl Drop for LiveConnection {
 /// The upstream uses the explicit host-loopback route and per-component port
 /// grant, under the default enforcing address policy.
 async fn start_host() -> Result<(std::net::SocketAddr, impl HostApi)> {
+    start_host_with_policy(SocketPolicy {
+        host_loopback_enabled: true,
+        ..Default::default()
+    })
+    .await
+}
+
+async fn start_host_with_policy(
+    policy: SocketPolicy,
+) -> Result<(std::net::SocketAddr, impl HostApi)> {
     let engine = Engine::builder()
-        .with_socket_policy(Arc::new(SocketPolicy {
-            host_loopback_enabled: true,
-            ..Default::default()
-        }))
+        .with_socket_policy(Arc::new(policy))
         .build()?;
     let ingress = Ingress::new(DynamicRouter::default(), "127.0.0.1:0".parse()?).await?;
     let bound_addr = ingress.addr();
@@ -172,10 +179,6 @@ fn egress_workload_with(
     max_concurrency: i32,
 ) -> WorkloadStartRequest {
     let upstream: std::net::SocketAddr = allowed_host.parse().expect("upstream address");
-    let allowed: wash_runtime::host::allowed_hosts::AllowedHost =
-        format!("host.wasmcloud.internal:{}", upstream.port())
-            .parse()
-            .expect("test gave an invalid allowed_hosts entry");
     WorkloadStartRequest {
         workload_id: workload_id.to_string(),
         workload: Workload {
@@ -193,7 +196,12 @@ fn egress_workload_with(
                     config: HashMap::new(),
                     environment: HashMap::new(),
                     volume_mounts: vec![],
-                    allowed_hosts: vec![allowed].into(),
+                    allowed_hosts: vec![
+                        format!("http://host.wasmcloud.internal:{}", upstream.port())
+                            .parse()
+                            .expect("valid upstream URL"),
+                    ]
+                    .into(),
                     allowed_ip_name_lookups: Default::default(),
                     allowed_host_loopback_ports: vec![AllowedLoopbackPort::tcp(upstream.port())]
                         .into(),
@@ -228,6 +236,10 @@ async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
     workload.workload.components[0]
         .local_resources
         .allowed_host_loopback_ports = Arc::default();
+    // An allow-all `allowedHosts` does not stand in for the port grant.
+    workload.workload.components[0]
+        .local_resources
+        .allowed_hosts = vec!["*".parse()?].into();
     host.workload_start(workload).await?;
     let response = reqwest::Client::new()
         .get(format!(
@@ -243,6 +255,207 @@ async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
         workload_id: "without-loopback-grant".into(),
     })
     .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_loopback_tcp_grants_cannot_bypass_https_or_an_empty_http_allowlist() -> Result<()> {
+    use wash_runtime::sockets::policy::EgressMode;
+
+    let (upstream, stats) = spawn_counting_server().await?;
+    for (index, (mode, https_only)) in [
+        (EgressMode::Enforce, true),
+        (EgressMode::Count, true),
+        (EgressMode::Enforce, false),
+        (EgressMode::Count, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (ingress, host) = start_host_with_policy(SocketPolicy {
+            host_loopback_enabled: true,
+            egress_mode: mode,
+            ..Default::default()
+        })
+        .await?;
+        let workload_id = format!("http-scheme-guard-{index}");
+        let mut workload = egress_workload(&workload_id, &upstream.to_string());
+        workload.workload.components[0]
+            .local_resources
+            .allowed_hosts = if https_only {
+            vec![format!("https://host.wasmcloud.internal:{}", upstream.port()).parse()?].into()
+        } else {
+            Arc::default()
+        };
+        host.workload_start(workload).await?;
+        let response = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?
+            .get(format!(
+                "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
+                upstream.port()
+            ))
+            .header("HOST", "test")
+            .send()
+            .await?;
+        assert_eq!(
+            response.status(),
+            502,
+            "a TCP grant must not override allowedHosts"
+        );
+        host.workload_stop(WorkloadStopRequest { workload_id })
+            .await?;
+    }
+    assert_eq!(
+        stats.opened(),
+        0,
+        "no refused request may reach the backend"
+    );
+    Ok(())
+}
+
+/// The port grant admits `host.wasmcloud.internal` on that port only. It does
+/// not open the component's `allowedHosts` to anything else, including the
+/// same backend under its loopback address.
+#[tokio::test]
+async fn host_loopback_port_grant_does_not_widen_allowed_hosts() -> Result<()> {
+    let (upstream, stats) = spawn_counting_server().await?;
+    let (other, other_stats) = spawn_counting_server().await?;
+    let (ingress, host) = start_host().await?;
+    host.workload_start(egress_workload("grant-scope", &upstream.to_string()))
+        .await?;
+    let client = reqwest::Client::new();
+    let fetch = |target: String| {
+        client
+            .get(format!("http://{ingress}/fetch?target={target}"))
+            .header("HOST", "test")
+            .send()
+    };
+    let response = fetch(format!("host.wasmcloud.internal:{}", upstream.port())).await?;
+    assert_eq!(response.status(), 200, "{}", response.text().await?);
+    for target in [
+        format!("host.wasmcloud.internal:{}", other.port()),
+        upstream.to_string(),
+        format!("localhost:{}", upstream.port()),
+    ] {
+        let response = fetch(target.clone()).await?;
+        assert_eq!(response.status(), 502, "{target} must stay refused");
+    }
+    assert_eq!(stats.opened.load(Ordering::SeqCst), 1);
+    assert_eq!(other_stats.opened.load(Ordering::SeqCst), 0);
+    host.workload_stop(WorkloadStopRequest {
+        workload_id: "grant-scope".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_http_loopback_grants_reach_only_the_named_endpoint() -> Result<()> {
+    let (upstream, stats) = spawn_counting_server().await?;
+    let (other, other_stats) = spawn_counting_server().await?;
+    let (ingress, host) = start_host_with_policy(SocketPolicy {
+        host_loopback_enabled: true,
+        host_owned_ports: Some(wash_runtime::host::ports::PortTable::new()),
+        ..Default::default()
+    })
+    .await?;
+    let mut workload = egress_workload("http-only", &upstream.to_string());
+    let resources = &mut workload.workload.components[0].local_resources;
+    resources.allowed_host_loopback_ports = Arc::default();
+    resources.allowed_hosts = vec![
+        format!("http://localhost:{}", upstream.port()).parse()?,
+        format!("http://localhost:{}", ingress.port()).parse()?,
+        "http://169.254.169.254".parse()?,
+    ]
+    .into();
+    host.workload_start(workload).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    for _ in 0..3 {
+        let response = client
+            .get(format!(
+                "http://{ingress}/fetch?target=localhost:{}",
+                upstream.port()
+            ))
+            .header("HOST", "test")
+            .send()
+            .await?;
+        assert_eq!(response.status(), 200, "{}", response.text().await?);
+    }
+    for target in [
+        format!("localhost:{}", other.port()),
+        upstream.to_string(),
+        format!("host.wasmcloud.internal:{}", upstream.port()),
+        format!("localhost:{}", ingress.port()),
+        "169.254.169.254:80".into(),
+    ] {
+        let response = client
+            .get(format!("http://{ingress}/fetch?target={target}"))
+            .header("HOST", "test")
+            .send()
+            .await?;
+        assert_eq!(response.status(), 502, "{target} must stay refused");
+    }
+    assert_eq!(
+        stats.opened(),
+        1,
+        "repeated granted requests should reuse the pool"
+    );
+    assert_eq!(other_stats.opened(), 0);
+    host.workload_stop(WorkloadStopRequest {
+        workload_id: "http-only".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_loopback_needs_the_operator_and_an_explicit_component_grant() -> Result<()> {
+    use wash_runtime::sockets::policy::EgressMode;
+    let (upstream, stats) = spawn_counting_server().await?;
+    for (index, (enabled, mode, explicit)) in [
+        (false, EgressMode::Enforce, true),
+        (false, EgressMode::Count, true),
+        (true, EgressMode::Enforce, false),
+        (true, EgressMode::Count, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (ingress, host) = start_host_with_policy(SocketPolicy {
+            host_loopback_enabled: enabled,
+            egress_mode: mode,
+            ..Default::default()
+        })
+        .await?;
+        let workload_id = format!("denied-http-loopback-{index}");
+        let mut workload = egress_workload(&workload_id, &upstream.to_string());
+        let resources = &mut workload.workload.components[0].local_resources;
+        resources.allowed_host_loopback_ports = Arc::default();
+        resources.allowed_hosts = vec![if explicit {
+            format!("http://localhost:{}", upstream.port()).parse()?
+        } else {
+            "*".parse()?
+        }]
+        .into();
+        host.workload_start(workload).await?;
+        let response = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?
+            .get(format!(
+                "http://{ingress}/fetch?target=localhost:{}",
+                upstream.port()
+            ))
+            .header("HOST", "test")
+            .send()
+            .await?;
+        assert_eq!(response.status(), 502);
+        host.workload_stop(WorkloadStopRequest { workload_id })
+            .await?;
+    }
+    assert_eq!(stats.opened(), 0);
     Ok(())
 }
 
