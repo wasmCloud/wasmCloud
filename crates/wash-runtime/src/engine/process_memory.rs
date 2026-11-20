@@ -84,7 +84,6 @@
 mod footprint;
 mod metrics;
 mod sampling;
-#[cfg(test)]
 use footprint::FootprintReader;
 #[cfg(test)]
 use footprint::linux_footprint;
@@ -512,16 +511,16 @@ impl ProcessMemoryGuard {
     /// initial reading before returning; an unavailable reading is retried by
     /// the sampler rather than permanently disabling this guard.
     pub fn spawn_sampler(self: &Arc<Self>) -> anyhow::Result<()> {
-        self.spawn_sampler_with_reading(process_footprint)
+        self.spawn_sampler_with_reading(FootprintReader::read)
     }
 
     fn spawn_sampler_with_reading(
         self: &Arc<Self>,
-        read: impl FnOnce() -> Option<u64>,
+        read: impl FnOnce(&mut FootprintReader) -> Option<u64>,
     ) -> anyhow::Result<()> {
         // Keep the initial read ordered with periodic and on-demand reads.
         let mut sampled = lock_ignoring_poison(&SAMPLED);
-        match read() {
+        match sampled.read(read) {
             Some(footprint) => {
                 sampled.failed_reads = 0;
                 self.observe(footprint);
@@ -611,7 +610,7 @@ mod tests {
     #[test]
     fn an_unreadable_initial_sample_is_retried() -> anyhow::Result<()> {
         let guard = Arc::new(ProcessMemoryGuard::new(1));
-        guard.spawn_sampler_with_reading(|| None)?;
+        guard.spawn_sampler_with_reading(|_| None)?;
         // Exercise the real sampler registration and background reader, not
         // just observe(): the regression omitted registration on this path.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -693,6 +692,14 @@ mod tests {
         assert_eq!(linux_footprint(status), Some(3 * MIB));
         let with_page_tables = "VmRSS:\t  2048 kB\nVmPTE:\t  1024 kB\nVmSwap:\t  1024 kB\n";
         assert_eq!(linux_footprint(with_page_tables), Some(4 * MIB));
+    }
+
+    #[test]
+    fn linux_uses_first_fields_and_ignores_an_unused_fallback() {
+        let status = "VmRSS: garbage kB\nVmSwap: 1024 kB\nVmPTE: 1024 kB\n\
+                      Name: x\nRssAnon: 2048 kB\nRssAnon: garbage kB\nVmSwap: garbage kB\n";
+        assert_eq!(linux_footprint(status), Some(4 * MIB));
+        assert_eq!(linux_footprint("VmRSS: garbage kB\nVmPTE: 1024 kB\n"), None);
     }
 
     #[test]
