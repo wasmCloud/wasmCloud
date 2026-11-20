@@ -1299,7 +1299,10 @@ impl tower_service::Service<hyper::Uri> for BoundedConnector {
         // to the wrapping HttpsConnector.
         http.enforce_http(false);
         http.set_nodelay(true);
-        let mut inner = hyper_rustls::HttpsConnector::from((http, Arc::clone(&self.tls)));
+        let mut inner = hyper_rustls::HttpsConnector::from((
+            CanonicalHttpConnector(http),
+            Arc::clone(&self.tls),
+        ));
         let workload = self.workload.clone();
         let quota = self.quota.clone();
         let permit_wait = self.permit_wait;
@@ -1342,6 +1345,51 @@ fn uri_ip(uri: &hyper::Uri) -> Option<std::net::IpAddr> {
         .trim_end_matches(']')
         .parse()
         .ok()
+}
+
+/// Canonicalize the TCP destination below the TLS connector, so a mapped
+/// IPv4 address uses an IPv4 socket even on IPv6-only Windows sockets. TLS
+/// verification, the HTTP Host header, and the pool key keep the original URI.
+#[derive(Clone)]
+struct CanonicalHttpConnector(HttpConnector<GatedResolver>);
+
+impl tower_service::Service<hyper::Uri> for CanonicalHttpConnector {
+    type Response = TokioIo<TcpStream>;
+    type Error = BoxError;
+    type Future = std::pin::Pin<Box<dyn Future<Output = Result<Self::Response, BoxError>> + Send>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        tower_service::Service::poll_ready(&mut self.0, cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, uri: hyper::Uri) -> Self::Future {
+        let uri = match canonical_tcp_uri(uri) {
+            Ok(uri) => uri,
+            Err(error) => return Box::pin(async { Err(error) }),
+        };
+        let connecting = tower_service::Service::call(&mut self.0, uri);
+        Box::pin(async move { connecting.await.map_err(Into::into) })
+    }
+}
+
+fn canonical_tcp_uri(uri: hyper::Uri) -> Result<hyper::Uri, BoxError> {
+    let Some(ip) = uri_ip(&uri) else {
+        return Ok(uri);
+    };
+    let canonical = ip.to_canonical();
+    if canonical == ip {
+        return Ok(uri);
+    }
+    let authority = match uri.port_u16() {
+        Some(port) => format!("{canonical}:{port}"),
+        None => canonical.to_string(),
+    };
+    let mut parts = uri.into_parts();
+    parts.authority = Some(authority.parse()?);
+    Ok(hyper::Uri::from_parts(parts)?)
 }
 
 /// Name resolution that hands the connector only the addresses the host's
@@ -3635,7 +3683,8 @@ mod tests {
         ] {
             let (response, _io) = client
                 .send_request(request(&format!("http://{authority}/")), test_options())
-                .await?;
+                .await
+                .with_context(|| format!("pooled HTTP to {authority} failed"))?;
             assert_eq!(response.status(), 200);
             response.into_body().collect().await?;
             let stream = connect_http_tcp(
@@ -3646,6 +3695,62 @@ mod tests {
             .await?;
             assert!(stream.peer_addr()?.ip().is_loopback());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn tcp_dialing_canonicalizes_only_ipv4_mapped_literals() -> anyhow::Result<()> {
+        for (original, expected) in [
+            (
+                "http://[::ffff:127.0.0.1]/path?query=1",
+                "http://127.0.0.1/path?query=1",
+            ),
+            (
+                "https://[::ffff:7f00:1]:443/path",
+                "https://127.0.0.1:443/path",
+            ),
+            ("http://[::1]:3000/path", "http://[::1]:3000/path"),
+            ("https://localhost:3000/path", "https://localhost:3000/path"),
+            (
+                "https://host.wasmcloud.internal:3000/path",
+                "https://host.wasmcloud.internal:3000/path",
+            ),
+        ] {
+            assert_eq!(
+                canonical_tcp_uri(original.parse()?).unwrap(),
+                expected.parse::<hyper::Uri>()?
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mapped_tcp_dialing_preserves_tls_identity_and_http_host() -> anyhow::Result<()> {
+        let (port, ca_pem, names) = sni_recording_tls_server("::ffff:127.0.0.1").await;
+        let dir = tempfile::tempdir()?;
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, ca_pem)?;
+        let clients = WorkloadClients::new(
+            ClientTlsOptions {
+                roots: TrustRoots::ExtraOnly,
+                extra_ca_paths: vec![ca_path],
+                ..Default::default()
+            }
+            .build()?,
+        );
+        clients.install_egress_gate(host_loopback_gate());
+        let authority = format!("[::ffff:127.0.0.1]:{port}");
+        let (response, _io) = clients
+            .client("workload")
+            .send_request(request(&format!("https://{authority}/")), test_options())
+            .await?;
+        assert_eq!(response.status(), 200);
+        response.into_body().collect().await?;
+        assert_eq!(
+            *names.lock().unwrap(),
+            [authority],
+            "IP TLS uses no SNI; the HTTP Host must retain its original mapped spelling"
+        );
         Ok(())
     }
 
