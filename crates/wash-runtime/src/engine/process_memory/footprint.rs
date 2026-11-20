@@ -21,16 +21,11 @@ pub fn pid_footprint(pid: u32) -> Option<u64> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+        use sysinfo::{Pid, RefreshKind, System};
 
         let pid = Pid::from_u32(pid);
         let mut system = System::new_with_specifics(RefreshKind::new());
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            false,
-            ProcessRefreshKind::new().with_memory(),
-        );
-        system.process(pid).map(|process| process.memory())
+        sysinfo_footprint(&mut system, pid)
     }
 }
 
@@ -91,16 +86,27 @@ impl FootprintReader {
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(super) fn read(&mut self) -> Option<u64> {
-        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
-
         let pid = sysinfo::get_current_pid().ok()?;
-        self.system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            false,
-            ProcessRefreshKind::new().with_memory(),
-        );
-        self.system.process(pid).map(|process| process.memory())
+        sysinfo_footprint(&mut self.system, pid)
     }
+}
+
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
+#[cfg_attr(
+    all(coverage_nightly, any(target_os = "macos", target_os = "linux")),
+    coverage(off)
+)]
+fn sysinfo_footprint(system: &mut sysinfo::System, pid: sysinfo::Pid) -> Option<u64> {
+    // A failed refresh can leave the previous process entry in the cache.
+    let updated = system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        false,
+        sysinfo::ProcessRefreshKind::new().with_memory(),
+    );
+    if updated == 0 {
+        return None;
+    }
+    system.process(pid).map(|process| process.memory())
 }
 
 #[cfg(target_os = "macos")]
@@ -152,25 +158,92 @@ fn read_footprint(pid: u32) -> Option<u64> {
 /// same per-mapping overcount back.
 #[cfg(any(target_os = "linux", test))]
 pub(super) fn linux_footprint(status: &str) -> Option<u64> {
+    let mut anon = None;
+    let mut rss = None;
+    let mut swap = None;
+    let mut pte = None;
+    let mut pmd = None;
+    for line in status.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let field = match name {
+            "RssAnon" => &mut anon,
+            "VmRSS" => &mut rss,
+            "VmSwap" => &mut swap,
+            "VmPTE" => &mut pte,
+            "VmPMD" => &mut pmd,
+            _ => continue,
+        };
+        field.get_or_insert(value);
+    }
+
     // Absence is distinct from corruption: optional fields may be absent,
     // but a present field must parse or the entire sample is unavailable.
-    let kib = |name: &str| -> Option<Option<u64>> {
-        let Some(rest) = status.lines().find_map(|line| line.strip_prefix(name)) else {
-            return Some(None);
-        };
-        Some(Some(rest.trim().strip_suffix("kB")?.trim().parse().ok()?))
-    };
-    let resident = match kib("RssAnon:")? {
-        Some(anon) => anon,
-        None => kib("VmRSS:")??,
-    };
+    let kib = |value: &str| -> Option<u64> { value.trim().strip_suffix("kB")?.trim().parse().ok() };
+    let resident = kib(anon.or(rss)?)?;
     // VmPTE is mandatory on supported Linux kernels. Missing or malformed
     // accounting must not silently restore the page-table undercount.
-    let page_tables = kib("VmPTE:")??;
+    let page_tables = kib(pte?)?;
     // Swap may be absent without CONFIG_SWAP; modern kernels omit VmPMD.
     let kib_total = resident
-        .saturating_add(kib("VmSwap:")?.unwrap_or(0))
+        .saturating_add(swap.map_or(Some(0), kib)?)
         .saturating_add(page_tables)
-        .saturating_add(kib("VmPMD:")?.unwrap_or(0));
+        .saturating_add(pmd.map_or(Some(0), kib)?);
     Some(kib_total.saturating_mul(1024))
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use anyhow::Context as _;
+    use std::io::{BufRead as _, Write as _};
+
+    #[test]
+    fn a_failed_refresh_does_not_republish_cached_memory() -> anyhow::Result<()> {
+        const CHILD: &str = "WASH_MEMORY_READER_CHILD";
+        const READY: &str = "memory reader ready";
+        if std::env::var_os(CHILD).is_some() {
+            println!("{READY}");
+            std::io::stdout().flush()?;
+            std::io::copy(&mut std::io::stdin(), &mut std::io::sink())?;
+            return Ok(());
+        }
+
+        let (_, module) = module_path!().split_once("::").context("no test module")?;
+        let test = format!("{module}::a_failed_refresh_does_not_republish_cached_memory");
+        let mut child = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", &test, "--nocapture"])
+            .env(CHILD, "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()?;
+        let output = child.stdout.take().context("missing child stdout")?;
+        let mut lines = std::io::BufReader::new(output).lines();
+        let mut ready = false;
+        for line in lines.by_ref() {
+            if line?.ends_with(READY) {
+                ready = true;
+                break;
+            }
+        }
+        let pid = sysinfo::Pid::from_u32(child.id());
+        let mut system = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new());
+        let initial = sysinfo_footprint(&mut system, pid);
+        drop(child.stdin.take());
+        // Keep stdout open until the child harness writes its test summary.
+        let status = child.wait()?;
+        drop(lines);
+
+        assert!(status.success());
+        assert!(ready, "the child reached its wait for input");
+        assert!(initial.is_some(), "the live child has readable memory");
+        assert!(
+            system.process(pid).is_some(),
+            "the previous sample is cached"
+        );
+        assert_eq!(sysinfo_footprint(&mut system, pid), None);
+        Ok(())
+    }
 }

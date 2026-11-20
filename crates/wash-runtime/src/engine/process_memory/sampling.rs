@@ -24,12 +24,19 @@ impl Sampled {
         }
     }
 
+    pub(super) fn read(
+        &mut self,
+        read: impl FnOnce(&mut FootprintReader) -> Option<u64>,
+    ) -> Option<u64> {
+        read(self.reader.get_or_insert_with(FootprintReader::new))
+    }
+
     fn read_and_publish(
         &mut self,
         read: impl FnOnce(&mut FootprintReader) -> Option<u64>,
         periodic: bool,
     ) {
-        let reading = read(self.reader.get_or_insert_with(FootprintReader::new));
+        let reading = self.read(read);
         match reading {
             Some(_) => self.failed_reads = 0,
             None if periodic => self.failed_reads = self.failed_reads.saturating_add(1),
