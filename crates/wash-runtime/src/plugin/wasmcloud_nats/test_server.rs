@@ -31,12 +31,29 @@ impl NatsServer {
 
     /// Always a server of its own, for a test that needs two distinct servers.
     pub(super) async fn container() -> anyhow::Result<Self> {
-        let container = GenericImage::new("nats", "2.12.15-alpine")
+        Self::started(Self::image().with_cmd(["-js"])).await
+    }
+
+    /// A server of its own running `config`, which enables JetStream itself.
+    pub(super) async fn with_config(config: &str) -> anyhow::Result<Self> {
+        Self::started(
+            Self::image()
+                .with_copy_to("/etc/nats/test.conf", config.as_bytes().to_vec())
+                .with_cmd(["-c", "/etc/nats/test.conf"]),
+        )
+        .await
+    }
+
+    fn image() -> GenericImage {
+        GenericImage::new("nats", "2.12.15-alpine")
             .with_exposed_port(4222.tcp())
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
-            .with_cmd(["-js"])
-            .start()
-            .await?;
+    }
+
+    async fn started(
+        request: testcontainers::ContainerRequest<GenericImage>,
+    ) -> anyhow::Result<Self> {
+        let container = request.start().await?;
         let url = format!(
             "nats://127.0.0.1:{}",
             container.get_host_port_ipv4(4222).await?
