@@ -1115,6 +1115,13 @@ jobs:
         run: |
           echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
 
+      - name: Preserve Windows audit metadata
+        if: runner.os == 'Windows'
+        # cargo-auditable 0.7.7 cannot inspect rustc response files. Cargo's
+        # new build layout exceeds Windows' command-line limit, so use its
+        # temporary compatibility switch until cargo-auditable supports them.
+        run: echo "__CARGO_TEMPORARY_BUILD_DIR_NEW_LAYOUT_OPT_OUT=1" >> "$GITHUB_ENV"
+
       - name: Build binary (${{ matrix.target }})
         run: |
           # Release binaries ship with default features only — no
