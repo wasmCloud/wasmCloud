@@ -221,15 +221,30 @@ fn egress_workload_with(
 }
 
 #[tokio::test]
-async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
+async fn literal_loopback_reuses_connections_and_keeps_the_original_allowlist() -> Result<()> {
     let (upstream, stats) = spawn_counting_server().await?;
     let (ingress, host) = start_host().await?;
-    let mut workload = egress_workload("without-loopback-grant", &upstream.to_string());
+    let target = upstream.to_string();
+    let mut workload = egress_workload("literal-loopback", &target);
     workload.workload.components[0]
         .local_resources
-        .allowed_host_loopback_ports = Arc::default();
+        .allowed_hosts = vec![target.parse()?].into();
     host.workload_start(workload).await?;
-    let response = reqwest::Client::new()
+    let client = reqwest::Client::new();
+    for _ in 0..5 {
+        let response = client
+            .get(format!("http://{ingress}/fetch?target={target}"))
+            .header("HOST", "test")
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("upstream 200"), "{body}");
+    }
+    // A port grant does not make the two authorities interchangeable in
+    // allowedHosts, even when a connection to the backend is already pooled.
+    let response = client
         .get(format!(
             "http://{ingress}/fetch?target=host.wasmcloud.internal:{}",
             upstream.port()
@@ -238,6 +253,41 @@ async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
         .send()
         .await?;
     assert_eq!(response.status(), 502);
+    assert_eq!(
+        stats.opened(),
+        1,
+        "literal requests should reuse a connection"
+    );
+    host.workload_stop(WorkloadStopRequest {
+        workload_id: "literal-loopback".into(),
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_loopback_http_requires_the_components_port_grant() -> Result<()> {
+    let (upstream, stats) = spawn_counting_server().await?;
+    let (ingress, host) = start_host().await?;
+    let mut workload = egress_workload("without-loopback-grant", &upstream.to_string());
+    workload.workload.components[0]
+        .local_resources
+        .allowed_host_loopback_ports = Arc::default();
+    workload.workload.components[0]
+        .local_resources
+        .allowed_hosts = vec!["*".parse()?].into();
+    host.workload_start(workload).await?;
+    for target in [
+        format!("host.wasmcloud.internal:{}", upstream.port()),
+        upstream.to_string(),
+    ] {
+        let response = reqwest::Client::new()
+            .get(format!("http://{ingress}/fetch?target={target}"))
+            .header("HOST", "test")
+            .send()
+            .await?;
+        assert_eq!(response.status(), 502);
+    }
     assert_eq!(stats.opened.load(Ordering::SeqCst), 0);
     host.workload_stop(WorkloadStopRequest {
         workload_id: "without-loopback-grant".into(),

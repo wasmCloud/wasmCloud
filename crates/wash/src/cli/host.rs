@@ -829,7 +829,7 @@ pub struct HostCommand {
     pub wasi_otel: bool,
 
     /// Let workloads and plugins reach the machine's own loopback through
-    /// `host.wasmcloud.internal`.
+    /// `host.wasmcloud.internal` (or explicit `127.0.0.1` / `::1` HTTP and gRPC destinations).
     ///
     /// Off by default. A guest also needs its own `allowedHostLoopbackPorts` entry
     /// naming the port, so neither the operator nor the workload author can

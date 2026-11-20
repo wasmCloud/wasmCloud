@@ -71,7 +71,7 @@ fn bench_cold(c: &mut Criterion) {
             let mut total = Duration::ZERO;
             for _ in 0..iters {
                 let start = Instant::now();
-                let service = start_service_host().await.expect("service host");
+                let service = start_service_host(None).await.expect("service host");
                 let client = bench_client();
                 checked_request(&client, service.addr, None, DIRECT_BODY)
                     .await
@@ -94,7 +94,7 @@ fn bench_hot_direct(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(10));
 
     let (service, client) = rt.block_on(async {
-        let service = start_service_host().await.expect("service host");
+        let service = start_service_host(None).await.expect("service host");
         let client = bench_client();
         checked_request(&client, service.addr, None, DIRECT_BODY)
             .await
@@ -128,7 +128,7 @@ fn bench_throughput_direct(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(15));
 
     let (service, client) = rt.block_on(async {
-        let service = start_service_host().await.expect("service host");
+        let service = start_service_host(None).await.expect("service host");
         let client = bench_client();
         checked_request(&client, service.addr, None, DIRECT_BODY)
             .await
@@ -225,8 +225,10 @@ fn bench_service_to_component(c: &mut Criterion) {
 
     for flavor in [Flavor::P2, Flavor::P3] {
         let (service, backend, client) = rt.block_on(async {
-            let service = start_service_host().await.expect("service host");
             let backend = start_backend_host(flavor).await.expect("backend host");
+            let service = start_service_host(Some(backend.addr))
+                .await
+                .expect("service host");
             let client = bench_client();
             checked_request(
                 &client,

@@ -9,8 +9,9 @@
 //! | `<n>.svc.wasmcloud.internal`  | reserved spelling for a named service     |
 //! | `host.wasmcloud.internal`     | the real loopback of the machine          |
 //!
-//! `localhost` and `127.0.0.1` keep meaning the virtual network. Nothing here
-//! changes what already works.
+//! Through raw `wasi:sockets`, `localhost` and `127.0.0.1` mean the virtual
+//! network. HTTP and gRPC accept explicit loopback literals as scoped host
+//! loopback aliases; ordinary DNS names still pass through the address policy.
 //!
 //! # Resolved inside the host, never on the wire
 //!
