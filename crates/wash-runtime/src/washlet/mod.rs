@@ -49,6 +49,10 @@ fn attachment_shutdown_budget(plugin_stop: Duration) -> Duration {
 pub struct HostControlDefaults {
     host: Arc<Host>,
     starts: Arc<tokio::sync::Semaphore>,
+    /// Status lookups in flight across every `workload.status.batch` request.
+    /// A batch holds one query admission slot, so without a shared pool its
+    /// lookups would multiply the admission limit.
+    batch_lookups: Arc<tokio::sync::Semaphore>,
     _control: Option<Arc<crate::host::HostControlLease>>,
 }
 
@@ -819,6 +823,7 @@ fn spawn_control_loop(
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: starts.clone(),
+            batch_lookups: Arc::new(tokio::sync::Semaphore::new(STATUS_BATCH_CONCURRENCY)),
             _control: Some(control),
         };
         // Commands run as their own tasks, so shutdown has to wait for
@@ -1740,6 +1745,57 @@ async fn handle_command(
                 }),
             )
         }
+        "workload.status.batch" => {
+            let req: types::v2::WorkloadStatusBatchRequest = from_api(payload)?;
+            anyhow::ensure!(
+                !req.workload_ids.is_empty()
+                    && req.workload_ids.len() <= 128
+                    && req
+                        .workload_ids
+                        .iter()
+                        .all(|id| !id.is_empty() && id.len() <= 128),
+                "status batch requires 1..128 workload IDs of at most 128 bytes"
+            );
+            // Lookups run concurrently so a slow status plugin cannot push a full
+            // batch past the caller's timeout. `buffered` keeps request order.
+            let workloads = futures::stream::iter(req.workload_ids)
+                .map(|workload_id| async move {
+                    // The semaphore is never closed, so a permit always arrives.
+                    let _lookup = defaults.batch_lookups.acquire().await;
+                    let request = types::v2::WorkloadStatusRequest {
+                        workload_id: workload_id.clone(),
+                    };
+                    // Preserve custom status authorization; do not bypass the handler.
+                    let response = match handler {
+                        Some(handler) => handler.status(defaults, request).await,
+                        None => defaults.status(request).await,
+                    };
+                    // One failing lookup must not cost the whole batch its reply.
+                    // Report it the way the single status subject does.
+                    let mut status = match response.and_then(|response| {
+                        response.workload_status.context("missing workload status")
+                    }) {
+                        Ok(status) => status,
+                        Err(error) => command_error(&workload_id, format!("{error:#}")),
+                    };
+                    // Entries answer by position. A plugin that leaves the ID empty
+                    // or normalizes it must not make the caller reject the batch.
+                    status.workload_id = workload_id;
+                    // Bound the reply even when a plugin supplies a large diagnostic.
+                    if status.message.len() > 1024 {
+                        let mut end = 1024;
+                        while !status.message.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        status.message.truncate(end);
+                    }
+                    status
+                })
+                .buffered(STATUS_BATCH_CONCURRENCY)
+                .collect::<Vec<_>>()
+                .await;
+            to_api(&types::v2::WorkloadStatusBatchResponse { workloads })
+        }
         "workload.status" => {
             let req: types::v2::WorkloadStatusRequest = match from_api(payload) {
                 Ok(request) => request,
@@ -1837,6 +1893,13 @@ fn workload_start_error(workload_id: &str, message: String) -> types::v2::Worklo
         workload_status: Some(command_error(workload_id, message)),
     }
 }
+
+/// Status lookups all `workload.status.batch` requests on a host run at once.
+/// It matches the query admission limit, so batching never has less lookup
+/// parallelism than the same lookups sent as individual `workload.status`
+/// requests: under a slow status handler, a full batch finishes in the time
+/// those requests would.
+const STATUS_BATCH_CONCURRENCY: usize = MAX_PENDING_QUERIES;
 
 fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatus {
     types::v2::WorkloadStatus {
@@ -2369,6 +2432,48 @@ mod tests {
         control.stopped().await
     }
 
+    #[tokio::test]
+    async fn batched_status_is_bounded_and_preserves_status_authorization() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let defaults = control_defaults(host.clone());
+        let msg = command_message(
+            "workload.status.batch",
+            br#"{"workloadIds":["absent-a","absent-b"]}"#.to_vec(),
+        );
+        let reply = handle_command(&defaults, &msg, None, None).await?;
+        let reply: types::v2::WorkloadStatusBatchResponse = from_api(&reply)?;
+        assert_eq!(reply.workloads.len(), 2);
+        assert_eq!(reply.workloads[0].workload_id, "absent-a");
+        assert_eq!(reply.workloads[1].workload_id, "absent-b");
+        assert!(
+            reply
+                .workloads
+                .iter()
+                .all(|s| s.workload_state == types::v2::WorkloadState::NotFound as i32)
+        );
+        // A refused lookup is reported per entry, as on the single status
+        // subject, so the rest of the batch still gets an answer.
+        let reply = handle_command(&defaults, &msg, Some(&RefusingCommands), None).await?;
+        let reply: types::v2::WorkloadStatusBatchResponse = from_api(&reply)?;
+        assert_eq!(reply.workloads.len(), 2);
+        for (status, id) in reply.workloads.iter().zip(["absent-a", "absent-b"]) {
+            assert_eq!(status.workload_id, id);
+            assert_eq!(
+                status.workload_state,
+                types::v2::WorkloadState::Error as i32
+            );
+            assert!(status.message.contains("status denied"));
+        }
+        for ids in [vec![], vec!["id"; 129]] {
+            let msg = command_message(
+                "workload.status.batch",
+                serde_json::to_vec(&serde_json::json!({"workloadIds":ids}))?,
+            );
+            assert!(handle_command(&defaults, &msg, None, None).await.is_err());
+        }
+        host.stop().await
+    }
+
     struct NotifyOnDrop(Option<oneshot::Sender<()>>);
 
     impl Drop for NotifyOnDrop {
@@ -2431,6 +2536,7 @@ mod tests {
         HostControlDefaults {
             host,
             starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            batch_lookups: Arc::new(tokio::sync::Semaphore::new(STATUS_BATCH_CONCURRENCY)),
             _control: None,
         }
     }
@@ -2462,6 +2568,43 @@ mod tests {
         ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
             anyhow::bail!("status denied");
         }
+    }
+
+    /// Answers every status lookup without naming the workload.
+    struct AnonymousStatus;
+
+    #[async_trait]
+    impl HostCommandHandler for AnonymousStatus {
+        async fn status(
+            &self,
+            defaults: &HostControlDefaults,
+            request: types::v2::WorkloadStatusRequest,
+        ) -> anyhow::Result<types::v2::WorkloadStatusResponse> {
+            let mut response = defaults.status(request).await?;
+            if let Some(status) = response.workload_status.as_mut() {
+                status.workload_id.clear();
+            }
+            Ok(response)
+        }
+    }
+
+    #[tokio::test]
+    async fn batched_status_names_each_requested_workload() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::default().build()?.start().await?;
+        let defaults = control_defaults(host.clone());
+        let msg = command_message(
+            "workload.status.batch",
+            br#"{"workloadIds":["absent-a","absent-b"]}"#.to_vec(),
+        );
+        let reply = handle_command(&defaults, &msg, Some(&AnonymousStatus), None).await?;
+        let reply: types::v2::WorkloadStatusBatchResponse = from_api(&reply)?;
+        let ids: Vec<_> = reply
+            .workloads
+            .iter()
+            .map(|s| s.workload_id.as_str())
+            .collect();
+        assert_eq!(ids, ["absent-a", "absent-b"]);
+        host.stop().await
     }
 
     #[tokio::test]
@@ -2718,6 +2861,7 @@ mod tests {
         let defaults = HostControlDefaults {
             host: host.clone(),
             starts: Arc::new(tokio::sync::Semaphore::new(1)),
+            batch_lookups: Arc::new(tokio::sync::Semaphore::new(STATUS_BATCH_CONCURRENCY)),
             _control: None,
         };
         let reply = AnnotatingStatus

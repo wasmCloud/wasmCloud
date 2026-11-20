@@ -184,6 +184,83 @@ decision must be reconciled again against the current Host.
 Heartbeat status writes also check resource version so an old probe cannot
 overwrite a replacement Host's status.
 
+## Scaling and cleanup
+
+Workload cleanup runs in its own controller, so slow stops do not occupy the
+workers that place and monitor live workloads. Both queues yield when a host
+has reached its concurrency limit. A shared per-object guard prevents a start
+and finalization from overlapping, and placement checks current API state before
+sending Start. Host selection remains a durable status checkpoint before that RPC.
+
+The standalone operator exposes these bounds through flags; embedded callers
+can set the corresponding fields on `EmbeddedOperatorConfig`:
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--workload-concurrency` | 8 | Live Workload workers |
+| `--workload-cleanup-concurrency` | 16 | Workload cleanup workers |
+| `--workload-host-concurrency` | 2 | Concurrent reconciliations per host, separately for live passes, starts and cleanup |
+| `--replica-batch-size` | 64 | Creates or deletes per ReplicaSet scaling or cleanup batch |
+| `--replica-concurrency` | 8 | Concurrent API mutations within a ReplicaSet batch |
+| `--ready-requeue-interval` | 0 | Healthy-object polling interval; zero retains controller defaults |
+
+ReplicaSet scaling rechecks the parent through an uncached read before each
+batch. Deletes retain UID and resourceVersion preconditions. A delete that
+conflicts because the cache was stale rereads the child uncached: one already
+deleting or replaced counts as deleted, and one that changed while live is left
+for the next pass to choose again. Scale-down and cleanup remove unavailable
+children first, then a deterministic prefix by name, and count terminating
+children as already selected, so retries do not choose extra victims. Each
+cleanup pass deletes at most one batch: unhealthy-child cleanup waits while
+previous revisions still need more than one batch. Operator-created
+Workloads carry their cleanup finalizer from creation. Failed stops on Ready
+hosts retain the finalizer and back off together. After a failed stop, queued
+cleanup on a Host that is missing or not available (failed, or Unknown after
+missed heartbeats) uses the existing unavailable-host cleanup policy without
+repeating the timeout, so those Workloads are dropped without another stop.
+Suppression alone never authorizes that shortcut for a Ready Host. A cancelled
+reconcile or a failed Host lookup does not count as a failed stop.
+
+Child and route events coalesce over 100 milliseconds without extending the
+deadline when new events arrive; initial-list events keep their low priority on
+controller-runtime's priority queue. Routes omit terminating workloads, resolve
+each host once per pass, and use EndpointSlices of at most 100 endpoints.
+Existing slice membership is preserved when endpoints disappear. The route
+controller manages slices that carry its label or that the Service controls
+without another controller's `endpointslice.kubernetes.io/managed-by` label, and
+watches them: a slice that loses its label is adopted and repaired, and an
+endpoint a pass published twice against a stale cache is deduplicated when the
+new slice reaches the cache.
+
+Hosts supporting `workload.status.batch` answer up to 128 status queries in one
+RPC. The operator groups assignments with a local host/bucket index and reuses
+observations for at most 30 seconds. Observations predating placement are ignored;
+missing or mismatched response entries invalidate the batch. These are bounded
+request/reply observations, not an atomic fleet snapshot. Operator restart drops
+the cache and rebuilds it from fresh queries. Hosts that do not answer, or return
+an invalid response, use the existing individual status RPC; batch capability is
+retried after one minute. When a host that answered batches before stops
+answering, that Sync fails without a second timeout and the host is probed
+again on the next one, so a host rolled back to a release without batch support
+falls back instead of failing until its support record expires. An unsupported
+batch probe can add up to one second before fallback; sharing observations can add up to 30 seconds to failure
+detection beyond the configured polling interval. Individual start/stop
+confirmations remain uncached.
+
+The runtime applies the normal status handler to every batch entry, including
+custom authorization. Requests are limited to 128 IDs of at most 128 bytes each;
+diagnostic messages in batch replies are truncated to 1 KiB at a UTF-8 boundary.
+The existing query admission limit also applies to batch requests, and the
+lookups of every batch on a host share one pool the size of that limit (64), so
+batching neither multiplies the status handler calls in flight nor runs a full
+batch slower than the same lookups sent individually.
+
+Use controller-runtime queue/worker metrics and API-server request metrics to
+tune these limits. Measure traffic withdrawal, actual runtime cleanup, and
+Kubernetes object removal separately: a successful stop acknowledgement can
+precede the runtime's background cleanup. Increasing concurrency does not remove
+the per-object API writes or establish capacity for 100,000 workloads.
+
 ## Development
 
 You will need a local Kind cluster, NATS, and a Wash host.

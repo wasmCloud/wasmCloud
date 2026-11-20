@@ -36,6 +36,12 @@ type EmbeddedOperatorConfig struct {
 	// ReadyRequeueInterval overrides periodic polling for healthy workload
 	// Deployments, ReplicaSets, and Workloads. Zero uses their defaults.
 	ReadyRequeueInterval time.Duration
+	// Scaling bounds concurrent controller and host work. Zero uses defaults.
+	WorkloadConcurrency int
+	CleanupConcurrency  int
+	HostConcurrency     int
+	ReplicaBatchSize    int
+	ReplicaConcurrency  int
 	// Host CPU threshold (percentage).
 	// Used to calculate workload scheduling, avoiding hosts that are over this threshold.
 	HostCPUThreshold float64
@@ -138,6 +144,9 @@ func NewEmbeddedOperator(
 	}
 
 	if err = (&runtime_controllers.WorkloadReconciler{
+		Concurrency:          cfg.WorkloadConcurrency,
+		CleanupConcurrency:   cfg.CleanupConcurrency,
+		HostConcurrency:      cfg.HostConcurrency,
 		ReadyRequeueInterval: cfg.ReadyRequeueInterval,
 		Client:               mgr.GetClient(),
 		Bus:                  bus,
@@ -150,6 +159,8 @@ func NewEmbeddedOperator(
 	}
 
 	if err = (&runtime_controllers.WorkloadReplicaSetReconciler{
+		BatchSize:            cfg.ReplicaBatchSize,
+		Concurrency:          cfg.ReplicaConcurrency,
 		ReadyRequeueInterval: cfg.ReadyRequeueInterval,
 		Client:               mgr.GetClient(),
 		Scheme:               mgr.GetScheme(),

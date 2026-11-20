@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -321,6 +322,8 @@ func TestHostSpecChanged(t *testing.T) {
 // exercised by the round-trips under test; the remaining methods satisfy the
 // interface.
 type mockBus struct {
+	// mu lets concurrent requests, as from a chunked status batch, record safely.
+	mu         sync.Mutex
 	reply      *wasmbus.Message
 	err        error
 	respond    func(*wasmbus.Message) (*wasmbus.Message, error)
@@ -332,6 +335,8 @@ type mockBus struct {
 }
 
 func (m *mockBus) Request(ctx context.Context, msg *wasmbus.Message) (*wasmbus.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.gotSubject = msg.Subject
 	m.gotData = msg.Data
 	m.requests = append(m.requests, msg)

@@ -445,6 +445,7 @@ func (r *WorkloadDaemonSetReconciler) createWorkload(
 
 	workload := &runtimev1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
+			Finalizers:  []string{workloadFinalizerName},
 			Name:        name,
 			Namespace:   daemonSet.Namespace,
 			Labels:      workloadLabels,
@@ -691,7 +692,7 @@ func (r *WorkloadDaemonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runtimev1alpha1.WorkloadDaemonSet{}).
-		Owns(&runtimev1alpha1.Workload{}).
+		Watches(&runtimev1alpha1.Workload{}, coalesce(handler.EnqueueRequestForOwner(mgr.GetScheme(), mgr.GetRESTMapper(), &runtimev1alpha1.WorkloadDaemonSet{}, handler.OnlyControllerOwner())), builder.WithPredicates(childChanges())).
 		Watches(&runtimev1alpha1.Host{},
 			handler.EnqueueRequestsFromMapFunc(r.daemonSetsForHost),
 			builder.WithPredicates(hostPlacementChanged)).
