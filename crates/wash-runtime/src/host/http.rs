@@ -3097,6 +3097,33 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture {
         let span = outbound_client_span(request.method(), request.uri());
+        // Check even an already-connected pool entry against the host's
+        // loopback enablement and current port reservations.
+        if let Some(host) = request.uri().host()
+            && let Some(addrs) = crate::host::http_client::http_loopback_addrs(
+                host,
+                request.uri().port_u16().unwrap_or_else(|| {
+                    crate::host::allowed_hosts::default_port(
+                        request.uri().scheme_str().unwrap_or("http"),
+                    )
+                    .unwrap_or(80)
+                }),
+            )
+        {
+            if !allowed_hosts
+                .iter()
+                .any(|entry| entry.grants_http_loopback(request.uri()))
+            {
+                return deny_request(request);
+            }
+            if let Some(gate) = self.egress_gate.get()
+                && addrs
+                    .iter()
+                    .any(|addr| gate.check_host_loopback(*addr).is_err())
+            {
+                return deny_request(request);
+            }
+        }
         let inner: SendFuture = if let Err(e) =
             self.router
                 .allow_outgoing_request(workload_id, &request, options, allowed_hosts)

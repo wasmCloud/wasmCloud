@@ -46,6 +46,8 @@ pub(crate) const MAX_UDP_DATAGRAM_SIZE: usize = u16::MAX as usize;
 #[derive(Default)]
 pub struct WasiSocketsCtx {
     pub(crate) socket_addr_check: SocketAddrCheck,
+    /// HTTP loopback uses the host's gate without the raw socket port grant.
+    pub(crate) http_egress_gate: Option<crate::host::egress_policy::EgressAddressGate>,
     pub(crate) allowed_network_uses: AllowedNetworkUses,
     /// Which names this component may resolve through
     /// `wasi:sockets/ip-name-lookup`, beyond those `allowed_hosts` names.
@@ -74,6 +76,9 @@ impl WasiSocketsCtx {
         let names = Arc::clone(&resolved_names);
         let allowed_hosts = Arc::clone(&policy.allowed_hosts);
         Self {
+            http_egress_gate: Some(
+                crate::host::egress_policy::EgressAddressGate::from_socket_policy(&policy),
+            ),
             socket_addr_check: SocketAddrCheck::new(move |addr, reason| {
                 policy.decide_for_store(reason, addr, &names)
             }),

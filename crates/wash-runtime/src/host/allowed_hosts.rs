@@ -47,6 +47,11 @@
 //!   aren't allowed (see above) and request paths/queries are not
 //!   inspected by the matcher.
 //!
+//! An exact HTTP(S) URL for `localhost` or a loopback literal also grants
+//! HTTP-only access to that host, scheme, and effective port when the operator
+//! enables host loopback. Wildcards and bare authorities never grant this
+//! exception. It grants no raw socket access to the machine's loopback.
+//!
 //! # Raw sockets
 //!
 //! A `wasi:sockets` destination is an address with no name or scheme. An entry
@@ -143,6 +148,30 @@ pub enum AllowedHost {
 }
 
 impl AllowedHost {
+    /// An exact HTTP URL grants only its loopback host, scheme and effective
+    /// port. Wildcards and port-less authorities cannot open host loopback.
+    pub(crate) fn grants_http_loopback(&self, request: &Uri) -> bool {
+        let Self::Url(url) = self else {
+            return false;
+        };
+        let Some(host) = request.host().filter(|host| is_http_loopback_host(host)) else {
+            return false;
+        };
+        let Some(scheme @ ("http" | "https")) = request.scheme_str() else {
+            return false;
+        };
+        url.scheme() == scheme
+            && url.host_str().is_some_and(|allowed| {
+                same_name(allowed, host.strip_suffix('.').unwrap_or(host))
+                    || host
+                        .trim_start_matches('[')
+                        .trim_end_matches(']')
+                        .parse::<IpAddr>()
+                        .is_ok_and(|ip| host_is_addr(allowed, ip))
+            })
+            && url.port_or_known_default() == request.port_u16().or_else(|| default_port(scheme))
+    }
+
     /// Returns `true` if `request` satisfies this allowlist entry.
     ///
     /// Inspects the URI's host, scheme, and explicit port. Path, query,
@@ -185,6 +214,9 @@ impl AllowedHost {
             }
 
             AllowedHost::Url(url) => {
+                if is_http_loopback_host(request_host) {
+                    return self.grants_http_loopback(request);
+                }
                 let Some(policy_host) = url.host_str() else {
                     return false;
                 };
@@ -229,6 +261,19 @@ impl AllowedHost {
             }
         }
     }
+}
+
+/// Only the reserved local hostname and canonical loopback literals qualify.
+/// A DNS name resolving to loopback never becomes an HTTP loopback grant.
+pub(crate) fn is_http_loopback_host(host: &str) -> bool {
+    host.strip_suffix('.')
+        .unwrap_or(host)
+        .eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.to_canonical().is_loopback())
 }
 
 impl AllowedHost {
@@ -676,6 +721,56 @@ fn split_host_port(s: &str) -> anyhow::Result<(&str, Option<u16>)> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_loopback_grants_require_an_exact_url_and_effective_port() {
+        for (entry, request, permitted) in [
+            ("http://localhost:3000", "http://localhost:3000/", true),
+            ("http://localhost:3000", "http://LOCALHOST:3000/path", true),
+            ("http://localhost:3000", "http://LOCALHOST.:3000/path", true),
+            ("http://localhost", "http://localhost:80/", true),
+            ("https://localhost", "https://localhost:443/", true),
+            ("http://localhost", "http://localhost:3000/", false),
+            ("http://localhost:3000", "http://localhost:3001/", false),
+            ("http://localhost:3000", "https://localhost:3000/", false),
+            ("http://localhost:3000", "http://127.0.0.1:3000/", false),
+            ("http://127.0.0.1:3000", "http://127.0.0.1:3000/", true),
+            ("http://127.0.0.1:3000", "http://127.0.0.2:3000/", false),
+            ("http://[::1]:3000", "http://[::1]:3000/", true),
+            (
+                "http://[::ffff:127.0.0.1]:3000",
+                "http://[::ffff:7f00:1]:3000/",
+                true,
+            ),
+            (
+                "http://[::ffff:127.0.0.1]:3000",
+                "http://[::ffff:127.0.0.1]:3000/",
+                true,
+            ),
+            ("*", "http://localhost:3000/", false),
+            ("localhost:3000", "http://localhost:3000/", false),
+            ("http://*.localhost:3000", "http://a.localhost:3000/", false),
+            (
+                "http://backend.example:3000",
+                "http://backend.example:3000/",
+                false,
+            ),
+            ("http://169.254.169.254", "http://169.254.169.254/", false),
+            (
+                "http://[64:ff9b::7f00:1]",
+                "http://[64:ff9b::7f00:1]/",
+                false,
+            ),
+            ("http://[::127.0.0.1]", "http://[::127.0.0.1]/", false),
+        ] {
+            let entry = parse(entry);
+            assert_eq!(
+                entry.grants_http_loopback(&uri(request)),
+                permitted,
+                "{entry}: {request}"
+            );
+        }
+    }
 
     fn parse(s: &str) -> AllowedHost {
         s.parse()

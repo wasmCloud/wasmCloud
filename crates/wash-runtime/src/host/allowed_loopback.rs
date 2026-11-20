@@ -20,8 +20,9 @@
 //!
 //! # Empty list denies every connection
 //!
-//! Same shape as its neighbours: an empty or absent list denies every
-//! host-loopback connection. A guest's declaration is only half of it — the
+//! An empty or absent list denies host-loopback access through the reserved
+//! name. Exact HTTP loopback URL grants in `allowedHosts` are independent.
+//! A guest's declaration is only half of it — the
 //! host must also be started with `--allow-host-loopback`.
 
 use core::net::SocketAddr;
