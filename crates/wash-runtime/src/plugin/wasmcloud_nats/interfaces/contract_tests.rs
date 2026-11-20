@@ -1332,3 +1332,152 @@ async fn kv_admin_applies_every_requested_limit() -> anyhow::Result<()> {
     fx.plugin.connections.shutdown().await;
     Ok(())
 }
+
+/// Events naming one bucket, as `(level, message)`.
+#[derive(Clone, Default)]
+struct BucketEvents {
+    bucket: String,
+    seen: Arc<std::sync::Mutex<Vec<(tracing::Level, String)>>>,
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BucketEvents {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        #[derive(Default)]
+        struct Fields {
+            bucket: Option<String>,
+            message: String,
+        }
+        impl tracing::field::Visit for Fields {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "bucket" {
+                    self.bucket = Some(value.to_string());
+                }
+            }
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                match field.name() {
+                    "message" => self.message = format!("{value:?}"),
+                    "bucket" => self.bucket = Some(format!("{value:?}").trim_matches('"').into()),
+                    _ => {}
+                }
+            }
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        if fields.bucket.as_deref() == Some(self.bucket.as_str()) {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), fields.message));
+        }
+    }
+}
+
+/// Only a create that makes the bucket logs it as created; ensuring a live
+/// bucket, or being refused one, does not.
+#[tokio::test]
+#[ignore = "requires Docker (NATS) or NATS_URL"]
+async fn kv_admin_logs_a_bucket_as_created_only_when_it_is() -> anyhow::Result<()> {
+    use kv_admin::CreateBucketError as CreateErr;
+    use labeled_kv::HostBucket as BucketDrop;
+    use labeled_kv_admin::HostWithStore as Admin;
+    use tracing::Level;
+    use tracing_subscriber::layer::SubscriberExt as _;
+    const CHILD: &str = "WASH_TEST_KV_ADMIN_CREATE_LOG";
+
+    // Callsite interest is process-global. Capture events without parallel tests
+    // registering the same callsites under a different default subscriber.
+    if std::env::var_os(CHILD).is_none() {
+        let (_, module) = module_path!().split_once("::").unwrap();
+        let test = format!("{module}::kv_admin_logs_a_bucket_as_created_only_when_it_is");
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", &test, "--include-ignored", "--nocapture"])
+            .env(CHILD, "1")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "kv-admin create log capture failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+
+    let fx = fixture().await?;
+    let name = fx.scope.bucket.clone();
+    let admin = acquire(
+        &fx.plugin,
+        "workload",
+        "admin",
+        &NatsConfig::from_map(&crate::wit::Config::from([
+            ("servers", fx.server.url.clone()),
+            ("bucket-allow", name.clone()),
+            ("bucket-create-allow", name.clone()),
+            ("bucket-delete-allow", name.clone()),
+            ("bucket-max-bytes", "1048576".into()),
+            ("bucket-storage-allow", "memory".into()),
+        ]))?,
+    )
+    .await?;
+    let config = |max_bytes| kv_admin::BucketConfig {
+        bucket: name.clone(),
+        history: 1,
+        max_age_ms: 0,
+        max_bytes,
+        max_value_size: 0,
+        storage: kv_admin::StorageType::Memory,
+        limit_marker_ttl_ms: None,
+    };
+    let events = BucketEvents {
+        bucket: name.clone(),
+        ..Default::default()
+    };
+    let _guard =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(events.clone()));
+    let mut store = new_store("workload", Some(&fx.plugin))?;
+    let ran = tokio::time::timeout(
+        Duration::from_secs(60),
+        store.run_concurrent(async |store_accessor| {
+            let host_accessor = store_accessor.with_getter::<SharedCtx>(extract_active_ctx);
+            let accessor = &host_accessor;
+            let created =
+                <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
+                    .await?
+                    .unwrap();
+            let ensured =
+                <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(0))
+                    .await?
+                    .unwrap();
+            assert!(matches!(
+                <SharedCtx as Admin<_>>::create_bucket(accessor, admin.clone(), config(4096))
+                    .await?,
+                Err(CreateErr::ConfigConflict(_))
+            ));
+            for handle in [created, ensured] {
+                sync_call!(store_accessor, |active| BucketDrop::drop(
+                    &mut active,
+                    admin.clone(),
+                    handle
+                ))?;
+            }
+            <SharedCtx as Admin<_>>::delete_bucket(accessor, admin.clone(), name.clone())
+                .await?
+                .unwrap();
+            Ok::<_, wasmtime::Error>(())
+        }),
+    )
+    .await?;
+    finished(ran)?;
+    assert_eq!(
+        *events.seen.lock().unwrap(),
+        [
+            (Level::INFO, "wasmcloud:nats created KV bucket".to_string()),
+            (
+                Level::DEBUG,
+                "wasmcloud:nats opened existing KV bucket".to_string()
+            ),
+            (Level::INFO, "wasmcloud:nats deleted KV bucket".to_string()),
+        ]
+    );
+    fx.plugin.connections.shutdown().await;
+    Ok(())
+}

@@ -90,17 +90,43 @@ impl<T: 'static + Send> labeled_kv_admin::HostWithStore<T> for SharedCtx {
             }
             Err(e) => return Ok(Err(CreateBucketError::Nats(e))),
         };
-        let store = match conn.jetstream.create_key_value(kv_config).await {
-            Ok(store) => {
-                tracing::info!(bucket, "wasmcloud:nats created KV bucket");
-                store
-            }
-            Err(e) => match classify_create_err(&bucket, e) {
-                CreateFailure::Conflict => match adopt_existing(&conn, &requested).await {
-                    Ok(store) => store,
-                    Err(e) => return Ok(Err(e)),
-                },
-                CreateFailure::Other(e) => return Ok(Err(CreateBucketError::Nats(e))),
+        // Open before creating. JetStream's stream create is idempotent and
+        // async-nats drops the server's `did_create`, so a create that
+        // succeeds cannot tell a new bucket from an identical existing one,
+        // and "created" would be logged for every ensure of a live bucket.
+        let store = match conn.jetstream.get_key_value(&bucket).await {
+            Ok(store) => match check_existing(&conn, &requested, store) {
+                Ok(store) => {
+                    tracing::debug!(bucket, "wasmcloud:nats opened existing KV bucket");
+                    store
+                }
+                Err(e) => return Ok(Err(e)),
+            },
+            Err(e) => match bucket_lookup_err(&bucket, e) {
+                types::NatsError::NotFound(_) => {
+                    match conn.jetstream.create_key_value(kv_config).await {
+                        // A concurrent ensure that created the same config
+                        // first also lands here, so two racing callers may
+                        // both log the create.
+                        Ok(store) => {
+                            tracing::info!(bucket, "wasmcloud:nats created KV bucket");
+                            store
+                        }
+                        Err(e) => match classify_create_err(&bucket, e) {
+                            // Created with another config since the lookup.
+                            CreateFailure::Conflict => {
+                                match adopt_existing(&conn, &requested).await {
+                                    Ok(store) => store,
+                                    Err(e) => return Ok(Err(e)),
+                                }
+                            }
+                            CreateFailure::Other(e) => {
+                                return Ok(Err(CreateBucketError::Nats(e)));
+                            }
+                        },
+                    }
+                }
+                other => return Ok(Err(CreateBucketError::Nats(other))),
             },
         };
         let resource = accessor.with(|mut a| a.get().table.push(BucketHandle { store, conn }))?;
@@ -171,6 +197,17 @@ async fn adopt_existing(
         .get_key_value(bucket)
         .await
         .map_err(|e| CreateBucketError::Nats(bucket_lookup_err(bucket, e)))?;
+    check_existing(conn, requested, store)
+}
+
+/// Opens an existing bucket when it matches what the guest asked for,
+/// otherwise hands back what it has.
+fn check_existing(
+    conn: &ConnHandle,
+    requested: &kv_admin::BucketConfig,
+    store: jetstream::kv::Store,
+) -> Result<jetstream::kv::Store, CreateBucketError> {
+    let bucket = &requested.bucket;
     let info = store.stream.cached_info();
     let existing = from_stream_config(store.name.clone(), &info.config);
     if !matches_request(&conn.policy, requested, &existing) {
