@@ -36,7 +36,7 @@ workspace = true
 default = ["wasi-config", "wasi-logging", "wasi-blobstore", "wasi-keyvalue", "wasmcloud-postgres", "washlet", "wasi-otel", "wasi-webgpu", "wasm_component_model_implements", "wasmcloud-nats"]
 oci = ["dep:oci-client", "dep:oci-wasm", "dep:docker_credential", "dep:hmac", "dep:wit-component"]
 wasi-otel = []
-washlet = ["oci", "dep:nkeys"]
+washlet = ["oci", "dep:nkeys", "dep:pbjson", "dep:pbjson-types", "dep:prost", "dep:tonic-prost"]
 wasi-config = []
 wasi-logging = []
 wasi-blobstore = ["dep:object_store", "wasmcloud-nats"]
@@ -136,10 +136,10 @@ tonic = { workspace = true, features = [
 ] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "ansi", "time", "json"] }
 tracing-opentelemetry = { workspace = true }
-pbjson = { workspace = true, default-features = true }
-pbjson-types = { workspace = true, default-features = true }
-prost = { workspace = true, default-features = true }
-tonic-prost = { workspace = true, default-features = true }
+pbjson = { workspace = true, default-features = true, optional = true }
+pbjson-types = { workspace = true, default-features = true, optional = true }
+prost = { workspace = true, default-features = true, optional = true }
+tonic-prost = { workspace = true, default-features = true, optional = true }
 opentelemetry = { workspace = true, features = ["trace", "metrics", "logs"] }
 opentelemetry-appender-tracing = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["logs"] }
