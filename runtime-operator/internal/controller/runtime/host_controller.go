@@ -459,6 +459,20 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 
 // handleHeartbeat accepts only the subject's host ID and refuses name takeovers.
 // Existing Host writes require the resource version checked by the handler.
+// hostIDBeingDeleted reports whether a Host with hostID is still being deleted.
+func hostIDBeingDeleted(ctx context.Context, c client.Client, namespace, hostID string) (bool, error) {
+	hosts := &runtimev1alpha1.HostList{}
+	if err := c.List(ctx, hosts, client.InNamespace(namespace), client.MatchingFields{hostIDIndex: hostID}); err != nil {
+		return false, err
+	}
+	for i := range hosts.Items {
+		if !hosts.Items[i].DeletionTimestamp.IsZero() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger, subject string, data []byte) {
 	var req runtimev2.HostHeartbeat
 	if err := protojson.Unmarshal(data, &req); err != nil {
@@ -479,8 +493,19 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 	if req.GetStartedAt() != nil {
 		startedAt = req.GetStartedAt().AsTime()
 	}
-	if h.retiredHosts.contains(req.Id) || h.retiredHosts.fromRetiredPod(req.Hostname, startedAt) {
+	if h.retiredHosts.retiredID(req.Id, startedAt) || h.retiredHosts.fromRetiredPod(req.Hostname, startedAt) {
 		return
+	}
+	// A replacement under a retired ID waits for the retired Host to go: its
+	// cleanup removes Workloads by host ID, the replacement's among them.
+	if h.retiredHosts.contains(req.Id) {
+		deleting, err := hostIDBeingDeleted(ctx, h.client, h.operatorNamespace, req.Id)
+		if err != nil {
+			log.Error(err, "failed to check for a Host being deleted", "hostID", req.Id)
+		}
+		if err != nil || deleting {
+			return
+		}
 	}
 
 	// Every Host object lives in the operator's own namespace. Tenant

@@ -70,6 +70,19 @@ func (r *RetiredHosts) contains(hostID string) bool {
 	return ok
 }
 
+// retiredID rejects a retired ID unless its host is known to postdate the
+// retirement: a host restarted under a fixed ID is a replacement.
+func (r *RetiredHosts) retiredID(hostID string, startedAt time.Time) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	retiredAt, ok := r.ids[hostID]
+	// A missing start time cannot distinguish a replacement from the old host.
+	return ok && (startedAt.IsZero() || !startedAt.After(retiredAt))
+}
+
 // fromRetiredPod rejects hosts not known to postdate Pod removal.
 func (r *RetiredHosts) fromRetiredPod(podIP string, startedAt time.Time) bool {
 	if r == nil {
