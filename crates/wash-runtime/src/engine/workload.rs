@@ -3670,7 +3670,9 @@ impl UnresolvedWorkload {
                 // An `(implements ..)` label routes to the plugin
                 // whose `host.plugins` entry declares it; failing
                 // that, to one that supports named instances. A plain
-                // import stays with a plugin that serves it plainly.
+                // import routes to the plugin holding this workload's
+                // default route for it; failing that, it stays with a
+                // plugin that serves it plainly.
                 let defer_to_other = if let Some(label) = wit_interface.name.as_deref() {
                     match declaring_plugin(plugins, plugin_bindings, label, wit_interface) {
                         Some(owner) => owner != *plugin_id,
@@ -3680,8 +3682,13 @@ impl UnresolvedWorkload {
                         }
                     }
                 } else {
-                    p.defers_unnamed_instances()
-                        && other_plugin_serves(plugins, plugin_id, wit_interface, false)
+                    match default_route_plugin(plugins, plugin_bindings, wit_interface) {
+                        Some(owner) => owner != *plugin_id,
+                        None => {
+                            p.defers_unnamed_instances()
+                                && other_plugin_serves(plugins, plugin_id, wit_interface, false)
+                        }
+                    }
                 };
                 !defer_to_other
             };
@@ -4667,6 +4674,28 @@ fn declaring_plugin(
     })
 }
 
+/// The plugin holding the workload's default route for the plain (unlabeled)
+/// `iface`, if any — lowest id first, so the answer is stable. The plain
+/// import's counterpart of [`declaring_plugin`]: a route somebody declared
+/// beats id order and every plugin's [`HostPlugin::defers_unnamed_instances`].
+/// See [`HostPlugin::routes_unnamed_instance`].
+fn default_route_plugin(
+    plugins: &HashMap<&'static str, Arc<dyn HostPlugin + 'static>>,
+    plugin_bindings: &crate::plugin::PluginBindings,
+    iface: &WitInterface,
+) -> Option<&'static str> {
+    let mut candidates: Vec<(&&'static str, &Arc<dyn HostPlugin>)> = plugins.iter().collect();
+    candidates.sort_unstable_by_key(|(id, _)| **id);
+    candidates
+        .into_iter()
+        .find(|(id, q)| {
+            q.world().includes_bidirectional(iface)
+                && q.claims(iface)
+                && q.routes_unnamed_instance(iface, &plugin_bindings.for_plugin(id))
+        })
+        .map(|(id, _)| *id)
+}
+
 /// Topologically sort components (Kahn's algorithm) so exporters come before
 /// importers, a component's linker must be fully configured before anything
 /// that imports from it is pre-instantiated. Errors on a dependency cycle.
@@ -4836,6 +4865,9 @@ mod tests {
         /// Serves labeled and unlabeled imports off one backend, so it never
         /// defers a plain import to a single-backend plugin.
         serves_unnamed_too: bool,
+        /// Takes a plain import when the operator declared its unnamed
+        /// binding, the way a sync multiplexer holds a default route.
+        routes_declared_unnamed: bool,
         /// Minimum version this plugin will claim, mirroring a plugin whose
         /// `world()` cannot express the constraint. `None` claims everything.
         claims_from: Option<semver::Version>,
@@ -4865,6 +4897,7 @@ mod tests {
                 on_workload_resolved_count: Arc::new(AtomicUsize::new(0)),
                 named_instance_support: false,
                 serves_unnamed_too: false,
+                routes_declared_unnamed: false,
                 claims_from: None,
                 host_owned: Vec::new(),
                 bound_interfaces: Arc::new(Mutex::new(Vec::new())),
@@ -4921,6 +4954,13 @@ mod tests {
             self
         }
 
+        /// Take a plain import whose unnamed binding the operator declared on
+        /// this plugin, the way a sync multiplexer holds a default route.
+        fn routing_declared_unnamed(mut self) -> Self {
+            self.routes_declared_unnamed = true;
+            self
+        }
+
         /// Claim only interfaces pinning a version at or above `min`, the way
         /// the async messaging multiplexer claims only `>= 0.3.0`.
         fn claiming_from(mut self, min: &str) -> Self {
@@ -4960,6 +5000,17 @@ mod tests {
 
         fn defers_unnamed_instances(&self) -> bool {
             self.named_instance_support && !self.serves_unnamed_too
+        }
+
+        fn routes_unnamed_instance(
+            &self,
+            _interface: &WitInterface,
+            declared: &crate::plugin::PluginBindingSet,
+        ) -> bool {
+            self.routes_declared_unnamed
+                && declared
+                    .binding_names()
+                    .any(|name| name == crate::plugin::bindings::UNNAMED_BINDING)
         }
 
         fn claims(&self, interface: &WitInterface) -> bool {
@@ -7502,6 +7553,132 @@ mod tests {
             "zzz-component",
             "the multiplexer must hand a plain import to the plugin serving it plainly"
         );
+    }
+
+    /// The standalone/multiplexer pair as a host registers it: the standalone
+    /// serves plain imports, and the multiplexer defers them unless the
+    /// workload has a default route on it. Ids as wash-runtime's own, so the
+    /// standalone sorts first.
+    type PluginMap = HashMap<&'static str, Arc<dyn HostPlugin>>;
+
+    fn standalone_and_multiplexer(
+        iface: &WitInterface,
+    ) -> (Arc<MockPlugin>, Arc<MockPlugin>, PluginMap) {
+        let standalone = Arc::new(MockPlugin::new(
+            "wasi-blobstore",
+            vec![iface.clone()],
+            vec![],
+        ));
+        let mux = Arc::new(
+            MockPlugin::new("wasi-blobstore-multiplexed", vec![iface.clone()], vec![])
+                .with_named_instance_support()
+                .routing_declared_unnamed(),
+        );
+        let mut plugins = HashMap::new();
+        plugins.insert(standalone.id(), standalone.clone() as Arc<dyn HostPlugin>);
+        plugins.insert(mux.id(), mux.clone() as Arc<dyn HostPlugin>);
+        (standalone, mux, plugins)
+    }
+
+    fn workload_with(entries: Vec<WitInterface>) -> UnresolvedWorkload {
+        UnresolvedWorkload::new(
+            "test-workload-id".to_string(),
+            "test-workload".to_string(),
+            "test-namespace".to_string(),
+            None,
+            vec![create_test_component("component1")],
+            entries,
+        )
+    }
+
+    /// With no default route anywhere, a plain import binds the standalone
+    /// exactly as before — even when the operator declared labels on the
+    /// multiplexer, which say nothing about the unlabeled import.
+    #[tokio::test]
+    async fn test_a_plain_import_without_a_default_route_stays_standalone() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+        let (standalone, mux, plugins) = standalone_and_multiplexer(&iface);
+
+        for declared in [
+            crate::plugin::PluginBindings::new(),
+            crate::plugin::PluginBindings::new().with_plugin(
+                crate::plugin::PluginBindingSet::new("wasi-blobstore-multiplexed")
+                    .with_base(crate::wit::Config::from_iter([(
+                        "backend".to_string(),
+                        "in-memory".to_string(),
+                    )]))
+                    .with_binding("tenant-a", Default::default()),
+            ),
+        ] {
+            let mut workload = workload_with(vec![iface.clone()]);
+            let bound = workload.bind_plugins(&plugins, &declared).await.unwrap();
+            assert_eq!(bound.len(), 1);
+            assert_eq!(bound[0].0.id(), "wasi-blobstore");
+        }
+        assert_eq!(mux.get_call_count("on_workload_bind"), 0);
+        assert_eq!(standalone.get_call_count("on_workload_item_bind"), 2);
+    }
+
+    /// A declared unnamed binding is the plain import's route: it goes to the
+    /// multiplexer even though the standalone sorts first and serves plain
+    /// imports itself, and the standalone is not bound at all — the plain
+    /// interface is linked once.
+    #[tokio::test]
+    async fn test_a_plain_import_follows_its_default_route() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+        let (standalone, mux, plugins) = standalone_and_multiplexer(&iface);
+
+        let declared = crate::plugin::PluginBindings::new().with_plugin(
+            crate::plugin::PluginBindingSet::new("wasi-blobstore-multiplexed")
+                .with_binding(crate::plugin::bindings::UNNAMED_BINDING, Default::default()),
+        );
+        let mut workload = workload_with(vec![iface.clone()]);
+        let bound = workload.bind_plugins(&plugins, &declared).await.unwrap();
+
+        assert_eq!(
+            bound.iter().map(|(p, _)| p.id()).collect::<Vec<_>>(),
+            vec!["wasi-blobstore-multiplexed"]
+        );
+        assert_eq!(mux.get_call_count("on_workload_item_bind"), 1);
+        assert_eq!(
+            standalone.get_call_count("on_workload_bind"),
+            0,
+            "a plain import with a default route must not also bind the standalone"
+        );
+    }
+
+    /// Labels are routed as before beside a default route: a labeled entry
+    /// and the plain one both land on the multiplexer, as one bind.
+    #[tokio::test]
+    async fn test_a_default_route_leaves_labels_where_they_were() {
+        let iface = WitInterface::from("wasi:blobstore/container");
+        let (standalone, mux, plugins) = standalone_and_multiplexer(&iface);
+
+        let mut labeled = iface.clone();
+        labeled.name = Some("tenant-a".to_string());
+        let declared = crate::plugin::PluginBindings::new().with_plugin(
+            crate::plugin::PluginBindingSet::new("wasi-blobstore-multiplexed")
+                .with_binding(crate::plugin::bindings::UNNAMED_BINDING, Default::default())
+                // Under the default `deny`, a declared unnamed binding counts
+                // as declaring bindings, so the label is declared too.
+                .with_binding("tenant-a", Default::default()),
+        );
+        let mut workload = workload_with(vec![iface.clone(), labeled]);
+        let bound = workload.bind_plugins(&plugins, &declared).await.unwrap();
+
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0].0.id(), "wasi-blobstore-multiplexed");
+        assert_eq!(standalone.get_call_count("on_workload_bind"), 0);
+        let mut seen: Vec<Option<String>> = mux
+            .bound_interfaces
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|i| i.name.clone())
+            .collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen, vec![None, Some("tenant-a".to_string())]);
     }
 
     /// An `(implements ..)` label declared under a plugin's `host.plugins`
