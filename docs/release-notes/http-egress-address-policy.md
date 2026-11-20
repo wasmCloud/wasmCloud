@@ -33,14 +33,19 @@ Raw socket loopback remains the workload's virtual network, and raw access throu
 
 For a shared HTTP and raw socket grant, replace `http://localhost:3000` with `http://host.wasmcloud.internal:3000`,
 and grant the component the TCP port in `allowedHostLoopbackPorts`.
-That port grant is the component's whole grant for `host.wasmcloud.internal`, over HTTP, gRPC, and raw sockets alike:
-no `allowedHosts` entry is needed for it, and an `allowedHosts` entry (even `*`) does not stand in for it.
+HTTP and gRPC additionally need an `allowedHosts` entry permitting the request's scheme, host, and effective port.
+The TCP port grant never overrides this HTTP policy, and an `allowedHosts` entry (even `*`) never replaces the port grant.
 For example, in `.wash/config.yaml`:
 
 ```yaml
 workload:
+  allowedHosts: ["https://host.wasmcloud.internal:3000"]
   allowedHostLoopbackPorts: [3000]
 ```
+
+This example permits HTTPS to port 3000 and refuses plain HTTP, even though both use TCP.
+The HTTP allowlist is checked before every request, including pooled reuse.
+Custom HTTP handlers receive a single exact URL grant for the authorized request, rather than an unrestricted allowlist.
 
 The operator's half is `wash host --allow-host-loopback`, or `networking.allowHostLoopback: true` on the chart's applicable `runtime.hostGroups` entry.
 `wash dev` already enables the operator's half; the component still needs its port grant.

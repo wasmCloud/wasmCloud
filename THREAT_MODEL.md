@@ -86,7 +86,8 @@ A breach of one is a vulnerability unless mentioned in [Known limitations](#know
    It grants no raw socket access to the host.
    HTTP and gRPC can reach `host.wasmcloud.internal` only with the host's loopback enablement and the calling component's explicit TCP port grant in `allowedHostLoopbackPorts`,
    checked on every request even when components in a workload share a connection pool.
-   That port grant is the spec's grant for this route, as it is for raw sockets; `allowedHosts`, even `*`, neither replaces nor widens it.
+   HTTP and gRPC must also satisfy `allowedHosts`, including scheme and port restrictions; the TCP port grant never overrides that policy.
+   Custom HTTP handlers receive only the exact authorized scheme, host, and effective port.
    This route resolves locally to host loopback, preserves the hostname for HTTP and TLS, and refuses host-owned ports.
 6. **Resources.** One workload cannot exhaust the host's memory, connections or file descriptors beyond the limits the operator set.
 7. **Untrusted input.** No request, response, message or registry artifact from a peer can crash the host or corrupt its memory.

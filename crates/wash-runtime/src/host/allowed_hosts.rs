@@ -151,10 +151,16 @@ impl AllowedHost {
     /// An exact HTTP URL grants only its loopback host, scheme and effective
     /// port. Wildcards and port-less authorities cannot open host loopback.
     pub(crate) fn grants_http_loopback(&self, request: &Uri) -> bool {
+        request.host().is_some_and(is_http_loopback_host) && self.matches_http_url(request)
+    }
+
+    /// Match the URL's scheme, normalized host, and effective port exactly.
+    /// Used by both loopback routes, including request-scoped handler grants.
+    fn matches_http_url(&self, request: &Uri) -> bool {
         let Self::Url(url) = self else {
             return false;
         };
-        let Some(host) = request.host().filter(|host| is_http_loopback_host(host)) else {
+        let Some(host) = request.host() else {
             return false;
         };
         let Some(scheme @ ("http" | "https")) = request.scheme_str() else {
@@ -197,13 +203,30 @@ impl AllowedHost {
             return false;
         };
         let request_scheme = request.scheme_str();
-        let request_port = request.port_u16();
+        let host_loopback = is_host_loopback_name(request_host);
+        let request_host = if host_loopback {
+            request_host.strip_suffix('.').unwrap_or(request_host)
+        } else {
+            request_host
+        };
+        let request_port = request.port_u16().or_else(|| {
+            if host_loopback {
+                request_scheme.and_then(default_port)
+            } else {
+                None
+            }
+        });
 
         match self {
             AllowedHost::Any => true,
 
             AllowedHost::Authority(authority) => {
-                if !authority.host().eq_ignore_ascii_case(request_host) {
+                let host_matches = if host_loopback {
+                    same_name(authority.host(), request_host)
+                } else {
+                    authority.host().eq_ignore_ascii_case(request_host)
+                };
+                if !host_matches {
                     return false;
                 }
                 // Unspecified port on the policy matches any request port.
@@ -214,8 +237,8 @@ impl AllowedHost {
             }
 
             AllowedHost::Url(url) => {
-                if is_http_loopback_host(request_host) {
-                    return self.grants_http_loopback(request);
+                if is_http_loopback_host(request_host) || host_loopback {
+                    return self.matches_http_url(request);
                 }
                 let Some(policy_host) = url.host_str() else {
                     return false;
@@ -274,6 +297,12 @@ pub(crate) fn is_http_loopback_host(host: &str) -> bool {
             .trim_end_matches(']')
             .parse::<IpAddr>()
             .is_ok_and(|ip| ip.to_canonical().is_loopback())
+}
+
+fn is_host_loopback_name(host: &str) -> bool {
+    host.strip_suffix('.')
+        .unwrap_or(host)
+        .eq_ignore_ascii_case("host.wasmcloud.internal")
 }
 
 impl AllowedHost {
