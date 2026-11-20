@@ -35,8 +35,8 @@ const SVC_COUNTER_WASM: &[u8] = include_bytes!("wasm/svc_counter.wasm");
 #[tokio::test]
 async fn test_benchmark_service_can_proxy_to_loopback_backends() -> Result<()> {
     for flavor in [bench_common::Flavor::P2, bench_common::Flavor::P3] {
-        let service = bench_common::start_service_host().await?;
         let backend = bench_common::start_backend_host(flavor).await?;
+        let service = bench_common::start_service_host(Some(backend.addr)).await?;
         let result = bench_common::checked_request(
             &bench_common::bench_client(),
             service.addr,

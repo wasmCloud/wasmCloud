@@ -189,7 +189,6 @@ struct WarmService {
 fn start_service(backend: Option<Flavor>) -> WarmService {
     let rt = Runtime::new().expect("tokio runtime");
     let (service, backend, client) = rt.block_on(async {
-        let service = start_service_host().await.unwrap();
         let (backend, expected_body) = match backend {
             Some(flavor) => (
                 Some(start_backend_host(flavor).await.unwrap()),
@@ -197,6 +196,9 @@ fn start_service(backend: Option<Flavor>) -> WarmService {
             ),
             None => (None, DIRECT_BODY),
         };
+        let service = start_service_host(backend.as_ref().map(|host| host.addr))
+            .await
+            .unwrap();
         let client = bench_client();
         checked_request(
             &client,
