@@ -27,3 +27,6 @@ wit-parser = { version = "0.254.2", default-features = false, features = ["std"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
+
+[lints.cargo]
+unused_dependencies = "deny"

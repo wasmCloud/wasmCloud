@@ -3,6 +3,9 @@
 [alias]
 xtask = "run --package xtask --"
 
+[registry]
+global-min-publish-age = "24 hours"
+
 # Give transient registry/DNS failures time to recover, including in nested
 # fixture builds. Downloads still fail once this bounded retry budget is spent.
 # This is the only cover for CI jobs that run cargo without the setup-rust

@@ -3,6 +3,7 @@ name = "wash-runtime"
 version.workspace = true
 description = "Opinionated wasmtime wrapper that provides a runtime and workload API for executing Wasm components"
 edition = "2024"
+rust-version.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/wasmCloud/wasmCloud"
 authors = ["The wasmCloud Team"]
@@ -39,7 +40,7 @@ washlet = ["oci", "dep:nkeys"]
 wasi-config = []
 wasi-logging = []
 wasi-blobstore = ["dep:object_store", "wasmcloud-nats"]
-wasi-keyvalue = []
+wasi-keyvalue = ["dep:redis"]
 # Component-model `(implements ..)` / `named_imports` multiplexing. On by
 # default; disable with `--no-default-features` for a build that neither
 # accepts nor routes named imports.
@@ -90,7 +91,7 @@ imbl = { workspace = true }
 moka = { workspace = true, features = ["sync"]}
 names = { workspace = true }
 object_store = { workspace = true, optional = true }
-redis = { workspace = true }
+redis = { workspace = true, optional = true }
 semver = { workspace = true }
 sysinfo = { workspace = true }
 uuid = { workspace = true, features = ["v4", "v7"] }

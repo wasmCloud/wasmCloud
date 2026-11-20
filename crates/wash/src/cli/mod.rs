@@ -557,8 +557,8 @@ mod tests {
         // the tempdir drops so other parallel tests that read std::env::current_dir()
         // don't see a deleted path.
         let orig_cwd = std::env::current_dir().expect("get cwd");
-        let _restore = scopeguard::guard(orig_cwd, |c| {
-            let _ = std::env::set_current_dir(c);
+        let _restore = std::mem::DropGuard::new(orig_cwd, |cwd| {
+            let _ = std::env::set_current_dir(cwd);
         });
 
         let tempdir = tempfile::tempdir().unwrap();
