@@ -551,6 +551,29 @@ pub trait HostPlugin: std::any::Any + Send + Sync + 'static {
         self.supports_named_instances()
     }
 
+    /// Whether this workload's plain, unlabeled `interface` has a default
+    /// route on this plugin, so the plugin takes the import even though it
+    /// otherwise [defers unnamed instances](HostPlugin::defers_unnamed_instances).
+    ///
+    /// Asked only for an entry with no `(implements ..)` label, with the
+    /// operator's declaration for this plugin (`declared`) and the workload's
+    /// own entry (`interface`, as the manifest wrote it). The lowest plugin id
+    /// answering `true` takes the import ahead of every other plugin serving
+    /// it, the way an operator-declared label goes to its declaring plugin.
+    ///
+    /// The default is `false`, which leaves plain imports where
+    /// `defers_unnamed_instances` puts them. A multiplexer answers `true` only
+    /// for a route somebody wrote down — the operator in `declared`, or the
+    /// workload in its own entry — so where neither wrote one, the import binds
+    /// exactly as before.
+    fn routes_unnamed_instance(
+        &self,
+        _interface: &WitInterface,
+        _declared: &PluginBindingSet,
+    ) -> bool {
+        false
+    }
+
     /// Injects metrics into the plugin.
     ///
     /// A plugin holding meters starts out at
