@@ -35,7 +35,8 @@ A vulnerability with no evidence of exploitation is not an escalation event and 
 
 ### Prerequisites
 
-- **Rust** (latest stable version)
+- **Rust 1.100.0** for development and tests, as pinned in `rust-toolchain.toml`.
+  Production code supports Rust 1.98.0, matching Wasmtime main's minimum supported Rust version.
 - **Git**
 - **WebAssembly targets**: `wasm32-wasip2` and `wasm32-wasip1` (installed via `rustup target add wasm32-wasip2 wasm32-wasip1`) are both needed to build the `wash-runtime` wasm test fixtures.
 - **wasm-component-ld** (0.5.23 or newer): needed to link the wasm test fixtures — see the [warning in the README](README.md#building-from-source) for the install and linker setup.
@@ -47,6 +48,10 @@ git clone https://github.com/wasmcloud/wasmCloud.git
 cd wasmCloud
 cargo build
 ```
+
+Dependency resolution applies a 24-hour cooldown to newly published registry versions.
+For an urgent reviewed update, use `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate> --precise <version>`.
+Versions already in `Cargo.lock` remain allowed; `cargo install` does not apply the cooldown.
 
 ### Running Tests
 
