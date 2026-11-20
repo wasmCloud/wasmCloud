@@ -28,7 +28,8 @@ use crate::wit::WitInterface;
 use super::{
     DEFAULT_POOL_SIZE, PLUGIN_POSTGRES_ID, PgValue, PreparedEntry, PreparedStatementExecError,
     QueryError, ResultRow, StatementPrepareError, WasmcloudPostgres, bindings, execute_query,
-    extract_pool_size, extract_tls_requirement, pg_error_string, wrong_type_message,
+    extract_pool_size, extract_tls_requirement, parse_pg_config, pg_error_string,
+    wrong_type_message,
 };
 
 /// The single `wasmcloud:postgres` backend type. Unlike `wasi:keyvalue` (which
@@ -51,14 +52,12 @@ pub struct PgId {
 }
 
 fn check_url_egress(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
-    let pg_config: tokio_postgres::Config =
-        url.parse().context("failed to parse postgres config")?;
+    let pg_config = parse_pg_config(url)?;
     super::check_egress(&pg_config, policy)
 }
 
 async fn check_resolved_url_egress(url: &str, policy: &PluginEgressPolicy) -> anyhow::Result<()> {
-    let pg_config: tokio_postgres::Config =
-        url.parse().context("failed to parse postgres config")?;
+    let pg_config = parse_pg_config(url)?;
     super::check_resolved_egress(&pg_config, policy).await
 }
 
@@ -67,9 +66,8 @@ async fn check_resolved_url_egress(url: &str, policy: &PluginEgressPolicy) -> an
 /// named interface owns its role and target database.
 fn build_pool_from_url(url: &str) -> anyhow::Result<Pool> {
     let parsed = Url::parse(url).context("failed to parse postgres URL")?;
-    let pg_config: tokio_postgres::Config =
-        url.parse().context("failed to parse postgres config")?;
-    let pool_size = extract_pool_size(&parsed);
+    let pg_config = parse_pg_config(url)?;
+    let pool_size = extract_pool_size(&parsed)?;
     let mgr_config = ManagerConfig {
         recycling_method: RecyclingMethod::Fast,
     };
@@ -333,6 +331,31 @@ impl<'a> bindings::named_imports::wasmcloud::postgres0_1_1_draft::prepared::Host
         Ok(id
             .exec(&plugin.prepared_statements, &stmt_token, &params)
             .await)
+    }
+}
+
+#[cfg(test)]
+mod url_option_tests {
+    use super::*;
+
+    #[test]
+    fn a_named_interface_url_may_set_the_pool_size() {
+        let url = "postgres://u:p@db.internal/app?pool_size=3";
+        assert_eq!(build_pool_from_url(url).unwrap().status().max_size, 3);
+
+        let policy = PluginEgressPolicy::allowing(&["db.internal:5432"]);
+        check_url_egress(url, &policy).unwrap();
+    }
+
+    #[test]
+    fn a_named_interface_url_with_an_empty_pool_is_refused() {
+        let err = build_pool_from_url("postgres://u:p@db.internal/app?pool_size=0")
+            .err()
+            .unwrap();
+        assert!(
+            format!("{err:#}").contains("must be a positive integer"),
+            "{err:#}"
+        );
     }
 }
 

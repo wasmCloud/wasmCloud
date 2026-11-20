@@ -159,13 +159,10 @@ impl WasmcloudPostgres {
     ///
     /// Example: `postgres://user:pass@bouncer:6432?sslmode=require&pool_size=10`
     pub fn new(url: &Url) -> anyhow::Result<Self> {
-        let mut config: tokio_postgres::Config = url
-            .as_str()
-            .parse()
-            .context("failed to parse postgres config")?;
+        let mut config = parse_pg_config(url.as_str())?;
 
         // Extract pool_size from the URL (not a standard postgres param, we parse it ourselves)
-        let pool_size = extract_pool_size(url);
+        let pool_size = extract_pool_size(url)?;
 
         // Determine TLS from sslmode
         let tls = extract_tls_requirement(url);
@@ -250,12 +247,52 @@ impl WasmcloudPostgres {
     }
 }
 
+/// Parse a postgres URL into a [`tokio_postgres::Config`].
+///
+/// `tokio_postgres` rejects a query key or `sslmode` value it does not know,
+/// so the options this plugin reads itself are taken out first: `pool_size`
+/// (see [`extract_pool_size`]), and `verify-ca` and `verify-full`, which
+/// [`extract_tls_requirement`] treats as TLS-required and which become
+/// `require` here. Every TLS connection verifies the server certificate and
+/// name against the web PKI roots, so the three modes connect the same way.
+fn parse_pg_config(url: &str) -> anyhow::Result<tokio_postgres::Config> {
+    let rewritten;
+    let url = match url.split_once('?') {
+        Some((base, query)) => {
+            let params: Vec<&str> = query
+                .split('&')
+                .filter_map(|param| match param.split_once('=') {
+                    Some(("pool_size", _)) => None,
+                    Some(("sslmode", "verify-ca" | "verify-full")) => Some("sslmode=require"),
+                    _ => Some(param),
+                })
+                .collect();
+            rewritten = if params.is_empty() {
+                base.to_string()
+            } else {
+                format!("{base}?{}", params.join("&"))
+            };
+            rewritten.as_str()
+        }
+        None => url,
+    };
+    url.parse().context("failed to parse postgres config")
+}
+
 /// Extract pool_size from URL query params. Returns default if not found.
-fn extract_pool_size(url: &Url) -> usize {
-    url.query_pairs()
-        .find(|(k, _)| k == "pool_size")
-        .and_then(|(_, v)| v.parse().ok())
-        .unwrap_or(DEFAULT_POOL_SIZE)
+///
+/// # Errors
+///
+/// A `pool_size` that is not a positive integer: a pool of no connections
+/// would leave every query waiting for one forever.
+fn extract_pool_size(url: &Url) -> anyhow::Result<usize> {
+    let Some((_, value)) = url.query_pairs().find(|(k, _)| k == "pool_size") else {
+        return Ok(DEFAULT_POOL_SIZE);
+    };
+    match value.parse::<usize>() {
+        Ok(size) if size > 0 => Ok(size),
+        _ => bail!("pool_size must be a positive integer"),
+    }
 }
 
 /// Check every address `config` would dial, as `tokio_postgres` picks them: a
@@ -918,6 +955,55 @@ mod tests {
             &["postgres://db.internal:5432"],
         )
         .unwrap();
+    }
+
+    fn plugin(url: &str) -> anyhow::Result<WasmcloudPostgres> {
+        WasmcloudPostgres::new(&Url::parse(url).unwrap())
+    }
+
+    /// `pool_size` and the `verify-*` sslmodes are read by this plugin, not by
+    /// `tokio_postgres`, which rejects a key or value it does not know.
+    #[test]
+    fn the_documented_url_options_are_read() {
+        let pg = plugin("postgres://u:p@bouncer:6432?sslmode=require&pool_size=10").unwrap();
+        assert_eq!(pg.pool_size, 10);
+        assert!(pg.tls);
+        assert_eq!(pg.base_config.get_ports(), &[6432]);
+
+        let pg = plugin("postgres://u:p@bouncer:6432?pool_size=3&application_name=app").unwrap();
+        assert_eq!(pg.pool_size, 3);
+        assert!(!pg.tls);
+        assert_eq!(pg.base_config.get_application_name(), Some("app"));
+
+        let pg = plugin("postgres://u:p@bouncer/").unwrap();
+        assert_eq!(pg.pool_size, DEFAULT_POOL_SIZE);
+    }
+
+    #[test]
+    fn only_sslmodes_that_ask_for_tls_turn_it_on() {
+        for mode in ["require", "verify-ca", "verify-full"] {
+            let pg = plugin(&format!("postgres://u:p@bouncer/?sslmode={mode}")).unwrap();
+            assert!(pg.tls, "{mode}");
+        }
+        for mode in ["disable", "prefer"] {
+            let pg = plugin(&format!("postgres://u:p@bouncer/?sslmode={mode}")).unwrap();
+            assert!(!pg.tls, "{mode}");
+        }
+        assert!(plugin("postgres://u:p@bouncer/?sslmode=verify-everything").is_err());
+    }
+
+    /// A pool of zero connections would make every query wait forever.
+    #[test]
+    fn a_pool_size_that_is_not_a_positive_integer_is_refused() {
+        for size in ["0", "-1", "ten", ""] {
+            let err = plugin(&format!("postgres://u:p@bouncer/?pool_size={size}"))
+                .err()
+                .unwrap();
+            assert!(
+                format!("{err:#}").contains("must be a positive integer"),
+                "{size:?}: {err:#}"
+            );
+        }
     }
 
     /// The operator's base url is checked when the ceiling is installed, so a
