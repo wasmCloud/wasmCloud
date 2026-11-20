@@ -1513,7 +1513,6 @@ impl CliCommand for HostCommand {
             egress_addrs: wash_runtime::host::egress_policy::EgressAddressPolicy {
                 deny_special: self.deny_special_ranges,
                 allow_private: !self.deny_private_ranges,
-                allow_loopback: false,
             },
             quotas: Some(Arc::clone(&quotas)),
             // Published as metrics, so the socket policy's would-deny counters

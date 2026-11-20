@@ -8,30 +8,19 @@ use wash_runtime_fuzz::fuzz_target;
 fn check(addr: IpAddr) {
     for deny_special in [false, true] {
         for allow_private in [false, true] {
-            for allow_loopback in [false, true] {
-                let policy = EgressAddressPolicy {
-                    deny_special,
-                    allow_private,
-                    allow_loopback,
-                };
-                assert_eq!(policy.permits(addr), policy.permits(addr.to_canonical()));
-                if let IpAddr::V4(v4) = addr {
-                    assert_eq!(
-                        policy.permits(addr),
-                        policy.permits(v4.to_ipv6_mapped().into())
-                    );
-                }
-                if !deny_special && allow_private {
-                    assert!(policy.permits(addr));
-                }
-                // Loopback is the only range `allow_loopback` reopens.
-                if !addr.to_canonical().is_loopback() {
-                    let without = EgressAddressPolicy {
-                        allow_loopback: false,
-                        ..policy
-                    };
-                    assert_eq!(policy.permits(addr), without.permits(addr));
-                }
+            let policy = EgressAddressPolicy {
+                deny_special,
+                allow_private,
+            };
+            assert_eq!(policy.permits(addr), policy.permits(addr.to_canonical()));
+            if let IpAddr::V4(v4) = addr {
+                assert_eq!(
+                    policy.permits(addr),
+                    policy.permits(v4.to_ipv6_mapped().into())
+                );
+            }
+            if !deny_special && allow_private {
+                assert!(policy.permits(addr));
             }
         }
     }

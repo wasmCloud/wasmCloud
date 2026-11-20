@@ -55,18 +55,8 @@ fn dev_socket_policy(
     // from this one reads the same reservations. `quotas` is the session's
     // one registry, so socket connections draw on the same allowance the
     // HTTP pool and the published ports do.
-    //
-    // HTTP and gRPC may also reach the developer's own loopback (a backend on
-    // `localhost:3000`) without a per-component port grant, so a project
-    // written before the address policy applied to HTTP runs unchanged here.
-    // Link-local and metadata addresses stay refused, and so do the ports the
-    // session itself owns.
     Arc::new(wash_runtime::sockets::policy::SocketPolicy {
         host_loopback_enabled: true,
-        egress_addrs: wash_runtime::host::egress_policy::EgressAddressPolicy {
-            allow_loopback: true,
-            ..Default::default()
-        },
         host_owned_ports: Some(wash_runtime::host::ports::PortTable::new()),
         quotas: Some(Arc::clone(quotas)),
         ..Default::default()
@@ -1265,20 +1255,6 @@ mod tests {
         let policy = dev_socket_policy(&DevConfig::default().connection_quotas().unwrap());
         assert!(policy.host_loopback_enabled);
         assert!(policy.host_loopback.is_empty());
-        // HTTP egress reaches the developer's loopback, and nothing else
-        // special: metadata and link-local stay refused.
-        for (addr, permitted) in [
-            ("127.0.0.1", true),
-            ("::1", true),
-            ("169.254.169.254", false),
-            ("fe80::1", false),
-        ] {
-            assert_eq!(
-                policy.egress_addrs.permits(addr.parse().unwrap()),
-                permitted,
-                "{addr}"
-            );
-        }
         assert!(
             policy.quotas.is_some(),
             "a dev session's sockets draw on its one connection registry"
