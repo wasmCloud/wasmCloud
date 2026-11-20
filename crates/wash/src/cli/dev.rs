@@ -107,6 +107,8 @@ impl CliCommand for DevCommand {
             .unwrap_or_else(|| "0.0.0.0:8000".to_string());
 
         let mut engine_builder = Engine::builder()
+            // What the cache holds is loaded as code: no workload may mount it.
+            .with_reserved_host_paths([ctx.cache_dir().join(OCI_CACHE_DIR)])
             .with_pooling_allocator(true)
             .with_fuel_consumption(ctx.meters().consumes_fuel());
         for name in &dev_config.wasm_proposals {

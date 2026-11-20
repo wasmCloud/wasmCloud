@@ -274,7 +274,7 @@ async fn test_p3_linker_accepts_p2_component() -> Result<()> {
         volumes: vec![],
     };
 
-    let result = engine.initialize_workload("test-id", workload);
+    let result = engine.initialize_workload("test-id", workload).await;
     assert!(
         result.is_ok(),
         "P3-enabled engine should accept P2 component: {:?}",

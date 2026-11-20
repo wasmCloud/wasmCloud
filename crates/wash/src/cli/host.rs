@@ -1749,6 +1749,9 @@ impl CliCommand for HostCommand {
                 ),
                 insecure: self.allow_insecure_registries,
                 cache_dir: self.oci_cache_dir.clone(),
+                // The default backend for this directory, which the host
+                // built below shares.
+                cache: None,
                 timeout: Some(self.registry_pull_timeout),
                 ..Default::default()
             };

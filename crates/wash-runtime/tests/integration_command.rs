@@ -126,7 +126,8 @@ async fn resolve_components(
                 host_interfaces,
                 components,
             },
-        )?
+        )
+        .await?
         .resolve(
             plugins,
             &Default::default(),

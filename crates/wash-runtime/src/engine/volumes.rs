@@ -357,7 +357,9 @@ fn canonicalize_volume(volume: &Path) -> anyhow::Result<PathBuf> {
 /// reaches outside it. The canonical path is also the one opened and mounted.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HostPathPolicy {
-    reserved: ReservedHostPaths,
+    /// Shared by every clone of the engine that owns this policy, so a path
+    /// reserved through one of them is refused through all of them.
+    reserved: Arc<std::sync::RwLock<ReservedHostPaths>>,
     /// Directories host plugins mount. No workload volume may expose one.
     /// Shared by every clone, so a plugin that loads after the engine is
     /// built still keeps workloads out of its volumes.
@@ -368,6 +370,16 @@ pub(crate) struct HostPathPolicy {
 }
 
 impl HostPathPolicy {
+    /// Reserve further paths, for this policy and every clone of it.
+    #[cfg(feature = "oci")]
+    pub(crate) fn reserve(&self, paths: impl IntoIterator<Item = PathBuf>) {
+        let mut reserved = self
+            .reserved
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *reserved = ReservedHostPaths::new(reserved.0.iter().cloned().chain(paths));
+    }
+
     /// Relative paths in either list are taken against the working directory.
     /// The scratch root is reserved alongside `reserved`.
     pub(crate) fn new(
@@ -377,7 +389,9 @@ impl HostPathPolicy {
         meters: Option<Arc<crate::host::quota::PolicyMeters>>,
     ) -> Self {
         Self {
-            reserved: ReservedHostPaths::new(reserved.into_iter().chain(scratch)),
+            reserved: Arc::new(std::sync::RwLock::new(ReservedHostPaths::new(
+                reserved.into_iter().chain(scratch),
+            ))),
             plugin_volumes: Arc::default(),
             allowed: ReservedHostPaths::new(allowed).0,
             meters,
@@ -420,9 +434,10 @@ impl HostPathPolicy {
         volumes: Vec<(String, PathBuf)>,
         owner: &str,
     ) -> anyhow::Result<(BTreeMap<String, OpenedVolume>, PluginVolumeRegistration)> {
+        let reserved = self.reserved_snapshot();
         let mut checked = Vec::with_capacity(volumes.len());
         for (name, path) in volumes {
-            let canonical = self.reserved.check(&path).with_context(|| {
+            let canonical = reserved.check(&path).with_context(|| {
                 format!(
                     "{owner}: volume '{name}' hostPath {} cannot be mounted",
                     path.display()
@@ -460,18 +475,27 @@ impl HostPathPolicy {
         }
     }
 
+    fn reserved_snapshot(&self) -> ReservedHostPaths {
+        self.reserved
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Check a workload's `hostPath` volume and open the directory that was
     /// checked. Every rule applies.
     pub(crate) fn open(&self, volume: &Path) -> anyhow::Result<OpenedVolume> {
         let canonical = canonicalize_volume(volume)?;
         loop {
+            // A cheap clone of the list, so the check's file I/O holds no lock.
+            let reserved = self.reserved_snapshot();
             let listed = Arc::clone(
                 &self
                     .plugin_volumes
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             );
-            self.reserved
+            reserved
                 .check_canonical(volume, &canonical)
                 .and_then(|()| Self::check_plugin_volumes(&listed, volume, &canonical))
                 .and_then(|()| self.check_allowed(volume, &canonical))
@@ -1079,6 +1103,27 @@ mod allowlist_tests {
             .unwrap();
         drop(plugin);
         assert!(policy.open(root.path()).is_err());
+    }
+
+    /// A host reserves its OCI storage on the engine it was given. The handle
+    /// an embedder kept is a clone, and must refuse that storage too.
+    #[cfg(feature = "oci")]
+    #[test]
+    fn a_path_reserved_through_one_clone_is_refused_through_every_clone() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let kept = HostPathPolicy::new(
+            Vec::<PathBuf>::new(),
+            [root.path().to_path_buf()],
+            None,
+            None,
+        );
+        let hosts = kept.clone();
+        assert!(kept.open(&cache).is_ok());
+        hosts.reserve([cache.clone()]);
+        assert!(hosts.open(&cache).is_err());
+        assert!(kept.open(&cache).is_err());
     }
 
     /// The scratch root is reserved like a credential path: a volume equal to
