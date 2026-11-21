@@ -303,6 +303,9 @@ jobs:
       - name: Install pinned SBOM generator
         uses: $/.github/actions/setup-syft
 
+      - name: Install sbom-attest
+        run: cargo install sbom-attest --version 0.4.9 --locked
+
       - name: Generate and check release SBOMs
         env:
           PLAN: ${{ steps.images.outputs.plan }}

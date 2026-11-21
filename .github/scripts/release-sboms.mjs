@@ -18,8 +18,8 @@
 //
 // Inputs (env), for generate: PLAN (the release-tag `images` step output), TAG,
 // MERGE_SHA, GITHUB_REPOSITORY, RUNNER_TEMP. image-subjects takes IMAGE, NAME,
-// DIGEST, RUNNER_TEMP and GITHUB_OUTPUT. Needs `syft`, and `docker buildx` for
-// images.
+// DIGEST, RUNNER_TEMP and GITHUB_OUTPUT. Needs `syft`, `sbom-attest`, and
+// `docker buildx` for images.
 
 import { execFileSync } from 'node:child_process';
 import {
@@ -136,9 +136,13 @@ function generate() {
     const path = join(ARTIFACTS, name, name);
     if (!existsSync(path)) fail(`artifact ${name} does not contain ${name}`);
     const file = `${name}.spdx.json`;
-    const doc = scan(`file:${path}`, join(scratch, file));
-    requireDependencies(doc, 'cargo', name);
-    normalize(doc, file, ctx);
+    const out = join(scratch, file);
+    // Build the SBOM from Cargo.lock and the crate graph for this target, then
+    // fail on any crate or C library the SBOM and the build disagree on.
+    const graph = ['-p', 'wash', '--target', name.slice('wash-'.length)];
+    execFileSync('sbom-attest', ['generate', ...graph, '--locked', '--binary', path, '--spdx', out, '--cdx', join(scratch, `${name}.cdx.json`)], { stdio: 'inherit' });
+    execFileSync('sbom-attest', ['audit', out, ...graph], { stdio: 'inherit' });
+    normalize(JSON.parse(readFileSync(out, 'utf8')), file, ctx);
   }
 
   writeFileSync(recordPath(), JSON.stringify({ images }));
