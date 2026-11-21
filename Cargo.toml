@@ -15,7 +15,7 @@ members = [
 [workspace.package]
 authors = ["The wasmCloud Team"]
 edition = "2024"
-version = "2.12.2"
+version = "2.12.3"
 rust-version = "1.98.0"
 
 [workspace.lints.cargo]
