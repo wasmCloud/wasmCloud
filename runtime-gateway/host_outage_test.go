@@ -22,7 +22,7 @@ type hostOutage struct {
 	hosts   map[string]*runtimev1alpha1.Host
 }
 
-func newHostOutage(t *testing.T, names ...string) *hostOutage {
+func newHostOutage(t *testing.T, ready condition.Condition, names ...string) *hostOutage {
 	t.Helper()
 	o := &hostOutage{t: t, tracker: newHostTracker(testFallback{}), hosts: map[string]*runtimev1alpha1.Host{}}
 	builder := fake.NewClientBuilder().WithScheme(testScheme(t))
@@ -33,7 +33,7 @@ func newHostOutage(t *testing.T, names ...string) *hostOutage {
 			Hostname:   name,
 			HTTPPort:   8080,
 		}
-		host.Status.SetConditions(condition.ReadyCondition(condition.TypeReady))
+		host.Status.SetConditions(ready)
 		o.hosts[name] = host
 		builder = builder.WithObjects(host).WithStatusSubresource(host)
 	}
@@ -53,6 +53,14 @@ func (o *hostOutage) setReady(name string, ready condition.Condition) {
 	host := o.hosts[name]
 	host.Status.SetConditions(ready)
 	if err := o.client.Status().Update(o.t.Context(), host); err != nil {
+		o.t.Fatal(err)
+	}
+	o.reconcile(name)
+}
+
+func (o *hostOutage) delete(name string) {
+	o.t.Helper()
+	if err := o.client.Delete(o.t.Context(), o.hosts[name]); err != nil {
 		o.t.Fatal(err)
 	}
 	o.reconcile(name)
@@ -79,7 +87,7 @@ func notReadyConditions() map[string]condition.Condition {
 func TestHostOutageKeepsWorkloadRoutes(t *testing.T) {
 	for name, notReady := range notReadyConditions() {
 		t.Run(name, func(t *testing.T) {
-			o := newHostOutage(t, "a")
+			o := newHostOutage(t, condition.ReadyCondition(condition.TypeReady), "a")
 			o.setReady("a", notReady)
 			if got := resolve(t, o.tracker, "shared.example"); got.Hostname != fallbackEndpoint {
 				t.Fatalf("not-ready host takes traffic: %+v", got)
@@ -98,13 +106,34 @@ func TestHostOutageKeepsWorkloadRoutes(t *testing.T) {
 func TestHostOutageRoutesSharedHostnameToReadyHost(t *testing.T) {
 	for name, notReady := range notReadyConditions() {
 		t.Run(name, func(t *testing.T) {
-			o := newHostOutage(t, "a", "b")
+			o := newHostOutage(t, condition.ReadyCondition(condition.TypeReady), "a", "b")
 			o.setReady("a", notReady)
 			want := LookupResult{Scheme: "http", Hostname: "b:8080", WorkloadID: "b"}
 			for range 50 {
 				if got := resolve(t, o.tracker, "shared.example"); got != want {
 					t.Fatalf("route while host a is not Ready = %+v, want %+v", got, want)
 				}
+			}
+		})
+	}
+}
+
+// On gateway startup during an outage, Workloads can register routes on a Host
+// the gateway has never seen Ready; deleting that Host drops them.
+func TestHostOutageDeletingNeverReadyHostDropsItsRoutes(t *testing.T) {
+	for name, notReady := range notReadyConditions() {
+		t.Run(name, func(t *testing.T) {
+			o := newHostOutage(t, notReady, "a")
+			o.delete("a")
+			if len(o.tracker.workloadKeys) != 0 {
+				t.Errorf("workloadKeys = %v, want the deleted host's routes dropped", o.tracker.workloadKeys)
+			}
+			// A later host under the same ID must not serve the deleted host's routes.
+			if err := o.tracker.RegisterHost(t.Context(), types.NamespacedName{Namespace: "ns", Name: "a-new"}, "a", "a-new", 8080); err != nil {
+				t.Fatal(err)
+			}
+			if got := resolve(t, o.tracker, "shared.example"); got.Hostname != fallbackEndpoint {
+				t.Errorf("Resolve() = %+v after the host was deleted, want the fallback", got)
 			}
 		})
 	}

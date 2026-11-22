@@ -99,14 +99,14 @@ const operatorWorkloadFinalizer = "runtime.wasmcloud.dev/workload-finalizer"
 type recordingRegistry struct {
 	workloads map[types.NamespacedName]workloadRoute
 	hosts     map[types.NamespacedName]string
-	suspended map[types.NamespacedName]bool
+	suspended map[types.NamespacedName]string
 }
 
 func newRecordingRegistry() *recordingRegistry {
 	return &recordingRegistry{
 		workloads: make(map[types.NamespacedName]workloadRoute),
 		hosts:     make(map[types.NamespacedName]string),
-		suspended: make(map[types.NamespacedName]bool),
+		suspended: make(map[types.NamespacedName]string),
 	}
 }
 
@@ -132,9 +132,9 @@ func (r *recordingRegistry) DeregisterHost(_ context.Context, key types.Namespac
 	return nil
 }
 
-func (r *recordingRegistry) SuspendHost(_ context.Context, key types.NamespacedName) error {
+func (r *recordingRegistry) SuspendHost(_ context.Context, key types.NamespacedName, hostID string) error {
 	delete(r.hosts, key)
-	r.suspended[key] = true
+	r.suspended[key] = hostID
 	return nil
 }
 
@@ -274,7 +274,7 @@ func TestHostReconcilerDeregistersMissingHost(t *testing.T) {
 	if _, ok := registry.hosts[key]; ok {
 		t.Error("a deleted Host is still registered")
 	}
-	if registry.suspended[key] {
+	if _, ok := registry.suspended[key]; ok {
 		t.Error("a deleted Host was suspended, keeping its routes")
 	}
 }

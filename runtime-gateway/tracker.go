@@ -32,7 +32,7 @@ type HostRegistry interface {
 	DeregisterHost(ctx context.Context, key types.NamespacedName) error
 	// SuspendHost stops traffic to a host that is not Ready but keeps its
 	// workload routes, so they serve again when the host is Ready.
-	SuspendHost(ctx context.Context, key types.NamespacedName) error
+	SuspendHost(ctx context.Context, key types.NamespacedName, hostID string) error
 }
 
 // WorkloadRegistry tracks which workloads serve which hostname. As with
@@ -124,16 +124,20 @@ func (ht *HostTracker) RegisterHost(ctx context.Context, key types.NamespacedNam
 	ht.lock.Lock()
 	defer ht.lock.Unlock()
 
+	ht.setHostKey(key, hostID)
+	ht.hosts[hostID] = net.JoinHostPort(hostname, strconv.Itoa(port))
+	return nil
+}
+
+// The caller must hold ht.lock.
+func (ht *HostTracker) setHostKey(key types.NamespacedName, hostID string) {
 	// A Host object that comes back under a new ID — a host pod that restarted
 	// and re-registered under the same object name — would otherwise leave its
 	// previous ID routing traffic.
 	if prev, ok := ht.hostKeys[key]; ok && prev != hostID {
 		ht.removeHost(prev)
 	}
-
 	ht.hostKeys[key] = hostID
-	ht.hosts[hostID] = net.JoinHostPort(hostname, strconv.Itoa(port))
-	return nil
 }
 
 func (ht *HostTracker) DeregisterHost(ctx context.Context, key types.NamespacedName) error {
@@ -149,13 +153,14 @@ func (ht *HostTracker) DeregisterHost(ctx context.Context, key types.NamespacedN
 	return nil
 }
 
-func (ht *HostTracker) SuspendHost(ctx context.Context, key types.NamespacedName) error {
+func (ht *HostTracker) SuspendHost(ctx context.Context, key types.NamespacedName, hostID string) error {
 	ht.lock.Lock()
 	defer ht.lock.Unlock()
 
-	if hostID, ok := ht.hostKeys[key]; ok {
-		delete(ht.hosts, hostID)
-	}
+	// Record the key even for a host never seen Ready, so deleting it drops
+	// the routes its workloads registered meanwhile.
+	ht.setHostKey(key, hostID)
+	delete(ht.hosts, hostID)
 	return nil
 }
 

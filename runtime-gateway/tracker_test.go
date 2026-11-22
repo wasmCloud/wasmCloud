@@ -241,7 +241,7 @@ func TestHostTrackerDeregisterSuspendedHostDropsItsWorkloads(t *testing.T) {
 	if err := ht.RegisterWorkload(ctx, workloadKey, "host-id", "workload-id", "a.example"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ht.SuspendHost(ctx, hostKey); err != nil {
+	if err := ht.SuspendHost(ctx, hostKey, "host-id"); err != nil {
 		t.Fatal(err)
 	}
 	if err := ht.DeregisterHost(ctx, hostKey); err != nil {
@@ -255,5 +255,29 @@ func TestHostTrackerDeregisterSuspendedHostDropsItsWorkloads(t *testing.T) {
 	}
 	if got := resolve(t, ht, "a.example"); got.Hostname != fallbackEndpoint {
 		t.Errorf("Resolve() = %+v after the host was deleted, want the fallback", got)
+	}
+}
+
+// A Host suspended under a new ID is a restarted host: the previous ID takes
+// no more traffic and its workload routes go, as RegisterHost does.
+func TestHostTrackerSuspendUnderNewIDDropsPreviousHost(t *testing.T) {
+	ctx := t.Context()
+	ht := newHostTracker(testFallback{})
+	hostKey := types.NamespacedName{Namespace: "ns", Name: "host-a"}
+	workloadKey := types.NamespacedName{Namespace: "ns", Name: "workload-a"}
+	if err := ht.RegisterHost(ctx, hostKey, "old-id", "10.0.0.1", 8080); err != nil {
+		t.Fatal(err)
+	}
+	if err := ht.RegisterWorkload(ctx, workloadKey, "old-id", "workload-id", "a.example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ht.SuspendHost(ctx, hostKey, "new-id"); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, ht, "a.example"); got.Hostname != fallbackEndpoint {
+		t.Errorf("Resolve() = %+v after the host restarted, want the fallback", got)
+	}
+	if len(ht.workloadKeys) != 0 {
+		t.Errorf("workloadKeys = %v, want the previous ID's workloads dropped", ht.workloadKeys)
 	}
 }
