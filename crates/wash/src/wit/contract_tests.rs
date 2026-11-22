@@ -269,11 +269,10 @@ async fn diagnosing_does_not_wait_for_the_cache_lock() -> Result<()> {
     Ok(())
 }
 
-/// Records the message of every event on the thread it is set for.
-#[derive(Clone, Default)]
-struct Messages(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+/// Passes the message of every event on the thread it is set for to a callback.
+struct OnEvent<F>(F);
 
-impl tracing::Subscriber for Messages {
+impl<F: Fn(&str) + Send + Sync + 'static> tracing::Subscriber for OnEvent<F> {
     fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
         true
     }
@@ -293,38 +292,51 @@ impl tracing::Subscriber for Messages {
         }
         let mut message = Message(String::new());
         event.record(&mut message);
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(message.0);
+        (self.0)(&message.0);
     }
     fn enter(&self, _: &tracing::span::Id) {}
     fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Calls `callback` with each event message on this thread until the result drops.
+fn on_event(
+    callback: impl Fn(&str) + Send + Sync + 'static,
+) -> (tracing::Dispatch, tracing::subscriber::DefaultGuard) {
+    // With one dispatcher, tracing caches a callsite as disabled for good if it is
+    // first hit on a thread without one; a second makes it ask every dispatcher.
+    let second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    (second, tracing::subscriber::set_default(OnEvent(callback)))
 }
 
 /// A fetch that waits for another wash process says so instead of hanging
 /// silently.
 #[tokio::test]
 async fn waiting_for_the_cache_lock_is_logged() -> Result<()> {
-    let messages = Messages::default();
-    let _subscriber = tracing::subscriber::set_default(messages.clone());
+    let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
+    let _events = on_event({
+        let waiting = waiting.clone();
+        move |message| {
+            if message.contains("waiting for another wash process") {
+                waiting.notify_one();
+            }
+        }
+    });
     let dir = tempfile::tempdir()?;
     let (fetcher, root) = overridden(dir.path()).await?;
     let held = hold_cache_lock(dir.path())?;
     let mut lock = load_lock_file(dir.path()).await?;
     let mut fetch = std::pin::pin!(fetcher.fetch_wit_dependencies(&root, &mut lock));
-    let early = tokio::time::timeout(std::time::Duration::from_millis(300), fetch.as_mut()).await;
-    assert!(
-        early.is_err(),
-        "fetched while another process held the cache lock"
-    );
-    let logged = messages
-        .0
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .any(|m| m.contains("waiting for another wash process"));
-    assert!(logged, "waited for the cache lock without saying so");
+    // The timeout only stops a hang; the log line is what ends the wait.
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        tokio::select! {
+            fetched = fetch.as_mut() => {
+                anyhow::bail!("fetched while another process held the cache lock: {fetched:?}")
+            }
+            () = waiting.notified() => Ok(()),
+        }
+    })
+    .await
+    .context("waited for the cache lock without saying so")??;
     drop(held);
     fetch.await
 }
