@@ -267,10 +267,35 @@ async fn discard_cache_entry(path: &Path) -> Result<()> {
 /// Held by the wash process that is checking or filling the package cache.
 const CACHE_LOCK_FILE: &str = ".wash-cache.lock";
 
-/// The package cache, held by this process until dropped. Another process's
-/// scrub would otherwise delete a blob this one is still writing. Not reentrant.
+/// The package cache one call uses, until dropped: the shared cache, locked unless
+/// this process cannot write it, or else a private one. Not reentrant.
 struct CacheLock {
-    _file: std::fs::File,
+    dir: PathBuf,
+    cache: FileCache,
+    _lock: Option<std::fs::File>,
+    _private: Option<tempfile::TempDir>,
+}
+
+/// Locks `path` exclusively, waiting while another wash process holds it.
+async fn lock_exclusively(path: &Path) -> std::io::Result<std::fs::File> {
+    // A lock file this user cannot write can still be locked through a read-only handle
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .or_else(|error| std::fs::File::open(path).map_err(|_| error))?;
+    match file.try_lock() {
+        Ok(()) => return Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => info!(
+            path = %path.display(),
+            "waiting for another wash process to release the WIT package cache lock"
+        ),
+        Err(std::fs::TryLockError::Error(error)) => return Err(error),
+    }
+    tokio::task::spawn_blocking(move || file.lock().map(|()| file))
+        .await
+        .map_err(std::io::Error::other)?
 }
 
 #[cfg(windows)]
@@ -618,58 +643,49 @@ impl WkgFetcher {
         Ok(())
     }
 
-    /// A caching client for this fetcher's registry configuration
-    fn client(&self) -> CachingClient<FileCache> {
+    /// A caching client over `cache` for this fetcher's registry configuration
+    fn client(&self, cache: &FileCache) -> CachingClient<FileCache> {
         CachingClient::new(
             Some(wasm_pkg_client::Client::new(self.wkg_client_config.clone())),
-            self.cache.clone(),
+            cache.clone(),
         )
     }
 
-    /// Take the cache lock, waiting while another wash process holds it. Where
-    /// it cannot be taken (a read-only cache, a filesystem without locks), the
-    /// cache is used unlocked, as before the lock existed.
-    async fn lock_cache(&self) -> Option<CacheLock> {
+    /// The cache for one call. Where the shared cache cannot be locked but can be
+    /// written, a private cache keeps this call and other processes apart.
+    async fn lock_cache(&self) -> Result<CacheLock> {
         let path = self.cache_dir.join(CACHE_LOCK_FILE);
-        let opened = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .or_else(|_| std::fs::File::open(&path));
-        let file = match opened {
-            Ok(file) => file,
-            Err(error) => {
-                warn!(path = %path.display(), %error, "cannot open the WIT package cache lock; using the cache unlocked");
-                return None;
-            }
+        let shared = |lock| CacheLock {
+            dir: self.cache_dir.clone(),
+            cache: self.cache.clone(),
+            _lock: lock,
+            _private: None,
         };
-        match file.try_lock() {
-            Ok(()) => return Some(CacheLock { _file: file }),
-            Err(std::fs::TryLockError::WouldBlock) => info!(
-                path = %path.display(),
-                "waiting for another wash process to release the WIT package cache lock"
-            ),
-            Err(std::fs::TryLockError::Error(error)) => {
-                warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using it unlocked");
-                return None;
-            }
+        let error = match lock_exclusively(&path).await {
+            Ok(file) => return Ok(shared(Some(file))),
+            Err(error) => error,
+        };
+        if tempfile::tempfile_in(&self.cache_dir).is_err() {
+            warn!(path = %path.display(), %error, "cannot lock the WIT package cache, which this process cannot write either; using it unlocked");
+            return Ok(shared(None));
         }
-        match tokio::task::spawn_blocking(move || file.lock().map(|()| file)).await {
-            Ok(Ok(file)) => Some(CacheLock { _file: file }),
-            Ok(Err(error)) => {
-                warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using it unlocked");
-                None
-            }
-            Err(error) => {
-                warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using it unlocked");
-                None
-            }
-        }
+        warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using a private cache for this call");
+        let private = tempfile::Builder::new()
+            .prefix("wash-wit-cache-")
+            .tempdir()
+            .context("failed to create a private WIT package cache")?;
+        let cache = FileCache::new(private.path())
+            .await
+            .context("failed to create a private WIT package cache")?;
+        Ok(CacheLock {
+            dir: private.path().to_path_buf(),
+            cache,
+            _lock: None,
+            _private: Some(private),
+        })
     }
 
-    async fn discard_invalid_cache_entries(&self) -> Result<()> {
-        let cache_dir = &self.cache_dir;
+    async fn discard_invalid_cache_entries(cache_dir: &Path) -> Result<()> {
         let mut entries = tokio::fs::read_dir(cache_dir).await.with_context(|| {
             format!("failed to read WIT package cache [{}]", cache_dir.display())
         })?;
@@ -856,13 +872,13 @@ impl WkgFetcher {
         self.warn_of_unused_namespace_sources(&manifest);
         let mut attempt = 1;
         loop {
-            let cache = self.lock_cache().await;
-            self.discard_invalid_cache_entries().await?;
+            let cache = self.lock_cache().await?;
+            Self::discard_invalid_cache_entries(&cache.dir).await?;
             let fetched = wasm_pkg_core::wit::fetch_dependencies(
                 &manifest,
                 wit_dir,
                 lock,
-                self.client(),
+                self.client(&cache.cache),
                 OutputType::Wit,
             )
             .await;
@@ -896,10 +912,10 @@ impl WkgFetcher {
         let manifest = self.resolution_manifest(wit_dir)?;
         let mut attempt = 1;
         loop {
-            let cache = self.lock_cache().await;
-            self.discard_invalid_cache_entries().await?;
-            let built =
-                wasm_pkg_core::wit::build_package(&manifest, wit_dir, lock, self.client()).await;
+            let cache = self.lock_cache().await?;
+            Self::discard_invalid_cache_entries(&cache.dir).await?;
+            let client = self.client(&cache.cache);
+            let built = wasm_pkg_core::wit::build_package(&manifest, wit_dir, lock, client).await;
             drop(cache);
             match built {
                 Ok(package) => return Ok(package),
@@ -934,7 +950,7 @@ impl WkgFetcher {
         }
 
         let overrides = self.wkg_config.overrides.clone().unwrap_or_default();
-        let client = self.client();
+        let client = self.client(&self.cache);
 
         let mut problems = Vec::new();
         for (package, requirements) in required {
@@ -1014,8 +1030,8 @@ impl WkgFetcher {
         let local = package_override
             .as_ref()
             .is_some_and(|package_override| package_override.path.is_some());
-        let _cache = self.lock_cache().await;
-        let client = self.client();
+        let cache = self.lock_cache().await?;
+        let client = self.client(&cache.cache);
 
         // The lock file goes in so that a version it already pins is the one selected here, the
         // same way the fetch that follows selects it
@@ -1514,7 +1530,6 @@ mod tests {
     #[tokio::test]
     async fn wit_fetch_discards_incomplete_cache_entries() {
         let temp = tempfile::tempdir().unwrap();
-        let fetcher = test_fetcher(temp.path()).await;
         let valid_digest = temp
             .path()
             .join("sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3");
@@ -1549,7 +1564,9 @@ mod tests {
         .await
         .unwrap();
 
-        fetcher.discard_invalid_cache_entries().await.unwrap();
+        WkgFetcher::discard_invalid_cache_entries(temp.path())
+            .await
+            .unwrap();
 
         assert!(valid_digest.exists());
         assert!(valid_release.exists());
@@ -1562,13 +1579,14 @@ mod tests {
     #[tokio::test]
     async fn wit_fetch_discards_unreferenced_incomplete_blobs() {
         let temp = tempfile::tempdir().unwrap();
-        let fetcher = test_fetcher(temp.path()).await;
         let orphan_digest = temp
             .path()
             .join("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         tokio::fs::write(&orphan_digest, b"partial").await.unwrap();
 
-        fetcher.discard_invalid_cache_entries().await.unwrap();
+        WkgFetcher::discard_invalid_cache_entries(temp.path())
+            .await
+            .unwrap();
 
         assert!(!orphan_digest.exists());
     }

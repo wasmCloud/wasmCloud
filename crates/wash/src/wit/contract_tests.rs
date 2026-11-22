@@ -546,6 +546,87 @@ async fn the_cache_lock_is_released_while_waiting_to_retry() -> Result<()> {
     Ok(())
 }
 
+/// A shared cache this process can write but not lock is left alone: a fetch or
+/// build checks a private cache instead of deleting another process's download.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_writable_cache_that_cannot_be_locked_is_not_scrubbed() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let cache = dir.path().join("cache");
+    let lock_file = cache.join(CACHE_LOCK_FILE);
+    std::fs::write(&lock_file, b"")?;
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o000))?;
+    if std::fs::File::open(&lock_file).is_ok() {
+        return Ok(()); // root ignores the mode
+    }
+    let downloading = cache.join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&downloading, b"partial")?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    assert!(
+        downloading.exists(),
+        "a fetch deleted another process's download from a cache it could not lock"
+    );
+    fetcher.build_wit_package(&root, &mut lock).await?;
+    assert!(
+        downloading.exists(),
+        "a build deleted another process's download from a cache it could not lock"
+    );
+    Ok(())
+}
+
+/// A shared cache this process cannot write is still read: a package it holds
+/// is served from it, not fetched again into a private cache.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_read_only_cache_still_serves_the_packages_it_holds() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let elsewhere = tempfile::tempdir()?;
+    let (_, _, bytes) = fetcher(elsewhere.path())
+        .await?
+        .build_wit_package(
+            package(dir.path())?,
+            &mut load_lock_file(elsewhere.path()).await?,
+        )
+        .await?;
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let cache = dir.path().join("cache");
+    let mut fetcher = fetcher(dir.path()).await?;
+    std::fs::write(cache.join(&digest), &bytes)?;
+    std::fs::write(
+        cache.join("contracttest:api-1.2.3.json"),
+        format!(r#"{{"version":"1.2.3","content_digest":"{digest}"}}"#),
+    )?;
+    // The registry lists the version but cannot serve it, so only the cache can.
+    fake_registry(&mut fetcher, |path| match path {
+        "/v2/" => (200, String::new()),
+        path if path.ends_with("/tags/list") => (
+            200,
+            r#"{"name":"contracttest/api","tags":["1.2.3"]}"#.to_string(),
+        ),
+        _ => (404, String::new()),
+    })
+    .await?;
+    std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o555))?;
+    let _restore = std::mem::DropGuard::new(cache.clone(), |cache| {
+        let _ = std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o755));
+    });
+    if std::fs::write(cache.join("probe"), b"").is_ok() {
+        return Ok(()); // root ignores the mode
+    }
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    anyhow::ensure!(
+        std::fs::read_dir(root.join("deps"))?.next().is_some(),
+        "the fetch wrote no dependencies"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn fetching_a_local_override_populates_deps_and_builds_the_root() -> Result<()> {
     let dir = tempfile::tempdir()?;
