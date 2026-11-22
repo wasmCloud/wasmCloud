@@ -46,7 +46,7 @@ This is the wasmCloud monorepo. Other parts of the project such as documentation
 | [`proto/`](./proto/) | Protobuf definitions for control-plane messages exchanged between the operator and hosts over NATS. |
 | [`templates/`](./templates/) | Rust project templates consumed by `wash new` (`http-hello-world`, `http-handler`, `http-kv-handler`, `service-tcp`, etc.). |
 | [`examples/`](./examples/) | Reference component projects (`blobby`, `grpc-hello-world`, `otel-config`, `qrcode`, persistent-storage variants). Built and pushed to `ghcr.io/wasmcloud/components/*` by CI. |
-| [`deploy/`](./deploy/) | `kind` and `k3s` configurations for local clusters. |
+| [`deploy/`](./deploy/) | `kind` and `k3s` configurations for local clusters, plus [`deploy/external-nats/`](./deploy/external-nats/) for pointing the chart at a NATS server it does not install. |
 | [`wit/`](./wit/) | Top-level WIT definitions shared across the project (messaging, secrets). |
 
 ## Install

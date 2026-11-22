@@ -1,0 +1,50 @@
+# Point the runtime-operator chart at a NATS server that requires
+# username/password authentication.
+#
+# The chart has no first-class value for NATS credentials, so each component
+# gets them the way it gets any other flag: a mounted Secret plus `extraArgs`.
+# Passwords are read from files (`-nats-password-file`, `--scheduler-nats-user`
+# and friends), which keeps them out of the pod's command line. See README.md.
+nats:
+  enabled: false
+
+global:
+  nats:
+    schedulerUrl: nats://nats.nats.svc.cluster.local:4222
+    dataUrl: nats://nats.nats.svc.cluster.local:4222
+  tls:
+    enabled: false
+
+gateway:
+  enabled: false
+
+operator:
+  volumes:
+    - name: nats-auth
+      secret:
+        secretName: wasmcloud-nats-auth
+  volumeMounts:
+    - name: nats-auth
+      mountPath: /nats-auth
+      readOnly: true
+  extraArgs:
+    - "-nats-user=wasmcloud-operator"
+    - "-nats-password-file=/nats-auth/operator-password"
+
+runtime:
+  hostGroups:
+    - name: default
+      replicas: 1
+      volumes:
+        - name: nats-auth
+          secret:
+            secretName: wasmcloud-nats-auth
+      volumeMounts:
+        - name: nats-auth
+          mountPath: /nats-auth
+          readOnly: true
+      extraArgs:
+        - "--scheduler-nats-user=wasmcloud-runtime"
+        - "--scheduler-nats-password-file=/nats-auth/runtime-password"
+        - "--data-nats-user=wasmcloud-data"
+        - "--data-nats-password-file=/nats-auth/data-password"
