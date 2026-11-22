@@ -395,7 +395,8 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Watches(&runtimev1alpha1.Workload{}, handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest)).
-		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.serviceToRequest)).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.serviceToRequest),
+			builder.WithPredicates(routedServiceChanged)).
 		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(endpointSliceToRequest),
 			builder.WithPredicates(managedSliceDeleted)).
 		Named("workload-route").
@@ -441,4 +442,13 @@ func endpointSliceToRequest(_ context.Context, obj client.Object) []reconcile.Re
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: name}}}
+}
+
+// routedServiceChanged drops Service updates that keep the same object alive,
+// such as status writes; only a new UID or the start of deletion matters here.
+var routedServiceChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		return e.ObjectOld.GetUID() != e.ObjectNew.GetUID() ||
+			e.ObjectOld.GetDeletionTimestamp().IsZero() != e.ObjectNew.GetDeletionTimestamp().IsZero()
+	},
 }

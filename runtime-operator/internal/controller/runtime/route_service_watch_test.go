@@ -344,3 +344,40 @@ func TestServiceToRequestSkipsUnroutedServices(t *testing.T) {
 		t.Fatalf("same-named Service in another namespace requests = %v, want none", got)
 	}
 }
+
+// Service updates that cannot change which Service owns the slice are dropped
+// before serviceToRequest lists Workloads; create, delete, replacement and the
+// start of deletion still pass.
+func TestRoutedServiceChangedFilter(t *testing.T) {
+	svc := newRouteService(testServiceName)
+	svc.UID = "service-uid"
+	svc.ResourceVersion = "1"
+	update := func(mutate func(*corev1.Service)) bool {
+		changed := svc.DeepCopy()
+		changed.ResourceVersion = "2"
+		mutate(changed)
+		return routedServiceChanged.Update(event.UpdateEvent{ObjectOld: svc, ObjectNew: changed})
+	}
+	for _, tc := range []struct {
+		name string
+		got  bool
+		want bool
+	}{
+		{"Service created", routedServiceChanged.Create(event.CreateEvent{Object: svc}), true},
+		{"Service deleted", routedServiceChanged.Delete(event.DeleteEvent{Object: svc}), true},
+		{"resync", routedServiceChanged.Update(event.UpdateEvent{ObjectOld: svc, ObjectNew: svc}), false},
+		{"status changed", update(func(s *corev1.Service) {
+			s.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "192.0.2.1"}}
+		}), false},
+		{"labels changed", update(func(s *corev1.Service) { s.Labels = map[string]string{"app.kubernetes.io/part-of": "shop"} }), false},
+		{"spec changed", update(func(s *corev1.Service) { s.Spec.Ports[0].Port = 8080 }), false},
+		{"replaced (new UID)", update(func(s *corev1.Service) { s.UID = "replacement-uid" }), true},
+		{"deletion started", update(func(s *corev1.Service) {
+			s.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+		}), true},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s: passes = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
