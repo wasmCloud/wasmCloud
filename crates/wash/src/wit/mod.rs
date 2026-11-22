@@ -854,19 +854,21 @@ impl WkgFetcher {
         let wit_dir = wit_dir.as_ref();
         let manifest = self.resolution_manifest(wit_dir)?;
         self.warn_of_unused_namespace_sources(&manifest);
-        let _cache = self.lock_cache().await;
         let mut attempt = 1;
         loop {
+            let cache = self.lock_cache().await;
             self.discard_invalid_cache_entries().await?;
-            match wasm_pkg_core::wit::fetch_dependencies(
+            let fetched = wasm_pkg_core::wit::fetch_dependencies(
                 &manifest,
                 wit_dir,
                 lock,
                 self.client(),
                 OutputType::Wit,
             )
-            .await
-            {
+            .await;
+            // Other wash processes may use the cache while this one waits to retry
+            drop(cache);
+            match fetched {
                 Ok(()) => return Ok(()),
                 Err(error)
                     if attempt < WIT_FETCH_MAX_ATTEMPTS
@@ -892,11 +894,14 @@ impl WkgFetcher {
     )> {
         let wit_dir = wit_dir.as_ref();
         let manifest = self.resolution_manifest(wit_dir)?;
-        let _cache = self.lock_cache().await;
         let mut attempt = 1;
         loop {
+            let cache = self.lock_cache().await;
             self.discard_invalid_cache_entries().await?;
-            match wasm_pkg_core::wit::build_package(&manifest, wit_dir, lock, self.client()).await {
+            let built =
+                wasm_pkg_core::wit::build_package(&manifest, wit_dir, lock, self.client()).await;
+            drop(cache);
+            match built {
                 Ok(package) => return Ok(package),
                 Err(error)
                     if attempt < WIT_FETCH_MAX_ATTEMPTS

@@ -410,6 +410,142 @@ async fn the_cache_lock_is_held_exclusively_while_a_registry_is_read() -> Result
     Ok(())
 }
 
+/// Serves `contracttest` over plain HTTP, answering each request path with
+/// `respond`; the credentials keep any credential helper out of it.
+async fn fake_registry(
+    fetcher: &mut WkgFetcher,
+    respond: impl Fn(&str) -> (u16, String) + Send + 'static,
+) -> Result<()> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let registry: Registry = listener
+        .local_addr()?
+        .to_string()
+        .parse()
+        .context("invalid registry")?;
+    fetcher.wkg_client_config.set_namespace_registry(
+        "contracttest".parse().context("invalid label")?,
+        RegistryMapping::Registry(registry.clone()),
+    );
+    fetcher
+        .wkg_client_config
+        .get_or_insert_registry_config_mut(&registry)
+        .set_backend_config(
+            "oci",
+            OciRegistryConfig {
+                client_config: wasm_pkg_client::oci::client::ClientConfig {
+                    protocol: wasm_pkg_client::oci::client::ClientProtocol::Http,
+                    ..Default::default()
+                },
+                credentials: Some(BasicCredentials {
+                    username: "test".into(),
+                    password: "test".to_string().into(),
+                }),
+            },
+        )?;
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                match stream.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => request.extend_from_slice(buffer.get(..read).unwrap_or_default()),
+                }
+            }
+            let request = String::from_utf8_lossy(&request);
+            let (status, body) = respond(request.split_whitespace().nth(1).unwrap_or_default());
+            let response = format!(
+                "HTTP/1.1 {status} x\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+    Ok(())
+}
+
+/// Whether some handle other than a new one holds the cache lock at `path`.
+fn cache_lock_is_held(path: &Path) -> bool {
+    std::fs::File::open(path).is_ok_and(|probe| {
+        matches!(
+            probe.try_lock_shared(),
+            Err(std::fs::TryLockError::WouldBlock)
+        )
+    })
+}
+
+/// Whether the cache lock at `path` is still held after 5 s. A child process that
+/// another test is starting can hold an inherited handle to it for a moment.
+fn cache_lock_stays_held(path: &Path) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while cache_lock_is_held(path) {
+        if std::time::Instant::now() >= deadline {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+/// Each fetch attempt holds the cache lock while it reads the registry, and lets
+/// it go while it waits to try again, so other wash processes are not held up.
+#[tokio::test]
+async fn the_cache_lock_is_released_while_waiting_to_retry() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    let lock_path = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    let on_the_registry = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    fake_registry(&mut fetcher, {
+        let (held, lock_path) = (on_the_registry.clone(), lock_path.clone());
+        move |path| match path {
+            "/v2/" => (200, String::new()),
+            path if path.ends_with("/tags/list") => {
+                held.lock().unwrap().push(cache_lock_is_held(&lock_path));
+                (503, String::new())
+            }
+            _ => (404, String::new()),
+        }
+    })
+    .await?;
+    let waiting_to_retry = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _events = on_event({
+        let held = waiting_to_retry.clone();
+        move |message| {
+            if message.contains("retrying") {
+                held.lock().unwrap().push(cache_lock_stays_held(&lock_path));
+            }
+        }
+    });
+    let mut lock = load_lock_file(dir.path()).await?;
+    let fetched = fetcher.fetch_wit_dependencies(&root, &mut lock).await;
+    let built = fetcher
+        .build_wit_package(&root, &mut lock)
+        .await
+        .map(|_| ());
+    for result in [fetched, built] {
+        anyhow::ensure!(
+            result
+                .as_ref()
+                .is_err_and(is_transient_registry_fetch_error),
+            "the registry did not fail as a transient error: {result:?}"
+        );
+    }
+    let attempts = 2 * WIT_FETCH_MAX_ATTEMPTS as usize;
+    assert_eq!(
+        *on_the_registry.lock().unwrap(),
+        vec![true; attempts],
+        "an attempt read the registry without the cache lock"
+    );
+    assert_eq!(
+        *waiting_to_retry.lock().unwrap(),
+        vec![false; attempts - 2],
+        "the cache lock was held while waiting to retry"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn fetching_a_local_override_populates_deps_and_builds_the_root() -> Result<()> {
     let dir = tempfile::tempdir()?;
