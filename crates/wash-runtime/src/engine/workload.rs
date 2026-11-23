@@ -1618,13 +1618,8 @@ impl ResolvedWorkload {
         self.stop_service();
     }
 
-    /// Give back everything binding this workload allocated, with no journal to
-    /// resume from: its service, then its plugins, then its scratch.
-    ///
-    /// Inside a host, the caller must keep the workload's id reserved over the
-    /// whole call: `unbind_all_plugins` is keyed by workload id, so a new
-    /// workload that claimed the id could be torn down by this teardown. See
-    /// [`crate::host::HostApi::workload_stop`] for the ownership rules.
+    /// Release the service, then the plugins, then the scratch, with no journal to resume from.
+    /// Keep the workload id reserved over the call; see [`crate::host::HostApi::workload_stop`].
     pub(crate) async fn release_unjournaled(&self) {
         self.begin_teardown();
         if let Err(e) = self.unbind_all_plugins().await {

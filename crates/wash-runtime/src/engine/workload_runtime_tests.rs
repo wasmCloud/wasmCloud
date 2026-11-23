@@ -735,6 +735,33 @@ async fn a_stop_removes_scratch_off_the_worker_and_a_cancelled_removal_finishes(
     Ok(())
 }
 
+/// A failed scratch removal stays a pending step, and the retried stop removes it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_scratch_removal_stays_pending_for_the_retry() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    std::fs::create_dir(dir.join("sub"))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500))?;
+    let (_held, resources) = journaled_workload(&[], Some(scratch)).await?;
+    let first = resources.release("contracts").await;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    first?;
+    if !dir.exists() {
+        return Ok(()); // root ignores the mode
+    }
+    assert!(resources.state.lock().unwrap().scratch.is_some());
+    resources.release("contracts").await?;
+    assert!(
+        !dir.exists(),
+        "the failed removal was dropped from the journal"
+    );
+    assert!(resources.state.lock().unwrap().scratch.is_none());
+    Ok(())
+}
+
 /// A rolled-back resolve removes the scratch on the blocking pool too, and a
 /// removal whose resolve is cancelled still finishes.
 #[tokio::test]
