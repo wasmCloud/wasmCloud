@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -229,6 +230,8 @@ pub struct WkgFetcher {
     wkg_client_config: wasm_pkg_client::Config,
     cache: FileCache,
     cache_dir: PathBuf,
+    /// How long a call waits for the shared cache lock before it gives up on it.
+    lock_wait: Duration,
 }
 
 #[derive(Deserialize)]
@@ -266,9 +269,11 @@ async fn discard_cache_entry(path: &Path) -> Result<()> {
 
 /// Held by the wash process that is checking or filling the package cache.
 const CACHE_LOCK_FILE: &str = ".wash-cache.lock";
+/// Past this wait a call stops waiting for the lock, as one held by a stopped process.
+const CACHE_LOCK_WAIT: Duration = Duration::from_secs(30);
 
-/// The package cache one call uses, until dropped: the shared cache, locked unless
-/// this process cannot write it, or else a private one. Not reentrant.
+/// The cache one call uses until dropped: the shared cache, locked if the lock is taken;
+/// if not, a private cache, or the shared one unlocked when this process cannot write it.
 struct CacheLock {
     dir: PathBuf,
     cache: FileCache,
@@ -276,8 +281,8 @@ struct CacheLock {
     _private: Option<tempfile::TempDir>,
 }
 
-/// Locks `path` exclusively, waiting while another wash process holds it.
-async fn lock_exclusively(path: &Path) -> std::io::Result<std::fs::File> {
+/// Locks `path` exclusively, waiting up to `wait` while another wash process holds it.
+async fn lock_exclusively(path: &Path, wait: Duration) -> std::io::Result<std::fs::File> {
     // A lock file this user cannot write can still be locked through a read-only handle
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -285,17 +290,38 @@ async fn lock_exclusively(path: &Path) -> std::io::Result<std::fs::File> {
         .write(true)
         .open(path)
         .or_else(|error| std::fs::File::open(path).map_err(|_| error))?;
-    match file.try_lock() {
-        Ok(()) => return Ok(file),
-        Err(std::fs::TryLockError::WouldBlock) => info!(
-            path = %path.display(),
-            "waiting for another wash process to release the WIT package cache lock"
-        ),
-        Err(std::fs::TryLockError::Error(error)) => return Err(error),
-    }
-    tokio::task::spawn_blocking(move || file.lock().map(|()| file))
+    let locking = async {
+        // On some NFS mounts even a non-blocking `flock` blocks, so it runs off the runtime.
+        let (file, tried) = blocking(move || {
+            let tried = file.try_lock();
+            (file, tried)
+        })
+        .await?;
+        match tried {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => info!(
+                path = %path.display(),
+                "waiting for another wash process to release the WIT package cache lock"
+            ),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
+        blocking(move || file.lock().map(|()| file)).await?
+    };
+    tokio::time::timeout(wait, locking)
         .await
-        .map_err(std::io::Error::other)?
+        .unwrap_or_else(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("the lock was not free within {wait:?}"),
+            ))
+        })
+}
+
+/// Runs `f` on the blocking pool.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> std::io::Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(std::io::Error::other)
 }
 
 #[cfg(windows)]
@@ -503,6 +529,7 @@ impl WkgFetcher {
             wkg_client_config,
             cache,
             cache_dir,
+            lock_wait: CACHE_LOCK_WAIT,
         }
     }
 
@@ -661,7 +688,7 @@ impl WkgFetcher {
             _lock: lock,
             _private: None,
         };
-        let error = match lock_exclusively(&path).await {
+        let error = match lock_exclusively(&path, self.lock_wait).await {
             Ok(file) => return Ok(shared(Some(file))),
             Err(error) => error,
         };
@@ -1524,6 +1551,7 @@ mod tests {
             wkg_client_config: wasm_pkg_client::Config::default(),
             cache,
             cache_dir: dir.to_path_buf(),
+            lock_wait: CACHE_LOCK_WAIT,
         }
     }
 

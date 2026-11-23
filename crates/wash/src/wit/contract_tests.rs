@@ -212,7 +212,8 @@ fn hold_cache_lock(dir: &Path) -> Result<std::fs::File> {
     Ok(held)
 }
 
-/// A lock file this user cannot write is still taken, read-only.
+/// A lock file this user cannot write is still taken, read-only, and the shared
+/// cache is checked under it.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_lock_file_this_user_cannot_write_does_not_fail_the_fetch() -> Result<()> {
@@ -229,8 +230,45 @@ async fn a_lock_file_this_user_cannot_write_does_not_fail_the_fetch() -> Result<
     {
         return Ok(()); // root ignores the mode
     }
+    let partial = dir
+        .path()
+        .join("cache")
+        .join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&partial, b"partial")?;
     let mut lock = load_lock_file(dir.path()).await?;
-    fetcher.fetch_wit_dependencies(&root, &mut lock).await
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    anyhow::ensure!(
+        !partial.exists(),
+        "the shared cache was not checked under the read-only lock"
+    );
+    Ok(())
+}
+
+/// A lock that stays held past the wait, as by a stopped process, gives the call a
+/// private cache instead of a hang.
+#[tokio::test]
+async fn a_cache_lock_held_past_the_wait_gives_a_private_cache() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (mut fetcher, root) = overridden(dir.path()).await?;
+    fetcher.lock_wait = std::time::Duration::from_millis(200);
+    let _held = hold_cache_lock(dir.path())?;
+    let writing = dir
+        .path()
+        .join("cache")
+        .join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&writing, b"partial")?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        fetcher.fetch_wit_dependencies(&root, &mut lock),
+    )
+    .await
+    .context("the fetch waited on a held cache lock past its wait")??;
+    anyhow::ensure!(
+        writing.exists(),
+        "the fetch scrubbed the shared cache without its lock"
+    );
+    Ok(())
 }
 
 /// Where no lock file can be made, as in a read-only cache, a fetch that writes
