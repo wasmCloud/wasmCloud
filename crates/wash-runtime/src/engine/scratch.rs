@@ -6,9 +6,9 @@
 //!
 //! Two mechanisms reclaim it, because neither covers every failure alone:
 //!
-//! - A workload's directory is removed when the workload is released, and
-//!   again when its last handle drops, which covers a start that failed before
-//!   it was bound.
+//! - A workload's directory is removed when the workload is released, or else
+//!   when its last handle drops, which covers a start that failed before it was
+//!   bound.
 //! - A host that crashed runs no teardown. Each host holds an exclusive lock on
 //!   a file in its own directory for as long as it runs, and the kernel drops
 //!   that lock when the process dies. When a host builds its engine it removes
@@ -22,7 +22,7 @@
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Context as _;
 
@@ -70,7 +70,7 @@ impl ScratchRoot {
             .keep();
         Ok(Arc::new(ScratchDir {
             path,
-            removed: std::sync::atomic::AtomicBool::new(false),
+            removed: Mutex::new(false),
             _root: Arc::clone(self),
         }))
     }
@@ -88,8 +88,9 @@ impl Drop for ScratchRoot {
 #[derive(Debug)]
 pub(crate) struct ScratchDir {
     path: PathBuf,
-    /// Set once `remove` succeeded; the name may since belong to another workload.
-    removed: std::sync::atomic::AtomicBool,
+    /// Whether a removal succeeded; the name may since belong to another
+    /// workload. Held over each removal, so two never race.
+    removed: Mutex<bool>,
     /// Keeps the host directory, and its lock, alive while this lives.
     _root: Arc<ScratchRoot>,
 }
@@ -99,19 +100,24 @@ impl ScratchDir {
         &self.path
     }
 
-    /// Remove the directory now, whoever else still holds it. An open handle
-    /// keeps working on an unlinked directory on Unix; nothing new is written.
-    pub(crate) fn remove(&self) {
-        if remove(&self.path) {
-            self.removed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+    /// Remove the directory now, whoever else holds it (an open handle keeps
+    /// working on Unix), and say whether it is gone. Only the first success removes.
+    pub(crate) fn remove(&self) -> bool {
+        let mut removed = self.removed.lock().unwrap_or_else(PoisonError::into_inner);
+        if !*removed {
+            *removed = remove(&self.path);
         }
+        *removed
     }
 }
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        if !*self.removed.get_mut() {
+        let removed = self
+            .removed
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !*removed {
             remove(&self.path);
         }
     }
@@ -190,8 +196,8 @@ mod tests {
         assert!(!path.exists());
     }
 
-    /// Once removed, a directory's name may go to another workload, so a handle
-    /// that outlives the release must not remove it again.
+    /// Once removed, a directory's name may go to another workload, so neither a
+    /// second removal, such as a teardown retry, nor a later drop removes it again.
     #[test]
     fn a_removed_dir_never_deletes_what_later_takes_its_name() {
         let root = tempfile::tempdir().unwrap();
@@ -203,11 +209,39 @@ mod tests {
         drop(released);
         std::fs::create_dir(&path).unwrap();
         std::fs::write(path.join("data"), "the next workload's").unwrap();
+        stale.remove();
+        assert!(
+            path.join("data").exists(),
+            "a second removal deleted a directory it no longer owns"
+        );
         drop(stale);
         assert!(
             path.join("data").exists(),
             "a stale handle removed a directory it no longer owns"
         );
+    }
+
+    /// Only a success is remembered: a removal that failed is tried again.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_removal_is_tried_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let scratch = ScratchRoot::open(root.path()).unwrap();
+        let dir = scratch.workload_dir().unwrap();
+        let path = dir.path().to_path_buf();
+        std::fs::create_dir(path.join("sub")).unwrap();
+        // Read-only, so `sub` cannot be unlinked from it.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let first = dir.remove();
+        // Root removes it regardless, and there is nothing to test.
+        if !path.exists() {
+            return;
+        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!first, "a failed removal reported success");
+        assert!(dir.remove(), "a failed removal was not tried again");
+        assert!(!path.exists());
     }
 
     #[test]
