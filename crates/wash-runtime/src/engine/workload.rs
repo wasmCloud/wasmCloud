@@ -3158,6 +3158,9 @@ struct WorkloadResourceState {
     bindings: Vec<Option<PendingBinding>>,
     resolved: Option<ResolvedWorkload>,
     http_unbinds: Vec<PendingHttpUnbind>,
+    /// Pending until removed; kept apart from `resolved`, which goes once HTTP
+    /// is unbound.
+    scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
 }
 
 impl WorkloadResources {
@@ -3196,6 +3199,7 @@ impl WorkloadResources {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.resolved = Some(workload.clone());
+        state.scratch = workload.scratch.clone();
         state.http_unbinds = vec![PendingHttpUnbind::Workload];
         if workload.service.is_some() {
             state.http_unbinds.extend([
@@ -3286,9 +3290,15 @@ impl WorkloadResources {
                 }
             }
         }
-        // Last, as in release_unjournaled, and even when an unbind failed.
-        if let Some(resolved) = &state.resolved {
-            resolved.remove_scratch();
+        // Last, as in release_unjournaled, and even when an unbind failed. A
+        // failure is left to a retry or the last handle; it does not fail the stop.
+        if let Some(scratch) = &state.scratch
+            && scratch.remove()
+        {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .scratch = None;
         }
         match failure {
             Some(error) => Err(error),

@@ -582,6 +582,7 @@ async fn failed_resolve_releases_the_workload_a_plugin_kept() -> anyhow::Result<
 
 async fn journaled_workload(
     plugins: &[Arc<RecordingPlugin>],
+    scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
 ) -> anyhow::Result<(ResolvedWorkload, WorkloadResources)> {
     let registered = plugins
         .iter()
@@ -590,6 +591,7 @@ async fn journaled_workload(
     let interfaces = plugins.iter().map(|p| p.interface).collect::<Vec<_>>();
     let resources = WorkloadResources::default();
     let mut resolved = requesting(&interfaces, false)
+        .with_scratch(scratch)
         .resolve_for_start(
             Some(&registered),
             &Default::default(),
@@ -609,7 +611,7 @@ async fn concurrent_cleanup_retries_only_the_failed_plugin_in_reverse_bind_order
     let first = Arc::new(RecordingPlugin::new("first", API, &events));
     let last = Arc::new(RecordingPlugin::new("last", MIDDLE, &events));
     last.unbind_failures.store(1, Ordering::SeqCst);
-    let (resolved, _) = journaled_workload(&[first, last]).await?;
+    let (resolved, _) = journaled_workload(&[first, last], None).await?;
     assert_eq!(resolved.teardown_bindings.len(), 2);
     let resources = WorkloadResources::for_teardown(&resolved);
     events.lock().unwrap().clear();
@@ -628,15 +630,21 @@ async fn concurrent_cleanup_retries_only_the_failed_plugin_in_reverse_bind_order
     Ok(())
 }
 
+/// A cleanup cancelled while a plugin unbinds keeps what is left, the scratch
+/// among it: the retry removes the scratch while a clone of the workload is held.
 #[tokio::test]
-async fn cancelled_cleanup_retains_the_unfinished_binding() -> anyhow::Result<()> {
+async fn cancelled_cleanup_retains_the_unfinished_binding_and_scratch() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
     let events = Arc::default();
     let first = Arc::new(RecordingPlugin::new("first", API, &events));
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let mut last = RecordingPlugin::new("last", MIDDLE, &events);
     last.unbind_gate = Some(Arc::clone(&gate));
     let last = Arc::new(last);
-    let (resolved, resources) = journaled_workload(&[first, Arc::clone(&last)]).await?;
+    let (resolved, resources) =
+        journaled_workload(&[first, Arc::clone(&last)], Some(scratch)).await?;
     events.lock().unwrap().clear();
     let task = tokio::spawn({
         let resources = resources.clone();
@@ -649,6 +657,10 @@ async fn cancelled_cleanup_retains_the_unfinished_binding() -> anyhow::Result<()
     resources.release("contracts").await?;
     assert_eq!(*events.lock().unwrap(), ["last:Unbind", "first:Unbind"]);
     assert!(resolved.released());
+    assert!(
+        !dir.exists(),
+        "the retry lost the scratch while a clone of the workload held it"
+    );
     Ok(())
 }
 
