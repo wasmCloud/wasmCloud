@@ -109,6 +109,25 @@ impl ScratchDir {
         }
         *removed
     }
+
+    /// [`Self::remove`] on the blocking pool, so a large directory never holds
+    /// an async worker. It finishes even when the caller is cancelled.
+    pub(crate) async fn remove_on_blocking_pool(self: &Arc<Self>) -> bool {
+        let scratch = Arc::clone(self);
+        match tokio::task::spawn_blocking(move || scratch.remove()).await {
+            Ok(removed) => removed,
+            Err(e) => {
+                tracing::warn!(path = %self.path.display(), err = %e, "failed to remove scratch");
+                false
+            }
+        }
+    }
+
+    /// Stands in for a slow removal: any removal waits while this is held.
+    #[cfg(test)]
+    pub(crate) fn hold_removal(&self) -> std::sync::MutexGuard<'_, bool> {
+        self.removed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl Drop for ScratchDir {

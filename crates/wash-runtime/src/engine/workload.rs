@@ -1595,9 +1595,9 @@ impl ResolvedWorkload {
 
     /// Remove this workload's `emptyDir` volumes. Called on release, not left
     /// to whichever clone of this workload happens to drop last.
-    pub(crate) fn remove_scratch(&self) {
+    pub(crate) async fn remove_scratch(&self) {
         if let Some(scratch) = &self.scratch {
-            scratch.remove();
+            scratch.remove_on_blocking_pool().await;
         }
     }
 
@@ -1634,7 +1634,7 @@ impl ResolvedWorkload {
                 "error unbinding plugins during teardown, continuing"
             );
         }
-        self.remove_scratch();
+        self.remove_scratch().await;
     }
 
     /// The service, for one of the few writes after resolution. Copies it
@@ -3293,7 +3293,7 @@ impl WorkloadResources {
         // Last, as in release_unjournaled, and even when an unbind failed. A
         // failure is left to a retry or the last handle; it does not fail the stop.
         if let Some(scratch) = &state.scratch
-            && scratch.remove()
+            && scratch.remove_on_blocking_pool().await
         {
             self.state
                 .lock()

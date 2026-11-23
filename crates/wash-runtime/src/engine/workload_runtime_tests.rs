@@ -664,6 +664,122 @@ async fn cancelled_cleanup_retains_the_unfinished_binding_and_scratch() -> anyho
     Ok(())
 }
 
+/// Holds a scratch's removal from another thread, as a large directory would.
+struct SlowRemoval {
+    finish: std::sync::mpsc::Sender<()>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl SlowRemoval {
+    fn start(scratch: &Arc<crate::engine::scratch::ScratchDir>) -> Self {
+        let (held, is_held) = std::sync::mpsc::channel();
+        let (finish, finished) = std::sync::mpsc::channel::<()>();
+        let scratch = Arc::clone(scratch);
+        let thread = std::thread::spawn(move || {
+            let _removal = scratch.hold_removal();
+            held.send(()).unwrap();
+            // Bounded, so a removal run on the worker ends as a finished wait.
+            let _ = finished.recv_timeout(Duration::from_secs(5));
+        });
+        is_held.recv().unwrap();
+        Self { finish, thread }
+    }
+
+    fn finish(self) {
+        let _ = self.finish.send(());
+        self.thread.join().unwrap();
+    }
+}
+
+async fn gone(dir: &std::path::Path) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while dir.exists() {
+        if tokio::time::Instant::now() > deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    true
+}
+
+/// A stop removes the scratch on the blocking pool; a cancelled stop's removal
+/// still finishes while a clone is held, and the retry removes nothing again.
+#[tokio::test]
+async fn a_stop_removes_scratch_off_the_worker_and_a_cancelled_removal_finishes()
+-> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let (_held, resources) = journaled_workload(&[], Some(Arc::clone(&scratch))).await?;
+    let slow = SlowRemoval::start(&scratch);
+    let waited =
+        tokio::time::timeout(Duration::from_millis(500), resources.release("contracts")).await;
+    assert!(
+        waited.is_err(),
+        "the stop held its worker through the removal"
+    );
+    assert!(dir.exists());
+    slow.finish();
+    assert!(
+        gone(&dir).await,
+        "the cancelled stop's removal never finished"
+    );
+    std::fs::create_dir(&dir)?;
+    std::fs::write(dir.join("data"), "the next workload's")?;
+    resources.release("contracts").await?;
+    assert!(
+        dir.join("data").exists(),
+        "the retried stop removed the directory again"
+    );
+    assert!(resources.state.lock().unwrap().scratch.is_none());
+    Ok(())
+}
+
+/// A rolled-back resolve removes the scratch on the blocking pool too, and a
+/// removal whose resolve is cancelled still finishes.
+#[tokio::test]
+async fn a_rollback_removes_scratch_off_the_worker_and_a_cancelled_removal_finishes()
+-> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let events = Arc::default();
+    let mut plugin = RecordingPlugin::new("recording", API, &events);
+    plugin.fail = Some(Callback::Resolved);
+    let plugins = HashMap::from([("recording", Arc::new(plugin) as Arc<dyn HostPlugin>)]);
+    let slow = SlowRemoval::start(&scratch);
+    let waited = tokio::time::timeout(
+        Duration::from_millis(500),
+        requesting(&[API], false)
+            .with_scratch(Some(scratch))
+            .resolve(
+                Some(&plugins),
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+            ),
+    )
+    .await;
+    assert!(
+        waited.is_err(),
+        "the rollback held its worker through the removal"
+    );
+    assert!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.ends_with(":Unbind")),
+        "the rollback never reached the removal"
+    );
+    slow.finish();
+    assert!(
+        gone(&dir).await,
+        "the cancelled rollback's removal never finished"
+    );
+    Ok(())
+}
+
 #[test]
 fn trigger_ingresses_match_the_claims_and_receive_fresh_channels() -> anyhow::Result<()> {
     use crate::host::trigger_service::Ingress;
