@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -69,6 +70,9 @@ type HostTracker struct {
 	hostKeys map[types.NamespacedName]string
 	// Workload object key to the route it registered
 	workloadKeys map[types.NamespacedName]workloadRoute
+	// hostname to the WorkloadIDs whose host takes traffic, so a lookup picks
+	// one without scanning replicas on suspended hosts
+	ready map[string][]string
 }
 
 func newHostTracker(fallback Fallback) *HostTracker {
@@ -79,6 +83,7 @@ func newHostTracker(fallback Fallback) *HostTracker {
 		workloads:    make(map[string]string),
 		hostKeys:     make(map[types.NamespacedName]string),
 		workloadKeys: make(map[types.NamespacedName]workloadRoute),
+		ready:        make(map[string][]string),
 	}
 }
 
@@ -86,8 +91,7 @@ func (ht *HostTracker) Resolve(ctx context.Context, req *http.Request) LookupRes
 	ht.lock.RLock()
 	defer ht.lock.RUnlock()
 
-	workloads, ok := ht.hostnames[req.Host]
-	if !ok {
+	if _, ok := ht.hostnames[req.Host]; !ok {
 		scheme, endpoint := ht.Fallback.InvalidHostname(req.Host)
 		return LookupResult{
 			Hostname: endpoint,
@@ -95,21 +99,15 @@ func (ht *HostTracker) Resolve(ctx context.Context, req *http.Request) LookupRes
 		}
 	}
 
-	// pick a random workload whose host takes traffic; a suspended host has
-	// no entry in ht.hosts
-	for workloadID := range workloads {
-		hostID, ok := ht.workloads[workloadID]
-		if !ok {
-			continue
-		}
-		hostname, ok := ht.hosts[hostID]
-		if !ok {
-			continue
-		}
-		return LookupResult{
-			Hostname:   hostname,
-			Scheme:     "http",
-			WorkloadID: workloadID,
+	// pick a random workload whose host takes traffic
+	if ready := ht.ready[req.Host]; len(ready) > 0 {
+		workloadID := ready[rand.IntN(len(ready))]
+		if hostname, ok := ht.hosts[ht.workloads[workloadID]]; ok {
+			return LookupResult{
+				Hostname:   hostname,
+				Scheme:     "http",
+				WorkloadID: workloadID,
+			}
 		}
 	}
 
@@ -125,7 +123,11 @@ func (ht *HostTracker) RegisterHost(ctx context.Context, key types.NamespacedNam
 	defer ht.lock.Unlock()
 
 	ht.setHostKey(key, hostID)
+	_, wasReady := ht.hosts[hostID]
 	ht.hosts[hostID] = net.JoinHostPort(hostname, strconv.Itoa(port))
+	if !wasReady {
+		ht.refreshHostReady(hostID)
+	}
 	return nil
 }
 
@@ -160,7 +162,10 @@ func (ht *HostTracker) SuspendHost(ctx context.Context, key types.NamespacedName
 	// Record the key even for a host never seen Ready, so deleting it drops
 	// the routes its workloads registered meanwhile.
 	ht.setHostKey(key, hostID)
-	delete(ht.hosts, hostID)
+	if _, ok := ht.hosts[hostID]; ok {
+		delete(ht.hosts, hostID)
+		ht.refreshHostReady(hostID)
+	}
 	return nil
 }
 
@@ -175,12 +180,17 @@ func (ht *HostTracker) removeHost(hostID string) {
 			delete(ht.workloadKeys, key)
 		}
 	}
+	affected := sets.New[string]()
 	for workloadID, hID := range ht.workloads {
 		if hID != hostID {
 			continue
 		}
 		delete(ht.workloads, workloadID)
 		for hostname, workloadSet := range ht.hostnames {
+			if !workloadSet.Has(workloadID) {
+				continue
+			}
+			affected.Insert(hostname)
 			workloadSet.Delete(workloadID)
 			if workloadSet.Len() == 0 {
 				delete(ht.hostnames, hostname)
@@ -189,6 +199,9 @@ func (ht *HostTracker) removeHost(hostID string) {
 	}
 
 	delete(ht.hosts, hostID)
+	for hostname := range affected {
+		ht.refreshReady(hostname)
+	}
 }
 
 func (ht *HostTracker) RegisterWorkload(ctx context.Context, key types.NamespacedName, hostID string, workloadID string, hostname string) error {
@@ -202,12 +215,18 @@ func (ht *HostTracker) RegisterWorkload(ctx context.Context, key types.Namespace
 		ht.removeWorkload(prev)
 	}
 
+	// Every Workload reconcile registers again; an unchanged route keeps the
+	// hostname's ready workloads as they are.
+	changed := ht.workloads[workloadID] != hostID || !ht.hostnames[hostname].Has(workloadID)
 	ht.workloadKeys[key] = route
 	ht.workloads[workloadID] = hostID
 	if workloadSet, ok := ht.hostnames[hostname]; !ok {
 		ht.hostnames[hostname] = sets.New(workloadID)
 	} else {
 		workloadSet.Insert(workloadID)
+	}
+	if changed {
+		ht.refreshReady(hostname)
 	}
 	return nil
 }
@@ -232,6 +251,40 @@ func (ht *HostTracker) removeWorkload(route workloadRoute) {
 		workloadSet.Delete(route.workloadID)
 		if workloadSet.Len() == 0 {
 			delete(ht.hostnames, route.hostname)
+		}
+	}
+	ht.refreshReady(route.hostname)
+}
+
+// refreshReady rebuilds the ready workloads of one hostname.
+// The caller must hold ht.lock.
+func (ht *HostTracker) refreshReady(hostname string) {
+	var ready []string
+	for workloadID := range ht.hostnames[hostname] {
+		hostID, ok := ht.workloads[workloadID]
+		if !ok {
+			continue
+		}
+		if _, ok := ht.hosts[hostID]; ok {
+			ready = append(ready, workloadID)
+		}
+	}
+	if len(ready) == 0 {
+		delete(ht.ready, hostname)
+		return
+	}
+	ht.ready[hostname] = ready
+}
+
+// refreshHostReady rebuilds the ready workloads of every hostname hostID serves.
+// The caller must hold ht.lock.
+func (ht *HostTracker) refreshHostReady(hostID string) {
+	for hostname, workloadSet := range ht.hostnames {
+		for workloadID := range workloadSet {
+			if ht.workloads[workloadID] == hostID {
+				ht.refreshReady(hostname)
+				break
+			}
 		}
 	}
 }
