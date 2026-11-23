@@ -321,10 +321,7 @@ fn a_compile_backend_leaves_oci_retention_on_the_configured_default() -> Result<
     let before = engine.cache();
     let host = Host::builder()
         .with_engine(engine)
-        .with_config(HostConfig {
-            oci_cache_dir: Some(directory.path().to_owned()),
-            ..Default::default()
-        })
+        .with_config(HostConfig::default().with_oci_cache_dir(Some(directory.path().to_owned())))
         .build()?;
     assert!(Arc::ptr_eq(&before, &host.cache()));
     let oci = host.oci_cache();
@@ -350,10 +347,7 @@ fn an_oci_backend_beside_a_cache_directory_is_refused() -> Result<()> {
 
     let Err(error) = Host::builder()
         .with_oci_cache(backend)
-        .with_config(HostConfig {
-            oci_cache_dir: Some(directory.path().to_owned()),
-            ..Default::default()
-        })
+        .with_config(HostConfig::default().with_oci_cache_dir(Some(directory.path().to_owned())))
         .build()
     else {
         panic!("a directory beside an explicit backend should be refused");

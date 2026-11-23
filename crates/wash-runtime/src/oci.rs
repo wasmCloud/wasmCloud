@@ -705,6 +705,16 @@ async fn pull_uncoalesced(
             .await
             .context("OCI artifact cache lookup failed")?
     {
+        // A cache shared with a host that allows more must not let this one
+        // load past its own limit.
+        let max_size = config.effective_max_component_size_bytes();
+        let cached = entry.artifact.bytes.len() as u64;
+        if cached > max_size {
+            bail!(
+                "cached component is {cached} bytes, over the {max_size}-byte limit \
+                 (raise the component size limit to load it)"
+            );
+        }
         if *pull_policy == OciPullPolicy::Never {
             if !entry.credentials_match {
                 bail!(
@@ -796,7 +806,7 @@ async fn pull_component_layer(
     if declared > max_size {
         bail!(
             "component layer declares {declared} bytes, over the {max_size}-byte limit \
-             (raise `max_component_size_bytes` to pull it)"
+             (raise the component size limit to pull it)"
         );
     }
     let declared =

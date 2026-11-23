@@ -311,6 +311,7 @@ async fn custom_artifacts_support_offline_reuse_and_rotation_without_disk() {
         cache_dir: Some(forbidden.clone()),
         cache: Some(cache.clone()),
         timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
     };
     let reference = registry.reference();
     pull_component(&reference, config("secret"), OciPullPolicy::IfNotPresent)
@@ -536,4 +537,34 @@ async fn cloned_backends_with_different_directories_each_persist_the_artifact() 
     pull_component(&reference, second, OciPullPolicy::Never)
         .await
         .expect("a successful pull through the second backend must populate its directory");
+}
+
+#[tokio::test]
+async fn a_cached_component_over_the_limit_is_refused() {
+    wash_runtime::init_crypto();
+    let registry = Registry::start().await;
+    let cache = tempfile::tempdir().unwrap();
+    let config = OciConfig {
+        credentials: Some(("user".into(), "secret".into())),
+        cache_dir: Some(cache.path().to_owned()),
+        insecure: true,
+        timeout: Some(Duration::from_secs(5)),
+        ..Default::default()
+    };
+    let reference = registry.reference();
+    pull_component(&reference, config.clone(), OciPullPolicy::IfNotPresent)
+        .await
+        .unwrap();
+    let size = registry.image.read().unwrap().wasm.len() as u64;
+
+    let smaller = config.with_max_component_size_bytes(size - 1);
+    for policy in [OciPullPolicy::Never, OciPullPolicy::IfNotPresent] {
+        let error = pull_component(&reference, smaller.clone(), policy)
+            .await
+            .expect_err("a host with a lower limit must not load the cached component");
+        assert!(
+            format!("{error:#}").contains("cached component"),
+            "{error:#}"
+        );
+    }
 }

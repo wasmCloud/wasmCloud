@@ -1702,10 +1702,27 @@ async fn consume_workload_failures(
 }
 
 /// Config for the [`Host`]
+///
+/// Non-exhaustive so new settings are not breaking changes: start from
+/// [`HostConfig::default`] and set fields directly or through the `with_*`
+/// methods.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct HostConfig {
     pub allow_oci_insecure: bool,
     pub oci_pull_timeout: Option<Duration>,
+    /// The largest workload component, in bytes, this host pulls from a
+    /// registry. If None, [`DEFAULT_MAX_COMPONENT_SIZE_BYTES`] applies.
+    ///
+    /// A pull holds the whole component in memory, so this bounds what one
+    /// workload's registry can make the host allocate. Raise it to run larger
+    /// components; it does not apply to host plugins, whose pulls the embedder
+    /// configures through their own [`OciConfig`]. [`HostBuilder::build`]
+    /// refuses `Some(0)`, which would refuse every pull.
+    ///
+    /// [`DEFAULT_MAX_COMPONENT_SIZE_BYTES`]: crate::oci::DEFAULT_MAX_COMPONENT_SIZE_BYTES
+    /// [`OciConfig`]: crate::oci::OciConfig
+    pub oci_max_component_size_bytes: Option<u64>,
     /// Directory of the default OCI artifact cache. A host given its own
     /// backend through [`HostBuilder::with_oci_cache`] refuses to build with
     /// this set: that backend owns its storage.
@@ -1732,9 +1749,42 @@ impl Default for HostConfig {
         Self {
             allow_oci_insecure: false,
             oci_pull_timeout: Duration::from_secs(30).into(),
+            oci_max_component_size_bytes: None,
             oci_cache_dir: None,
             oci_ca_paths: Vec::new(),
         }
+    }
+}
+
+impl HostConfig {
+    /// Set [`HostConfig::allow_oci_insecure`].
+    pub fn with_allow_oci_insecure(mut self, allow: bool) -> Self {
+        self.allow_oci_insecure = allow;
+        self
+    }
+
+    /// Set [`HostConfig::oci_pull_timeout`].
+    pub fn with_oci_pull_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.oci_pull_timeout = timeout;
+        self
+    }
+
+    /// Set [`HostConfig::oci_max_component_size_bytes`].
+    pub fn with_oci_max_component_size_bytes(mut self, bytes: Option<u64>) -> Self {
+        self.oci_max_component_size_bytes = bytes;
+        self
+    }
+
+    /// Set [`HostConfig::oci_cache_dir`].
+    pub fn with_oci_cache_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.oci_cache_dir = dir;
+        self
+    }
+
+    /// Set [`HostConfig::oci_ca_paths`].
+    pub fn with_oci_ca_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.oci_ca_paths = paths;
+        self
     }
 }
 
@@ -2014,10 +2064,16 @@ impl HostBuilder {
     /// # Errors
     /// Returns an error if the default engine cannot be created (when no engine
     /// is provided), if a CA bundle named by [`HostConfig::oci_ca_paths`]
-    /// cannot be read or does not parse, or if a different set of bundles is
-    /// already configured for this process.
+    /// cannot be read or does not parse, if a different set of bundles is
+    /// already configured for this process, or if
+    /// [`HostConfig::oci_max_component_size_bytes`] is zero.
     pub fn build(self) -> anyhow::Result<Host> {
         let config = self.config.unwrap_or_default();
+
+        anyhow::ensure!(
+            config.oci_max_component_size_bytes != Some(0),
+            "oci_max_component_size_bytes must be greater than zero"
+        );
 
         // Trust roots first, before anything this host builds can pull: the
         // host pulls on behalf of every workload, and a bundle that cannot be
@@ -2275,6 +2331,15 @@ mod tests {
     /// as every pull from that registry failing to verify, far from the typo
     /// that caused it.
     #[cfg(feature = "oci")]
+    #[test]
+    fn a_zero_component_size_limit_fails_the_build() {
+        let err = Host::builder()
+            .with_config(HostConfig::default().with_oci_max_component_size_bytes(Some(0)))
+            .build()
+            .expect_err("a host must not build with a limit that refuses every pull");
+        assert!(format!("{err:#}").contains("greater than zero"), "{err:#}");
+    }
+
     #[test]
     fn an_unreadable_oci_ca_bundle_fails_the_build() {
         let err = Host::builder()

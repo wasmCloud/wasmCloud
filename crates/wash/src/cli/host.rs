@@ -809,6 +809,17 @@ pub struct HostCommand {
     #[arg(long = "registry-pull-timeout", value_parser = wash_runtime::duration::parse_duration, default_value = "30s")]
     pub registry_pull_timeout: Duration,
 
+    /// The largest component this host pulls from an OCI registry, for
+    /// workloads and host plugins alike (e.g. `512MiB`).
+    ///
+    /// A pull holds the whole component in memory, so this bounds what one
+    /// registry can make the host allocate. Unset, it is 256 MiB.
+    #[arg(
+        long = "max-oci-component-size",
+        env = "WASH_HOST_MAX_OCI_COMPONENT_SIZE"
+    )]
+    pub max_oci_component_size: Option<String>,
+
     /// The directory to use for caching OCI artifacts
     #[arg(long = "oci-cache-dir")]
     pub oci_cache_dir: Option<PathBuf>,
@@ -1464,12 +1475,14 @@ impl CliCommand for HostCommand {
                 .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
-        let host_config = wash_runtime::host::HostConfig {
-            allow_oci_insecure: self.allow_insecure_registries,
-            oci_pull_timeout: Some(self.registry_pull_timeout),
-            oci_cache_dir: self.oci_cache_dir.clone(),
-            oci_ca_paths: self.oci_ca_paths.clone(),
-        };
+        let max_oci_component_size =
+            parse_max_oci_component_size(self.max_oci_component_size.as_deref())?;
+        let host_config = wash_runtime::host::HostConfig::default()
+            .with_allow_oci_insecure(self.allow_insecure_registries)
+            .with_oci_pull_timeout(Some(self.registry_pull_timeout))
+            .with_oci_max_component_size_bytes(max_oci_component_size)
+            .with_oci_cache_dir(self.oci_cache_dir.clone())
+            .with_oci_ca_paths(self.oci_ca_paths.clone());
 
         // The host applies these itself when it is built, but host component
         // plugins are pulled before that. Install them here too — the same
@@ -1756,7 +1769,7 @@ impl CliCommand for HostCommand {
                 // built below shares.
                 cache: None,
                 timeout: Some(self.registry_pull_timeout),
-                ..Default::default()
+                max_component_size_bytes: max_oci_component_size,
             };
             let native_plugins = cluster_host_builder.native_plugins();
             let host_ref = cluster_host_builder.host_ref();
@@ -2903,6 +2916,20 @@ fn parse_max_initial_guest_memory(raw: Option<&str>) -> anyhow::Result<Option<u6
     Ok(Some(bytes))
 }
 
+/// `--max-oci-component-size`, reading a blank value as unset.
+fn parse_max_oci_component_size(raw: Option<&str>) -> anyhow::Result<Option<u64>> {
+    let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(None);
+    };
+    let bytes = wash_runtime::engine::host_memory::parse_bytes(raw)
+        .map_err(|e| anyhow::anyhow!("invalid max-oci-component-size: {e}"))?;
+    anyhow::ensure!(
+        bytes > 0,
+        "max-oci-component-size must be greater than zero"
+    );
+    Ok(Some(bytes))
+}
+
 /// The three distinct meanings of the process-memory flag.
 #[derive(Debug, PartialEq, Eq)]
 enum ProcessMemoryPolicy {
@@ -2983,6 +3010,17 @@ mod process_memory_policy_tests {
         assert_eq!(parse_max_initial_guest_memory(Some("4GiB"))?, Some(4 << 30));
         assert!(parse_max_initial_guest_memory(Some("0")).is_err());
         assert!(parse_max_initial_guest_memory(Some("off")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn max_oci_component_size_parses_sizes_and_reads_blank_as_unset() -> anyhow::Result<()> {
+        for raw in [None, Some(""), Some("  ")] {
+            assert_eq!(parse_max_oci_component_size(raw)?, None);
+        }
+        assert_eq!(parse_max_oci_component_size(Some("1GiB"))?, Some(1 << 30));
+        assert!(parse_max_oci_component_size(Some("0")).is_err());
+        assert!(parse_max_oci_component_size(Some("big")).is_err());
         Ok(())
     }
 
