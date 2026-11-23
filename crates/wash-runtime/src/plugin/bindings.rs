@@ -1655,7 +1655,7 @@ impl PluginBindingSet {
 
     /// The declared bindings a label can name: every one but the unnamed
     /// binding, which is the plain-import default route.
-    fn named_binding_names(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn named_binding_names(&self) -> impl Iterator<Item = &str> {
         self.binding_names().filter(|name| *name != UNNAMED_BINDING)
     }
 }
