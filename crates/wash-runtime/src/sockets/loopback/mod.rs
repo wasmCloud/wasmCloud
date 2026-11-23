@@ -1,7 +1,7 @@
 use crate::sockets::util::ErrorCode;
 use core::net::{IpAddr, SocketAddr};
 use core::num::NonZeroU16;
-use std::collections::{HashMap, hash_map};
+use std::collections::{HashMap, HashSet, hash_map};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{OwnedSemaphorePermit, mpsc};
 
@@ -12,7 +12,7 @@ pub use tcp::*;
 pub use udp::*;
 
 /// The store a virtual port was bound from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Owner(u64);
 
 impl Owner {
@@ -28,7 +28,7 @@ impl Default for Owner {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Family {
     V4,
     V6,
@@ -44,7 +44,7 @@ impl Family {
 }
 
 /// A virtual port: the network keys endpoints by protocol, family and number.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Port {
     Tcp(Family, NonZeroU16),
     Udp(Family, NonZeroU16),
@@ -58,6 +58,8 @@ pub struct Network {
     pub udp_ipv6: HashMap<NonZeroU16, UdpEndpoint>,
     /// The store that last bound each port.
     owners: HashMap<Port, Owner>,
+    /// The ports each store holds, so releasing a store visits only its own.
+    held: HashMap<Owner, HashSet<Port>>,
 }
 
 fn bind<T>(net: &mut HashMap<NonZeroU16, T>, port: u16, ep: T) -> Result<NonZeroU16, ErrorCode> {
@@ -119,12 +121,23 @@ impl Network {
     }
 
     fn record(&mut self, port: Port, owner: Owner) {
+        // The port maps are public, so a removal made outside `forget` may have left a record.
+        self.forget(port);
         self.owners.insert(port, owner);
+        self.held.entry(owner).or_default().insert(port);
     }
 
     /// Drop `port`'s owner record. Every endpoint removal calls this.
     fn forget(&mut self, port: Port) {
-        self.owners.remove(&port);
+        let Some(owner) = self.owners.remove(&port) else {
+            return;
+        };
+        if let Some(ports) = self.held.get_mut(&owner) {
+            ports.remove(&port);
+            if ports.is_empty() {
+                self.held.remove(&owner);
+            }
+        }
     }
 
     fn take_tcp(&mut self, family: Family, port: NonZeroU16) -> Option<TcpEndpoint> {
@@ -154,12 +167,9 @@ impl Network {
     /// Free the ports `owner` still holds. Its store is gone, so its sockets
     /// were dropped without releasing them.
     pub(crate) fn release(&mut self, owner: Owner) {
-        let held: Vec<Port> = self
-            .owners
-            .iter()
-            .filter(|&(_, holder)| *holder == owner)
-            .map(|(&port, _)| port)
-            .collect();
+        let Some(held) = self.held.remove(&owner) else {
+            return;
+        };
         for port in held {
             match port {
                 Port::Tcp(family, port) => drop(self.take_tcp(family, port)),
@@ -234,9 +244,11 @@ impl Network {
         Ok(Some(endpoint))
     }
 
-    /// How many ports have an owner on record.
+    /// How many ports have an owner on record, checked against the index.
     #[cfg(test)]
     pub(crate) fn owner_records(&self) -> usize {
+        let indexed: usize = self.held.values().map(HashSet::len).sum();
+        assert_eq!(indexed, self.owners.len(), "the index matches the records");
         self.owners.len()
     }
 }
@@ -278,5 +290,38 @@ mod tests {
         net.unbind_tcp(v4).unwrap();
         net.unbind_tcp(v6).unwrap();
         assert_eq!(net.owner_records(), 0);
+    }
+
+    /// The index lists the ports each owner holds and drops an owner once its
+    /// last port closes.
+    #[test]
+    fn the_index_tracks_each_owners_ports() {
+        let mut net = Network::default();
+        let (a, b) = (Owner::new(), Owner::new());
+        let any_v4: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let tcp = net.bind_tcp(any_v4, a).unwrap();
+        let (udp, _rx) = net
+            .bind_udp("[::1]:0".parse().unwrap(), Arc::new(Semaphore::new(0)), a)
+            .unwrap();
+        let other = net.bind_tcp(any_v4, b).unwrap();
+        let port = |addr: SocketAddr| NonZeroU16::new(addr.port()).unwrap();
+        assert_eq!(
+            net.held[&a],
+            HashSet::from([
+                Port::Tcp(Family::V4, port(tcp)),
+                Port::Udp(Family::V6, port(udp))
+            ])
+        );
+        assert_eq!(
+            net.held[&b],
+            HashSet::from([Port::Tcp(Family::V4, port(other))])
+        );
+        net.unbind_tcp(tcp).unwrap();
+        net.unbind_udp(udp).unwrap();
+        assert!(
+            !net.held.contains_key(&a),
+            "an owner with no ports has no entry"
+        );
+        assert_eq!(net.owner_records(), 1);
     }
 }

@@ -389,6 +389,10 @@ harness = false
 name = "ids"
 harness = false
 
+[[bench]]
+name = "loopback_lease"
+harness = false
+
 # Ramps warm and scale-to-zero HTTP workloads to max-process-memory; see the
 # module docs for the knobs.
 [[bench]]

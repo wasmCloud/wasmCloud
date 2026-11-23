@@ -93,14 +93,16 @@ impl WasiSocketsCtx {
 
 /// One store's use of its workload's loopback network. A torn-down store does
 /// not drop its sockets one by one, so dropping this frees the ports they held.
-pub(crate) struct LoopbackLease {
+pub struct LoopbackLease {
     network: Arc<std::sync::Mutex<loopback::Network>>,
-    owner: loopback::Owner,
+    /// Set by the store's first socket. Without one, the store holds no port.
+    owner: std::sync::OnceLock<loopback::Owner>,
 }
 
 impl LoopbackLease {
-    pub(crate) fn owner(&self) -> loopback::Owner {
-        self.owner
+    /// The owner this store's sockets bind their virtual ports for.
+    pub fn owner(&self) -> loopback::Owner {
+        *self.owner.get_or_init(loopback::Owner::new)
     }
 }
 
@@ -108,7 +110,7 @@ impl From<Arc<std::sync::Mutex<loopback::Network>>> for LoopbackLease {
     fn from(network: Arc<std::sync::Mutex<loopback::Network>>) -> Self {
         Self {
             network,
-            owner: loopback::Owner::new(),
+            owner: std::sync::OnceLock::new(),
         }
     }
 }
@@ -129,10 +131,12 @@ impl Deref for LoopbackLease {
 
 impl Drop for LoopbackLease {
     fn drop(&mut self) {
-        self.network
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .release(self.owner);
+        if let Some(&owner) = self.owner.get() {
+            self.network
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .release(owner);
+        }
     }
 }
 
@@ -559,5 +563,30 @@ mod tests_p3 {
             code,
             wasmtime_wasi::p3::bindings::sockets::types::ErrorCode::ConnectionRefused
         ));
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::unwrap_used)]
+mod lease_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// A store that never opened a socket does not touch the shared network
+    /// when it is dropped.
+    #[test]
+    fn a_store_without_sockets_does_not_lock_the_network_on_drop() {
+        let network: Arc<std::sync::Mutex<loopback::Network>> = Arc::default();
+        let lease = LoopbackLease::from(Arc::clone(&network));
+        let held = network.lock().unwrap();
+        let (done, dropped) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(lease);
+            done.send(()).unwrap();
+        });
+        let result = dropped.recv_timeout(Duration::from_secs(5));
+        drop(held);
+        assert!(result.is_ok(), "dropping the lease waited for the network");
     }
 }
