@@ -213,37 +213,61 @@ mod tests {
 
         let (_, module) = module_path!().split_once("::").context("no test module")?;
         let test = format!("{module}::a_failed_refresh_does_not_republish_cached_memory");
-        let mut child = std::process::Command::new(std::env::current_exe()?)
-            .args(["--exact", &test, "--nocapture"])
-            .env(CHILD, "1")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()?;
-        let output = child.stdout.take().context("missing child stdout")?;
-        let mut lines = std::io::BufReader::new(output).lines();
-        let mut ready = false;
-        for line in lines.by_ref() {
-            if line?.ends_with(READY) {
-                ready = true;
-                break;
+        for _ in 0..3 {
+            let mut child = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", &test, "--nocapture"])
+                .env(CHILD, "1")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()?;
+            let output = child.stdout.take().context("missing child stdout")?;
+            let mut lines = std::io::BufReader::new(output).lines();
+            let mut ready = false;
+            for line in lines.by_ref() {
+                if line?.ends_with(READY) {
+                    ready = true;
+                    break;
+                }
+            }
+            let pid = sysinfo::Pid::from_u32(child.id());
+            let mut system = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new());
+            let initial = sysinfo_footprint(&mut system, pid);
+            drop(child.stdin.take());
+            // Keep stdout open until the child harness writes its test summary.
+            let status = child.wait()?;
+            drop(lines);
+
+            assert!(status.success());
+            assert!(ready, "the child reached its wait for input");
+            assert!(initial.is_some(), "the live child has readable memory");
+            assert!(
+                system.process(pid).is_some(),
+                "the previous sample is cached"
+            );
+            // Once reaped, the child's id can go to a new process, or on
+            // Linux a new thread, and refreshing it then rightly succeeds.
+            // Only a refresh made while the id stays free shows anything,
+            // so a reused id means another try with a new child.
+            if !pid_is_free(pid) {
+                continue;
+            }
+            let after = sysinfo_footprint(&mut system, pid);
+            if pid_is_free(pid) {
+                assert_eq!(after, None);
+                return Ok(());
             }
         }
-        let pid = sysinfo::Pid::from_u32(child.id());
-        let mut system = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new());
-        let initial = sysinfo_footprint(&mut system, pid);
-        drop(child.stdin.take());
-        // Keep stdout open until the child harness writes its test summary.
-        let status = child.wait()?;
-        drop(lines);
+        anyhow::bail!("every child's pid was reused before it could be checked")
+    }
 
-        assert!(status.success());
-        assert!(ready, "the child reached its wait for input");
-        assert!(initial.is_some(), "the live child has readable memory");
-        assert!(
-            system.process(pid).is_some(),
-            "the previous sample is cached"
+    /// Whether nothing holds `pid`, asked of a `System` with no cache.
+    fn pid_is_free(pid: sysinfo::Pid) -> bool {
+        let mut system = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::new());
+        let updated = system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            false,
+            sysinfo::ProcessRefreshKind::new(),
         );
-        assert_eq!(sysinfo_footprint(&mut system, pid), None);
-        Ok(())
+        updated == 0
     }
 }
