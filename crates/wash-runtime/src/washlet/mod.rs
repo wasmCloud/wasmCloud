@@ -1776,6 +1776,7 @@ fn image_pull_secret_to_oci_config(
     oci_config.cache = Some(cache);
     oci_config.insecure = config.allow_oci_insecure;
     oci_config.timeout = config.oci_pull_timeout;
+    oci_config.max_component_size_bytes = config.oci_max_component_size_bytes;
 
     oci_config
 }
@@ -3752,6 +3753,25 @@ mod tests {
         );
         assert!(config.credentials.is_none());
         assert!(!config.insecure);
+        assert_eq!(
+            config.effective_max_component_size_bytes(),
+            oci::DEFAULT_MAX_COMPONENT_SIZE_BYTES
+        );
+    }
+
+    #[tokio::test]
+    async fn the_host_component_size_limit_reaches_workload_pulls() {
+        let limit = 2 * oci::DEFAULT_MAX_COMPONENT_SIZE_BYTES;
+        let host_config = HostConfig {
+            oci_max_component_size_bytes: Some(limit),
+            ..Default::default()
+        };
+        let config = image_pull_secret_to_oci_config(
+            &host_config,
+            crate::cache::oci::standalone(None),
+            &None,
+        );
+        assert_eq!(config.effective_max_component_size_bytes(), limit);
     }
 
     #[tokio::test]
