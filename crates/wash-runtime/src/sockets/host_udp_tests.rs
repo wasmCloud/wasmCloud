@@ -652,6 +652,20 @@ async fn full_receiver_releases_dropped_p2_sender_permits() {
     assert!(h.receive(rx, 10).is_empty());
 }
 
+/// Closing sockets drops their owner records while the store lives on.
+#[tokio::test]
+async fn closing_sockets_drops_their_owner_records_while_the_store_lives() {
+    let mut h = Harness::default();
+    let (v4, _) = h.bind("127.0.0.1:0").await;
+    let (v6, _) = h.bind("[::1]:0").await;
+    assert_eq!(h.ctx.loopback.lock().unwrap().owner_records(), 2);
+    Socket::drop(&mut h.view(), Resource::new_own(v4)).unwrap();
+    Socket::drop(&mut h.view(), Resource::new_own(v6)).unwrap();
+    let net = h.ctx.loopback.lock().unwrap();
+    assert!(net.udp_ipv4.is_empty() && net.udp_ipv6.is_empty());
+    assert_eq!(net.owner_records(), 0, "no record outlives its port");
+}
+
 /// A store torn down without dropping its sockets frees their loopback ports,
 /// so the next store on the same network can bind them.
 #[tokio::test]

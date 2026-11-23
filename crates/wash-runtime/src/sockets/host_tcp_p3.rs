@@ -1673,15 +1673,12 @@ mod tests {
         for rep in [first, second, listener] {
             HostTcpSocket::drop(&mut view(store.data_mut()), Resource::new_own(rep)).unwrap();
         }
-        assert!(
-            store
-                .data()
-                .ctx
-                .loopback
-                .lock()
-                .unwrap()
-                .tcp_ipv4
-                .is_empty()
+        let net = store.data().ctx.loopback.lock().unwrap();
+        assert!(net.tcp_ipv4.is_empty());
+        assert_eq!(
+            net.owner_records(),
+            0,
+            "the cancelled connect left no record"
         );
     }
 

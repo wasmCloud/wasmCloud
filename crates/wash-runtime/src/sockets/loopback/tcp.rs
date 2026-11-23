@@ -261,9 +261,11 @@ impl TcpSocket {
         let Some(port) = NonZeroU16::new(local_address.port()) else {
             return;
         };
-        let net = loopback.get_tcp_net_mut(local_address.ip());
-        if matches!(net.get(&port), Some(TcpEndpoint::Bound)) {
-            net.remove(&port);
+        if matches!(
+            loopback.get_tcp_net(local_address.ip()).get(&port),
+            Some(TcpEndpoint::Bound)
+        ) {
+            loopback.unbind_tcp(local_address);
         }
     }
 
@@ -548,9 +550,8 @@ impl TcpSocket {
             | TcpState::P2Streaming { accepted: true, .. }
             | TcpState::Closed => return Ok(()),
         };
-        let net = loopback.get_tcp_net_mut(addr.ip());
-        let port = NonZeroU16::new(addr.port()).context("local address port cannot be 0")?;
-        net.remove(&port);
+        NonZeroU16::new(addr.port()).context("local address port cannot be 0")?;
+        loopback.unbind_tcp(addr);
         Ok(())
     }
 }

@@ -29,11 +29,25 @@ impl Default for Owner {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Family {
+    V4,
+    V6,
+}
+
+impl Family {
+    fn of(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(..) => Self::V4,
+            IpAddr::V6(..) => Self::V6,
+        }
+    }
+}
+
+/// A virtual port: the network keys endpoints by protocol, family and number.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Port {
-    TcpV4(NonZeroU16),
-    TcpV6(NonZeroU16),
-    UdpV4(NonZeroU16),
-    UdpV6(NonZeroU16),
+    Tcp(Family, NonZeroU16),
+    Udp(Family, NonZeroU16),
 }
 
 #[derive(Default)]
@@ -75,10 +89,14 @@ impl Network {
         }
     }
 
-    pub(crate) fn get_tcp_net_mut(&mut self, ip: IpAddr) -> &mut HashMap<NonZeroU16, TcpEndpoint> {
-        match ip {
-            IpAddr::V4(..) => &mut self.tcp_ipv4,
-            IpAddr::V6(..) => &mut self.tcp_ipv6,
+    fn get_tcp_net_mut(&mut self, ip: IpAddr) -> &mut HashMap<NonZeroU16, TcpEndpoint> {
+        self.tcp_net_mut(Family::of(ip))
+    }
+
+    fn tcp_net_mut(&mut self, family: Family) -> &mut HashMap<NonZeroU16, TcpEndpoint> {
+        match family {
+            Family::V4 => &mut self.tcp_ipv4,
+            Family::V6 => &mut self.tcp_ipv6,
         }
     }
 
@@ -89,11 +107,36 @@ impl Network {
         }
     }
 
-    pub(crate) fn get_udp_net_mut(&mut self, ip: IpAddr) -> &mut HashMap<NonZeroU16, UdpEndpoint> {
-        match ip {
-            IpAddr::V4(..) => &mut self.udp_ipv4,
-            IpAddr::V6(..) => &mut self.udp_ipv6,
+    fn get_udp_net_mut(&mut self, ip: IpAddr) -> &mut HashMap<NonZeroU16, UdpEndpoint> {
+        self.udp_net_mut(Family::of(ip))
+    }
+
+    fn udp_net_mut(&mut self, family: Family) -> &mut HashMap<NonZeroU16, UdpEndpoint> {
+        match family {
+            Family::V4 => &mut self.udp_ipv4,
+            Family::V6 => &mut self.udp_ipv6,
         }
+    }
+
+    fn record(&mut self, port: Port, owner: Owner) {
+        self.owners.insert(port, owner);
+    }
+
+    /// Drop `port`'s owner record. Every endpoint removal calls this.
+    fn forget(&mut self, port: Port) {
+        self.owners.remove(&port);
+    }
+
+    fn take_tcp(&mut self, family: Family, port: NonZeroU16) -> Option<TcpEndpoint> {
+        let endpoint = self.tcp_net_mut(family).remove(&port)?;
+        self.forget(Port::Tcp(family, port));
+        Some(endpoint)
+    }
+
+    fn take_udp(&mut self, family: Family, port: NonZeroU16) -> Option<UdpEndpoint> {
+        let endpoint = self.udp_net_mut(family).remove(&port)?;
+        self.forget(Port::Udp(family, port));
+        Some(endpoint)
     }
 
     pub fn bind_tcp(
@@ -101,13 +144,9 @@ impl Network {
         mut addr: SocketAddr,
         owner: Owner,
     ) -> Result<SocketAddr, ErrorCode> {
-        let net = self.get_tcp_net_mut(addr.ip());
-        let port = bind(net, addr.port(), TcpEndpoint::Bound)?;
-        let key = match addr.ip() {
-            IpAddr::V4(..) => Port::TcpV4(port),
-            IpAddr::V6(..) => Port::TcpV6(port),
-        };
-        self.owners.insert(key, owner);
+        let family = Family::of(addr.ip());
+        let port = bind(self.tcp_net_mut(family), addr.port(), TcpEndpoint::Bound)?;
+        self.record(Port::Tcp(family, port), owner);
         addr.set_port(port.into());
         Ok(addr)
     }
@@ -115,31 +154,28 @@ impl Network {
     /// Free the ports `owner` still holds. Its store is gone, so its sockets
     /// were dropped without releasing them.
     pub(crate) fn release(&mut self, owner: Owner) {
-        let Self {
-            tcp_ipv4,
-            tcp_ipv6,
-            udp_ipv4,
-            udp_ipv6,
-            owners,
-        } = self;
-        owners.retain(|port, holder| {
-            if *holder != owner {
-                return true;
+        let held: Vec<Port> = self
+            .owners
+            .iter()
+            .filter(|&(_, holder)| *holder == owner)
+            .map(|(&port, _)| port)
+            .collect();
+        for port in held {
+            match port {
+                Port::Tcp(family, port) => drop(self.take_tcp(family, port)),
+                Port::Udp(family, port) => drop(self.take_udp(family, port)),
             }
-            match *port {
-                Port::TcpV4(port) => drop(tcp_ipv4.remove(&port)),
-                Port::TcpV6(port) => drop(tcp_ipv6.remove(&port)),
-                Port::UdpV4(port) => drop(udp_ipv4.remove(&port)),
-                Port::UdpV6(port) => drop(udp_ipv6.remove(&port)),
-            }
-            false
-        });
+        }
     }
 
     /// Release the TCP endpoint bound at `addr`, returning it if one was bound.
     pub fn unbind_tcp(&mut self, addr: SocketAddr) -> Option<TcpEndpoint> {
-        let port = NonZeroU16::new(addr.port())?;
-        self.get_tcp_net_mut(addr.ip()).remove(&port)
+        self.take_tcp(Family::of(addr.ip()), NonZeroU16::new(addr.port())?)
+    }
+
+    /// Release the UDP endpoint bound at `addr`, returning it if one was bound.
+    pub fn unbind_udp(&mut self, addr: SocketAddr) -> Option<UdpEndpoint> {
+        self.take_udp(Family::of(addr.ip()), NonZeroU16::new(addr.port())?)
     }
 
     pub fn bind_udp(
@@ -154,19 +190,15 @@ impl Network {
         ),
         ErrorCode,
     > {
-        let net = self.get_udp_net_mut(addr.ip());
+        let family = Family::of(addr.ip());
         let (tx, rx) = mpsc::unbounded_channel();
         let ep = UdpEndpoint {
             tx,
             connected_address: None,
             receive_permits,
         };
-        let port = bind(net, addr.port(), ep)?;
-        let key = match addr.ip() {
-            IpAddr::V4(..) => Port::UdpV4(port),
-            IpAddr::V6(..) => Port::UdpV6(port),
-        };
-        self.owners.insert(key, owner);
+        let port = bind(self.udp_net_mut(family), addr.port(), ep)?;
+        self.record(Port::Udp(family, port), owner);
         addr.set_port(port.into());
         Ok((addr, rx))
     }
@@ -201,6 +233,12 @@ impl Network {
         }
         Ok(Some(endpoint))
     }
+
+    /// How many ports have an owner on record.
+    #[cfg(test)]
+    pub(crate) fn owner_records(&self) -> usize {
+        self.owners.len()
+    }
 }
 
 #[cfg(test)]
@@ -226,5 +264,19 @@ mod tests {
         net.release(a);
         assert!(net.tcp_ipv4.is_empty() && net.tcp_ipv6.is_empty() && net.udp_ipv6.is_empty());
         assert_eq!(net.udp_ipv4.len(), 1, "the other owner's UDP port survives");
+    }
+
+    /// Unbinding a port drops its owner record while the owner lives on.
+    #[test]
+    fn unbinding_a_port_drops_its_owner_record() {
+        let mut net = Network::default();
+        let owner = Owner::new();
+        let v4: SocketAddr = "127.0.0.1:7000".parse().unwrap();
+        let v6: SocketAddr = "[::1]:7000".parse().unwrap();
+        net.bind_tcp(v4, owner).unwrap();
+        net.bind_tcp(v6, owner).unwrap();
+        net.unbind_tcp(v4).unwrap();
+        net.unbind_tcp(v6).unwrap();
+        assert_eq!(net.owner_records(), 0);
     }
 }

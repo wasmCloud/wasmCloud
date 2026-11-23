@@ -1187,6 +1187,26 @@ mod tests {
             .expect("the port of a torn-down store is free");
     }
 
+    /// Closing sockets drops their owner records while the store lives on.
+    #[tokio::test]
+    async fn closing_sockets_drops_their_owner_records_while_the_store_lives() {
+        let mut h = Harness::new(SocketAddrCheck::new(|addr, _| {
+            AddrDecision::allow_by_address(addr)
+        }));
+        let (listener, address) = h.listen().await;
+        let (client, input, output) = h.connect(address).await;
+        h.ready(listener).await;
+        let (server, server_in, server_out) =
+            tcp::HostTcpSocket::accept(&mut h.view(), Resource::new_borrow(listener)).unwrap();
+        assert_eq!(h.ctx.loopback.lock().unwrap().owner_records(), 2);
+        h.close(client, input, output);
+        h.close(server.rep(), server_in, server_out);
+        tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
+        let net = h.ctx.loopback.lock().unwrap();
+        assert!(net.tcp_ipv4.is_empty());
+        assert_eq!(net.owner_records(), 0, "no record outlives its port");
+    }
+
     /// A client store's ephemeral port, bound by its connect, goes with the store.
     #[tokio::test]
     async fn store_teardown_releases_a_connected_clients_ephemeral_port() {
