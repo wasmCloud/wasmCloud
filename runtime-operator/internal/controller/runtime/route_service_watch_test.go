@@ -170,7 +170,7 @@ func TestWorkloadRouteRebuildsSliceThatWasDeletingAtReplacement(t *testing.T) {
 		t.Fatalf("no EndpointSlice for the old Service: %v", err)
 	}
 
-	// The finalizer keeps the old slice deleting, as foreground deletion of its Service would.
+	// A finalizer holds the old slice in deletion while the replacement Service appears.
 	setFinalizers(t, ctx, apiClient, oldSlice, `["`+routeTestFinalizer+`"]`)
 	if err := apiClient.Delete(ctx, oldSvc); err != nil {
 		t.Fatal(err)
@@ -276,6 +276,57 @@ func TestWorkloadRouteDoesNotAdoptUnmanagedSlice(t *testing.T) {
 	}
 }
 
+// With no ready endpoints, a same-named slice this controller does not manage
+// is not deleted.
+func TestWorkloadRouteKeepsUnmanagedSliceWithNoEndpoints(t *testing.T) {
+	svc := newRouteService(testServiceName)
+	foreign := staleRouteSlice()
+	foreign.Labels = map[string]string{discoveryv1.LabelServiceName: testServiceName}
+	r := newRouteReconciler(t, svc, foreign)
+	before := getSlice(t, r, testServiceName)
+	runReconcile(t, r, testServiceName)
+	if after := getSlice(t, r, testServiceName); !reflect.DeepEqual(after, before) {
+		t.Fatalf("unmanaged slice was changed: before=%+v after=%+v", before, after)
+	}
+}
+
+// A Service held in deletion, as by a load balancer finalizer, keeps getting
+// its slice updated and removed; only a new slice is not built.
+func TestWorkloadRouteKeepsSliceCurrentWhileServiceIsDeleting(t *testing.T) {
+	const otherHostID, otherPodIP = "host-def", "10.244.0.43"
+	ctx := t.Context()
+	svc := newRouteService(testServiceName)
+	svc.Finalizers = []string{routeTestFinalizer}
+	first := newAvailableWorkload("wl-1", testServiceName, testHostID)
+	r := newRouteReconciler(t, svc, first, newHost("host-a", testHostID, testPodIP, routeTestPort))
+	runReconcile(t, r, testServiceName)
+	if err := r.Delete(ctx, svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(svc), svc); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newAvailableWorkload("wl-2", testServiceName, otherHostID)
+	for _, obj := range []client.Object{newHost("host-b", otherHostID, otherPodIP, routeTestPort), second} {
+		if err := r.Create(ctx, obj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReconcile(t, r, testServiceName)
+	assertRouteSlice(t, getSlice(t, r, testServiceName), svc, testPodIP, otherPodIP)
+
+	for _, wl := range []client.Object{first, second} {
+		if err := r.Delete(ctx, wl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReconcile(t, r, testServiceName)
+	if got := getSlice(t, r, testServiceName); got != nil {
+		t.Fatalf("the slice of a deleting Service was not removed with its last endpoint: %v", got.Endpoints)
+	}
+}
+
 // A Service being deleted gets no new slice: garbage collection would delete
 // it again and the slice watch would rebuild it, round after round.
 func TestWorkloadRouteBuildsNoSliceForDeletingService(t *testing.T) {
@@ -345,9 +396,8 @@ func TestServiceToRequestSkipsUnroutedServices(t *testing.T) {
 	}
 }
 
-// Service updates that cannot change which Service owns the slice are dropped
-// before serviceToRequest lists Workloads; create, delete, replacement and the
-// start of deletion still pass.
+// Only create, delete, a new UID and the start of deletion pass the Service
+// watch; other updates are dropped before serviceToRequest lists Workloads.
 func TestRoutedServiceChangedFilter(t *testing.T) {
 	svc := newRouteService(testServiceName)
 	svc.UID = "service-uid"

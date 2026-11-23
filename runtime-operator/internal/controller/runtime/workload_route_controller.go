@@ -82,10 +82,6 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		return ctrl.Result{}, fmt.Errorf("getting service %s: %w", serviceName, err)
 	}
-	// GC removes the slice with the Service; a new one would be deleted and rebuilt in a loop.
-	if !svc.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
-	}
 
 	// Collect all Workloads in this namespace that reference this service.
 	workloadList := &runtimev1alpha1.WorkloadList{}
@@ -155,18 +151,7 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	sliceName := endpointSliceName(serviceName)
 
 	if len(endpoints) == 0 {
-		// No ready workloads for this service; delete our EndpointSlice if it exists.
-		es := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      sliceName,
-				Namespace: namespace,
-			},
-		}
-		if err := r.Delete(ctx, es); err != nil && !errors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("deleting empty EndpointSlice: %w", err)
-		}
-		log.Info("deleted EndpointSlice (no ready endpoints)", "endpointSlice", sliceName)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.deleteEndpointSlice(ctx, namespace, sliceName)
 	}
 
 	// Set the port to the first HTTPPort, since all Hosts within the same HostGroup have the same HTTPPort.
@@ -229,6 +214,10 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	existing := &discoveryv1.EndpointSlice{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: sliceName}, existing)
 	if errors.IsNotFound(err) {
+		// GC removes a deleting Service's slice; a new one would be deleted and rebuilt in a loop.
+		if !svc.DeletionTimestamp.IsZero() {
+			return ctrl.Result{}, nil
+		}
 		if err := r.Create(ctx, desiredSlice); err != nil {
 			return ctrl.Result{}, fmt.Errorf("creating EndpointSlice: %w", err)
 		}
@@ -250,6 +239,25 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// deleteEndpointSlice deletes the named slice if this controller manages it.
+func (r *WorkloadRouteReconciler) deleteEndpointSlice(ctx context.Context, namespace, name string) error {
+	existing := &discoveryv1.EndpointSlice{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if existing.Labels[routeManagerLabel] != routeManagedValue || !existing.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if err := r.Delete(ctx, existing, client.Preconditions{UID: &existing.UID}); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("deleting empty EndpointSlice: %w", err)
+	}
+	ctrl.LoggerFrom(ctx).Info("deleted EndpointSlice (no ready endpoints)", "endpointSlice", name)
+	return nil
 }
 
 // updateEndpointSlice writes desired into existing when they differ and reports
