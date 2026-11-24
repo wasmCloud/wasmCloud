@@ -271,6 +271,8 @@ async fn discard_cache_entry(path: &Path) -> Result<()> {
 const CACHE_LOCK_FILE: &str = ".wash-cache.lock";
 /// Past this wait a call stops waiting for the lock, as one held by a stopped process.
 const CACHE_LOCK_WAIT: Duration = Duration::from_secs(30);
+/// How often a waiting call tries the lock again.
+const CACHE_LOCK_POLL: Duration = Duration::from_millis(100);
 
 /// The cache one call uses until dropped: the shared cache, locked if the lock is taken;
 /// if not, a private cache, or the shared one unlocked when this process cannot write it.
@@ -291,21 +293,31 @@ async fn lock_exclusively(path: &Path, wait: Duration) -> std::io::Result<std::f
         .open(path)
         .or_else(|error| std::fs::File::open(path).map_err(|_| error))?;
     let locking = async {
-        // On some NFS mounts even a non-blocking `flock` blocks, so it runs off the runtime.
-        let (file, tried) = blocking(move || {
-            let tried = file.try_lock();
-            (file, tried)
-        })
-        .await?;
-        match tried {
-            Ok(()) => return Ok(file),
-            Err(std::fs::TryLockError::WouldBlock) => info!(
-                path = %path.display(),
-                "waiting for another wash process to release the WIT package cache lock"
-            ),
-            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        let mut file = file;
+        let mut logged = false;
+        loop {
+            // On some NFS mounts even a non-blocking `flock` blocks, so it runs off the runtime.
+            let (returned, tried) = blocking(move || {
+                let tried = file.try_lock();
+                (file, tried)
+            })
+            .await?;
+            file = returned;
+            match tried {
+                Ok(()) => return Ok(file),
+                Err(std::fs::TryLockError::WouldBlock) if !logged => {
+                    logged = true;
+                    info!(
+                        path = %path.display(),
+                        "waiting for another wash process to release the WIT package cache lock"
+                    );
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(error)) => return Err(error),
+            }
+            // Polling, not a blocking `lock`, so a wait that times out leaves no thread behind
+            tokio::time::sleep(CACHE_LOCK_POLL).await;
         }
-        blocking(move || file.lock().map(|()| file)).await?
     };
     tokio::time::timeout(wait, locking)
         .await

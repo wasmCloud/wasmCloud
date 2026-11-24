@@ -271,6 +271,36 @@ async fn a_cache_lock_held_past_the_wait_gives_a_private_cache() -> Result<()> {
     Ok(())
 }
 
+/// A wait that runs out leaves no thread blocked on the lock, so the runtime can
+/// shut down while another process still holds it.
+#[test]
+fn a_timed_out_wait_for_the_cache_lock_leaves_no_thread_behind() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    std::fs::create_dir_all(dir.path().join("cache"))?;
+    let held = hold_cache_lock(dir.path())?;
+    let path = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let waited = runtime.block_on(lock_exclusively(&path, Duration::from_millis(200)));
+    anyhow::ensure!(
+        waited
+            .as_ref()
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::TimedOut),
+        "the wait did not time out: {waited:?}"
+    );
+    let (stopped, shut_down) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(runtime);
+        let _ = stopped.send(());
+    });
+    // The bound only stops a hang; the runtime's shutdown is what ends the wait.
+    let shut_down = shut_down.recv_timeout(Duration::from_secs(10));
+    drop(held);
+    shut_down.context("the runtime waited for a thread still blocked on the cache lock")?;
+    Ok(())
+}
+
 /// Where no lock file can be made, as in a read-only cache, a fetch that writes
 /// nothing to the cache still works.
 #[cfg(unix)]
