@@ -266,6 +266,10 @@ name = "integration_instance_concurrency"
 required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
 
 [[test]]
+name = "integration_loopback_service_restart"
+required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
+
+[[test]]
 name = "integration_messaging_async"
 required-features = ["wasi-blobstore", "wasi-config", "wasi-keyvalue", "wasi-logging"]
 

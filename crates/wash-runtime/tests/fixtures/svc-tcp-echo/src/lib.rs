@@ -7,6 +7,8 @@
 //! checkout wakers and per-session stream drivers. There is NO periodic clock
 //! tick: if either a spawned task or a guest-waker wake needs an unrelated
 //! host event to be observed, the reply never flushes.
+//!
+//! A `trap` request traps the instance, so a test can restart the service.
 
 mod bindings {
     wit_bindgen::generate!({ world: "svc-tcp-echo", generate_all });
@@ -93,6 +95,9 @@ async fn handle(sock: TcpSocket) {
     });
 
     let (_result, data) = rx.read(Vec::with_capacity(1024)).await;
+    if data == b"trap" {
+        panic!("svc-tcp-echo: deliberate trap for the restart test");
+    }
     let mut reply = b"echo:".to_vec();
     reply.extend_from_slice(&data);
     handoff.put(reply);

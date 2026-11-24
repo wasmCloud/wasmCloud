@@ -3,6 +3,8 @@
 //! and returns the echoed reply as the response body. The pair reproduces a
 //! long-lived service reached guest-to-guest, with the HTTP side driving one
 //! request at a time.
+//!
+//! A request for `/trap` sends `trap` instead, which traps the service.
 
 mod bindings {
     wit_bindgen::generate!({ world: "http-loopback-gateway", generate_all });
@@ -19,15 +21,19 @@ const ECHO_PORT: u16 = 9099;
 struct Component;
 
 impl Handler for Component {
-    async fn handle(_request: Request) -> Result<Response, ErrorCode> {
-        let reply = echo_roundtrip()
+    async fn handle(request: Request) -> Result<Response, ErrorCode> {
+        let payload = match request.get_path_with_query().as_deref() {
+            Some("/trap") => b"trap".to_vec(),
+            _ => b"ping".to_vec(),
+        };
+        let reply = echo_roundtrip(payload)
             .await
             .map_err(|e| ErrorCode::InternalError(Some(e.to_string())))?;
         Ok(make_response(reply))
     }
 }
 
-async fn echo_roundtrip() -> Result<Vec<u8>, &'static str> {
+async fn echo_roundtrip(payload: Vec<u8>) -> Result<Vec<u8>, &'static str> {
     let client = TcpSocket::create(IpAddressFamily::Ipv4).map_err(|_| "create failed")?;
     client
         .connect(IpSocketAddress::Ipv4(Ipv4SocketAddress {
@@ -41,7 +47,7 @@ async fn echo_roundtrip() -> Result<Vec<u8>, &'static str> {
     // service observes as end-of-request.
     let (mut tx, tx_stream) = bindings::wit_stream::new();
     let (send_result, ()) = futures::join!(async { client.send(tx_stream).await }, async {
-        tx.write_all(b"ping".to_vec()).await;
+        tx.write_all(payload).await;
         drop(tx);
     });
     send_result.map_err(|_| "send failed")?;
