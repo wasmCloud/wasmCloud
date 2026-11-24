@@ -1180,3 +1180,35 @@ async fn p2_and_p3_senders_share_the_receivers_buffer_budget() {
         assert_eq!(receive(&mut store, receiver).await.unwrap().0, [3]);
     }
 }
+
+/// Dropping a store frees only the ports it still holds: a port it gave up and
+/// another store bound again stays bound.
+#[tokio::test]
+async fn dropping_a_store_keeps_ports_bound_by_another_store() {
+    let network: Arc<std::sync::Mutex<crate::sockets::loopback::Network>> = Arc::default();
+    let on_network = || {
+        let mut data = Data::default();
+        data.ctx.loopback = Arc::clone(&network).into();
+        store(data)
+    };
+    let mut first = on_network();
+    let (socket, addr) = bind(first.data_mut(), "127.0.0.1:0").await;
+    HostUdpSocket::drop(&mut view(first.data_mut()), Resource::new_own(socket)).unwrap();
+
+    let mut second = on_network();
+    let (_socket, rebound) = bind(second.data_mut(), &addr.to_string()).await;
+    assert_eq!(rebound, addr);
+    drop(first);
+
+    let mut third = on_network();
+    let socket = create(third.data_mut(), IpAddressFamily::Ipv4).await;
+    assert_code(
+        HostUdpSocket::bind(
+            &mut view(third.data_mut()),
+            Resource::new_borrow(socket),
+            addr.into(),
+        )
+        .await,
+        ErrorCode::AddressInUse,
+    );
+}

@@ -1571,6 +1571,51 @@ mod tests {
         .expect("the port of a dropped store is free");
     }
 
+    /// Create a TCP socket in `store` and bind it to `addr`.
+    async fn bind_new(
+        store: &mut wasmtime::Store<Data>,
+        addr: SocketAddr,
+    ) -> (u32, SocketResult<()>) {
+        let rep = HostTcpSocket::create(&mut view(store.data_mut()), IpAddressFamily::Ipv4)
+            .unwrap()
+            .rep();
+        let result = HostTcpSocket::bind(
+            &mut view(store.data_mut()),
+            Resource::new_borrow(rep),
+            addr.into(),
+        )
+        .await;
+        (rep, result)
+    }
+
+    /// Dropping a store frees only the ports it still holds: a port it gave up
+    /// and another store bound again stays bound.
+    #[tokio::test]
+    async fn dropping_a_store_keeps_ports_bound_by_another_store() {
+        let network = Arc::default();
+        let mut first = store_on(Arc::clone(&network));
+        let (socket, bound) = bind_new(&mut first, "127.0.0.1:0".parse().unwrap()).await;
+        bound.unwrap();
+        let addr = HostTcpSocket::get_local_address(
+            &mut view(first.data_mut()),
+            Resource::new_borrow(socket),
+        )
+        .unwrap()
+        .into();
+        HostTcpSocket::drop(&mut view(first.data_mut()), Resource::new_own(socket)).unwrap();
+
+        let mut second = store_on(Arc::clone(&network));
+        bind_new(&mut second, addr).await.1.unwrap();
+        drop(first);
+
+        let mut third = store_on(network);
+        let error = bind_new(&mut third, addr).await.1.unwrap_err();
+        assert!(matches!(
+            error.downcast().unwrap(),
+            types::ErrorCode::AddressInUse
+        ));
+    }
+
     #[tokio::test]
     async fn cancelling_a_backlogged_connect_releases_its_virtual_port() {
         let mut store = store(SocketAddrCheck::new(|addr, _| {
