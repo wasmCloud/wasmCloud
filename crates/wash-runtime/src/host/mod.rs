@@ -2326,11 +2326,8 @@ mod tests {
         ));
     }
 
-    /// An unreadable CA bundle has to stop the host being built. Trust is
-    /// configured once and used much later, so accepting it here would surface
-    /// as every pull from that registry failing to verify, far from the typo
-    /// that caused it.
-    #[cfg(feature = "oci")]
+    /// A zero limit refuses every pull, so it is a configuration error, found
+    /// when the host is built rather than at its first workload start.
     #[test]
     fn a_zero_component_size_limit_fails_the_build() {
         let err = Host::builder()
@@ -2340,6 +2337,11 @@ mod tests {
         assert!(format!("{err:#}").contains("greater than zero"), "{err:#}");
     }
 
+    /// An unreadable CA bundle has to stop the host being built. Trust is
+    /// configured once and used much later, so accepting it here would surface
+    /// as every pull from that registry failing to verify, far from the typo
+    /// that caused it.
+    #[cfg(feature = "oci")]
     #[test]
     fn an_unreadable_oci_ca_bundle_fails_the_build() {
         let err = Host::builder()
