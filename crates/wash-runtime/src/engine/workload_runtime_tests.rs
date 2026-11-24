@@ -790,6 +790,152 @@ async fn a_failed_scratch_removal_stays_pending_for_the_retry() -> anyhow::Resul
     Ok(())
 }
 
+/// Stands in for the volume handles a live workload holds open, which Windows
+/// will not remove a directory under: read-only until this drops with the
+/// workload's last handle, and the removal then takes a while.
+#[cfg(unix)]
+struct HeldOpen(Arc<crate::engine::scratch::ScratchDir>);
+
+#[cfg(unix)]
+impl HostPlugin for HeldOpen {
+    fn id(&self) -> &'static str {
+        "held-open"
+    }
+    fn world(&self) -> WitWorld {
+        WitWorld::default()
+    }
+}
+
+#[cfg(unix)]
+impl HeldOpen {
+    fn new(scratch: Arc<crate::engine::scratch::ScratchDir>) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        Self(scratch)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HeldOpen {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(self.0.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let slow = SlowRemoval::start(&self.0);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            slow.finish();
+        });
+    }
+}
+
+/// Adds a [`HeldOpen`] to the workload's component as plugin state, so it drops
+/// with the workload's components.
+#[cfg(unix)]
+#[derive(Default)]
+struct HoldsScratchOpen {
+    scratch: Mutex<Option<Arc<crate::engine::scratch::ScratchDir>>>,
+    dir: Mutex<Option<std::path::PathBuf>>,
+}
+
+#[cfg(unix)]
+#[async_trait::async_trait]
+impl HostPlugin for HoldsScratchOpen {
+    fn id(&self) -> &'static str {
+        "holds-scratch-open"
+    }
+    fn world(&self) -> WitWorld {
+        WitWorld {
+            imports: HashSet::new(),
+            exports: HashSet::from([WitInterface::from(API)]),
+        }
+    }
+    async fn on_workload_bind(
+        &self,
+        workload: &UnresolvedWorkload,
+        _: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        *self.dir.lock().unwrap() = workload.scratch.as_ref().map(|s| s.path().to_path_buf());
+        *self.scratch.lock().unwrap() = workload.scratch.clone();
+        Ok(())
+    }
+    async fn on_workload_item_bind<'a>(
+        &self,
+        item: &mut WorkloadItem<'a>,
+        _: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        if let Some(scratch) = self.scratch.lock().unwrap().take() {
+            item.add_plugin("held-open", Arc::new(HeldOpen::new(scratch)));
+        }
+        item.linker()?
+            .instance(API)?
+            .func_wrap("f", |_, (): ()| Ok(()))?;
+        Ok(())
+    }
+}
+
+/// A stop returns once the scratch is gone, also where the workload's own open
+/// handles block the removal until they close, as on Windows.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stop_removes_scratch_its_own_handles_held_open() -> anyhow::Result<()> {
+    use crate::host::HostApi as _;
+    let tmp = tempfile::tempdir()?;
+    let plugin = Arc::new(HoldsScratchOpen::default());
+    let host = crate::host::HostBuilder::new()
+        .with_engine(
+            crate::engine::Engine::builder()
+                .with_scratch_root(tmp.path())
+                .build()?,
+        )
+        .with_plugin(Arc::clone(&plugin) as Arc<dyn HostPlugin>)?
+        .build()?;
+    let wat = format!(r#"(component (import "{API}" (instance (export "f" (func)))))"#);
+    let started = host
+        .workload_start(crate::types::WorkloadStartRequest {
+            workload_id: "held-open".to_string(),
+            workload: crate::types::Workload {
+                namespace: "test".to_string(),
+                name: "held-open".to_string(),
+                annotations: HashMap::new(),
+                service: None,
+                components: vec![crate::types::Component {
+                    name: "caller".to_string(),
+                    bytes: wat::parse_str(&wat)?.into(),
+                    ..Default::default()
+                }],
+                host_interfaces: vec![WitInterface::from(API)],
+                volumes: vec![crate::types::Volume {
+                    name: "scratch".to_string(),
+                    volume_type: crate::types::VolumeType::EmptyDir(
+                        crate::types::EmptyDirVolume {},
+                    ),
+                }],
+            },
+        })
+        .await?;
+    assert_eq!(
+        started.workload_status.workload_state,
+        crate::types::WorkloadState::Running,
+        "{}",
+        started.workload_status.message
+    );
+    let dir = plugin
+        .dir
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the workload's scratch");
+    host.workload_stop(crate::types::WorkloadStopRequest {
+        workload_id: "held-open".to_string(),
+    })
+    .await?;
+    assert!(
+        !dir.exists(),
+        "the stop returned before the workload's scratch was removed"
+    );
+    Ok(())
+}
+
 /// A rolled-back resolve removes the scratch on the blocking pool too, and a
 /// removal whose resolve is cancelled still finishes.
 #[tokio::test]

@@ -1363,6 +1363,9 @@ impl HostApi for Host {
                     workload_name = resolved_workload.name(),
                     "stopping workload"
                 );
+                // The journal holds it from here: a copy kept over the release
+                // holds its volumes open, and Windows cannot remove the scratch.
+                drop(resolved_workload);
                 match cleanup_guard.cleanup().release(&request.workload_id).await {
                     Ok(()) => {
                         // Dropped only now, so the id stays reserved for the

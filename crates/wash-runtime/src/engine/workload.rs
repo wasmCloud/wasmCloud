@@ -3208,13 +3208,15 @@ impl WorkloadResources {
         // Record each successful step before another await, so failed or
         // cancelled cleanup resumes without repeating completed callbacks.
         let _release = self.release_lock.lock().await;
-        let state = self
+        let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let mut failure = None;
-        if let Some(resolved) = &state.resolved {
+        // Taken, so this copy is gone before the scratch removal below: a live
+        // workload holds its volumes open, and Windows cannot remove them.
+        if let Some(resolved) = state.resolved.take() {
             resolved.begin_teardown();
             for component in resolved.components.read().await.values() {
                 component.instances.close();
