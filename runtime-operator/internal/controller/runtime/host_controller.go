@@ -341,6 +341,7 @@ func (r *HostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		operatorNamespace: r.OperatorNamespace,
 		fleet:             &r.fleet,
 		retiredHosts:      r.RetiredHosts,
+		apiReader:         r.apiReader,
 	}
 	if err := mgr.Add(statusUpdater); err != nil {
 		return err
@@ -439,6 +440,8 @@ type hostStatusUpdater struct {
 	fleet *fleetWitness
 	// retiredHosts rejects late heartbeats after a Pod disappears.
 	retiredHosts *RetiredHosts
+	// apiReader reads past the cache, which can lag a Host's deletion.
+	apiReader client.Reader
 }
 
 func (h *hostStatusUpdater) Start(ctx context.Context) error {
@@ -455,6 +458,19 @@ func (h *hostStatusUpdater) Start(ctx context.Context) error {
 
 	<-ctx.Done()
 	return subscription.Drain()
+}
+
+// retiredHostGone reads past the cache, which can still show the Host just
+// deleted with no deletion timestamp.
+func retiredHostGone(ctx context.Context, reader client.Reader, key types.NamespacedName, uid types.UID) (bool, error) {
+	host := &runtimev1alpha1.Host{}
+	if err := reader.Get(ctx, key, host); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return host.UID != uid, nil
 }
 
 // handleHeartbeat accepts only the subject's host ID and refuses name takeovers.
@@ -479,8 +495,20 @@ func (h *hostStatusUpdater) handleHeartbeat(ctx context.Context, log logr.Logger
 	if req.GetStartedAt() != nil {
 		startedAt = req.GetStartedAt().AsTime()
 	}
-	if h.retiredHosts.contains(req.Id) || h.retiredHosts.fromRetiredPod(req.Hostname, startedAt) {
+	if h.retiredHosts.retiredID(req.Id, req.Hostname, startedAt) || h.retiredHosts.fromRetiredPod(req.Hostname, startedAt) {
 		return
+	}
+	// A replacement under a retired ID waits for the retired Host to go: its
+	// cleanup removes Workloads by host ID, the replacement's among them.
+	if key, uid, ok := h.retiredHosts.awaitedHost(req.Id); ok {
+		gone, err := retiredHostGone(ctx, h.apiReader, key, uid)
+		if err != nil {
+			log.Error(err, "failed to check for the retired Host", "host", key.Name, "hostID", req.Id)
+		}
+		if !gone {
+			return
+		}
+		h.retiredHosts.hostGone(req.Id, uid)
 	}
 
 	// Every Host object lives in the operator's own namespace. Tenant
