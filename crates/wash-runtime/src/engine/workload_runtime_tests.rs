@@ -1457,6 +1457,47 @@ async fn a_failed_http_unbind_keeps_the_scratch_for_the_retry() -> anyhow::Resul
     Ok(())
 }
 
+/// The unjournaled teardown unbinds HTTP too: the rollback of a failed HTTP
+/// registration, and a direct release as a failed workload gets.
+#[tokio::test]
+async fn the_unjournaled_teardown_unbinds_http() -> anyhow::Result<()> {
+    for fail_registration in [true, false] {
+        let recording = Arc::new(RecordingHttp {
+            fail_resolved: fail_registration,
+            ..Default::default()
+        });
+        let handler: Arc<dyn crate::host::http::HostHandler> = recording.clone();
+        let http = r#"(component
+            (instance $http)
+            (export "wasi:http/incoming-handler@0.2.0" (instance $http)))"#;
+        let resolved = UnresolvedWorkload::new(
+            "contracts",
+            "contracts",
+            "test",
+            None,
+            [component("served", http)],
+            vec![WitInterface::from("wasi:http/incoming-handler@0.2.0")],
+        )
+        .resolve(
+            None,
+            &Default::default(),
+            &crate::host::HostRef::from_handler(&handler),
+            &Default::default(),
+        )
+        .await;
+        assert_eq!(resolved.is_err(), fail_registration);
+        if let Ok(resolved) = resolved {
+            resolved.release_unjournaled().await;
+        }
+        assert_eq!(
+            recording.unbinds.load(Ordering::SeqCst),
+            1,
+            "fail_registration={fail_registration}: the route was left registered"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn dependency_order_is_stable_and_ignores_dependencies_outside_the_workload() -> anyhow::Result<()>
 {

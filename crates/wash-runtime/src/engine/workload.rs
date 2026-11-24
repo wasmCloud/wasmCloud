@@ -1618,7 +1618,7 @@ impl ResolvedWorkload {
         self.stop_service();
     }
 
-    /// Release the service, then the plugins, then the scratch, with no journal to resume from.
+    /// Unbind plugins and HTTP, then remove the scratch; a failed unbind is logged, not retried.
     /// Keep the workload id reserved over the call; see [`crate::host::HostApi::workload_stop`].
     pub(crate) async fn release_unjournaled(&self) {
         self.begin_teardown();
