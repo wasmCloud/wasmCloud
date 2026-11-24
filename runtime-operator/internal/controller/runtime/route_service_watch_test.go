@@ -276,6 +276,42 @@ func TestWorkloadRouteDoesNotAdoptUnmanagedSlice(t *testing.T) {
 	}
 }
 
+// A deleting slice without the route-manager label, ours or not, makes the reconcile
+// fail: the slice watch drops its delete event, so only the backoff requeues the Service.
+func TestWorkloadRouteRetriesDeletingSliceWithoutTheLabel(t *testing.T) {
+	for _, ours := range []bool{false, true} {
+		ctx := t.Context()
+		svc := newRouteService(testServiceName)
+		svc.UID = routeServiceUID
+		r := newRouteReconciler(t, svc,
+			newAvailableWorkload("wl-1", testServiceName, testHostID),
+			newHost("host-a", testHostID, testPodIP, routeTestPort))
+		var slice *discoveryv1.EndpointSlice
+		if ours {
+			runReconcile(t, r, testServiceName)
+			slice = getSlice(t, r, testServiceName)
+			delete(slice.Labels, routeManagerLabel)
+			slice.Finalizers = []string{routeTestFinalizer}
+			if err := r.Update(ctx, slice); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			slice = staleRouteSlice()
+			slice.Labels = map[string]string{discoveryv1.LabelServiceName: testServiceName}
+			slice.Finalizers = []string{routeTestFinalizer}
+			if err := r.Create(ctx, slice); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := r.Delete(ctx, slice); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(svc)}); err == nil {
+			t.Fatalf("ours=%v: reconcile waited on a deleting slice whose delete event the watch drops", ours)
+		}
+	}
+}
+
 // With no ready endpoints, a same-named slice this controller does not manage
 // is not deleted.
 func TestWorkloadRouteKeepsUnmanagedSliceWithNoEndpoints(t *testing.T) {

@@ -263,8 +263,16 @@ func (r *WorkloadRouteReconciler) deleteEndpointSlice(ctx context.Context, names
 // updateEndpointSlice writes desired into existing when they differ and reports
 // whether it wrote. A deleting slice is left alone; only managed slices are adopted.
 func (r *WorkloadRouteReconciler) updateEndpointSlice(ctx context.Context, existing, desired *discoveryv1.EndpointSlice, svc *corev1.Service) (bool, error) {
+	// The slice watch drops events of unlabelled slices, so only an error's backoff requeues them.
+	managed := existing.Labels[routeManagerLabel] == routeManagedValue
+	if !managed && !metav1.IsControlledBy(existing, svc) {
+		return false, fmt.Errorf("EndpointSlice %s exists and is not managed by this controller", existing.Name)
+	}
 	// Adopting a deleting slice would not stop its deletion; its delete event requeues this Service.
 	if !existing.DeletionTimestamp.IsZero() {
+		if !managed {
+			return false, fmt.Errorf("EndpointSlice %s is being deleted without the %s label", existing.Name, routeManagerLabel)
+		}
 		ctrl.LoggerFrom(ctx).V(1).Info("waiting for EndpointSlice deletion to finish", "endpointSlice", existing.Name)
 		return false, nil
 	}
@@ -272,9 +280,6 @@ func (r *WorkloadRouteReconciler) updateEndpointSlice(ctx context.Context, exist
 		return false, nil
 	}
 	if !metav1.IsControlledBy(existing, svc) {
-		if existing.Labels[routeManagerLabel] != routeManagedValue {
-			return false, fmt.Errorf("EndpointSlice %s exists and is not managed by this controller", existing.Name)
-		}
 		existing.OwnerReferences = desired.OwnerReferences
 	}
 	existing.Labels = desired.Labels
