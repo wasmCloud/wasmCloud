@@ -539,10 +539,14 @@ async fn cloned_backends_with_different_directories_each_persist_the_artifact() 
         .expect("a successful pull through the second backend must populate its directory");
 }
 
+/// A cached component over a host's limit is a miss for that host: `Never`
+/// refuses it without loading it, and `IfNotPresent` asks the registry, which
+/// may now serve a version within the limit.
 #[tokio::test]
-async fn a_cached_component_over_the_limit_is_refused() {
+async fn a_cached_component_over_the_limit_is_a_miss() {
     wash_runtime::init_crypto();
     let registry = Registry::start().await;
+    *registry.image.write().unwrap() = Image::new("(component (core module))");
     let cache = tempfile::tempdir().unwrap();
     let config = OciConfig {
         credentials: Some(("user".into(), "secret".into())),
@@ -551,20 +555,28 @@ async fn a_cached_component_over_the_limit_is_refused() {
         timeout: Some(Duration::from_secs(5)),
         ..Default::default()
     };
-    let reference = registry.reference();
+    let reference = format!("{}/private/component:v1", registry.addr);
     pull_component(&reference, config.clone(), OciPullPolicy::IfNotPresent)
         .await
         .unwrap();
-    let size = registry.image.read().unwrap().wasm.len() as u64;
+    let large = registry.image.read().unwrap().wasm.len();
 
-    let smaller = config.with_max_component_size_bytes(size - 1);
-    for policy in [OciPullPolicy::Never, OciPullPolicy::IfNotPresent] {
-        let error = pull_component(&reference, smaller.clone(), policy)
-            .await
-            .expect_err("a host with a lower limit must not load the cached component");
-        assert!(
-            format!("{error:#}").contains("cached component"),
-            "{error:#}"
-        );
-    }
+    // The tag now points at a smaller component, within the second host's limit.
+    let small = Image::new("(component)");
+    assert!(small.wasm.len() < large);
+    let limited = config.with_max_component_size_bytes(small.wasm.len() as u64);
+    *registry.image.write().unwrap() = small;
+
+    let error = pull_component(&reference, limited.clone(), OciPullPolicy::Never)
+        .await
+        .expect_err("a host with a lower limit must not load the cached component");
+    assert!(
+        format!("{error:#}").contains("component size limit"),
+        "{error:#}"
+    );
+
+    let (bytes, _) = pull_component(&reference, limited, OciPullPolicy::IfNotPresent)
+        .await
+        .expect("an oversized cache entry must not stop a pull that fits");
+    assert_eq!(bytes, registry.image.read().unwrap().wasm);
 }

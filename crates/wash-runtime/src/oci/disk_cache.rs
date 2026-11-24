@@ -162,12 +162,23 @@ impl CacheManager {
 
     /// Read a cached artifact as (component_data, digest), or `None` when
     /// there is no entry.
+    #[cfg(test)]
     pub(crate) async fn read_optional(&self, reference: &str) -> Result<Option<(Vec<u8>, String)>> {
+        self.read_within(reference, u64::MAX).await
+    }
+
+    /// Read a cached artifact as (component_data, digest), or `None` when
+    /// there is no entry or its component is larger than `max_bytes`. A
+    /// larger entry is refused from its file length, before it is read.
+    pub(crate) async fn read_within(
+        &self,
+        reference: &str,
+        max_bytes: u64,
+    ) -> Result<Option<(Vec<u8>, String)>> {
         let path = self.get_entry_path(reference);
         match tokio::fs::File::open(&path).await {
-            Ok(file) => read_entry(file)
+            Ok(file) => read_entry(file, max_bytes)
                 .await
-                .map(Some)
                 .with_context(|| format!("invalid cached artifact at {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e)
@@ -211,9 +222,22 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-async fn read_entry(mut file: tokio::fs::File) -> Result<(Vec<u8>, String)> {
-    let capacity = usize::try_from(file.metadata().await?.len())
-        .context("cached artifact is too large for this platform")?;
+/// The longest digest line an entry can start with: the algorithm, a colon,
+/// a SHA-512 in hex and the newline, with room to spare.
+const MAX_DIGEST_LINE: u64 = 256;
+
+async fn read_entry(
+    mut file: tokio::fs::File,
+    max_bytes: u64,
+) -> Result<Option<(Vec<u8>, String)>> {
+    let len = file.metadata().await?.len();
+    // Decided from the file's length, before anything is allocated: the
+    // component is the entry less its digest line.
+    if len > max_bytes.saturating_add(MAX_DIGEST_LINE) {
+        return Ok(None);
+    }
+    let capacity =
+        usize::try_from(len).context("cached artifact is too large for this platform")?;
     let mut entry = Vec::with_capacity(capacity);
     file.read_to_end(&mut entry).await?;
     let newline = entry
@@ -229,7 +253,10 @@ async fn read_entry(mut file: tokio::fs::File) -> Result<(Vec<u8>, String)> {
     .to_owned();
     // Keep the large allocation with the component, not the short digest.
     drop(entry.drain(..=newline));
-    Ok((entry, digest))
+    if entry.len() as u64 > max_bytes {
+        return Ok(None);
+    }
+    Ok(Some((entry, digest)))
 }
 
 /// Expire old artifacts from the cache, and remove entries written before
@@ -524,12 +551,29 @@ mod tests {
             .await
             .unwrap();
 
-        let (data, digest) = read_entry(reader).await.unwrap();
+        let (data, digest) = read_entry(reader, u64::MAX).await.unwrap().unwrap();
         assert_eq!(data, b"component A");
         assert_eq!(digest, "sha256:A");
         let (data, digest) = cache.read_cached(reference).await.unwrap();
         assert_eq!(data, b"component B");
         assert_eq!(digest, "sha256:B");
+    }
+
+    #[tokio::test]
+    async fn an_entry_over_the_limit_reads_as_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache = anonymous_cache(dir.path()).await;
+        let reference = "localhost:5000/test:bounded";
+        let data = vec![7; 4096];
+        cache
+            .write_to_cache(reference, &data, "sha256:bounded")
+            .await
+            .unwrap();
+        assert!(cache.read_within(reference, 4095).await.unwrap().is_none());
+        // Refused from the file length alone, past the digest line's slack.
+        assert!(cache.read_within(reference, 1024).await.unwrap().is_none());
+        let (read, _) = cache.read_within(reference, 4096).await.unwrap().unwrap();
+        assert_eq!(read, data);
     }
 
     #[tokio::test]

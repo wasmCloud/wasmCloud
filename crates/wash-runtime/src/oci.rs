@@ -699,22 +699,16 @@ async fn pull_uncoalesced(
     cache: &dyn OciCache,
     key: &ArtifactKey,
 ) -> Result<Arc<Pulled>> {
+    // A cache shared with a host that allows more must not let this one load
+    // past its own limit, so a larger entry is a miss: `IfNotPresent` asks the
+    // registry, which may now serve a version that fits.
+    let max_size = config.effective_max_component_size_bytes();
     if *pull_policy != OciPullPolicy::Always
         && let Some(entry) = cache
-            .oci_get_artifact(key)
+            .oci_get_artifact_within(key, max_size)
             .await
             .context("OCI artifact cache lookup failed")?
     {
-        // A cache shared with a host that allows more must not let this one
-        // load past its own limit.
-        let max_size = config.effective_max_component_size_bytes();
-        let cached = entry.artifact.bytes.len() as u64;
-        if cached > max_size {
-            bail!(
-                "cached component is {cached} bytes, over the {max_size}-byte limit \
-                 (raise the component size limit to load it)"
-            );
-        }
         if *pull_policy == OciPullPolicy::Never {
             if !entry.credentials_match {
                 bail!(
@@ -739,7 +733,10 @@ async fn pull_uncoalesced(
     }
 
     if *pull_policy == OciPullPolicy::Never {
-        bail!("component not found in cache and pull policy is 'Never'");
+        bail!(
+            "component not found in cache within the {max_size}-byte component size limit, \
+             and pull policy is 'Never'"
+        );
     }
 
     let client = pull_client(reference_parsed, config.insecure, auth, trust).await?;
@@ -750,7 +747,7 @@ async fn pull_uncoalesced(
         &client,
         reference_parsed,
         auth,
-        config.effective_max_component_size_bytes(),
+        max_size,
     ))
     .await
     .with_context(|| format!("failed to pull component from {reference}"))?;

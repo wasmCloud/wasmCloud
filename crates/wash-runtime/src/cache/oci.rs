@@ -39,6 +39,22 @@ pub trait OciCache: Send + Sync + 'static {
     async fn oci_get_artifact(&self, _key: &ArtifactKey) -> Result<Option<ArtifactEntry>> {
         Ok(None)
     }
+    /// [`Self::oci_get_artifact`] for a caller that accepts components of at
+    /// most `max_bytes`. A larger entry is answered as a miss.
+    ///
+    /// The default reads the entry and then compares its size. Override it to
+    /// refuse a larger entry before reading it, so the limit also bounds what a
+    /// lookup allocates.
+    async fn oci_get_artifact_within(
+        &self,
+        key: &ArtifactKey,
+        max_bytes: u64,
+    ) -> Result<Option<ArtifactEntry>> {
+        Ok(self
+            .oci_get_artifact(key)
+            .await?
+            .filter(|entry| entry.artifact.bytes.len() as u64 <= max_bytes))
+    }
     /// Publish an artifact after the registry accepted this request's credentials.
     async fn oci_put_artifact(&self, _key: &ArtifactKey, _value: &Pulled) -> Result<()> {
         Ok(())
@@ -112,7 +128,14 @@ impl DefaultOciCache {
 #[async_trait::async_trait]
 impl OciCache for DefaultOciCache {
     async fn oci_get_artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactEntry>> {
-        self.storage.oci_get_artifact(key).await
+        self.storage.oci_get_artifact(key, u64::MAX).await
+    }
+    async fn oci_get_artifact_within(
+        &self,
+        key: &ArtifactKey,
+        max_bytes: u64,
+    ) -> Result<Option<ArtifactEntry>> {
+        self.storage.oci_get_artifact(key, max_bytes).await
     }
     async fn oci_put_artifact(&self, key: &ArtifactKey, value: &Pulled) -> Result<()> {
         self.storage.oci_put_artifact(key, value).await
@@ -317,11 +340,15 @@ impl Storage {
             None => Ok(None),
         }
     }
-    async fn oci_get_artifact(&self, key: &ArtifactKey) -> Result<Option<ArtifactEntry>> {
+    async fn oci_get_artifact(
+        &self,
+        key: &ArtifactKey,
+        max_bytes: u64,
+    ) -> Result<Option<ArtifactEntry>> {
         let Some(manager) = self.manager(key).await? else {
             return Ok(None);
         };
-        let Some((bytes, digest)) = manager.read_optional(key.reference()).await? else {
+        let Some((bytes, digest)) = manager.read_within(key.reference(), max_bytes).await? else {
             return Ok(None);
         };
         Ok(Some(ArtifactEntry {

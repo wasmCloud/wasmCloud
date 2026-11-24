@@ -1405,6 +1405,8 @@ impl CliCommand for HostCommand {
         let process_memory_policy = ProcessMemoryPolicy::parse(self.max_process_memory.as_deref())?;
         let max_initial_guest_memory =
             parse_max_initial_guest_memory(self.max_initial_guest_memory.as_deref())?;
+        let max_oci_component_size =
+            parse_max_oci_component_size(self.max_oci_component_size.as_deref())?;
         let hostcall_fuel = self.hostcall_fuel()?;
         let memory_layout = parse_memory_layout(
             self.memory_reservation.as_deref(),
@@ -1475,8 +1477,6 @@ impl CliCommand for HostCommand {
                 .context("failed to connect to NATS")?;
         let data_nats_client = Arc::new(data_nats_client);
 
-        let max_oci_component_size =
-            parse_max_oci_component_size(self.max_oci_component_size.as_deref())?;
         let host_config = wash_runtime::host::HostConfig::default()
             .with_allow_oci_insecure(self.allow_insecure_registries)
             .with_oci_pull_timeout(Some(self.registry_pull_timeout))
