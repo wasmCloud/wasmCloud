@@ -70,8 +70,8 @@ impl ScratchRoot {
             .keep();
         Ok(Arc::new(ScratchDir {
             path,
-            removed: Mutex::new(false),
-            _root: Arc::clone(self),
+            removed: Arc::default(),
+            root: Arc::clone(self),
         }))
     }
 }
@@ -89,10 +89,10 @@ impl Drop for ScratchRoot {
 pub(crate) struct ScratchDir {
     path: PathBuf,
     /// Whether a removal succeeded; the name may since belong to another
-    /// workload. Held over each removal, so two never race.
-    removed: Mutex<bool>,
+    /// workload. Held over each removal, the drop's included, so two never race.
+    removed: Arc<Mutex<bool>>,
     /// Keeps the host directory, and its lock, alive while this lives.
-    _root: Arc<ScratchRoot>,
+    root: Arc<ScratchRoot>,
 }
 
 impl ScratchDir {
@@ -103,11 +103,7 @@ impl ScratchDir {
     /// Remove the directory now, whoever else holds it (an open handle keeps
     /// working on Unix), and say whether it is gone. Only the first success removes.
     pub(crate) fn remove(&self) -> bool {
-        let mut removed = self.removed.lock().unwrap_or_else(PoisonError::into_inner);
-        if !*removed {
-            *removed = remove(&self.path);
-        }
-        *removed
+        remove_once(&self.removed, &self.path)
     }
 
     /// [`Self::remove`] on the blocking pool, so a large directory never holds
@@ -123,23 +119,55 @@ impl ScratchDir {
         }
     }
 
-    /// Stands in for a slow removal: any removal waits while this is held.
+    /// The lock every removal takes; holding it stands in for a slow removal.
     #[cfg(test)]
-    pub(crate) fn hold_removal(&self) -> std::sync::MutexGuard<'_, bool> {
-        self.removed.lock().unwrap_or_else(PoisonError::into_inner)
+    pub(crate) fn removal_lock(&self) -> Arc<Mutex<bool>> {
+        Arc::clone(&self.removed)
     }
 }
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        let removed = self
-            .removed
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
-        if !*removed {
-            remove(&self.path);
+        if self.removed.try_lock().is_ok_and(|removed| *removed) {
+            return;
+        }
+        let removal = PendingRemoval {
+            removed: Arc::clone(&self.removed),
+            path: std::mem::take(&mut self.path),
+            _root: Arc::clone(&self.root),
+        };
+        // Off the async worker when there is one. A task the pool never runs is
+        // dropped, and the removal then runs inline.
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(move || drop(removal));
+            }
+            Err(_) => drop(removal),
         }
     }
+}
+
+/// A dropped scratch's removal, run when this drops. It holds the root, so the
+/// host directory outlives the removal.
+struct PendingRemoval {
+    removed: Arc<Mutex<bool>>,
+    path: PathBuf,
+    _root: Arc<ScratchRoot>,
+}
+
+impl Drop for PendingRemoval {
+    fn drop(&mut self) {
+        remove_once(&self.removed, &self.path);
+    }
+}
+
+/// Remove `path` unless a removal already succeeded, and say whether it is gone.
+fn remove_once(removed: &Mutex<bool>, path: &Path) -> bool {
+    let mut removed = removed.lock().unwrap_or_else(PoisonError::into_inner);
+    if !*removed {
+        *removed = remove(path);
+    }
+    *removed
 }
 
 /// Whether `path` is gone afterwards.

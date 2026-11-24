@@ -674,9 +674,12 @@ impl SlowRemoval {
     fn start(scratch: &Arc<crate::engine::scratch::ScratchDir>) -> Self {
         let (held, is_held) = std::sync::mpsc::channel();
         let (finish, finished) = std::sync::mpsc::channel::<()>();
-        let scratch = Arc::clone(scratch);
+        // The lock alone, so the test may still drop the last handle.
+        let lock = scratch.removal_lock();
         let thread = std::thread::spawn(move || {
-            let _removal = scratch.hold_removal();
+            let _removal = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             held.send(()).unwrap();
             // Bounded, so a removal run on the worker ends as a finished wait.
             let _ = finished.recv_timeout(Duration::from_secs(5));
@@ -732,6 +735,31 @@ async fn a_stop_removes_scratch_off_the_worker_and_a_cancelled_removal_finishes(
         "the retried stop removed the directory again"
     );
     assert!(resources.state.lock().unwrap().scratch.is_none());
+    Ok(())
+}
+
+/// Dropping the last handle on a runtime leaves the removal to the blocking
+/// pool, which holds the host directory until the removal finishes.
+#[tokio::test]
+async fn dropping_the_last_handle_removes_scratch_off_the_worker() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let host = dir.parent().expect("the host directory").to_path_buf();
+    let slow = SlowRemoval::start(&scratch);
+    let started = std::time::Instant::now();
+    drop(scratch);
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "the drop held its worker through the removal"
+    );
+    assert!(
+        dir.exists(),
+        "the host directory went before the drop's removal ran"
+    );
+    slow.finish();
+    assert!(gone(&dir).await, "the drop's removal never finished");
+    assert!(gone(&host).await, "the removal never let go of the root");
     Ok(())
 }
 
