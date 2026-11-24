@@ -499,7 +499,7 @@ async fn release_removes_scratch_while_the_workload_is_held() -> anyhow::Result<
 }
 
 /// A stop removes the scratch after the plugins are unbound, as the unjournaled
-/// teardown does, and also when an unbind fails.
+/// teardown does, and also when a plugin unbind fails.
 #[tokio::test]
 async fn release_removes_scratch_after_unbinding_even_on_failure() -> anyhow::Result<()> {
     for fail in [false, true] {
@@ -1251,6 +1251,8 @@ async fn wasi_overrides_bind_last_and_restore_shadowing_after_an_error() -> anyh
 struct RecordingHttp {
     resolved: Mutex<Vec<String>>,
     unbinds: AtomicUsize,
+    /// How many unbinds fail before one succeeds.
+    unbind_failures: AtomicUsize,
     fail_resolved: bool,
 }
 
@@ -1282,6 +1284,10 @@ impl crate::host::http::HostHandler for RecordingHttp {
     }
     async fn on_workload_unbind(&self, _: &str) -> anyhow::Result<()> {
         self.unbinds.fetch_add(1, Ordering::SeqCst);
+        let failing = self
+            .unbind_failures
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        ensure!(failing.is_err(), "HTTP unbind refused");
         Ok(())
     }
     fn outgoing_request(
@@ -1374,6 +1380,52 @@ async fn http_registration_uses_manifest_order_and_failed_registration_rolls_bac
         );
         assert_eq!(recording.unbinds.load(Ordering::SeqCst), 1);
     }
+    Ok(())
+}
+
+/// A stop whose HTTP unbind fails keeps the scratch, since the route still
+/// serves requests from it; the retried stop removes it once the route is gone.
+#[tokio::test]
+async fn a_failed_http_unbind_keeps_the_scratch_for_the_retry() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let recording = Arc::new(RecordingHttp::default());
+    recording.unbind_failures.store(1, Ordering::SeqCst);
+    let handler: Arc<dyn crate::host::http::HostHandler> = recording.clone();
+    let http = r#"(component
+        (instance $http)
+        (export "wasi:http/incoming-handler@0.2.0" (instance $http)))"#;
+    let resources = WorkloadResources::default();
+    let mut resolved = UnresolvedWorkload::new(
+        "contracts",
+        "contracts",
+        "test",
+        None,
+        [component("served", http)],
+        vec![WitInterface::from("wasi:http/incoming-handler@0.2.0")],
+    )
+    .with_scratch(Some(scratch))
+    .resolve_for_start(
+        None,
+        &Default::default(),
+        &crate::host::HostRef::from_handler(&handler),
+        &Default::default(),
+        Some(&resources),
+    )
+    .await?;
+    resources.commit(&mut resolved);
+    assert_eq!(*recording.resolved.lock().unwrap(), ["served"]);
+
+    let stopped = resources.release("contracts").await;
+    assert!(stopped.is_err(), "{stopped:?}");
+    assert!(
+        dir.exists(),
+        "the stop removed the scratch while the route was still registered"
+    );
+    resources.release("contracts").await?;
+    assert_eq!(recording.unbinds.load(Ordering::SeqCst), 2);
+    assert!(!dir.exists(), "the retried stop left the scratch");
     Ok(())
 }
 

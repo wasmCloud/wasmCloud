@@ -3285,9 +3285,16 @@ impl WorkloadResources {
                 }
             }
         }
-        // Last, as in release_unjournaled, and even when an unbind failed. A
-        // failure is left to a retry or the last handle; it does not fail the stop.
-        if let Some(scratch) = &state.scratch
+        // Last, once HTTP is unbound: a live route still serves from it. A
+        // failed removal stays pending for a retry; it does not fail the stop.
+        let http_unbound = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .http_unbinds
+            .is_empty();
+        if http_unbound
+            && let Some(scratch) = &state.scratch
             && scratch.remove_on_blocking_pool().await
         {
             self.state
