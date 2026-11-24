@@ -329,6 +329,16 @@ async fn lock_exclusively(path: &Path, wait: Duration) -> std::io::Result<std::f
         })
 }
 
+/// Whether a failed write probe means this process may not write the cache at all,
+/// rather than that it could not write for now, as on a full disk.
+fn cannot_write(probe: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        probe.kind(),
+        ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
+    )
+}
+
 /// Runs `f` on the blocking pool.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> std::io::Result<T> {
     tokio::task::spawn_blocking(f)
@@ -704,7 +714,7 @@ impl WkgFetcher {
             Ok(file) => return Ok(shared(Some(file))),
             Err(error) => error,
         };
-        if tempfile::tempfile_in(&self.cache_dir).is_err() {
+        if tempfile::tempfile_in(&self.cache_dir).is_err_and(|probe| cannot_write(&probe)) {
             warn!(path = %path.display(), %error, "cannot lock the WIT package cache, which this process cannot write either; using it unlocked");
             return Ok(shared(None));
         }
@@ -1629,6 +1639,22 @@ mod tests {
             .unwrap();
 
         assert!(!orphan_digest.exists());
+    }
+
+    #[test]
+    fn only_a_denied_or_read_only_write_means_the_cache_cannot_be_written() {
+        use std::io::{Error, ErrorKind};
+        for kind in [ErrorKind::PermissionDenied, ErrorKind::ReadOnlyFilesystem] {
+            assert!(cannot_write(&Error::from(kind)), "{kind:?}");
+        }
+        for kind in [
+            ErrorKind::StorageFull,
+            ErrorKind::QuotaExceeded,
+            ErrorKind::NotFound,
+            ErrorKind::Other,
+        ] {
+            assert!(!cannot_write(&Error::from(kind)), "{kind:?}");
+        }
     }
 
     #[test]
