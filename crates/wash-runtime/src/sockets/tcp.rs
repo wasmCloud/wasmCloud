@@ -1815,7 +1815,7 @@ mod tests {
             socket.finish_bind(),
             Err(ErrorCode::NotInProgress)
         ));
-        assert_eq!(loopback.tcp_ipv4.len(), 1);
+        assert_eq!(loopback.tcp_ports().len(), 1);
         std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
     }
 

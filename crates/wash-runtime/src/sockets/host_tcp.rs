@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(&bytes, b"accepted");
         h.close(server.rep(), input, output);
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
-        assert!(h.ctx.loopback.lock().unwrap().tcp_ipv4.is_empty());
+        assert!(h.ctx.loopback.lock().unwrap().tcp_ports().is_empty());
         assert!(tokio::net::TcpListener::bind(address).await.is_ok());
     }
 
@@ -928,7 +928,7 @@ mod tests {
         ));
         h.close(client, input, output);
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
-        assert!(h.ctx.loopback.lock().unwrap().tcp_ipv4.is_empty());
+        assert!(h.ctx.loopback.lock().unwrap().tcp_ports().is_empty());
     }
 
     #[tokio::test]
@@ -948,7 +948,7 @@ mod tests {
             ErrorCode::ConnectionRefused,
         );
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(client)).unwrap();
-        assert!(h.ctx.loopback.lock().unwrap().tcp_ipv4.is_empty());
+        assert!(h.ctx.loopback.lock().unwrap().tcp_ports().is_empty());
     }
 
     #[tokio::test]
@@ -1203,7 +1203,7 @@ mod tests {
         h.close(server.rep(), server_in, server_out);
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
         let net = h.ctx.loopback.lock().unwrap();
-        assert!(net.tcp_ipv4.is_empty());
+        assert!(net.tcp_ports().is_empty());
         assert_eq!(net.owner_records(), 0, "no record outlives its port");
     }
 
@@ -1217,21 +1217,18 @@ mod tests {
         let mut client = Harness::on_network(std::sync::Arc::clone(&network));
         let (_rep, _input, _output) = client.connect(address).await;
         assert_eq!(
-            network.lock().unwrap().tcp_ipv4.len(),
+            network.lock().unwrap().tcp_ports().len(),
             2,
             "listener and ephemeral port"
         );
         drop(client);
         let net = network.lock().unwrap();
         assert_eq!(
-            net.tcp_ipv4.len(),
+            net.tcp_ports().len(),
             1,
             "the client's ephemeral port is freed"
         );
-        assert!(
-            net.tcp_ipv4
-                .contains_key(&std::num::NonZeroU16::new(address.port()).unwrap())
-        );
+        assert!(net.tcp_ports().contains(&address));
     }
 
     /// Teardown frees only the ports the store still holds: a port it gave up

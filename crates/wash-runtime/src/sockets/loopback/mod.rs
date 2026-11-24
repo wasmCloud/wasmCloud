@@ -52,10 +52,10 @@ enum Port {
 
 #[derive(Default)]
 pub struct Network {
-    pub tcp_ipv4: HashMap<NonZeroU16, TcpEndpoint>,
-    pub tcp_ipv6: HashMap<NonZeroU16, TcpEndpoint>,
-    pub udp_ipv4: HashMap<NonZeroU16, UdpEndpoint>,
-    pub udp_ipv6: HashMap<NonZeroU16, UdpEndpoint>,
+    tcp_ipv4: HashMap<NonZeroU16, TcpEndpoint>,
+    tcp_ipv6: HashMap<NonZeroU16, TcpEndpoint>,
+    udp_ipv4: HashMap<NonZeroU16, UdpEndpoint>,
+    udp_ipv6: HashMap<NonZeroU16, UdpEndpoint>,
     /// The store that last bound each port.
     owners: HashMap<Port, Owner>,
     /// The ports each store holds, so releasing a store visits only its own.
@@ -121,8 +121,7 @@ impl Network {
     }
 
     fn record(&mut self, port: Port, owner: Owner) {
-        // The port maps are public, so a removal made outside `forget` may have left a record.
-        self.forget(port);
+        debug_assert!(!self.owners.contains_key(&port), "a free port has no owner");
         self.owners.insert(port, owner);
         self.held.entry(owner).or_default().insert(port);
     }
@@ -244,6 +243,18 @@ impl Network {
         Ok(Some(endpoint))
     }
 
+    /// The bound TCP ports, as loopback addresses of their family.
+    #[cfg(test)]
+    pub(crate) fn tcp_ports(&self) -> Vec<SocketAddr> {
+        ports(&self.tcp_ipv4, &self.tcp_ipv6)
+    }
+
+    /// The bound UDP ports, as loopback addresses of their family.
+    #[cfg(test)]
+    pub(crate) fn udp_ports(&self) -> Vec<SocketAddr> {
+        ports(&self.udp_ipv4, &self.udp_ipv6)
+    }
+
     /// How many ports have an owner on record, checked against the index.
     #[cfg(test)]
     pub(crate) fn owner_records(&self) -> usize {
@@ -251,6 +262,17 @@ impl Network {
         assert_eq!(indexed, self.owners.len(), "the index matches the records");
         self.owners.len()
     }
+}
+
+#[cfg(test)]
+fn ports<T>(v4: &HashMap<NonZeroU16, T>, v6: &HashMap<NonZeroU16, T>) -> Vec<SocketAddr> {
+    let v4 = v4
+        .keys()
+        .map(|port| SocketAddr::from(([127, 0, 0, 1], port.get())));
+    let v6 = v6
+        .keys()
+        .map(|port| SocketAddr::from((core::net::Ipv6Addr::LOCALHOST, port.get())));
+    v4.chain(v6).collect()
 }
 
 #[cfg(test)]

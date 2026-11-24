@@ -662,7 +662,7 @@ async fn closing_sockets_drops_their_owner_records_while_the_store_lives() {
     Socket::drop(&mut h.view(), Resource::new_own(v4)).unwrap();
     Socket::drop(&mut h.view(), Resource::new_own(v6)).unwrap();
     let net = h.ctx.loopback.lock().unwrap();
-    assert!(net.udp_ipv4.is_empty() && net.udp_ipv6.is_empty());
+    assert!(net.udp_ports().is_empty());
     assert_eq!(net.owner_records(), 0, "no record outlives its port");
 }
 

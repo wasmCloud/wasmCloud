@@ -1462,7 +1462,7 @@ mod tests {
                 .loopback
                 .lock()
                 .unwrap()
-                .tcp_ipv4
+                .tcp_ports()
                 .is_empty()
         );
     }
@@ -1621,7 +1621,7 @@ mod tests {
                 .await
                 .unwrap();
                 let before = accessor
-                    .with(|mut access| access.get().ctx.loopback.lock().unwrap().tcp_ipv4.len());
+                    .with(|mut access| access.get().ctx.loopback.lock().unwrap().tcp_ports().len());
                 {
                     let mut connecting =
                         Box::pin(<WasiSockets as HostTcpSocketWithStore<Data>>::connect(
@@ -1637,7 +1637,7 @@ mod tests {
                             .loopback
                             .lock()
                             .unwrap()
-                            .tcp_ipv4
+                            .tcp_ports()
                             .len()),
                         before + 1
                     );
@@ -1649,7 +1649,7 @@ mod tests {
                         .loopback
                         .lock()
                         .unwrap()
-                        .tcp_ipv4
+                        .tcp_ports()
                         .len()),
                     before
                 );
@@ -1674,7 +1674,7 @@ mod tests {
             HostTcpSocket::drop(&mut view(store.data_mut()), Resource::new_own(rep)).unwrap();
         }
         let net = store.data().ctx.loopback.lock().unwrap();
-        assert!(net.tcp_ipv4.is_empty());
+        assert!(net.tcp_ports().is_empty());
         assert_eq!(
             net.owner_records(),
             0,
