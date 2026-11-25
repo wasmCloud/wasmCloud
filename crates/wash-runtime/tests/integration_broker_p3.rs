@@ -1,5 +1,5 @@
 #![cfg(feature = "wasm_component_model_implements")]
-//! A real P3 guest reaching out only through `wasmcloud:broker` imports, one
+//! A real P3 guest reaching out only through `wasmcloud:secrets` broker imports, one
 //! per credential, with every key and token held by the host.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -276,9 +276,9 @@ impl BrokerPolicy for Policy {
 fn broker_import(interface: &str, label: &str) -> WitInterface {
     WitInterface {
         namespace: "wasmcloud".to_string(),
-        package: "broker".to_string(),
+        package: "secrets".to_string(),
         interfaces: [interface.to_string()].into_iter().collect(),
-        version: Some(semver::Version::parse("0.1.0").unwrap()),
+        version: Some(semver::Version::parse("2.2.0").unwrap()),
         config: Default::default(),
         name: Some(label.to_string()),
     }
@@ -311,7 +311,7 @@ fn workload() -> WorkloadStartRequest {
         ],
         vec![
             http_incoming_handler_interface("broker", None),
-            broker_import("client", "github"),
+            broker_import("http-client", "github"),
             broker_import("signer", "release"),
             broker_import("verifier", "webhook"),
         ],
@@ -857,7 +857,7 @@ async fn the_guest_signs_and_verifies_with_host_held_keys() -> Result<()> {
         .verify(manifest.as_bytes(), &unhex(&signature))
         .expect("the signature verifies against the published key");
 
-    let mut forged = b"wasmcloud:broker/context\0".to_vec();
+    let mut forged = b"wasmcloud:secrets/context\0".to_vec();
     forged.extend_from_slice(b"\0\0\0\0\0\0\0\0rest");
     let (status, body) = call(running.addr, "/sign", &[], forged).await?;
     assert_eq!(status, 502, "a plain key refuses the context label: {body}");

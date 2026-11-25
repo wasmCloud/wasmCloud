@@ -5,5 +5,5 @@
 "wasi:http" = { path = "../p3-wit-deps/wasi-http-0.3.2" }
 "wasi:random" = { path = "../p3-wit-deps/wasi-random-0.3.2" }
 "wasi:sockets" = { path = "../p3-wit-deps/wasi-sockets-0.3.2" }
-"wasmcloud:broker" = { path = "../p3-wit-deps/wasmcloud-broker-0.1.0" }
+"wasmcloud:secrets" = { path = "../p3-wit-deps/wasmcloud-secrets-2.2.0" }
 "wasmcloud:broker-test" = { path = "../broker-test-wit" }

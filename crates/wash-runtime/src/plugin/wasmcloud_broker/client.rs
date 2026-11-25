@@ -29,8 +29,8 @@ use wasmtime_wasi_http::p3::bindings::http::types::{
 use wasmtime_wasi_http::p3::{Request, Response};
 use wasmtime_wasi_http::{WasiBody, WasiHttpView};
 
-use super::bindings::wasmcloud::broker::client::ErrorCode as SendError;
-use super::bindings::wasmcloud::broker::types::DeniedReason;
+use super::bindings::wasmcloud::secrets::http_client::ErrorCode as SendError;
+use super::bindings::wasmcloud::secrets::types::DeniedReason;
 use super::{AUDIT_ID_HEADER, Audit, BoundClient, BrokerOperation, BrokerOutcome, reason_name};
 use crate::engine::ctx::SharedCtx;
 use crate::host::dpop::{DPOP, wants_nonce};

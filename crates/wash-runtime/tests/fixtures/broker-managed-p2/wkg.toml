@@ -6,5 +6,5 @@
 "wasi:io" = { path = "../p2-wit-deps/wasi-io-0.2.12" }
 "wasi:random" = { path = "../p2-wit-deps/wasi-random-0.2.12" }
 "wasi:sockets" = { path = "../p2-wit-deps/wasi-sockets-0.2.12" }
-# `wasmcloud:broker` without `client`, which needs `wasi:http@0.3.2`.
-"wasmcloud:broker" = { path = "broker-signer" }
+# `wasmcloud:secrets` without `http-client`, which needs `wasi:http@0.3.2`.
+"wasmcloud:secrets" = { path = "secrets-signer" }

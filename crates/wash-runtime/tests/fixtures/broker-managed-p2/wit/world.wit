@@ -7,7 +7,7 @@ world broker-managed-p2 {
     import wasi:sockets/instance-network@0.2.12;
     import wasi:sockets/tcp-create-socket@0.2.12;
     import wasi:sockets/tcp@0.2.12;
-    import release: wasmcloud:broker/signer@0.1.0;
+    import release: wasmcloud:secrets/signer@2.2.0;
 
     export wasi:http/incoming-handler@0.2.12;
 }

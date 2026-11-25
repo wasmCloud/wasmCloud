@@ -8,9 +8,9 @@ world broker-client-p3 {
     import wasi:http/client@0.3.2;
     import wasi:sockets/types@0.3.2;
     import wasmcloud:broker-test/slow@0.1.0;
-    import github: wasmcloud:broker/client@0.1.0;
-    import release: wasmcloud:broker/signer@0.1.0;
-    import webhook: wasmcloud:broker/verifier@0.1.0;
+    import github: wasmcloud:secrets/http-client@2.2.0;
+    import release: wasmcloud:secrets/signer@2.2.0;
+    import webhook: wasmcloud:secrets/verifier@2.2.0;
 
     export wasi:http/handler@0.3.2;
 }

@@ -1,8 +1,8 @@
-//! # `wasmcloud:broker@0.1.0`
+//! # The brokered interfaces of `wasmcloud:secrets@2.2.0`
 //!
 //! Effects performed with a credential the guest is never handed. A component
-//! imports `client`, `signer` or `verifier` once per credential, under a label
-//! (`import github: wasmcloud:broker/client@0.1.0;`), and a [`BrokerPolicy`]
+//! imports `http-client`, `signer` or `verifier` once per credential, under a label
+//! (`import github: wasmcloud:secrets/http-client@2.2.0;`), and a [`BrokerPolicy`]
 //! decides at bind which credential, if any, stands behind each label. A label
 //! with nothing behind it fails the bind, so there is no name a guest can
 //! forge at run time.
@@ -13,7 +13,7 @@
 //! allow no address, not even the workload's virtual network. The view is
 //! fixed at link time, so it holds whichever component the store's active
 //! context names, and a library that imports either still links. `wasi:tls`
-//! and `reveal` are refused at bind, since neither has a useful deny-all form.
+//! and `wasmcloud:secrets/reveal` are refused at bind, since neither has a useful deny-all form.
 //! The only way out with a credential is an operation the binding allows.
 //!
 //! This is per component: a sibling in the same workload keeps its own
@@ -43,9 +43,9 @@ mod bindings {
         world: "broker",
         imports: { default: async | store | trappable | tracing },
         named_imports: {
-            "wasmcloud:broker/client": crate::plugin::wasmcloud_broker::BoundClient,
-            "wasmcloud:broker/signer": crate::plugin::wasmcloud_broker::BoundSigner,
-            "wasmcloud:broker/verifier": crate::plugin::wasmcloud_broker::BoundVerifier,
+            "wasmcloud:secrets/http-client": crate::plugin::wasmcloud_broker::BoundClient,
+            "wasmcloud:secrets/signer": crate::plugin::wasmcloud_broker::BoundSigner,
+            "wasmcloud:secrets/verifier": crate::plugin::wasmcloud_broker::BoundVerifier,
         },
         with: {
             "wasi:http/types@0.3.0": wasmtime_wasi_http::p3::bindings::http::types,
@@ -54,7 +54,7 @@ mod bindings {
     });
 }
 
-use bindings::wasmcloud::broker::types::{DeniedReason, ErrorCode};
+use bindings::wasmcloud::secrets::types::{DeniedReason, ErrorCode};
 
 pub const WASMCLOUD_BROKER_ID: &str = "wasmcloud-broker";
 
@@ -219,23 +219,38 @@ const BYPASSES: &[(&str, &str, Option<&str>)] = &[
     ("wasmcloud", "secrets", Some("reveal")),
 ];
 
+/// The `wasmcloud:secrets` interfaces this plugin serves. The rest of the
+/// package is the secrets plugin's.
+const BROKER_INTERFACES: &[&str] = &["types", "http-client", "signer", "verifier"];
+
+/// The interfaces that act with a credential, so each import names one.
+const OPERATION_INTERFACES: &[&str] = &["http-client", "signer", "verifier"];
+
 /// An unlabeled operation import names no credential. Only `types` may be
 /// imported plainly.
 fn refuse_unlabeled(world: &WitWorld) -> anyhow::Result<()> {
     let unlabeled = world.imports.iter().any(|import| {
         import.namespace == "wasmcloud"
-            && import.package == "broker"
+            && import.package == "secrets"
             && import.name.is_none()
-            && ["client", "signer", "verifier"]
+            && OPERATION_INTERFACES
                 .iter()
                 .any(|i| import.interfaces.contains(*i))
     });
     anyhow::ensure!(
         !unlabeled,
-        "a `wasmcloud:broker` import must be labeled with the credential it uses, \
-         as in `import github: wasmcloud:broker/client@0.1.0;`"
+        "a `wasmcloud:secrets` broker import must be labeled with the credential it uses, \
+         as in `import github: wasmcloud:secrets/http-client@2.2.0;`"
     );
     Ok(())
+}
+
+fn names_only_broker_interfaces(interface: &WitInterface) -> bool {
+    !interface.interfaces.is_empty()
+        && interface
+            .interfaces
+            .iter()
+            .all(|i| BROKER_INTERFACES.contains(&i.as_str()))
 }
 
 fn refuse_bypasses(world: &WitWorld) -> anyhow::Result<()> {
@@ -246,7 +261,7 @@ fn refuse_bypasses(world: &WitWorld) -> anyhow::Result<()> {
                 && interface.is_none_or(|i| import.interfaces.contains(i))
             {
                 anyhow::bail!(
-                    "a component importing `wasmcloud:broker` cannot also import \
+                    "a component importing a `wasmcloud:secrets` broker interface cannot also import \
                      `{namespace}:{package}{}`, which would reach out without its binding",
                     interface.map(|i| format!("/{i}")).unwrap_or_default()
                 );
@@ -256,7 +271,7 @@ fn refuse_bypasses(world: &WitWorld) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Serves `wasmcloud:broker` imports with credentials a [`BrokerPolicy`]
+/// Serves the brokered `wasmcloud:secrets` imports with credentials a [`BrokerPolicy`]
 /// binds per label.
 pub struct WasmcloudBroker {
     policy: Arc<dyn BrokerPolicy>,
@@ -293,10 +308,16 @@ impl HostPlugin for WasmcloudBroker {
     fn world(&self) -> WitWorld {
         WitWorld {
             imports: HashSet::from([WitInterface::from(
-                "wasmcloud:broker/types,client,signer,verifier@0.1.0",
+                "wasmcloud:secrets/types,http-client,signer,verifier@2.2.0",
             )]),
             ..Default::default()
         }
+    }
+
+    /// Only an entry naming broker interfaces. One naming none stands for all of
+    /// `wasmcloud:secrets`, which the secrets plugin serves.
+    fn claims(&self, interface: &WitInterface) -> bool {
+        names_only_broker_interfaces(interface)
     }
 
     fn supports_named_instances(&self) -> bool {
@@ -314,7 +335,7 @@ impl HostPlugin for WasmcloudBroker {
         item: &mut WorkloadItem<'a>,
         interfaces: WitInterfaces<'_>,
     ) -> anyhow::Result<()> {
-        if !interfaces.contains("wasmcloud", "broker", &[]) {
+        if !interfaces.contains("wasmcloud", "secrets", &[]) {
             return Ok(());
         }
         let world = item.world();
@@ -342,11 +363,11 @@ impl HostPlugin for WasmcloudBroker {
             )
         };
 
-        bindings::wasmcloud::broker::types::add_to_linker::<_, SharedCtx>(
+        bindings::wasmcloud::secrets::types::add_to_linker::<_, SharedCtx>(
             linker,
             extract_active_ctx,
         )?;
-        bindings::named_imports::wasmcloud::broker::client::add_to_linker::<_, SharedCtx>(
+        bindings::named_imports::wasmcloud::secrets::http_client::add_to_linker::<_, SharedCtx>(
             linker,
             &component,
             |label| {
@@ -358,7 +379,7 @@ impl HostPlugin for WasmcloudBroker {
             },
             extract_active_ctx,
         )?;
-        bindings::named_imports::wasmcloud::broker::signer::add_to_linker::<_, SharedCtx>(
+        bindings::named_imports::wasmcloud::secrets::signer::add_to_linker::<_, SharedCtx>(
             linker,
             &component,
             |label| {
@@ -371,7 +392,7 @@ impl HostPlugin for WasmcloudBroker {
             },
             extract_active_ctx,
         )?;
-        bindings::named_imports::wasmcloud::broker::verifier::add_to_linker::<_, SharedCtx>(
+        bindings::named_imports::wasmcloud::secrets::verifier::add_to_linker::<_, SharedCtx>(
             linker,
             &component,
             |label| {
@@ -388,12 +409,12 @@ impl HostPlugin for WasmcloudBroker {
     }
 }
 
-impl bindings::wasmcloud::broker::types::Host for ActiveCtx<'_> {}
-impl bindings::named_imports::wasmcloud::broker::client::Host for ActiveCtx<'_> {}
-impl bindings::named_imports::wasmcloud::broker::signer::Host for ActiveCtx<'_> {}
-impl bindings::named_imports::wasmcloud::broker::verifier::Host for ActiveCtx<'_> {}
+impl bindings::wasmcloud::secrets::types::Host for ActiveCtx<'_> {}
+impl bindings::named_imports::wasmcloud::secrets::http_client::Host for ActiveCtx<'_> {}
+impl bindings::named_imports::wasmcloud::secrets::signer::Host for ActiveCtx<'_> {}
+impl bindings::named_imports::wasmcloud::secrets::verifier::Host for ActiveCtx<'_> {}
 
-impl bindings::named_imports::wasmcloud::broker::signer::HostWithStore<SharedCtx> for SharedCtx {
+impl bindings::named_imports::wasmcloud::secrets::signer::HostWithStore<SharedCtx> for SharedCtx {
     async fn sign(
         accessor: &Accessor<SharedCtx, Self>,
         bound: BoundSigner,
@@ -409,7 +430,7 @@ impl bindings::named_imports::wasmcloud::broker::signer::HostWithStore<SharedCtx
     async fn get_key_info(
         _accessor: &Accessor<SharedCtx, Self>,
         bound: BoundSigner,
-    ) -> wasmtime::Result<bindings::wasmcloud::broker::signer::KeyInfo> {
+    ) -> wasmtime::Result<bindings::wasmcloud::secrets::signer::KeyInfo> {
         let audit_id = crate::ids::now_v7().to_string();
         bound.audit(
             &audit_id,
@@ -420,7 +441,7 @@ impl bindings::named_imports::wasmcloud::broker::signer::HostWithStore<SharedCtx
     }
 }
 
-impl bindings::named_imports::wasmcloud::broker::verifier::HostWithStore<SharedCtx> for SharedCtx {
+impl bindings::named_imports::wasmcloud::secrets::verifier::HostWithStore<SharedCtx> for SharedCtx {
     async fn verify(
         accessor: &Accessor<SharedCtx, Self>,
         bound: BoundVerifier,
@@ -435,7 +456,9 @@ impl bindings::named_imports::wasmcloud::broker::verifier::HostWithStore<SharedC
     }
 }
 
-impl bindings::named_imports::wasmcloud::broker::client::HostWithStore<SharedCtx> for SharedCtx {
+impl bindings::named_imports::wasmcloud::secrets::http_client::HostWithStore<SharedCtx>
+    for SharedCtx
+{
     async fn send(
         accessor: &Accessor<SharedCtx, Self>,
         bound: BoundClient,
@@ -443,7 +466,7 @@ impl bindings::named_imports::wasmcloud::broker::client::HostWithStore<SharedCtx
     ) -> wasmtime::Result<
         Result<
             wasmtime::component::Resource<wasmtime_wasi_http::p3::Response>,
-            bindings::wasmcloud::broker::client::ErrorCode,
+            bindings::wasmcloud::secrets::http_client::ErrorCode,
         >,
     > {
         client::send(accessor, &bound, request).await
@@ -486,6 +509,16 @@ mod tests {
     }
 
     #[test]
+    fn only_entries_naming_broker_interfaces_are_claimed() {
+        let claimed = |iface: &str| names_only_broker_interfaces(&WitInterface::from(iface));
+        assert!(claimed("wasmcloud:secrets/http-client@2.2.0"));
+        assert!(claimed("wasmcloud:secrets/types,signer,verifier@2.2.0"));
+        assert!(!claimed("wasmcloud:secrets@2.2.0"));
+        assert!(!claimed("wasmcloud:secrets/secret@2.2.0"));
+        assert!(!claimed("wasmcloud:secrets/store,http-client@2.2.0"));
+    }
+
+    #[test]
     fn an_unlabeled_operation_import_is_refused_but_types_is_not() {
         let world = |name: Option<&str>, iface: &str| {
             let mut import = WitInterface::from(iface);
@@ -495,9 +528,11 @@ mod tests {
                 ..Default::default()
             }
         };
-        assert!(refuse_unlabeled(&world(None, "wasmcloud:broker/client@0.1.0")).is_err());
-        assert!(refuse_unlabeled(&world(None, "wasmcloud:broker/signer@0.1.0")).is_err());
-        assert!(refuse_unlabeled(&world(None, "wasmcloud:broker/types@0.1.0")).is_ok());
-        assert!(refuse_unlabeled(&world(Some("gh"), "wasmcloud:broker/client@0.1.0")).is_ok());
+        assert!(refuse_unlabeled(&world(None, "wasmcloud:secrets/http-client@2.2.0")).is_err());
+        assert!(refuse_unlabeled(&world(None, "wasmcloud:secrets/signer@2.2.0")).is_err());
+        assert!(refuse_unlabeled(&world(None, "wasmcloud:secrets/types@2.2.0")).is_ok());
+        assert!(
+            refuse_unlabeled(&world(Some("gh"), "wasmcloud:secrets/http-client@2.2.0")).is_ok()
+        );
     }
 }

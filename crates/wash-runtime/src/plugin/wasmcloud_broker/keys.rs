@@ -20,8 +20,8 @@ use aws_lc_rs::signature::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use wasmtime::component::{Accessor, HasData, Source, StreamConsumer, StreamReader, StreamResult};
 
-use super::bindings::wasmcloud::broker::signer::{Algorithm, KeyInfo};
-use super::bindings::wasmcloud::broker::types::{DeniedReason, ErrorCode};
+use super::bindings::wasmcloud::secrets::signer::{Algorithm, KeyInfo};
+use super::bindings::wasmcloud::secrets::types::{DeniedReason, ErrorCode};
 
 /// Default bound on one signed or verified message.
 pub const DEFAULT_MAX_MESSAGE: usize = 16 * 1024 * 1024;
@@ -32,7 +32,7 @@ pub const ABSORB_IDLE: Duration = Duration::from_secs(30);
 /// Hashed ahead of a context's length. A key with no context refuses a
 /// message that begins with it, so a plain message can never pass for a
 /// contextual one.
-const CONTEXT_LABEL: &[u8] = b"wasmcloud:broker/context\0";
+const CONTEXT_LABEL: &[u8] = b"wasmcloud:secrets/context\0";
 
 enum SigningKey {
     Hmac(Box<hmac::Key>),
@@ -580,7 +580,7 @@ mod tests {
             Some(label),
             "across chunks"
         );
-        assert_eq!(labelled(0, b"wasmcloud:broker/contexts"), None);
+        assert_eq!(labelled(0, b"wasmcloud:secrets/contexts"), None);
         assert_eq!(labelled(0, b"wasm"), Some(4));
         assert_eq!(labelled(label, b"anything"), Some(label));
 

@@ -1,18 +1,90 @@
-package wasmcloud:broker@0.1.0;
+package wasmcloud:secrets@2.2.0;
 
-/// Types shared by every broker interface.
+/// Opaque-handle access to a secrets backend. Returning `secret` rather than
+/// the underlying value lets the host gate reveal independently of lookup.
+///
+/// The operations are `async`: a secrets backend is commonly served by a host
+/// component plugin from its own store, and cross-store capability calls are
+/// dispatched asynchronously. (This is the async revision of the synchronous
+/// `wasmcloud:secrets@1.0.0` interface.)
+interface store {
+  /// An error type that encapsulates the different errors that can occur fetching secrets
+  variant secrets-error {
+    /// This indicates an error from an "upstream" secrets source.
+    /// As this could be almost _anything_ (such as Vault, Kubernetes Secrets, KeyValue buckets, etc),
+    /// the error message is a string.
+    upstream(string),
+    /// This indicates an error from an I/O operation.
+    /// As this could be almost _anything_ (such as a file read, network connection, etc),
+    /// the error message is a string.
+    /// Depending on how this ends up being consumed,
+    /// we may consider moving this to use the `wasi:io/error` type instead.
+    /// For simplicity right now in supporting multiple implementations, it is being left as a string.
+    io(string),
+    /// This indicates that the requested secret was not found.
+    not-found,
+  }
+
+  /// A secret value can be either a string or a byte array, which lets you
+  /// store binary data as a secret.
+  variant secret-value {
+    %string(string),
+    bytes(list<u8>),
+  }
+
+  /// A secret is a resource that can only be borrowed. This allows you to
+  /// pass around handles to secrets and not reveal the values until a
+  /// component needs them.
+  /// You need to use the reveal interface to get the value.
+  resource secret;
+
+  /// Gets a single opaque secrets value set at the given key if it exists
+  get: async func(key: string) -> result<secret, secrets-error>;
+}
+
+/// Unwraps an opaque `secret` handle into its underlying value. Split from
+/// `store` so a host can audit or restrict reveal calls separately.
+interface reveal {
+  use store.{secret, secret-value};
+
+  /// Reveals the value of a secret to the caller.
+  /// This lets you easily audit your code to discover where secrets are being used.
+  reveal: async func(s: borrow<secret>) -> secret-value;
+}
+
+/// A single secret, statically identified by the `(implements ..)` label a
+/// component imports it under, instead of a runtime `key` argument.
+///
+/// A component that knows its exact secret names up front (the common case)
+/// can import one labeled instance of this interface per secret — e.g.
+/// `import db-password: wasmcloud:secrets/secret;`. Because the label is part
+/// of the component's own type, a host can check that every labeled secret it
+/// imports has a matching entry in the component's resolved bind-time config
+/// from the component's import list alone, before instantiating it — instead
+/// of only discovering a missing one when a dynamic `store.get` call returns
+/// `not-found`. `store` remains the interface for a component whose set of
+/// keys is only known at runtime.
+interface secret {
+  use store.{secret};
+
+  /// Returns the one secret this labeled import identifies. There is no `key`
+  /// parameter — which secret this is comes entirely from the label.
+  get: async func() -> secret;
+}
+
+/// Types shared by `http-client`, `signer` and `verifier`.
 ///
 /// A broker performs an effect with a credential the caller is never handed:
 /// it sends a request, signs a message or checks a tag, and returns only the
 /// result. Each operation interface is imported once per credential, under a
-/// label (`import github: wasmcloud:broker/client@0.1.0;`), and the
+/// label (`import github: wasmcloud:secrets/http-client@2.2.0;`), and the
 /// implementer binds that label to one credential before the caller is
 /// instantiated. An unlabeled operation import names no credential and is
 /// refused.
-@since(version = 0.1.0)
+@since(version = 2.2.0)
 interface types {
   /// Why an operation was refused before anything left the implementer.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   variant denied-reason {
     /// The implementer's policy refused this caller this operation.
     not-entitled,
@@ -35,7 +107,7 @@ interface types {
   }
 
   /// Why a signing or verifying operation failed.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   variant error-code {
     /// Refused before the key was used.
     denied(denied-reason),
@@ -54,13 +126,13 @@ interface types {
 /// `send` takes and returns `wasi:http` requests and responses, but its error
 /// type is this interface's own, so a component exporting `wasi:http/client`
 /// cannot stand in for it unchanged.
-@since(version = 0.1.0)
-interface client {
-  use wasi:http/types@0.3.2.{request, response, error-code as http-error-code};
+@since(version = 2.2.0)
+interface http-client {
+  use wasi:http/types@0.3.0.{request, response, error-code as http-error-code};
   use types.{denied-reason};
 
   /// Why a send failed.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   variant error-code {
     /// Refused before anything was sent.
     denied(denied-reason),
@@ -81,7 +153,7 @@ interface client {
   /// arrives is reported through the body's own completion, as in `wasi:http`.
   /// Redirects are returned, not followed. The implementer returns the audit
   /// record's identifier in the `wasmcloud-audit-id` response header.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   send: async func(request: request) -> result<response, error-code>;
 }
 
@@ -92,13 +164,13 @@ interface client {
 /// allows, so the implementer may bound message size, and bound rate and
 /// concurrency per import, so one caller's use does not spend another's. It
 /// may also fix a context that every signed message is bound to.
-@since(version = 0.1.0)
+@since(version = 2.2.0)
 interface signer {
   use types.{error-code};
 
   /// A signing algorithm. Hosts may bind keys for algorithms this version
   /// does not name; those are reported as `other` with the algorithm's name.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   variant algorithm {
     /// HMAC with SHA-256. The tag is 32 bytes.
     hmac-sha256,
@@ -110,7 +182,7 @@ interface signer {
   }
 
   /// What a verifier needs to know about the bound key.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   record key-info {
     algorithm: algorithm,
     /// The identifier the implementer publishes the key under, if any.
@@ -118,32 +190,38 @@ interface signer {
     /// The public half as DER `SubjectPublicKeyInfo`. `none` for a MAC key.
     public-key: option<list<u8>>,
     /// The context the binding fixes, if any. With one, what is signed is the
-    /// 24 bytes `wasmcloud:broker/context` and a zero byte, then the
+    /// 25 bytes `wasmcloud:secrets/context` and a zero byte, then the
     /// context's length as a big-endian u64, then the context, then
     /// `message`. Without one, it is `message` alone, and a message that
-    /// begins with those 25 bytes is refused. A verifier needs this to check
+    /// begins with those 26 bytes is refused. A verifier needs this to check
     /// a signature elsewhere.
     context: option<list<u8>>,
   }
 
   /// The signature or tag over `message`, which is read as a stream and never
   /// held whole.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   sign: async func(message: stream<u8>) -> result<list<u8>, error-code>;
 
   /// The bound key's algorithm, identifier and public half.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   get-key-info: async func() -> key-info;
 }
 
 /// The caller may check a tag or signature against the one key this import is
 /// bound to, without being able to produce one.
-@since(version = 0.1.0)
+@since(version = 2.2.0)
 interface verifier {
   use types.{error-code};
 
   /// Whether `tag` is valid for `message`, compared in constant time.
   /// `message` is read as a stream and never held whole.
-  @since(version = 0.1.0)
+  @since(version = 2.2.0)
   verify: async func(message: stream<u8>, tag: list<u8>) -> result<bool, error-code>;
+}
+
+world imports {
+  import store;
+  import reveal;
+  import secret;
 }
