@@ -7,12 +7,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 use url::Url;
 use wasm_pkg_client::{
     ContentDigest, CustomConfig, PackageRef, Registry, RegistryMapping, RegistryMetadata,
@@ -229,6 +230,8 @@ pub struct WkgFetcher {
     wkg_client_config: wasm_pkg_client::Config,
     cache: FileCache,
     cache_dir: PathBuf,
+    /// How long a call waits for the shared cache lock before it gives up on it.
+    lock_wait: Duration,
 }
 
 #[derive(Deserialize)]
@@ -251,7 +254,71 @@ async fn cached_blob_matches_digest(path: &Path, digest: &str) -> Result<bool> {
             path.display()
         )
     })?;
-    Ok(format!("{:x}", Sha256::digest(contents)) == expected)
+    Ok(blob_matches_digest(&contents, digest))
+}
+
+fn blob_matches_digest(contents: &[u8], digest: &str) -> bool {
+    digest
+        .strip_prefix("sha256:")
+        .is_some_and(|expected| format!("{:x}", Sha256::digest(contents)) == expected)
+}
+
+/// Every file in the cache directory, with, on Windows, the streams that hold the
+/// names with a colon.
+async fn cache_entries(cache_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut entries = tokio::fs::read_dir(cache_dir)
+        .await
+        .with_context(|| format!("failed to read WIT package cache [{}]", cache_dir.display()))?;
+    let mut paths = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        if !entry.file_type().await?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        #[cfg(windows)]
+        let streams = windows_cache_streams(&path)?;
+        paths.push(path);
+        #[cfg(windows)]
+        paths.extend(streams);
+    }
+    Ok(paths)
+}
+
+/// Copies into `private` each release record of the `shared` cache that parses, and
+/// each blob they name whose content matches its digest.
+async fn copy_verified_cache_entries(shared: &Path, private: &Path) -> Result<()> {
+    // What cannot be read from the shared cache is fetched again
+    let entries = cache_entries(shared).await.unwrap_or_else(|error| {
+        warn!("could not read the shared WIT package cache: {error:#}");
+        Vec::new()
+    });
+    let mut digests = BTreeSet::new();
+    for path in entries {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let Ok(contents) = tokio::fs::read(&path).await else {
+            continue;
+        };
+        let Ok(release) = serde_json::from_slice::<CachedRelease>(&contents) else {
+            continue;
+        };
+        tokio::fs::write(private.join(name), &contents).await?;
+        digests.insert(release.content_digest.to_string());
+    }
+    for digest in digests {
+        // Read once and write those bytes, so a blob that changes after the check is not copied
+        let Ok(contents) = tokio::fs::read(shared.join(&digest)).await else {
+            continue;
+        };
+        if blob_matches_digest(&contents, &digest) {
+            tokio::fs::write(private.join(&digest), contents).await?;
+        }
+    }
+    Ok(())
 }
 
 async fn discard_cache_entry(path: &Path) -> Result<()> {
@@ -262,6 +329,107 @@ async fn discard_cache_entry(path: &Path) -> Result<()> {
             path.display()
         )
     })
+}
+
+/// Held by the wash process that is checking or filling the package cache.
+const CACHE_LOCK_FILE: &str = ".wash-cache.lock";
+/// Past this wait a call stops waiting for the lock, as one held by a stopped process.
+const CACHE_LOCK_WAIT: Duration = Duration::from_secs(30);
+/// How often a waiting call tries the lock again.
+const CACHE_LOCK_POLL: Duration = Duration::from_millis(100);
+
+/// The cache one call uses until dropped: the shared cache under its lock; else a private
+/// copy of its verified entries, or the shared one unlocked if this process cannot write it.
+struct CacheLock {
+    dir: PathBuf,
+    cache: FileCache,
+    _lock: Option<std::fs::File>,
+    _private: Option<tempfile::TempDir>,
+}
+
+/// Locks `path` exclusively, waiting up to `wait` while another wash process holds it.
+async fn lock_exclusively(path: &Path, wait: Duration) -> std::io::Result<std::fs::File> {
+    let file = open_lock_file(path)?;
+    let locking = async {
+        let mut file = file;
+        let mut logged = false;
+        loop {
+            // On some NFS mounts even a non-blocking `flock` blocks, so it runs off the runtime.
+            let (returned, tried) = blocking(move || {
+                let tried = file.try_lock();
+                (file, tried)
+            })
+            .await?;
+            file = returned;
+            match tried {
+                Ok(()) => return Ok(file),
+                Err(std::fs::TryLockError::WouldBlock) if !logged => {
+                    logged = true;
+                    info!(
+                        path = %path.display(),
+                        "waiting for another wash process to release the WIT package cache lock"
+                    );
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(error)) => return Err(error),
+            }
+            // Polling, not a blocking `lock`, so a wait that times out leaves no thread behind
+            tokio::time::sleep(CACHE_LOCK_POLL).await;
+        }
+    };
+    tokio::time::timeout(wait, locking)
+        .await
+        .unwrap_or_else(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("the lock was not free within {wait:?}"),
+            ))
+        })
+}
+
+/// Opens the lock file at `path`, and makes it if it is missing.
+fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => {
+            // Every user of a shared cache must be able to open it, whatever our umask
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+            }
+            Ok(file)
+        }
+        // A lock file this user cannot write can still be locked through a read-only handle
+        Err(created) => std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .or_else(|error| std::fs::File::open(path).map_err(|_| error))
+            .map_err(|error| match created.kind() {
+                std::io::ErrorKind::AlreadyExists => error,
+                _ => created,
+            }),
+    }
+}
+
+/// Whether a failed write probe means this process may not write the cache at all,
+/// rather than that it could not write for now, as on a full disk.
+fn cannot_write(probe: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        probe.kind(),
+        ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
+    )
+}
+
+/// Runs `f` on the blocking pool.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> std::io::Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(std::io::Error::other)
 }
 
 #[cfg(windows)]
@@ -469,6 +637,7 @@ impl WkgFetcher {
             wkg_client_config,
             cache,
             cache_dir,
+            lock_wait: CACHE_LOCK_WAIT,
         }
     }
 
@@ -609,62 +778,80 @@ impl WkgFetcher {
         Ok(())
     }
 
-    /// A caching client for this fetcher's registry configuration
-    fn client(&self) -> CachingClient<FileCache> {
+    /// A caching client over `cache` for this fetcher's registry configuration
+    fn client(&self, cache: &FileCache) -> CachingClient<FileCache> {
         CachingClient::new(
             Some(wasm_pkg_client::Client::new(self.wkg_client_config.clone())),
-            self.cache.clone(),
+            cache.clone(),
         )
     }
 
-    async fn discard_invalid_cache_entries(&self) -> Result<()> {
-        let cache_dir = &self.cache_dir;
-        let mut entries = tokio::fs::read_dir(cache_dir).await.with_context(|| {
-            format!("failed to read WIT package cache [{}]", cache_dir.display())
-        })?;
+    /// The cache for one call. Where the shared cache cannot be locked but can be
+    /// written, a private cache keeps this call and other processes apart.
+    async fn lock_cache(&self) -> Result<CacheLock> {
+        let path = self.cache_dir.join(CACHE_LOCK_FILE);
+        let shared = |lock| CacheLock {
+            dir: self.cache_dir.clone(),
+            cache: self.cache.clone(),
+            _lock: lock,
+            _private: None,
+        };
+        let error = match lock_exclusively(&path, self.lock_wait).await {
+            Ok(file) => return Ok(shared(Some(file))),
+            Err(error) => error,
+        };
+        if tempfile::tempfile_in(&self.cache_dir).is_err_and(|probe| cannot_write(&probe)) {
+            warn!(path = %path.display(), %error, "cannot lock the WIT package cache, which this process cannot write either; using it unlocked");
+            return Ok(shared(None));
+        }
+        warn!(path = %path.display(), %error, "cannot lock the WIT package cache; using a private cache for this call");
+        let private = tempfile::Builder::new()
+            .prefix("wash-wit-cache-")
+            .tempdir()
+            .context("failed to create a private WIT package cache")?;
+        let cache = FileCache::new(private.path())
+            .await
+            .context("failed to create a private WIT package cache")?;
+        copy_verified_cache_entries(&self.cache_dir, private.path())
+            .await
+            .context("failed to fill a private WIT package cache")?;
+        Ok(CacheLock {
+            dir: private.path().to_path_buf(),
+            cache,
+            _lock: None,
+            _private: Some(private),
+        })
+    }
+
+    async fn discard_invalid_cache_entries(cache_dir: &Path) -> Result<()> {
         let mut referenced = Vec::new();
         let mut checked = HashSet::new();
 
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if !entry.file_type().await?.is_file() {
+        for path in cache_entries(cache_dir).await? {
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
-            }
-
-            let paths = vec![path.clone()];
-            #[cfg(windows)]
-            let paths = {
-                let mut paths = paths;
-                paths.extend(windows_cache_streams(&path)?);
-                paths
             };
 
-            for path in paths {
-                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                    continue;
-                };
-
-                let valid = if name.starts_with("sha256:") {
-                    checked.insert(path.clone());
-                    cached_blob_matches_digest(&path, name).await?
-                } else if path
-                    .extension()
-                    .is_some_and(|extension| extension == "json")
-                {
-                    match serde_json::from_slice::<CachedRelease>(&tokio::fs::read(&path).await?) {
-                        Ok(release) => {
-                            referenced.push(release.content_digest);
-                            true
-                        }
-                        Err(_) => false,
+            let valid = if name.starts_with("sha256:") {
+                checked.insert(path.clone());
+                cached_blob_matches_digest(&path, name).await?
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                match serde_json::from_slice::<CachedRelease>(&tokio::fs::read(&path).await?) {
+                    Ok(release) => {
+                        referenced.push(release.content_digest);
+                        true
                     }
-                } else {
-                    true
-                };
-
-                if !valid {
-                    discard_cache_entry(&path).await?;
+                    Err(_) => false,
                 }
+            } else {
+                true
+            };
+
+            if !valid {
+                discard_cache_entry(&path).await?;
             }
         }
 
@@ -805,16 +992,19 @@ impl WkgFetcher {
         self.warn_of_unused_namespace_sources(&manifest);
         let mut attempt = 1;
         loop {
-            self.discard_invalid_cache_entries().await?;
-            match wasm_pkg_core::wit::fetch_dependencies(
+            let cache = self.lock_cache().await?;
+            Self::discard_invalid_cache_entries(&cache.dir).await?;
+            let fetched = wasm_pkg_core::wit::fetch_dependencies(
                 &manifest,
                 wit_dir,
                 lock,
-                self.client(),
+                self.client(&cache.cache),
                 OutputType::Wit,
             )
-            .await
-            {
+            .await;
+            // Other wash processes may use the cache while this one waits to retry
+            drop(cache);
+            match fetched {
                 Ok(()) => return Ok(()),
                 Err(error)
                     if attempt < WIT_FETCH_MAX_ATTEMPTS
@@ -842,8 +1032,12 @@ impl WkgFetcher {
         let manifest = self.resolution_manifest(wit_dir)?;
         let mut attempt = 1;
         loop {
-            self.discard_invalid_cache_entries().await?;
-            match wasm_pkg_core::wit::build_package(&manifest, wit_dir, lock, self.client()).await {
+            let cache = self.lock_cache().await?;
+            Self::discard_invalid_cache_entries(&cache.dir).await?;
+            let client = self.client(&cache.cache);
+            let built = wasm_pkg_core::wit::build_package(&manifest, wit_dir, lock, client).await;
+            drop(cache);
+            match built {
                 Ok(package) => return Ok(package),
                 Err(error)
                     if attempt < WIT_FETCH_MAX_ATTEMPTS
@@ -876,7 +1070,7 @@ impl WkgFetcher {
         }
 
         let overrides = self.wkg_config.overrides.clone().unwrap_or_default();
-        let client = self.client();
+        let client = self.client(&self.cache);
 
         let mut problems = Vec::new();
         for (package, requirements) in required {
@@ -956,7 +1150,8 @@ impl WkgFetcher {
         let local = package_override
             .as_ref()
             .is_some_and(|package_override| package_override.path.is_some());
-        let client = self.client();
+        let cache = self.lock_cache().await?;
+        let client = self.client(&cache.cache);
 
         // The lock file goes in so that a version it already pins is the one selected here, the
         // same way the fetch that follows selects it
@@ -1449,13 +1644,13 @@ mod tests {
             wkg_client_config: wasm_pkg_client::Config::default(),
             cache,
             cache_dir: dir.to_path_buf(),
+            lock_wait: CACHE_LOCK_WAIT,
         }
     }
 
     #[tokio::test]
     async fn wit_fetch_discards_incomplete_cache_entries() {
         let temp = tempfile::tempdir().unwrap();
-        let fetcher = test_fetcher(temp.path()).await;
         let valid_digest = temp
             .path()
             .join("sha256:ec654fac9599f62e79e2706abef23dfb7c07c08185aa86db4d8695f0b718d1b3");
@@ -1490,7 +1685,9 @@ mod tests {
         .await
         .unwrap();
 
-        fetcher.discard_invalid_cache_entries().await.unwrap();
+        WkgFetcher::discard_invalid_cache_entries(temp.path())
+            .await
+            .unwrap();
 
         assert!(valid_digest.exists());
         assert!(valid_release.exists());
@@ -1503,15 +1700,32 @@ mod tests {
     #[tokio::test]
     async fn wit_fetch_discards_unreferenced_incomplete_blobs() {
         let temp = tempfile::tempdir().unwrap();
-        let fetcher = test_fetcher(temp.path()).await;
         let orphan_digest = temp
             .path()
             .join("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         tokio::fs::write(&orphan_digest, b"partial").await.unwrap();
 
-        fetcher.discard_invalid_cache_entries().await.unwrap();
+        WkgFetcher::discard_invalid_cache_entries(temp.path())
+            .await
+            .unwrap();
 
         assert!(!orphan_digest.exists());
+    }
+
+    #[test]
+    fn only_a_denied_or_read_only_write_means_the_cache_cannot_be_written() {
+        use std::io::{Error, ErrorKind};
+        for kind in [ErrorKind::PermissionDenied, ErrorKind::ReadOnlyFilesystem] {
+            assert!(cannot_write(&Error::from(kind)), "{kind:?}");
+        }
+        for kind in [
+            ErrorKind::StorageFull,
+            ErrorKind::QuotaExceeded,
+            ErrorKind::NotFound,
+            ErrorKind::Other,
+        ] {
+            assert!(!cannot_write(&Error::from(kind)), "{kind:?}");
+        }
     }
 
     #[test]

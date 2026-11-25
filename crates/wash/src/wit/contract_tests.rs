@@ -12,13 +12,12 @@ async fn fetcher(dir: &Path) -> Result<WkgFetcher> {
     ))
 }
 
+const CONTRACT_WIT: &str = "package contracttest:api@1.2.3; interface values { get: func() -> u32; } world service { export values; }";
+
 fn package(dir: &Path) -> Result<PathBuf> {
     let path = dir.join("contract");
     std::fs::create_dir_all(&path)?;
-    std::fs::write(
-        path.join("contract.wit"),
-        "package contracttest:api@1.2.3; interface values { get: func() -> u32; } world service { export values; }",
-    )?;
+    std::fs::write(path.join("contract.wit"), CONTRACT_WIT)?;
     Ok(path)
 }
 
@@ -142,6 +141,737 @@ async fn lookup_distinguishes_invalid_versions_missing_packages_and_bad_override
         }
         _ => anyhow::bail!("incompatible pin was not reported as missing"),
     }
+    Ok(())
+}
+
+/// A fetch waits while another wash process holds the cache lock: its scrub
+/// would otherwise delete a blob that process is still writing.
+#[tokio::test]
+async fn fetching_waits_for_the_cache_lock() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = package(dir.path())?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    fetcher.wkg_config.overrides = Some(HashMap::from([(
+        "contracttest:api".into(),
+        wasm_pkg_core::manifest::Override {
+            path: Some(path),
+            version: None,
+        },
+    )]));
+    let cache = dir.path().join("cache");
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(cache.join(".wash-cache.lock"))?;
+    held.lock()?;
+    let writing = cache.join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&writing, b"partial")?;
+
+    let mut lock = load_lock_file(dir.path()).await?;
+    let mut fetch = std::pin::pin!(fetcher.fetch_wit_dependencies(&root, &mut lock));
+    let early = tokio::time::timeout(std::time::Duration::from_millis(500), fetch.as_mut()).await;
+    assert!(
+        early.is_err(),
+        "fetched while another process held the cache lock"
+    );
+    assert!(
+        writing.exists(),
+        "the scrub deleted a blob another process was writing"
+    );
+
+    drop(held);
+    fetch.await?;
+    Ok(())
+}
+
+/// A fetcher whose `contracttest:api` comes from a local override in `dir`.
+async fn overridden(dir: &Path) -> Result<(WkgFetcher, PathBuf)> {
+    let path = package(dir)?;
+    let root = root(dir)?;
+    let mut fetcher = fetcher(dir).await?;
+    fetcher.wkg_config.overrides = Some(HashMap::from([(
+        "contracttest:api".into(),
+        wasm_pkg_core::manifest::Override {
+            path: Some(path),
+            version: None,
+        },
+    )]));
+    Ok((fetcher, root))
+}
+
+fn hold_cache_lock(dir: &Path) -> Result<std::fs::File> {
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("cache").join(CACHE_LOCK_FILE))?;
+    held.lock()?;
+    Ok(held)
+}
+
+/// A lock file this user cannot write is still taken, read-only, and the shared
+/// cache is checked under it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_lock_file_this_user_cannot_write_does_not_fail_the_fetch() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let lock_file = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    std::fs::write(&lock_file, b"")?;
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o444))?;
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open(&lock_file)
+        .is_ok()
+    {
+        return Ok(()); // root ignores the mode
+    }
+    let partial = dir
+        .path()
+        .join("cache")
+        .join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&partial, b"partial")?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    anyhow::ensure!(
+        !partial.exists(),
+        "the shared cache was not checked under the read-only lock"
+    );
+    Ok(())
+}
+
+/// A lock that stays held past the wait, as by a stopped process, gives the call a
+/// private cache instead of a hang.
+#[tokio::test]
+async fn a_cache_lock_held_past_the_wait_gives_a_private_cache() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (mut fetcher, root) = overridden(dir.path()).await?;
+    fetcher.lock_wait = std::time::Duration::from_millis(200);
+    let _held = hold_cache_lock(dir.path())?;
+    let writing = dir
+        .path()
+        .join("cache")
+        .join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&writing, b"partial")?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        fetcher.fetch_wit_dependencies(&root, &mut lock),
+    )
+    .await
+    .context("the fetch waited on a held cache lock past its wait")??;
+    anyhow::ensure!(
+        writing.exists(),
+        "the fetch scrubbed the shared cache without its lock"
+    );
+    Ok(())
+}
+
+/// A wait that runs out leaves no thread blocked on the lock, so the runtime can
+/// shut down while another process still holds it.
+#[test]
+fn a_timed_out_wait_for_the_cache_lock_leaves_no_thread_behind() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    std::fs::create_dir_all(dir.path().join("cache"))?;
+    let held = hold_cache_lock(dir.path())?;
+    let path = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let waited = runtime.block_on(lock_exclusively(&path, Duration::from_millis(200)));
+    anyhow::ensure!(
+        waited
+            .as_ref()
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::TimedOut),
+        "the wait did not time out: {waited:?}"
+    );
+    let (stopped, shut_down) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(runtime);
+        let _ = stopped.send(());
+    });
+    // The bound only stops a hang; the runtime's shutdown is what ends the wait.
+    let shut_down = shut_down.recv_timeout(Duration::from_secs(10));
+    drop(held);
+    shut_down.context("the runtime waited for a thread still blocked on the cache lock")?;
+    Ok(())
+}
+
+/// Where no lock file can be made, as in a read-only cache, a fetch that writes
+/// nothing to the cache still works.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_read_only_cache_that_needs_no_writes_still_fetches() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let cache = dir.path().join("cache");
+    std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o555))?;
+    let _restore = std::mem::DropGuard::new(cache.clone(), |cache| {
+        let _ = std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o755));
+    });
+    if std::fs::write(cache.join("probe"), b"").is_ok() {
+        return Ok(()); // root ignores the mode
+    }
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await
+}
+
+/// Diagnosing a failed fetch only asks registries, so it does not wait for the
+/// cache lock.
+#[tokio::test]
+async fn diagnosing_does_not_wait_for_the_cache_lock() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let _held = hold_cache_lock(dir.path())?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        fetcher.diagnose_wit(&root),
+    )
+    .await
+    .context("diagnose_wit waited for the cache lock")??;
+    Ok(())
+}
+
+/// Passes the message of every event on the thread it is set for to a callback.
+struct OnEvent<F>(F);
+
+impl<F: Fn(&str) + Send + Sync + 'static> tracing::Subscriber for OnEvent<F> {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        (self.0)(&message.0);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Calls `callback` with each event message on this thread until the result drops.
+fn on_event(
+    callback: impl Fn(&str) + Send + Sync + 'static,
+) -> (tracing::Dispatch, tracing::subscriber::DefaultGuard) {
+    // With one dispatcher, tracing caches a callsite as disabled for good if it is
+    // first hit on a thread without one; a second makes it ask every dispatcher.
+    let second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    (second, tracing::subscriber::set_default(OnEvent(callback)))
+}
+
+/// A fetch that waits for another wash process says so instead of hanging
+/// silently.
+#[tokio::test]
+async fn waiting_for_the_cache_lock_is_logged() -> Result<()> {
+    let waiting = std::sync::Arc::new(tokio::sync::Notify::new());
+    let _events = on_event({
+        let waiting = waiting.clone();
+        move |message| {
+            if message.contains("waiting for another wash process") {
+                waiting.notify_one();
+            }
+        }
+    });
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let held = hold_cache_lock(dir.path())?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    let mut fetch = std::pin::pin!(fetcher.fetch_wit_dependencies(&root, &mut lock));
+    // The timeout only stops a hang; the log line is what ends the wait.
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        tokio::select! {
+            fetched = fetch.as_mut() => {
+                anyhow::bail!("fetched while another process held the cache lock: {fetched:?}")
+            }
+            () = waiting.notified() => Ok(()),
+        }
+    })
+    .await
+    .context("waited for the cache lock without saying so")??;
+    drop(held);
+    fetch.await
+}
+
+/// Waits until `call` reaches `registry`, then checks the cache lock is held
+/// exclusively.
+async fn assert_lock_held_on_the_network<F: std::future::Future>(
+    registry: &tokio::net::TcpListener,
+    lock_path: &Path,
+    call: F,
+    name: &str,
+) -> Result<()> {
+    let mut call = std::pin::pin!(call);
+    let _connection = tokio::select! {
+        _ = call.as_mut() => anyhow::bail!("{name} finished without waiting on the registry"),
+        accepted = tokio::time::timeout(std::time::Duration::from_secs(30), registry.accept()) =>
+            accepted.with_context(|| format!("{name} never reached the registry"))??.0,
+    };
+    let probe = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path)?;
+    match probe.try_lock_shared() {
+        Err(std::fs::TryLockError::WouldBlock) => Ok(()),
+        Ok(()) => anyhow::bail!("{name} reached the registry without holding the cache lock"),
+        Err(std::fs::TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+/// The lock is held, exclusively, for as long as a call may fill the cache.
+#[tokio::test]
+async fn the_cache_lock_is_held_exclusively_while_a_registry_is_read() -> Result<()> {
+    let registry = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address: Registry = registry
+        .local_addr()?
+        .to_string()
+        .parse()
+        .context("invalid registry")?;
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    fetcher.wkg_client_config.set_namespace_registry(
+        "contracttest".parse().context("invalid label")?,
+        RegistryMapping::Registry(address),
+    );
+    let lock_path = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    let mut lock = load_lock_file(dir.path()).await?;
+    assert_lock_held_on_the_network(
+        &registry,
+        &lock_path,
+        fetcher.fetch_wit_dependencies(&root, &mut lock),
+        "fetch",
+    )
+    .await?;
+    assert_lock_held_on_the_network(
+        &registry,
+        &lock_path,
+        fetcher.build_wit_package(&root, &mut lock),
+        "build",
+    )
+    .await?;
+    let package = "contracttest:api".parse()?;
+    assert_lock_held_on_the_network(
+        &registry,
+        &lock_path,
+        fetcher.load_package(&package, None, None),
+        "load",
+    )
+    .await?;
+    Ok(())
+}
+
+/// Serves `contracttest` over plain HTTP, answering each request path with
+/// `respond`; the credentials keep any credential helper out of it.
+async fn fake_registry(
+    fetcher: &mut WkgFetcher,
+    respond: impl Fn(&str) -> (u16, String) + Send + 'static,
+) -> Result<()> {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let registry: Registry = listener
+        .local_addr()?
+        .to_string()
+        .parse()
+        .context("invalid registry")?;
+    fetcher.wkg_client_config.set_namespace_registry(
+        "contracttest".parse().context("invalid label")?,
+        RegistryMapping::Registry(registry.clone()),
+    );
+    fetcher
+        .wkg_client_config
+        .get_or_insert_registry_config_mut(&registry)
+        .set_backend_config(
+            "oci",
+            OciRegistryConfig {
+                client_config: wasm_pkg_client::oci::client::ClientConfig {
+                    protocol: wasm_pkg_client::oci::client::ClientProtocol::Http,
+                    ..Default::default()
+                },
+                credentials: Some(BasicCredentials {
+                    username: "test".into(),
+                    password: "test".to_string().into(),
+                }),
+            },
+        )?;
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                match stream.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => request.extend_from_slice(buffer.get(..read).unwrap_or_default()),
+                }
+            }
+            let request = String::from_utf8_lossy(&request);
+            let (status, body) = respond(request.split_whitespace().nth(1).unwrap_or_default());
+            let response = format!(
+                "HTTP/1.1 {status} x\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+    Ok(())
+}
+
+/// Whether some handle other than a new one holds the cache lock at `path`.
+fn cache_lock_is_held(path: &Path) -> bool {
+    std::fs::File::open(path).is_ok_and(|probe| {
+        matches!(
+            probe.try_lock_shared(),
+            Err(std::fs::TryLockError::WouldBlock)
+        )
+    })
+}
+
+/// Whether the cache lock at `path` is still held after 5 s. A child process that
+/// another test is starting can hold an inherited handle to it for a moment.
+fn cache_lock_stays_held(path: &Path) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while cache_lock_is_held(path) {
+        if std::time::Instant::now() >= deadline {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+/// Each fetch attempt holds the cache lock while it reads the registry, and lets
+/// it go while it waits to try again, so other wash processes are not held up.
+#[tokio::test]
+async fn the_cache_lock_is_released_while_waiting_to_retry() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let mut fetcher = fetcher(dir.path()).await?;
+    let lock_path = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    let on_the_registry = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    fake_registry(&mut fetcher, {
+        let (held, lock_path) = (on_the_registry.clone(), lock_path.clone());
+        move |path| match path {
+            "/v2/" => (200, String::new()),
+            path if path.ends_with("/tags/list") => {
+                held.lock().unwrap().push(cache_lock_is_held(&lock_path));
+                (503, String::new())
+            }
+            _ => (404, String::new()),
+        }
+    })
+    .await?;
+    let waiting_to_retry = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _events = on_event({
+        let held = waiting_to_retry.clone();
+        move |message| {
+            if message.contains("retrying") {
+                held.lock().unwrap().push(cache_lock_stays_held(&lock_path));
+            }
+        }
+    });
+    let mut lock = load_lock_file(dir.path()).await?;
+    let fetched = fetcher.fetch_wit_dependencies(&root, &mut lock).await;
+    let built = fetcher
+        .build_wit_package(&root, &mut lock)
+        .await
+        .map(|_| ());
+    for result in [fetched, built] {
+        anyhow::ensure!(
+            result
+                .as_ref()
+                .is_err_and(is_transient_registry_fetch_error),
+            "the registry did not fail as a transient error: {result:?}"
+        );
+    }
+    let attempts = 2 * WIT_FETCH_MAX_ATTEMPTS as usize;
+    assert_eq!(
+        *on_the_registry.lock().unwrap(),
+        vec![true; attempts],
+        "an attempt read the registry without the cache lock"
+    );
+    assert_eq!(
+        *waiting_to_retry.lock().unwrap(),
+        vec![false; attempts - 2],
+        "the cache lock was held while waiting to retry"
+    );
+    Ok(())
+}
+
+/// A shared cache this process can write but not lock is left alone: a fetch or
+/// build checks a private cache instead of deleting another process's download.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_writable_cache_that_cannot_be_locked_is_not_scrubbed() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let cache = dir.path().join("cache");
+    let lock_file = cache.join(CACHE_LOCK_FILE);
+    std::fs::write(&lock_file, b"")?;
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o000))?;
+    if std::fs::File::open(&lock_file).is_ok() {
+        return Ok(()); // root ignores the mode
+    }
+    let downloading = cache.join(format!("sha256:{}", "a".repeat(64)));
+    std::fs::write(&downloading, b"partial")?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    assert!(
+        downloading.exists(),
+        "a fetch deleted another process's download from a cache it could not lock"
+    );
+    fetcher.build_wit_package(&root, &mut lock).await?;
+    assert!(
+        downloading.exists(),
+        "a build deleted another process's download from a cache it could not lock"
+    );
+    Ok(())
+}
+
+/// A shared cache this process cannot write is still read: a package it holds
+/// is served from it, not fetched again into a private cache.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_read_only_cache_still_serves_the_packages_it_holds() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let elsewhere = tempfile::tempdir()?;
+    let (_, _, bytes) = fetcher(elsewhere.path())
+        .await?
+        .build_wit_package(
+            package(dir.path())?,
+            &mut load_lock_file(elsewhere.path()).await?,
+        )
+        .await?;
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let cache = dir.path().join("cache");
+    let mut fetcher = fetcher(dir.path()).await?;
+    std::fs::write(cache.join(&digest), &bytes)?;
+    std::fs::write(
+        cache.join("contracttest:api-1.2.3.json"),
+        format!(r#"{{"version":"1.2.3","content_digest":"{digest}"}}"#),
+    )?;
+    // The registry lists the version but cannot serve it, so only the cache can.
+    fake_registry(&mut fetcher, |path| match path {
+        "/v2/" => (200, String::new()),
+        path if path.ends_with("/tags/list") => (
+            200,
+            r#"{"name":"contracttest/api","tags":["1.2.3"]}"#.to_string(),
+        ),
+        _ => (404, String::new()),
+    })
+    .await?;
+    std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o555))?;
+    let _restore = std::mem::DropGuard::new(cache.clone(), |cache| {
+        let _ = std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o755));
+    });
+    if std::fs::write(cache.join("probe"), b"").is_ok() {
+        return Ok(()); // root ignores the mode
+    }
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    anyhow::ensure!(
+        std::fs::read_dir(root.join("deps"))?.next().is_some(),
+        "the fetch wrote no dependencies"
+    );
+    Ok(())
+}
+
+/// The encoded `contracttest:api@1.2.3` package whose WIT is `wit`.
+#[cfg(unix)]
+async fn encoded_package(wit: &str) -> Result<Vec<u8>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("contract");
+    std::fs::create_dir_all(&path)?;
+    std::fs::write(path.join("contract.wit"), wit)?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    let (_, _, bytes) = fetcher(dir.path())
+        .await?
+        .build_wit_package(&path, &mut lock)
+        .await?;
+    Ok(bytes)
+}
+
+/// Puts `contracttest:api@1.2.3` into `cache` as a fetch would, with `blob`, if given,
+/// stored in place of its content.
+#[cfg(unix)]
+async fn cache_contract_package(cache: &Path, blob: Option<&[u8]>) -> Result<()> {
+    let bytes = encoded_package(CONTRACT_WIT).await?;
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    std::fs::write(cache.join(&digest), blob.unwrap_or(&bytes))?;
+    std::fs::write(
+        cache.join("contracttest:api-1.2.3.json"),
+        format!(r#"{{"version":"1.2.3","content_digest":"{digest}"}}"#),
+    )?;
+    Ok(())
+}
+
+/// A registry that lists `contracttest:api@1.2.3` but serves nothing else, so only a
+/// cache can supply the package.
+#[cfg(unix)]
+async fn listing_only_registry(fetcher: &mut WkgFetcher) -> Result<()> {
+    fake_registry(fetcher, |path| match path {
+        "/v2/" => (200, String::new()),
+        path if path.ends_with("/tags/list") => (
+            200,
+            r#"{"name":"contracttest/api","tags":["1.2.3"]}"#.to_string(),
+        ),
+        _ => (404, String::new()),
+    })
+    .await
+}
+
+/// Gives `cache` a lock file this process cannot open, so a call takes a private
+/// cache. False where root ignores the mode.
+#[cfg(unix)]
+fn make_the_cache_unlockable(cache: &Path) -> Result<bool> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let lock_file = cache.join(CACHE_LOCK_FILE);
+    std::fs::write(&lock_file, b"")?;
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o000))?;
+    Ok(std::fs::File::open(&lock_file).is_err())
+}
+
+#[cfg(unix)]
+fn file_names(dir: &Path) -> Result<BTreeSet<std::ffi::OsString>> {
+    std::fs::read_dir(dir)?
+        .map(|entry| Ok(entry?.file_name()))
+        .collect()
+}
+
+/// A private cache starts with what the shared cache holds, so a package that
+/// only the shared cache has is still served when the shared cache cannot be locked.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_private_cache_serves_the_packages_the_shared_cache_holds() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let cache = dir.path().join("cache");
+    let mut fetcher = fetcher(dir.path()).await?;
+    cache_contract_package(&cache, None).await?;
+    listing_only_registry(&mut fetcher).await?;
+    if !make_the_cache_unlockable(&cache)? {
+        return Ok(()); // root ignores the mode
+    }
+    let held = file_names(&cache)?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher
+        .fetch_wit_dependencies(&root, &mut lock)
+        .await
+        .context("a fetch through a private cache lost the shared cache's package")?;
+    fetcher
+        .build_wit_package(&root, &mut lock)
+        .await
+        .context("a build through a private cache lost the shared cache's package")?;
+    match fetcher
+        .load_package(&"contracttest:api".parse()?, Some("1.2.3"), None)
+        .await
+    {
+        PackageLookup::Found(contents) => assert_eq!(contents.interfaces, ["values"]),
+        PackageLookup::Failed(error) => {
+            return Err(error.context("a lookup through a private cache failed"));
+        }
+        PackageLookup::Missing(message) => anyhow::bail!(message),
+    }
+    anyhow::ensure!(
+        file_names(&cache)? == held,
+        "the shared cache was written without its lock"
+    );
+    Ok(())
+}
+
+/// A shared blob that does not match its digest stays out of a private cache.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_private_cache_does_not_take_a_shared_blob_that_fails_its_digest() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = root(dir.path())?;
+    let cache = dir.path().join("cache");
+    let mut fetcher = fetcher(dir.path()).await?;
+    let planted = encoded_package(
+        "package contracttest:api@1.2.3; interface values { get: func() -> u32; } interface planted {} world service { export values; }",
+    )
+    .await?;
+    cache_contract_package(&cache, Some(&planted)).await?;
+    listing_only_registry(&mut fetcher).await?;
+    if !make_the_cache_unlockable(&cache)? {
+        return Ok(()); // root ignores the mode
+    }
+    // A lookup does not check the cache first, so only the copy keeps the blob out
+    let error = match fetcher
+        .load_package(&"contracttest:api".parse()?, Some("1.2.3"), None)
+        .await
+    {
+        PackageLookup::Found(contents) => anyhow::bail!(
+            "the lookup used a shared blob that does not match its digest: {:?}",
+            contents.interfaces
+        ),
+        PackageLookup::Missing(message) => anyhow::bail!(message),
+        PackageLookup::Failed(error) => format!("{error:#}"),
+    };
+    anyhow::ensure!(
+        error.contains("404"),
+        "the lookup failed for another reason than the registry: {error}"
+    );
+    let mut lock = load_lock_file(dir.path()).await?;
+    let error = match fetcher.fetch_wit_dependencies(&root, &mut lock).await {
+        Ok(()) => anyhow::bail!("the fetch used a shared blob that does not match its digest"),
+        Err(error) => format!("{error:#}"),
+    };
+    anyhow::ensure!(
+        error.contains("404"),
+        "the fetch failed for another reason than the registry: {error}"
+    );
+    Ok(())
+}
+
+/// A lock file this process makes can be opened by every user of a shared cache,
+/// whatever the umask.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_new_cache_lock_file_can_be_opened_by_every_user() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    let lock_file = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    let mode = std::fs::metadata(lock_file)?.permissions().mode() & 0o777;
+    assert_eq!(mode, 0o666, "the new lock file has mode {mode:o}");
+    Ok(())
+}
+
+/// A lock file that is already there keeps its mode.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_existing_cache_lock_file_keeps_its_mode() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let (fetcher, root) = overridden(dir.path()).await?;
+    let lock_file = dir.path().join("cache").join(CACHE_LOCK_FILE);
+    std::fs::write(&lock_file, b"")?;
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o600))?;
+    let mut lock = load_lock_file(dir.path()).await?;
+    fetcher.fetch_wit_dependencies(&root, &mut lock).await?;
+    let mode = std::fs::metadata(lock_file)?.permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "the lock file's mode changed to {mode:o}");
     Ok(())
 }
 
