@@ -19,7 +19,11 @@ import (
 
 func staleRouteSlice() *discoveryv1.EndpointSlice {
 	return &discoveryv1.EndpointSlice{
-		ObjectMeta:  metav1.ObjectMeta{Namespace: testNamespace, Name: endpointSliceName(testServiceName)},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: testNamespace,
+			Name:      endpointSliceName(testServiceName),
+			Labels:    map[string]string{routeManagerLabel: routeManagedValue},
+		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Endpoints:   []discoveryv1.Endpoint{{Addresses: []string{"10.244.0.1"}}},
 	}

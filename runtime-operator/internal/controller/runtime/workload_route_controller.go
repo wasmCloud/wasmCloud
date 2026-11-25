@@ -20,8 +20,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
@@ -34,6 +37,8 @@ const (
 	hostIDIndex = "spec.hostId"
 	// routeManagerLabel is the label applied to EndpointSlices managed by this controller.
 	routeManagerLabel = "wasmcloud.dev/route-manager"
+	// routeManagedValue is the routeManagerLabel value that marks a slice as managed.
+	routeManagedValue = "true"
 )
 
 // WorkloadRouteReconciler maintains EndpointSlices for Kubernetes Services
@@ -146,18 +151,7 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	sliceName := endpointSliceName(serviceName)
 
 	if len(endpoints) == 0 {
-		// No ready workloads for this service; delete our EndpointSlice if it exists.
-		es := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      sliceName,
-				Namespace: namespace,
-			},
-		}
-		if err := r.Delete(ctx, es); err != nil && !errors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("deleting empty EndpointSlice: %w", err)
-		}
-		log.Info("deleted EndpointSlice (no ready endpoints)", "endpointSlice", sliceName)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.deleteEndpointSlice(ctx, namespace, sliceName)
 	}
 
 	// Set the port to the first HTTPPort, since all Hosts within the same HostGroup have the same HTTPPort.
@@ -179,7 +173,7 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			Namespace: namespace,
 			Labels: map[string]string{
 				discoveryv1.LabelServiceName: serviceName,
-				routeManagerLabel:            "true",
+				routeManagerLabel:            routeManagedValue,
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(svc, corev1.SchemeGroupVersion.WithKind("Service")),
@@ -220,6 +214,10 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	existing := &discoveryv1.EndpointSlice{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: sliceName}, existing)
 	if errors.IsNotFound(err) {
+		// GC removes a deleting Service's slice; a new one would be deleted and rebuilt in a loop.
+		if !svc.DeletionTimestamp.IsZero() {
+			return ctrl.Result{}, nil
+		}
 		if err := r.Create(ctx, desiredSlice); err != nil {
 			return ctrl.Result{}, fmt.Errorf("creating EndpointSlice: %w", err)
 		}
@@ -232,24 +230,76 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	sortEndpoints(existing.Endpoints)
 
-	if reflect.DeepEqual(existing.Labels, desiredSlice.Labels) &&
-		existing.AddressType == desiredSlice.AddressType &&
-		reflect.DeepEqual(existing.Ports, desiredSlice.Ports) &&
-		reflect.DeepEqual(existing.Endpoints, desiredSlice.Endpoints) {
-		return ctrl.Result{}, nil
+	updated, err := r.updateEndpointSlice(ctx, existing, desiredSlice, svc)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	// Update if the existing slice differs.
-	existing.Labels = desiredSlice.Labels
-	existing.AddressType = desiredSlice.AddressType
-	existing.Ports = desiredSlice.Ports
-	existing.Endpoints = desiredSlice.Endpoints
-	if err := r.Update(ctx, existing); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating EndpointSlice: %w", err)
+	if updated {
+		log.Info("updated EndpointSlice", "endpointSlice", sliceName, "endpoints", len(endpoints))
 	}
-	log.Info("updated EndpointSlice", "endpointSlice", sliceName, "endpoints", len(endpoints))
 
 	return ctrl.Result{}, nil
+}
+
+// deleteEndpointSlice deletes the named slice if this controller manages it.
+func (r *WorkloadRouteReconciler) deleteEndpointSlice(ctx context.Context, namespace, name string) error {
+	existing := &discoveryv1.EndpointSlice{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if existing.Labels[routeManagerLabel] != routeManagedValue || !existing.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if err := r.Delete(ctx, existing, client.Preconditions{UID: &existing.UID}); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("deleting empty EndpointSlice: %w", err)
+	}
+	ctrl.LoggerFrom(ctx).Info("deleted EndpointSlice (no ready endpoints)", "endpointSlice", name)
+	return nil
+}
+
+// updateEndpointSlice writes desired into existing when they differ and reports
+// whether it wrote. A deleting slice is left alone; only managed slices are adopted.
+func (r *WorkloadRouteReconciler) updateEndpointSlice(ctx context.Context, existing, desired *discoveryv1.EndpointSlice, svc *corev1.Service) (bool, error) {
+	// The slice watch drops events of unlabelled slices, so only an error's backoff requeues them.
+	managed := existing.Labels[routeManagerLabel] == routeManagedValue
+	if !managed && !metav1.IsControlledBy(existing, svc) {
+		return false, fmt.Errorf("EndpointSlice %s exists and is not managed by this controller", existing.Name)
+	}
+	// Adopting a deleting slice would not stop its deletion; its delete event requeues this Service.
+	if !existing.DeletionTimestamp.IsZero() {
+		if !managed {
+			return false, fmt.Errorf("EndpointSlice %s is being deleted without the %s label", existing.Name, routeManagerLabel)
+		}
+		ctrl.LoggerFrom(ctx).V(1).Info("waiting for EndpointSlice deletion to finish", "endpointSlice", existing.Name)
+		return false, nil
+	}
+	if endpointSliceCurrent(existing, desired, svc) {
+		return false, nil
+	}
+	if !metav1.IsControlledBy(existing, svc) {
+		existing.OwnerReferences = desired.OwnerReferences
+	}
+	existing.Labels = desired.Labels
+	existing.AddressType = desired.AddressType
+	existing.Ports = desired.Ports
+	existing.Endpoints = desired.Endpoints
+	if err := r.Update(ctx, existing); err != nil {
+		return false, fmt.Errorf("updating EndpointSlice: %w", err)
+	}
+	return true, nil
+}
+
+// endpointSliceCurrent reports whether existing matches desired and is owned by
+// svc, not by a deleted Service of the same name that GC would follow.
+func endpointSliceCurrent(existing, desired *discoveryv1.EndpointSlice, svc *corev1.Service) bool {
+	return metav1.IsControlledBy(existing, svc) &&
+		reflect.DeepEqual(existing.Labels, desired.Labels) &&
+		existing.AddressType == desired.AddressType &&
+		reflect.DeepEqual(existing.Ports, desired.Ports) &&
+		reflect.DeepEqual(existing.Endpoints, desired.Endpoints)
 }
 
 // findPodByHostname locates the HostPodLabel-bearing Pod whose OS hostname
@@ -358,6 +408,60 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Watches(&runtimev1alpha1.Workload{}, handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest)).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.serviceToRequest),
+			builder.WithPredicates(routedServiceChanged)).
+		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(endpointSliceToRequest),
+			builder.WithPredicates(managedSliceDeleted)).
 		Named("workload-route").
 		Complete(r)
+}
+
+// serviceToRequest enqueues a Service only when a Workload routes to it, so
+// the other Services in the cluster are never reconciled.
+func (r *WorkloadRouteReconciler) serviceToRequest(ctx context.Context, obj client.Object) []reconcile.Request {
+	request := []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: obj.GetNamespace(),
+		Name:      obj.GetName(),
+	}}}
+	workloads := &runtimev1alpha1.WorkloadList{}
+	if err := r.List(ctx, workloads,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{workloadKubernetesServiceIndex: obj.GetName()},
+	); err != nil {
+		// Reconciling is idempotent; an extra pass is cheaper than a lost one.
+		return request
+	}
+	if len(workloads.Items) == 0 {
+		return nil
+	}
+	return request
+}
+
+// managedSliceDeleted passes only the deletion of a slice this controller
+// manages, so its Service is reconciled again when the slice goes away.
+var managedSliceDeleted = predicate.Funcs{
+	CreateFunc: func(event.CreateEvent) bool { return false },
+	UpdateFunc: func(event.UpdateEvent) bool { return false },
+	DeleteFunc: func(e event.DeleteEvent) bool {
+		return e.Object.GetLabels()[routeManagerLabel] == routeManagedValue
+	},
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
+// endpointSliceToRequest maps a managed slice to its Service.
+func endpointSliceToRequest(_ context.Context, obj client.Object) []reconcile.Request {
+	name := obj.GetLabels()[discoveryv1.LabelServiceName]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: name}}}
+}
+
+// routedServiceChanged drops Service updates that keep the same object alive,
+// such as status writes; only a new UID or the start of deletion matters here.
+var routedServiceChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		return e.ObjectOld.GetUID() != e.ObjectNew.GetUID() ||
+			e.ObjectOld.GetDeletionTimestamp().IsZero() != e.ObjectNew.GetDeletionTimestamp().IsZero()
+	},
 }
