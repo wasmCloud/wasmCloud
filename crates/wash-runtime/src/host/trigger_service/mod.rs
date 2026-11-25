@@ -105,14 +105,15 @@ pub enum Ingress {
     /// `registry` tracks each served call as a cancellable job; `replay` holds
     /// the lifecycle binds this incarnation must complete before serving `rx`
     /// (the per-workload state rebuild after a restart); `secret_source`
-    /// names the plugin's `wasmcloud:host/secret-source` export, if any.
+    /// names the plugin's `wasmcloud:host/secret-source` or
+    /// `owned-secret-source` export, if any.
     #[cfg(feature = "host-component-plugins")]
     Capability {
         funcs: Vec<CapabilityFunc>,
         rx: tokio::sync::mpsc::Receiver<CapabilityJob>,
         registry: Arc<JobRegistry>,
         replay: Vec<LifecycleReplay>,
-        secret_source: Option<Arc<str>>,
+        secret_source: Option<crate::plugin::component_host::SecretSourceExport>,
     },
 }
 
@@ -183,9 +184,9 @@ impl Ingress {
                 // Registration already checked the shape against the published
                 // WIT, so this only fails if that check and wasmtime disagree.
                 let secret_source = secret_source
-                    .map(|interface| {
+                    .map(|export| {
                         crate::plugin::component_host::secret_source_resolve(
-                            store, instance, &interface,
+                            store, instance, &export,
                         )
                     })
                     .transpose()?;

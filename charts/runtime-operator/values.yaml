@@ -889,16 +889,19 @@ runtime:
       #           configFrom: [vault-prod]
       plugins: []
       # -- Secrets a host component plugin serves through
-      # `wasmcloud:host/secret-source`, by the name a `plugins` entry's or
-      # binding's `secretFrom` uses. `keys` maps each config key to the key
-      # the plugin is asked for. `workloads` is required: the namespaces (and
-      # optionally names) whose workloads may have its values, or `all`. A
-      # name is a WorkloadDeployment's, WorkloadDaemonSet's or WorkloadReplicaSet's,
-      # else the Workload's own; it narrows a grant within a namespace, which is the
-      # boundary. The host asks the plugin on every workload bind, naming the
-      # workload, so one entry serves each workload its own value when the
-      # plugin scopes its answer by that name; a rotation reaches the next
-      # bind, and no volume or Reloader annotation is involved.
+      # `wasmcloud:host/owned-secret-source` or `secret-source`, by the name a
+      # `plugins` entry's or binding's `secretFrom` uses. `keys` maps each
+      # config key to the key the plugin is asked for. `workloads` is
+      # required: the namespaces whose workloads may have its values, or
+      # `all`. A selector with a `kind` and `name` (and optionally `uid`)
+      # matches the owner the operator verified, such as a WorkloadDeployment.
+      # A `name` alone matches the name a Workload's start request chose,
+      # which any Workload in the namespace can claim. The host asks the
+      # plugin on every workload bind, naming the workload and, through
+      # `owned-secret-source`, its owner, so one entry serves each workload
+      # its own value when the plugin scopes its answer by owner; a rotation
+      # reaches the next bind, and no volume or Reloader annotation is
+      # involved.
       # A workload outside the grant fails to deploy. On `wasmcloud-secrets`,
       # whose keys each stand alone, an entry its own `secretFrom` names is
       # instead left out of that workload's config.
@@ -920,6 +923,7 @@ runtime:
       #         url: platform/postgres/reports-url
       #       workloads:
       #         - namespace: billing
+      #           kind: WorkloadDeployment
       #           name: reports
       #   plugins:
       #     - id: wasmcloud-secrets

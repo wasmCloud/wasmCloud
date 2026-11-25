@@ -1,5 +1,5 @@
 [overrides]
-# `wasmcloud:host` is defined and installed by the runtime itself, so its
-# canonical WIT lives in-repo at wit/host/wit/.
-"wasmcloud:host" = { path = "../../../../../wit/host/wit" }
-"wasmcloud:secrets" = { path = "../../../../../wit/secrets/wit" }
+# Built against the released `wasmcloud:host@0.1.6` `secret-source`, copied
+# from v2.12.1, so the host is tested against a plugin that predates
+# `owned-secret-source`.
+"wasmcloud:host" = { path = "host-0.1.6" }

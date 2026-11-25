@@ -18,6 +18,27 @@ message Workload {
 
   // The identity the workload runs as. Unset runs it with none.
   WorkloadIdentity identity = 7;
+
+  // The object that controls the workload's replicas, as the control plane
+  // verified it. Egress credential, broker and kind-qualified secret grants
+  // match a workload by its namespace and this owner. Unset leaves the
+  // workload matching none of them; a secret grant by name alone still
+  // matches the workload's grouping name. Hosts that read this field label
+  // their heartbeats runtime.wasmcloud.dev/accepts-workload-owner=true, and
+  // the control plane sends it to no other host, since an older host refuses
+  // a request with a field it does not know.
+  WorkloadOwner owner = 8;
+}
+
+// The controller a workload belongs to, in the workload's namespace: for
+// example kind WorkloadDeployment, its name, and its UID. A workload with no
+// controller is its own owner. Kinds keep names apart, so a Workload and a
+// WorkloadDeployment of the same name are different owners, and the UID keeps
+// an object recreated under the same name apart from the one it replaced.
+message WorkloadOwner {
+  string kind = 1;
+  string name = 2;
+  string uid = 3;
 }
 
 // What the control plane grants a workload's identity. The host generates

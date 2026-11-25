@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -10,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	runtimev1alpha1 "go.wasmcloud.dev/runtime-operator/v2/api/runtime/v1alpha1"
 )
 
@@ -40,5 +42,25 @@ func drainEvents(recorder *events.FakeRecorder) []string {
 		default:
 			return got
 		}
+	}
+}
+
+// place runs placement as the reconciler's requeue would: a pass that only
+// records the Workload's owner is followed at once by the one that starts it.
+func place(ctx context.Context, r *WorkloadReconciler, workload *runtimev1alpha1.Workload) error {
+	before := workload.Status.Owner
+	err := r.reconcilePlacement(ctx, workload)
+	if errors.Is(err, condition.ErrNoop()) && workload.Status.Owner != before {
+		return r.reconcilePlacement(ctx, workload)
+	}
+	return err
+}
+
+// recordOwner runs the placement pass that records the Workload's owner, so
+// a test can compare what the start that follows changes.
+func recordOwner(t *testing.T, r *WorkloadReconciler, workload *runtimev1alpha1.Workload) {
+	t.Helper()
+	if err := r.reconcilePlacement(t.Context(), workload); !errors.Is(err, condition.ErrNoop()) || workload.Status.Owner == nil {
+		t.Fatalf("recording the owner = %v, owner %v", err, workload.Status.Owner)
 	}
 }

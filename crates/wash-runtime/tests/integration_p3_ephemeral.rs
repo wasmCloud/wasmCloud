@@ -47,6 +47,7 @@ async fn test_p3_plain_value_async_call_uses_ephemeral_store() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-ephemeral".to_string(),
             annotations: HashMap::new(),

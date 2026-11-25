@@ -761,6 +761,7 @@ async fn start_batch(
         let request = WorkloadStartRequest {
             workload_id: uuid::Uuid::new_v4().to_string(),
             workload: Workload {
+                owner: None,
                 namespace: "scale".to_string(),
                 name: host_header.clone(),
                 annotations: HashMap::new(),

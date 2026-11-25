@@ -111,6 +111,7 @@ async fn a_wedged_pooled_instance_is_retired_and_replaced() -> Result<()> {
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "wedge-pooled".to_string(),
             annotations: HashMap::new(),
@@ -159,6 +160,7 @@ async fn a_wedged_service_keeps_serving_with_a_bounded_wait() -> Result<()> {
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "wedge-svc".to_string(),
             annotations: HashMap::new(),

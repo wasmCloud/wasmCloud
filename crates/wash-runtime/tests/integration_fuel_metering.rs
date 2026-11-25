@@ -111,6 +111,7 @@ async fn a_fuel_metering_host_runs_guest_code() -> Result<()> {
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "fuel-metered".to_string(),
             annotations: HashMap::new(),

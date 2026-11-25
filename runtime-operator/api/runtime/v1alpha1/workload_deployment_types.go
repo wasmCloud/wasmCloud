@@ -4,6 +4,7 @@ import (
 	"go.wasmcloud.dev/runtime-operator/v2/api/condition"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -44,13 +45,27 @@ type WorkloadDeploymentSpec struct {
 	Kubernetes *KubernetesSpec `json:"kubernetes,omitempty"`
 }
 
+// WorkloadReplicaSetReference is a set this deployment made. Its Workloads
+// are the deployment's only while the set keeps this UID and template digest.
+type WorkloadReplicaSetReference struct {
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// UID is the set's UID when the deployment made it.
+	// +kubebuilder:validation:Optional
+	UID types.UID `json:"uid,omitempty"`
+	// TemplateDigest is WorkloadReplicaTemplate.Digest of the template the
+	// deployment gave the set.
+	// +kubebuilder:validation:Optional
+	TemplateDigest string `json:"templateDigest,omitempty"`
+}
+
 // WorkloadDeploymentStatus defines the observed state of WorkloadDeployment.
 type WorkloadDeploymentStatus struct {
 	condition.ConditionedStatus `json:",inline"`
 	// +kubebuilder:validation:Optional
-	CurrentReplicaSet *corev1.LocalObjectReference `json:"currentReplicaSet,omitempty"`
+	CurrentReplicaSet *WorkloadReplicaSetReference `json:"currentReplicaSet,omitempty"`
 	// +kubebuilder:validation:Optional
-	PreviousReplicaSet *corev1.LocalObjectReference `json:"previousReplicaSet,omitempty"`
+	PreviousReplicaSet *WorkloadReplicaSetReference `json:"previousReplicaSet,omitempty"`
 	// +kubebuilder:validation:Optional
 	Replicas *ReplicaSetStatus `json:"replicas,omitempty"`
 

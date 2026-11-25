@@ -33,6 +33,7 @@ fn svc_no_run_request(host: &str) -> WorkloadStartRequest {
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host.to_string(),
             annotations: HashMap::new(),

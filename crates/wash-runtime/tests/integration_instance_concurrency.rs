@@ -59,6 +59,7 @@ async fn start_sleeper_with(
     host.workload_start(WorkloadStartRequest {
         workload_id: workload_id.clone(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),
@@ -296,6 +297,7 @@ async fn linked_calls_share_the_warm_instances() -> Result<()> {
     host.workload_start(WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "linked-conc".to_string(),
             annotations: HashMap::new(),

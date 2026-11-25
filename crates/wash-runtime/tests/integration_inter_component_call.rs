@@ -193,6 +193,7 @@ async fn test_inter_component_call() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "caller".to_string(),
             annotations: HashMap::new(),

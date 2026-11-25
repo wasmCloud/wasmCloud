@@ -207,8 +207,8 @@ func TestConditionWithMessage(t *testing.T) {
 // A condition error keeps its own reason through wrapping; any other error
 // fails the condition as Reconcile.
 func TestErrorConditionForKeepsItsReason(t *testing.T) {
-	reasoned := fmt.Errorf("placing: %w", ErrWithReason("StableNameChanged", errors.New("renamed")))
-	if got := ErrorConditionFor("Placement", reasoned); got.Reason != "StableNameChanged" ||
+	reasoned := fmt.Errorf("placing: %w", ErrWithReason("OwnerChanged", errors.New("renamed")))
+	if got := ErrorConditionFor("Placement", reasoned); got.Reason != "OwnerChanged" ||
 		got.Status != ConditionFalse || got.Message != "placing: renamed" {
 		t.Fatalf("reasoned condition = %+v", got)
 	}

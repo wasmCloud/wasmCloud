@@ -295,6 +295,10 @@
                   <a href="#wasmcloud.runtime.v2.WorkloadIdentity"><span class="badge">M</span>WorkloadIdentity</a>
                 </li>
               
+                <li>
+                  <a href="#wasmcloud.runtime.v2.WorkloadOwner"><span class="badge">M</span>WorkloadOwner</a>
+                </li>
+              
               
                 <li>
                   <a href="#wasmcloud.runtime.v2.ImagePullPolicy"><span class="badge">E</span>ImagePullPolicy</a>
@@ -1312,6 +1316,20 @@ The &#39;config&#39; on each host_interface may carry Workload Specific configur
                   <td><p>The identity the workload runs as. Unset runs it with none. </p></td>
                 </tr>
               
+                <tr>
+                  <td>owner</td>
+                  <td><a href="#wasmcloud.runtime.v2.WorkloadOwner">WorkloadOwner</a></td>
+                  <td></td>
+                  <td><p>The object that controls the workload&#39;s replicas, as the control plane
+verified it. Egress credential, broker and kind-qualified secret grants
+match a workload by its namespace and this owner. Unset leaves the
+workload matching none of them; a secret grant by name alone still
+matches the workload&#39;s grouping name. Hosts that read this field label
+their heartbeats runtime.wasmcloud.dev/accepts-workload-owner=true, and
+the control plane sends it to no other host, since an older host refuses
+a request with a field it does not know. </p></td>
+                </tr>
+              
             </tbody>
           </table>
 
@@ -1404,6 +1422,44 @@ Required. Replaced with WorkloadIdentityRenew before it expires. </p></td>
                   <td><a href="#wasmcloud.runtime.v2.MtlsDestination">MtlsDestination</a></td>
                   <td>repeated</td>
                   <td><p>HTTPS destinations the host presents the X.509-SVID to. </p></td>
+                </tr>
+              
+            </tbody>
+          </table>
+
+          
+
+        
+      
+        <h3 id="wasmcloud.runtime.v2.WorkloadOwner">WorkloadOwner</h3>
+        <p>The controller a workload belongs to, in the workload's namespace: for</p><p>example kind WorkloadDeployment, its name, and its UID. A workload with no</p><p>controller is its own owner. Kinds keep names apart, so a Workload and a</p><p>WorkloadDeployment of the same name are different owners, and the UID keeps</p><p>an object recreated under the same name apart from the one it replaced.</p>
+
+        
+          <table class="field-table">
+            <thead>
+              <tr><td>Field</td><td>Type</td><td>Label</td><td>Description</td></tr>
+            </thead>
+            <tbody>
+              
+                <tr>
+                  <td>kind</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>name</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>uid</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p> </p></td>
                 </tr>
               
             </tbody>

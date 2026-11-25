@@ -55,6 +55,7 @@ async fn test_p3_cross_component_stream_to_http() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-cross-component-stream".to_string(),
             annotations: HashMap::new(),
@@ -142,6 +143,7 @@ async fn test_p3_incoming_handler_streams_incrementally() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-stream-pacer".to_string(),
             annotations: HashMap::new(),
@@ -231,6 +233,7 @@ async fn test_p3_cross_component_stream_streams_incrementally() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-cross-component-stream-paced".to_string(),
             annotations: HashMap::new(),

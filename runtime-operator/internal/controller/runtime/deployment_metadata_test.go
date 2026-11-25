@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -58,9 +57,9 @@ func TestDeploymentTemplateMetadataChangesRollOut(t *testing.T) {
 						other.Spec.Template.Spec.HostID = "metadata-host-b"
 						current = ownedReplicaSetFor(t, other)
 						objects = append(objects, current)
-						d.Status.PreviousReplicaSet = &corev1.LocalObjectReference{Name: previous.Name}
+						d.Status.PreviousReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: previous.Name}
 					}
-					d.Status.CurrentReplicaSet = &corev1.LocalObjectReference{Name: current.Name}
+					d.Status.CurrentReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: current.Name}
 					if tc.annotations {
 						d.Spec.Template.Annotations = maps.Clone(tc.after)
 					} else {

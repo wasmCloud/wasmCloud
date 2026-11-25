@@ -122,6 +122,7 @@ async fn test_p2_http_component_works_with_p3_enabled() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p2-with-p3-enabled".to_string(),
             annotations: HashMap::new(),
@@ -189,6 +190,7 @@ async fn test_p2_concurrent_requests_with_p3_enabled() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p2-concurrent-p3".to_string(),
             annotations: HashMap::new(),
@@ -256,6 +258,7 @@ async fn test_p3_linker_accepts_p2_component() -> Result<()> {
     let engine = Engine::builder().build().expect("failed to build engine");
 
     let workload = Workload {
+        owner: None,
         namespace: "test".to_string(),
         name: "p2-on-p3-linker".to_string(),
         annotations: HashMap::new(),

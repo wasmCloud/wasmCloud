@@ -111,9 +111,11 @@ pub struct SecretConsumer {
 pub struct RequestingWorkload {
     /// This replica.
     pub id: String,
-    /// The name it keeps across replicas.
+    /// The name it keeps across replicas, which its start request chooses.
     pub name: String,
     pub namespace: String,
+    /// Its controller, as the control plane verified it, if it was told one.
+    pub owner: Option<crate::types::WorkloadOwner>,
 }
 
 /// A secret's value: text, or bytes for binary material. Redacted in `Debug`,
@@ -671,6 +673,7 @@ mod tests {
             id: "wl-1".to_string(),
             name: "billing-api".to_string(),
             namespace: "billing".to_string(),
+            owner: None,
         }
     }
 

@@ -88,6 +88,7 @@ pub(crate) const P3_FIXTURES: &[&str] = &[
     "badlifecycle",
     "secrets-caller",
     "secrets-consumer-plugin",
+    "owned-secret-source-plugin",
     "secret-source-plugin",
     "secrets-consumer-plugin-caller",
     "http-egress-plugin",

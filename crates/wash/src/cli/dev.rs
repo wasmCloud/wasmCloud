@@ -845,6 +845,7 @@ fn build_workload(
     debug!("workload host interfaces: {:?}", host_interfaces);
 
     Workload {
+        owner: None,
         namespace: "default".to_string(),
         name: "dev".to_string(),
         annotations: HashMap::default(),

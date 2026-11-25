@@ -463,7 +463,7 @@ struct Issuer {
     handler: Arc<dyn HostHandler>,
     workload_id: Arc<str>,
     namespace: Arc<str>,
-    name: Arc<str>,
+    owner: crate::types::WorkloadOwner,
     component_id: Arc<str>,
     options: Option<wasmtime_wasi_http::RequestOptions>,
 }
@@ -473,7 +473,7 @@ impl Issuer {
         EgressCaller {
             workload_id: &self.workload_id,
             namespace: &self.namespace,
-            name: &self.name,
+            owner: Some(&self.owner),
             component_id: Some(&*self.component_id).filter(|id| !id.is_empty()),
         }
     }
@@ -611,12 +611,11 @@ pub(super) async fn send(
         else {
             return Ok(Err(Unsent::Denied(DeniedReason::NotSupported)));
         };
-        let (namespace, name) = ctx.egress_names();
         let issuer = Issuer {
             handler,
             workload_id: ctx.workload_id.clone(),
-            namespace,
-            name,
+            namespace: ctx.egress_namespace(),
+            owner: bound.caller.owner.clone(),
             component_id: Arc::clone(&bound.caller.component_id),
             options: options.as_deref().copied(),
         };

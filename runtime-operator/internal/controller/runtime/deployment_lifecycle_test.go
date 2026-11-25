@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -246,7 +245,7 @@ func replicaSetNames(t *testing.T, r *WorkloadDeploymentReconciler) []string {
 	return names
 }
 
-func referencedName(ref *corev1.LocalObjectReference) string {
+func referencedName(ref *runtimev1alpha1.WorkloadReplicaSetReference) string {
 	if ref == nil {
 		return ""
 	}
@@ -319,8 +318,8 @@ func TestDeploymentRolloutToCurrentReplicaSetKeepsPrevious(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := undeployedDeployment()
 			name := ownedReplicaSetFor(t, d).Name
-			d.Status.CurrentReplicaSet = &corev1.LocalObjectReference{Name: name}
-			d.Status.PreviousReplicaSet = &corev1.LocalObjectReference{Name: testPrevSetName}
+			d.Status.CurrentReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: name}
+			d.Status.PreviousReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: testPrevSetName}
 			var objs []client.Object
 			if tc.exists {
 				objs = append(objs, ownedReplicaSetFor(t, d))
@@ -364,7 +363,7 @@ func TestDeploymentRollbackAdoptsExistingReplicaSet(t *testing.T) {
 			d := undeployedDeployment()
 			d.Spec.DeployPolicy = tc.policy
 			previous := ownedReplicaSetFor(t, d)
-			d.Status.PreviousReplicaSet = &corev1.LocalObjectReference{Name: previous.Name}
+			d.Status.PreviousReplicaSet = &runtimev1alpha1.WorkloadReplicaSetReference{Name: previous.Name}
 			r := newScaleReconciler(t, previous)
 
 			if err := r.reconcileDeploy(t.Context(), d); !errors.Is(err, condition.ErrSkipReconciliation()) {

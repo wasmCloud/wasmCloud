@@ -71,6 +71,7 @@ fn resolve_workload(
     WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: host_header.to_string(),
             annotations: HashMap::new(),

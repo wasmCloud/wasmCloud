@@ -3,7 +3,8 @@
 //! plugin (`secret-source-plugin`) and delivered to another component plugin
 //! (`kv-plugin`) as its binding config, read back through a caller workload;
 //! and the same source serving a workload its own secrets through the native
-//! `wasmcloud-secrets` plugin, limited to the workloads the entry grants.
+//! `wasmcloud-secrets` plugin, limited to the workloads the entry grants. An
+//! `owned-secret-source` plugin is also told each workload's owner.
 
 #![cfg(feature = "host-component-plugins")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -16,7 +17,7 @@ use wash_runtime::host::HostApi;
 use wash_runtime::plugin::{
     PluginBindingSet, PluginBindings, PluginSecretRef, WorkloadGrant, WorkloadSelector,
 };
-use wash_runtime::types::{LocalResources, WorkloadState};
+use wash_runtime::types::{LocalResources, WorkloadOwner, WorkloadState};
 
 mod common;
 use common::{
@@ -28,6 +29,8 @@ use common::{
 const KV_PLUGIN_WASM: &[u8] = include_bytes!("wasm/kv_plugin.wasm");
 const KV_PLUGIN_CALLER_WASM: &[u8] = include_bytes!("wasm/kv_plugin_caller.wasm");
 const SECRET_SOURCE_WASM: &[u8] = include_bytes!("wasm/secret_source_plugin.wasm");
+/// Exports `owned-secret-source` and a `secret-source` that refuses everything.
+const OWNED_SECRET_SOURCE_WASM: &[u8] = include_bytes!("wasm/owned_secret_source_plugin.wasm");
 const SECRETS_CALLER_WASM: &[u8] = include_bytes!("wasm/secrets_caller.wasm");
 /// Imports `wasmcloud:secrets/secret` under the label `db-password`.
 const SECRETS_CONSUMER_WASM: &[u8] = include_bytes!("wasm/secrets_consumer_plugin.wasm");
@@ -325,5 +328,77 @@ async fn a_labeled_import_of_a_withheld_secret_says_it_was_withheld() -> Result<
             assert!(!msg.contains("billing-api"), "{msg}");
         }
     }
+    Ok(())
+}
+
+/// `wasmcloud-secrets`' entry serving workloads `db-password`, `requested-by`
+/// and `owned-by` (the workload and owner the source was told it resolved
+/// for) from the `owned-secret-source` plugin to the workloads `grant` admits.
+async fn start_owned(grant: WorkloadGrant) -> Result<(std::net::SocketAddr, impl HostApi)> {
+    let secret = |key: &str| PluginSecretRef {
+        source: "billing-pw".into(),
+        plugin: SECRETS_ID.into(),
+        key: key.into(),
+        grant: grant.clone(),
+    };
+    let bindings = PluginBindings::new().with_plugin(
+        PluginBindingSet::new(WORKLOAD_SECRETS_ID).with_base_secrets(HashMap::from([
+            ("db-password".to_string(), secret("db-password")),
+            ("requested-by".to_string(), secret("workload")),
+            ("owned-by".to_string(), secret("owner")),
+        ])),
+    );
+    start_host_with_component_plugins(
+        "127.0.0.1:0",
+        &[(SECRETS_ID, OWNED_SECRET_SOURCE_WASM)],
+        bindings,
+    )
+    .await
+}
+
+/// A plugin exporting both shapes is called through `owned-secret-source`,
+/// which is told the owner the replica was started with.
+#[tokio::test]
+async fn an_owned_source_is_told_the_owner() -> Result<()> {
+    let owner = WorkloadOwner::new("WorkloadDeployment", "billing-api", "deployment-uid")?;
+    let (addr, h) = start_owned(WorkloadGrant::Only(vec![WorkloadSelector::owner(
+        "test", &owner,
+    )]))
+    .await?;
+    let replica = "billing-api-5d8f9c-x2k4q";
+    let mut request = secrets_caller(replica);
+    request.workload.owner = Some(owner);
+    let resp = h.workload_start(request).await?;
+    assert_eq!(
+        resp.workload_status.workload_state,
+        WorkloadState::Running,
+        "{}",
+        resp.workload_status.message
+    );
+    let client = reqwest::Client::new();
+    let (_, body) = req(&client, &addr, replica, "/get?key=db-password").await?;
+    assert_eq!(body, "hunter2");
+    let (_, body) = req(&client, &addr, replica, "/get?key=requested-by").await?;
+    assert_eq!(body, format!("test/{replica}"));
+    let (_, body) = req(&client, &addr, replica, "/get?key=owned-by").await?;
+    assert_eq!(body, "WorkloadDeployment/billing-api/deployment-uid");
+    Ok(())
+}
+
+/// A workload started with no owner reaches an `owned-secret-source` as one
+/// with none.
+#[tokio::test]
+async fn an_owned_source_is_told_a_workload_has_no_owner() -> Result<()> {
+    let (addr, h) = start_owned(test_namespace()).await?;
+    let resp = h.workload_start(secrets_caller("billing-api")).await?;
+    assert_eq!(
+        resp.workload_status.workload_state,
+        WorkloadState::Running,
+        "{}",
+        resp.workload_status.message
+    );
+    let client = reqwest::Client::new();
+    let (_, body) = req(&client, &addr, "billing-api", "/get?key=owned-by").await?;
+    assert_eq!(body, "-");
     Ok(())
 }

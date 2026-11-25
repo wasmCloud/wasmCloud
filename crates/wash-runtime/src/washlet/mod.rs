@@ -1870,6 +1870,15 @@ fn command_error(workload_id: &str, message: String) -> types::v2::WorkloadStatu
         message,
     }
 }
+
+fn owner_from_wire(
+    owner: Option<types::v2::WorkloadOwner>,
+) -> anyhow::Result<Option<crate::types::WorkloadOwner>> {
+    owner
+        .map(|owner| crate::types::WorkloadOwner::new(&owner.kind, &owner.name, &owner.uid))
+        .transpose()
+}
+
 #[instrument(skip_all, fields(
     workload_id = %req.workload_id,
     workload.name=?req.workload.as_ref().map(|w| &w.name).unwrap_or(&"<none>".to_string()),
@@ -1889,6 +1898,7 @@ async fn workload_start(
         wit_world,
         volumes,
         identity,
+        owner,
     }) = req.workload
     else {
         anyhow::bail!("workload is required");
@@ -1898,6 +1908,7 @@ async fn workload_start(
     if workload_id.is_empty() {
         anyhow::bail!("workload_id is required");
     }
+    let owner = owner_from_wire(owner)?;
 
     // Claimed before any image is fetched. Until the host holds the id a
     // status reports it missing and a stop reports it already gone, so a stop
@@ -2030,6 +2041,7 @@ async fn workload_start(
                 components,
                 host_interfaces,
                 volumes,
+                owner,
             },
         };
         Ok(request)
@@ -2261,8 +2273,15 @@ where
     Ok(parsed.into())
 }
 
+/// Tells the operator this host reads `Workload.owner`. Older hosts refuse a
+/// start request with a field they do not know, so the operator sends an owner
+/// only to hosts with this label.
+pub const ACCEPTS_WORKLOAD_OWNER_LABEL: &str = "runtime.wasmcloud.dev/accepts-workload-owner";
+
 impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
     fn from(hb: crate::types::HostHeartbeat) -> Self {
+        let mut labels = hb.labels;
+        labels.insert(ACCEPTS_WORKLOAD_OWNER_LABEL.into(), "true".into());
         types::v2::HostHeartbeat {
             id: hb.id,
             hostname: hb.hostname,
@@ -2278,7 +2297,7 @@ impl From<crate::types::HostHeartbeat> for types::v2::HostHeartbeat {
             workload_count: hb.workload_count,
             system_memory_total: hb.system_memory_total,
             system_memory_free: hb.system_memory_free,
-            labels: hb.labels,
+            labels,
             friendly_name: hb.friendly_name,
             http_port: hb.http_port.into(),
             environment: hb.environment,
@@ -2371,6 +2390,87 @@ mod tests {
     use super::*;
     use crate::host::allowed_hosts::AllowedHost;
     use crate::host::allowed_ip_name::AllowedIpName;
+
+    #[tokio::test]
+    async fn every_heartbeat_advertises_the_owner_field() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::new()
+            .with_engine(crate::engine::Engine::builder().build()?)
+            .with_label(ACCEPTS_WORKLOAD_OWNER_LABEL, "false")
+            .build()?;
+        let heartbeat: types::v2::HostHeartbeat = host.heartbeat().await?.into();
+        assert_eq!(
+            heartbeat
+                .labels
+                .get(ACCEPTS_WORKLOAD_OWNER_LABEL)
+                .map(String::as_str),
+            Some("true")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_whole_owner_crosses_the_wire_intact() -> anyhow::Result<()> {
+        let owner = owner_from_wire(Some(types::v2::WorkloadOwner {
+            kind: "WorkloadDeployment".into(),
+            name: "billing".into(),
+            uid: "deployment-uid".into(),
+        }))?
+        .expect("an owner was sent");
+        assert_eq!(
+            (owner.kind(), owner.name(), owner.uid()),
+            ("WorkloadDeployment", "billing", "deployment-uid")
+        );
+        assert!(owner_from_wire(None)?.is_none());
+        Ok(())
+    }
+
+    /// A start that names an owner names all of it, or is refused before the
+    /// host claims the id or pulls anything.
+    #[tokio::test]
+    async fn a_partial_owner_is_refused() -> anyhow::Result<()> {
+        let host = crate::host::HostBuilder::new()
+            .with_engine(crate::engine::Engine::builder().build()?)
+            .build()?;
+        for owner in [
+            types::v2::WorkloadOwner {
+                kind: "WorkloadDeployment".into(),
+                name: "billing".into(),
+                uid: String::new(),
+            },
+            types::v2::WorkloadOwner {
+                kind: String::new(),
+                name: "billing".into(),
+                uid: "uid".into(),
+            },
+        ] {
+            let request = types::v2::WorkloadStartRequest {
+                workload_id: "w1".into(),
+                workload: Some(types::v2::Workload {
+                    namespace: "default".into(),
+                    name: "billing-7d9f".into(),
+                    owner: Some(owner),
+                    ..Default::default()
+                }),
+            };
+            let err = workload_start(
+                &host,
+                request,
+                host.config(),
+                &tokio::sync::Semaphore::new(1),
+            )
+            .await
+            .expect_err("a partial owner starts nothing");
+            assert!(
+                format!("{err:#}").contains("needs a kind, a name and a uid"),
+                "{err:#}"
+            );
+        }
+        assert!(
+            host.workload_reserve("w1").await.is_ok(),
+            "the id was never claimed"
+        );
+        Ok(())
+    }
 
     #[test]
     fn cluster_host_id_matches_the_inner_builder() -> anyhow::Result<()> {

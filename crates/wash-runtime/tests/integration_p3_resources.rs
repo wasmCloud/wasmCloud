@@ -62,6 +62,7 @@ async fn test_p3_resource_handle_crosses_linker() -> Result<()> {
     let req = WorkloadStartRequest {
         workload_id: uuid::Uuid::new_v4().to_string(),
         workload: Workload {
+            owner: None,
             namespace: "test".to_string(),
             name: "p3-resource-passing".to_string(),
             annotations: HashMap::new(),
