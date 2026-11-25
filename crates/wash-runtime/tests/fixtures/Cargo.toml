@@ -31,6 +31,7 @@ members = [
     "http-allowed-hosts",
     "http-egress-pool",
     "http-ip-name-lookup",
+    "broker-managed-p2",
     "keyvalue-counter",
     "keyvalue-implements",
     "feeds-callee-a",
@@ -41,6 +42,8 @@ members = [
     # P3 fixtures (wasm32-wasip1 + reactor adapter)
     "command-p3",
     "http-handler-p3",
+    "broker-client-p3",
+    "broker-slow-p3",
     "http-local-caller-p3",
     "http-memory-grow",
     "http-ip-name-lookup-p3",

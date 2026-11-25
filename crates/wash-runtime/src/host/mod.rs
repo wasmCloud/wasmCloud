@@ -74,6 +74,7 @@ pub mod allowed_hosts;
 pub mod allowed_ip_name;
 pub mod aws_sts;
 pub mod client_identity;
+pub mod dpop;
 pub mod egress_credential;
 pub mod egress_sigv4;
 pub mod http;
@@ -81,6 +82,7 @@ pub mod http_client;
 pub mod http_p3;
 #[cfg(feature = "host-component-plugins")]
 pub(crate) mod job_registry;
+pub mod token_exchange;
 pub mod trigger_service;
 pub mod workload_identity;
 

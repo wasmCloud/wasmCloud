@@ -12,7 +12,7 @@ use std::{
 };
 
 use wasmtime::StoreContextMut;
-use wasmtime::component::{Accessor, Instance, ResourceTable};
+use wasmtime::component::{Accessor, Instance, Linker, ResourceTable};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
 #[cfg(feature = "wasi-tls")]
@@ -126,6 +126,9 @@ pub struct SharedCtx {
     /// Cross-component calls in flight (see [`AccessorActiveCtxGuard`] and
     /// [`StoreActiveCtxGuard`]).
     linked_calls_in_flight: usize,
+    /// What a component linked through [`link_denied_egress`] reaches, made
+    /// on first use.
+    denied_egress: Option<Box<DeniedEgress>>,
 }
 
 /// Lazily creates a token and cancels it when dropped.
@@ -251,6 +254,7 @@ impl SharedCtx {
         Self {
             root_component_id: context.component_id.clone(),
             linked_calls_in_flight: 0,
+            denied_egress: None,
             active_ctx: context,
             stream_payloads: Arc::default(),
             table: ResourceTable::new(),
@@ -420,6 +424,82 @@ pub fn extract_sockets(ctx: &mut SharedCtx) -> crate::sockets::WasiSocketsCtxVie
     }
 }
 
+/// A network that reaches nothing: every `wasi:http` request is refused, and
+/// sockets have a policy of their own that allows nothing, not even the
+/// workload's virtual network, on a private one.
+struct DeniedEgress {
+    http: WasiHttpCtx,
+    hooks: DenyAllHttp,
+    sockets: crate::sockets::WasiSocketsCtx,
+}
+
+impl Default for DeniedEgress {
+    fn default() -> Self {
+        let policy = crate::sockets::policy::SocketPolicy {
+            egress_mode: crate::sockets::policy::EgressMode::Enforce,
+            no_virtual_connect: true,
+            quotas: None,
+            ..Default::default()
+        };
+        Self {
+            http: WasiHttpCtx::new(),
+            hooks: DenyAllHttp,
+            sockets: crate::sockets::WasiSocketsCtx::for_store(
+                Arc::new(policy),
+                Arc::default(),
+                Arc::from([]),
+            ),
+        }
+    }
+}
+
+struct DenyAllHttp;
+
+impl WasiHttpHooks for DenyAllHttp {
+    fn send_request(
+        &mut self,
+        request: hyper::Request<wasmtime_wasi_http::WasiBody>,
+        _options: Option<wasmtime_wasi_http::RequestOptions>,
+        _fut: crate::host::http::RequestIoFuture,
+    ) -> crate::host::http::SendFuture {
+        crate::host::http::deny_request(request)
+    }
+}
+
+fn denied_http(ctx: &mut SharedCtx) -> WasiHttpCtxView<'_> {
+    let denied = ctx.denied_egress.get_or_insert_default();
+    WasiHttpCtxView {
+        ctx: &mut denied.http,
+        table: &mut ctx.table,
+        hooks: &mut denied.hooks,
+    }
+}
+
+fn denied_sockets(ctx: &mut SharedCtx) -> crate::sockets::WasiSocketsCtxView<'_> {
+    crate::sockets::WasiSocketsCtxView {
+        ctx: &mut ctx.denied_egress.get_or_insert_default().sockets,
+        table: &mut ctx.table,
+    }
+}
+
+/// Redefine `wasi:http` egress (p2 `outgoing-handler`, p3 `client`) and every
+/// `wasi:sockets` interface on `linker` to reach nothing. The view is fixed at
+/// link time, so it holds whichever component the store's active context
+/// names when the call is made.
+pub(crate) fn link_denied_egress(linker: &mut Linker<SharedCtx>) -> anyhow::Result<()> {
+    use wasmtime_wasi_http::{
+        WasiHttp, p2::bindings::http::outgoing_handler, p3::bindings::http::client,
+    };
+    linker.allow_shadowing(true);
+    let linked = (|| {
+        outgoing_handler::add_to_linker::<_, WasiHttp>(linker, denied_http)?;
+        client::add_to_linker::<_, WasiHttp>(linker, denied_http)?;
+        crate::sockets::add_to_linker_with(linker, denied_sockets)
+    })();
+    linker.allow_shadowing(false);
+    linked
+}
+
 pub struct ActiveCtx<'a> {
     pub table: &'a mut wasmtime::component::ResourceTable,
     pub ctx: &'a mut Ctx,
@@ -531,6 +611,19 @@ impl Ctx {
     /// to know whether that host is still there; see [`HostLink`].
     pub(crate) fn host_link(&self) -> HostLink {
         self.http_hooks.host.clone()
+    }
+
+    /// The handler this store's egress goes through, or why there is none.
+    pub(crate) fn egress_handler(&self) -> Result<Arc<dyn crate::host::http::HostHandler>, String> {
+        self.http_hooks.host.handler()
+    }
+
+    /// The namespace and name this store's egress is attributed to.
+    pub(crate) fn egress_names(&self) -> (Arc<str>, Arc<str>) {
+        (
+            Arc::clone(&self.http_hooks.workload_namespace),
+            Arc::clone(&self.http_hooks.workload_name),
+        )
     }
 }
 

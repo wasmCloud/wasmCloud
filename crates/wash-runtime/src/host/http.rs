@@ -466,6 +466,19 @@ pub trait Router: Send + Sync + 'static {
         allowed_hosts: &[AllowedHost],
     ) -> anyhow::Result<()>;
 
+    /// Asked before a [`BrokeredRequest`] leaves, in place of
+    /// [`Self::allow_outgoing_request`]. The broker has checked the request
+    /// against its binding and canonicalized its destination, and asks before
+    /// it writes the credential in, so the router never sees the credential.
+    /// An error refuses it. Default: allow.
+    fn allow_brokered_request(
+        &self,
+        _caller: EgressCaller<'_>,
+        _request: &hyper::Request<WasiBody>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// The secrets a caller may send by placeholder.
     ///
     /// Asked only after [`Self::allow_outgoing_request`] accepted the request.
@@ -1205,6 +1218,18 @@ pub type RequestIoFuture =
 pub type SendResult =
     Result<(hyper::Response<WasiBody>, RequestIoFuture), wasmtime_wasi_http::Error>;
 
+/// Set by the broker on a request it has already authorized and written its
+/// credential into. Only this crate can make one, so neither a guest nor an
+/// embedder's handler can mark a request of its own.
+#[derive(Clone, Copy, Debug)]
+pub struct BrokeredRequest(());
+
+impl BrokeredRequest {
+    pub(crate) fn new() -> Self {
+        Self(())
+    }
+}
+
 /// Future returned by [`OutgoingHandler::send_request`].
 pub type SendFuture = Box<dyn std::future::Future<Output = SendResult> + Send>;
 
@@ -1811,6 +1836,26 @@ pub trait HostHandler: Send + Sync + 'static {
         fut: RequestIoFuture,
         allowed_hosts: &[AllowedHost],
     ) -> SendFuture;
+
+    /// Whether a request marked [`BrokeredRequest`] is sent as it stands,
+    /// without the allowlist, substitution or local routing, by a transport
+    /// fit to carry a credential. A handler that wraps another forwards this
+    /// and [`Self::allow_brokered_request`]. Default: no, and the broker
+    /// refuses.
+    fn sends_brokered_requests(&self) -> bool {
+        false
+    }
+
+    /// Asked by the broker before it writes the credential into `request`.
+    /// An error refuses it. Default: refuse, so a wrapper that forwards
+    /// [`Self::sends_brokered_requests`] but not this fails closed.
+    fn allow_brokered_request(
+        &self,
+        _caller: EgressCaller<'_>,
+        _request: &hyper::Request<WasiBody>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this handler does not decide brokered requests")
+    }
 
     /// [`Self::outgoing_request`] with the caller attested, so a handler can
     /// scope egress credentials to it.
@@ -3035,6 +3080,18 @@ async fn dispatch_local(
 
 #[async_trait::async_trait]
 impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
+    fn sends_brokered_requests(&self) -> bool {
+        self.outgoing_handler.accepts_secrets()
+    }
+
+    fn allow_brokered_request(
+        &self,
+        caller: EgressCaller<'_>,
+        request: &hyper::Request<WasiBody>,
+    ) -> anyhow::Result<()> {
+        self.router.allow_brokered_request(caller, request)
+    }
+
     async fn inject_meters(&self, meters: &crate::observability::Meters) {
         *self.meters.write().await = meters.clone();
     }
@@ -3366,7 +3423,18 @@ impl<T: Router, O: OutgoingHandler> HostHandler for Ingress<T, O> {
         let workload_id = caller.workload_id;
         let component_id = caller.component_id.unwrap_or_default();
         let span = outbound_client_span(request.method(), request.uri());
-        let inner: SendFuture = if let Err(e) =
+        let inner: SendFuture = if request.extensions().get::<BrokeredRequest>().is_some() {
+            if self.outgoing_handler.accepts_secrets() {
+                self.send_over_network(workload_id, request, options, fut)
+            } else {
+                warn!(
+                    workload_id,
+                    component_id,
+                    "brokered request refused: the outgoing handler does not accept secrets"
+                );
+                deny_request(request)
+            }
+        } else if let Err(e) =
             self.router
                 .allow_outgoing_request(workload_id, &request, options, allowed_hosts)
         {
@@ -4717,7 +4785,7 @@ async fn drain_denied_body(mut body: WasiBody, timeout: Duration) {
 }
 
 /// Refuse an outgoing request while briefly draining its body.
-fn deny_request(request: hyper::Request<WasiBody>) -> SendFuture {
+pub(crate) fn deny_request(request: hyper::Request<WasiBody>) -> SendFuture {
     static DRAINS: std::sync::LazyLock<Arc<Semaphore>> =
         std::sync::LazyLock::new(|| Arc::new(Semaphore::new(MAX_DENIED_BODY_DRAINS)));
     if let Ok(permit) = Arc::clone(&DRAINS).try_acquire_owned() {

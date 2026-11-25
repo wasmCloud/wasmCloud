@@ -1,0 +1,16 @@
+package wasmcloud:broker-client-p3@0.1.0;
+
+/// Reaches out through broker imports, one per credential, and reports each
+/// outcome as its own response. `wasi:http/client` and `wasi:sockets` are
+/// imported only to show they reach nothing, and `slow` is a sibling's.
+world broker-client-p3 {
+    import wasi:http/types@0.3.2;
+    import wasi:http/client@0.3.2;
+    import wasi:sockets/types@0.3.2;
+    import wasmcloud:broker-test/slow@0.1.0;
+    import github: wasmcloud:secrets/http-client@2.2.0;
+    import release: wasmcloud:secrets/signer@2.2.0;
+    import webhook: wasmcloud:secrets/verifier@2.2.0;
+
+    export wasi:http/handler@0.3.2;
+}

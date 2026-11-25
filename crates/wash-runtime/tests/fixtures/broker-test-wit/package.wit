@@ -1,0 +1,8 @@
+/// What `broker-slow-p3` exports and `broker-client-p3` imports.
+package wasmcloud:broker-test@0.1.0;
+
+interface slow {
+    /// Return after `ms` milliseconds. `held` is never read: a stream keeps
+    /// the call in the caller's own store, as a linked call with handles is.
+    wait: async func(ms: u32, held: stream<u8>);
+}

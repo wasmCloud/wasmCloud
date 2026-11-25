@@ -1,0 +1,13 @@
+package wasmcloud:broker-managed-p2@0.1.0;
+
+/// A p2 component made managed by its broker grant, so its own `wasi:http`
+/// and `wasi:sockets` reach nothing.
+world broker-managed-p2 {
+    import wasi:http/outgoing-handler@0.2.12;
+    import wasi:sockets/instance-network@0.2.12;
+    import wasi:sockets/tcp-create-socket@0.2.12;
+    import wasi:sockets/tcp@0.2.12;
+    import release: wasmcloud:secrets/signer@2.2.0;
+
+    export wasi:http/incoming-handler@0.2.12;
+}
