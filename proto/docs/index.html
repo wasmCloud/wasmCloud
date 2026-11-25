@@ -1063,7 +1063,7 @@ open this door alone. </p></td>
         
       
         <h3 id="wasmcloud.runtime.v2.MtlsDestination">MtlsDestination</h3>
-        <p>An exact HTTPS host and port the X.509-SVID is presented to. The server is</p><p>verified against the host's roots, by host name.</p>
+        <p>An exact HTTPS host and port the X.509-SVID is presented to. The server is</p><p>verified against the host's roots, by host name, unless server_spiffe_id is</p><p>set.</p>
 
         
           <table class="field-table">
@@ -1084,6 +1084,15 @@ open this door alone. </p></td>
                   <td><a href="#uint32">uint32</a></td>
                   <td></td>
                   <td><p> </p></td>
+                </tr>
+              
+                <tr>
+                  <td>server_spiffe_id</td>
+                  <td><a href="#string">string</a></td>
+                  <td></td>
+                  <td><p>Verify the server by its X.509-SVID against the host&#39;s trust bundles
+instead: spiffe://&lt;trust domain&gt; admits any ID in that trust domain, and
+an ID with a path admits that ID alone. The host name is not checked. </p></td>
                 </tr>
               
             </tbody>
@@ -1404,6 +1413,14 @@ Required. Replaced with WorkloadIdentityRenew before it expires. </p></td>
                   <td><a href="#wasmcloud.runtime.v2.MtlsDestination">MtlsDestination</a></td>
                   <td>repeated</td>
                   <td><p>HTTPS destinations the host presents the X.509-SVID to. </p></td>
+                </tr>
+              
+                <tr>
+                  <td>ingress_hosts</td>
+                  <td><a href="#string">string</a></td>
+                  <td>repeated</td>
+                  <td><p>Exact host names the host&#39;s HTTPS ingress presents the X.509-SVID for,
+picked by SNI. Requests on such a connection must route to this workload. </p></td>
                 </tr>
               
             </tbody>

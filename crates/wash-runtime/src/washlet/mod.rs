@@ -2076,6 +2076,7 @@ fn bind_identity(
     namespace: &str,
     identity: types::v2::WorkloadIdentity,
 ) -> Result<(), String> {
+    use crate::host::trust_bundle::SpiffePeer;
     use crate::host::workload_identity::{IdentityGrant, MtlsDestination, SchedulingLease};
     let Some(credentials) = host.workload_credentials() else {
         return Err("the workload names an identity, but this host has no identity issuer".into());
@@ -2087,9 +2088,15 @@ fn bind_identity(
         .map(|d| {
             let port =
                 u16::try_from(d.port).map_err(|_| format!("port {} is out of range", d.port))?;
-            MtlsDestination::new(&d.host, port).map_err(|e| format!("{e:#}"))
+            let destination = MtlsDestination::new(&d.host, port).map_err(|e| format!("{e:#}"))?;
+            if d.server_spiffe_id.is_empty() {
+                return Ok(destination);
+            }
+            let server = SpiffePeer::parse(&d.server_spiffe_id)
+                .map_err(|e| format!("mTLS destination {}:{port}: {e:#}", d.host))?;
+            Ok(destination.with_server(server))
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, String>>()?;
     let grant = IdentityGrant {
         namespace: Some(namespace.to_string()).filter(|n| !n.is_empty()),
         identity_ref: Some(identity.identity_ref).filter(|r| !r.is_empty()),
@@ -2097,6 +2104,7 @@ fn bind_identity(
         scheduling_lease: SchedulingLease::new(identity.scheduling_lease, expires_at),
         mtls_destinations,
         jwt_audiences: identity.jwt_audiences,
+        ingress_hosts: identity.ingress_hosts,
     };
     credentials
         .bind(workload_id, grant)
