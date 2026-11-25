@@ -520,6 +520,28 @@ mod tests {
             }
         }
 
+        /// A store on `network`, as the stores of one workload share theirs.
+        fn on_network(
+            network: std::sync::Arc<std::sync::Mutex<crate::sockets::loopback::Network>>,
+        ) -> Self {
+            let mut h = Self::new(SocketAddrCheck::new(|addr, _| {
+                AddrDecision::allow_by_address(addr)
+            }));
+            h.ctx.loopback = network.into();
+            h
+        }
+
+        async fn bind(&mut self, rep: u32, address: SocketAddr) -> SocketResult<()> {
+            let network = self.network;
+            tcp::HostTcpSocket::start_bind(
+                &mut self.view(),
+                Resource::new_borrow(rep),
+                Resource::new_borrow(network),
+                socket_addr_to_ip_socket_address(address),
+            )
+            .await
+        }
+
         fn create(&mut self) -> u32 {
             tcp_create_socket::Host::create_tcp_socket(&mut self.view(), IpAddressFamily::Ipv4)
                 .unwrap()
@@ -732,7 +754,12 @@ mod tests {
         h.close(server, server_in, server_out);
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
         assert!(
-            h.ctx.loopback.lock().unwrap().bind_tcp(address).is_ok(),
+            h.ctx
+                .loopback
+                .lock()
+                .unwrap()
+                .bind_tcp(address, h.ctx.loopback.owner())
+                .is_ok(),
             "dropping the listener releases its port"
         );
     }
@@ -871,7 +898,7 @@ mod tests {
         assert_eq!(&bytes, b"accepted");
         h.close(server.rep(), input, output);
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
-        assert!(h.ctx.loopback.lock().unwrap().tcp_ipv4.is_empty());
+        assert!(h.ctx.loopback.lock().unwrap().tcp_ports().is_empty());
         assert!(tokio::net::TcpListener::bind(address).await.is_ok());
     }
 
@@ -901,7 +928,7 @@ mod tests {
         ));
         h.close(client, input, output);
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
-        assert!(h.ctx.loopback.lock().unwrap().tcp_ipv4.is_empty());
+        assert!(h.ctx.loopback.lock().unwrap().tcp_ports().is_empty());
     }
 
     #[tokio::test]
@@ -921,7 +948,7 @@ mod tests {
             ErrorCode::ConnectionRefused,
         );
         tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(client)).unwrap();
-        assert!(h.ctx.loopback.lock().unwrap().tcp_ipv4.is_empty());
+        assert!(h.ctx.loopback.lock().unwrap().tcp_ports().is_empty());
     }
 
     #[tokio::test]
@@ -1141,5 +1168,85 @@ mod tests {
             );
             tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(rep)).unwrap();
         }
+    }
+
+    /// A store torn down without dropping its sockets frees their loopback
+    /// ports, so the next store on the same network can bind them.
+    #[tokio::test]
+    async fn store_teardown_releases_loopback_ports() {
+        let network = std::sync::Arc::default();
+        let mut first = Harness::on_network(std::sync::Arc::clone(&network));
+        let (_listener, address) = first.listen().await;
+        drop(first);
+
+        let mut second = Harness::on_network(network);
+        let rep = second.create();
+        second
+            .bind(rep, address)
+            .await
+            .expect("the port of a torn-down store is free");
+    }
+
+    /// Closing sockets drops their owner records while the store lives on.
+    #[tokio::test]
+    async fn closing_sockets_drops_their_owner_records_while_the_store_lives() {
+        let mut h = Harness::new(SocketAddrCheck::new(|addr, _| {
+            AddrDecision::allow_by_address(addr)
+        }));
+        let (listener, address) = h.listen().await;
+        let (client, input, output) = h.connect(address).await;
+        h.ready(listener).await;
+        let (server, server_in, server_out) =
+            tcp::HostTcpSocket::accept(&mut h.view(), Resource::new_borrow(listener)).unwrap();
+        assert_eq!(h.ctx.loopback.lock().unwrap().owner_records(), 2);
+        h.close(client, input, output);
+        h.close(server.rep(), server_in, server_out);
+        tcp::HostTcpSocket::drop(&mut h.view(), Resource::new_own(listener)).unwrap();
+        let net = h.ctx.loopback.lock().unwrap();
+        assert!(net.tcp_ports().is_empty());
+        assert_eq!(net.owner_records(), 0, "no record outlives its port");
+    }
+
+    /// A client store's ephemeral port, bound by its connect, goes with the store.
+    #[tokio::test]
+    async fn store_teardown_releases_a_connected_clients_ephemeral_port() {
+        let network: std::sync::Arc<std::sync::Mutex<crate::sockets::loopback::Network>> =
+            std::sync::Arc::default();
+        let mut service = Harness::on_network(std::sync::Arc::clone(&network));
+        let (_listener, address) = service.listen().await;
+        let mut client = Harness::on_network(std::sync::Arc::clone(&network));
+        let (_rep, _input, _output) = client.connect(address).await;
+        assert_eq!(
+            network.lock().unwrap().tcp_ports().len(),
+            2,
+            "listener and ephemeral port"
+        );
+        drop(client);
+        let net = network.lock().unwrap();
+        assert_eq!(
+            net.tcp_ports().len(),
+            1,
+            "the client's ephemeral port is freed"
+        );
+        assert!(net.tcp_ports().contains(&address));
+    }
+
+    /// Teardown frees only the ports the store still holds: a port it gave up
+    /// and another store bound again stays bound.
+    #[tokio::test]
+    async fn store_teardown_keeps_ports_bound_by_another_store() {
+        let network = std::sync::Arc::default();
+        let mut first = Harness::on_network(std::sync::Arc::clone(&network));
+        let (listener, address) = first.listen().await;
+        tcp::HostTcpSocket::drop(&mut first.view(), Resource::new_own(listener)).unwrap();
+
+        let mut second = Harness::on_network(std::sync::Arc::clone(&network));
+        let (_listener, rebound) = second.listen().await;
+        assert_eq!(rebound, address);
+        drop(first);
+
+        let mut third = Harness::on_network(network);
+        let rep = third.create();
+        assert_code(third.bind(rep, address).await, ErrorCode::AddressInUse);
     }
 }

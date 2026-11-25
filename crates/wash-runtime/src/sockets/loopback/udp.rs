@@ -339,10 +339,8 @@ impl UdpSocket {
             | UdpState::Connected { local_address, .. } => local_address,
             UdpState::Closed => return Ok(()),
         };
-        let net = loopback.get_udp_net_mut(local_address.ip());
-        let port =
-            NonZeroU16::new(local_address.port()).context("local address port cannot be 0")?;
-        net.remove(&port);
+        NonZeroU16::new(local_address.port()).context("local address port cannot be 0")?;
+        loopback.unbind_udp(local_address);
         Ok(())
     }
 }

@@ -2,6 +2,7 @@
 
 pub(crate) const P2_FIXTURES: &[&str] = &[
     "p2-udp-progress",
+    "svc-tcp-echo-p2",
     "structured-plugin",
     "structured-caller",
     "http-handler-p2",

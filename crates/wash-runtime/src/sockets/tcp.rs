@@ -140,6 +140,9 @@ pub struct NetworkTcpSocket {
     /// Taken before the OS socket is opened and released when its real half is
     /// dropped.
     quota_slot: Option<crate::host::quota::ConnectionSlot>,
+
+    /// The store this socket's loopback ports are bound for.
+    loopback_owner: super::loopback::Owner,
 }
 
 impl NetworkTcpSocket {
@@ -157,7 +160,11 @@ impl NetworkTcpSocket {
                 }
             };
 
-            Ok(Self::from_state(TcpState::Default(socket), family))
+            Ok(Self::from_state(
+                TcpState::Default(socket),
+                family,
+                ctx.loopback.owner(),
+            ))
         }
     }
 
@@ -170,6 +177,7 @@ impl NetworkTcpSocket {
         result: io::Result<tokio::net::TcpStream>,
         options: &NonInheritedOptions,
         family: SocketAddressFamily,
+        loopback_owner: super::loopback::Owner,
     ) -> io::Result<Self> {
         let client = result.map_err(|err| match Errno::from_io_error(&err) {
             // From: https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-accept#:~:text=WSAEINPROGRESS
@@ -213,19 +221,28 @@ impl NetworkTcpSocket {
             send_taken: false,
             receive_taken: false,
             quota_slot: None,
+            loopback_owner,
         })
     }
 
     /// Create an error socket (P3 only, for deferred accept errors).
-    pub(crate) fn new_error(_err: std::io::Error, family: SocketAddressFamily) -> Self {
+    pub(crate) fn new_error(
+        _err: std::io::Error,
+        family: SocketAddressFamily,
+        loopback_owner: super::loopback::Owner,
+    ) -> Self {
         // Create a closed socket to represent the error.
         // The upstream uses a dedicated Error state, but for simplicity
         // we just create a Closed socket since errors are deferred.
-        Self::from_state(TcpState::Closed, family)
+        Self::from_state(TcpState::Closed, family, loopback_owner)
     }
 
     /// Create a `TcpSocket` from an existing socket.
-    fn from_state(state: TcpState, family: SocketAddressFamily) -> Self {
+    fn from_state(
+        state: TcpState,
+        family: SocketAddressFamily,
+        loopback_owner: super::loopback::Owner,
+    ) -> Self {
         Self {
             tcp_state: state,
             listen_backlog_size: DEFAULT_TCP_BACKLOG,
@@ -234,6 +251,7 @@ impl NetworkTcpSocket {
             send_taken: false,
             receive_taken: false,
             quota_slot: None,
+            loopback_owner,
         }
     }
 
@@ -435,7 +453,12 @@ impl NetworkTcpSocket {
             }
         };
 
-        Ok(Some(Self::new_accept(result, &self.options, self.family)?))
+        Ok(Some(Self::new_accept(
+            result,
+            &self.options,
+            self.family,
+            self.loopback_owner,
+        )?))
     }
 
     fn local_address(&self) -> Result<SocketAddr, ErrorCode> {
@@ -938,7 +961,7 @@ fn bind_loopback_half(
         };
         addr.set_port(sock.local_addr()?.port());
     }
-    let addr = loopback.bind_tcp(addr)?;
+    let addr = loopback.bind_tcp(addr, socket.loopback_owner)?;
     super::loopback::TcpSocket::new(socket, super::loopback::TcpState::BindStarted(addr))
         .inspect_err(|_| {
             loopback.unbind_tcp(addr);
@@ -958,8 +981,9 @@ impl TcpSocket {
         result: io::Result<tokio::net::TcpStream>,
         options: &NonInheritedOptions,
         family: SocketAddressFamily,
+        loopback_owner: super::loopback::Owner,
     ) -> io::Result<Self> {
-        NetworkTcpSocket::new_accept(result, options, family).map(Self::Network)
+        NetworkTcpSocket::new_accept(result, options, family, loopback_owner).map(Self::Network)
     }
 
     pub(crate) fn start_bind(
@@ -1011,6 +1035,7 @@ impl TcpSocket {
                     send_taken: false,
                     receive_taken: false,
                     quota_slot: socket.quota_slot.take(),
+                    loopback_owner: socket.loopback_owner,
                 },
                 lo,
             }
@@ -1122,7 +1147,7 @@ impl TcpSocket {
 
                 let mut local_address = *addr;
                 local_address.set_port(0);
-                let local_address = match loopback.bind_tcp(local_address) {
+                let local_address = match loopback.bind_tcp(local_address, socket.loopback_owner) {
                     Ok(addr) => addr,
                     Err(err) => {
                         *self = Self::Network(socket);
@@ -1642,6 +1667,7 @@ mod tests {
             Ok(stream),
             &NonInheritedOptions::default(),
             SocketAddressFamily::Ipv4,
+            crate::sockets::loopback::Owner::new(),
         )
         .unwrap();
         accepted.hold_quota_slot(quota.try_acquire_inbound_socket());
@@ -1775,7 +1801,10 @@ mod tests {
             .port();
         let mut loopback = crate::sockets::loopback::Network::default();
         loopback
-            .bind_tcp(SocketAddr::from(([127, 0, 0, 1], port)))
+            .bind_tcp(
+                SocketAddr::from(([127, 0, 0, 1], port)),
+                crate::sockets::loopback::Owner::new(),
+            )
             .unwrap();
         let mut socket = TcpSocket::Network(make_ipv4_socket());
         assert!(matches!(
@@ -1786,7 +1815,7 @@ mod tests {
             socket.finish_bind(),
             Err(ErrorCode::NotInProgress)
         ));
-        assert_eq!(loopback.tcp_ipv4.len(), 1);
+        assert_eq!(loopback.tcp_ports().len(), 1);
         std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
     }
 
@@ -1880,6 +1909,7 @@ mod tests {
             let (accepted, _) = listener.accept().await.unwrap();
 
             let mut connected = NetworkTcpSocket {
+                loopback_owner: crate::sockets::loopback::Owner::new(),
                 tcp_state: TcpState::Connected(std::sync::Arc::new(accepted)),
                 listen_backlog_size: DEFAULT_TCP_BACKLOG,
                 family: SocketAddressFamily::Ipv4,
@@ -1912,6 +1942,7 @@ mod tests {
             let (accepted, _) = listener.accept().await.unwrap();
 
             let mut connected = NetworkTcpSocket {
+                loopback_owner: crate::sockets::loopback::Owner::new(),
                 tcp_state: TcpState::Connected(std::sync::Arc::new(accepted)),
                 listen_backlog_size: DEFAULT_TCP_BACKLOG,
                 family: SocketAddressFamily::Ipv4,
@@ -1958,7 +1989,11 @@ mod tests {
         #[test]
         fn test_new_error_creates_closed_socket() {
             let err = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "test");
-            let socket = NetworkTcpSocket::new_error(err, SocketAddressFamily::Ipv4);
+            let socket = NetworkTcpSocket::new_error(
+                err,
+                SocketAddressFamily::Ipv4,
+                crate::sockets::loopback::Owner::new(),
+            );
             assert!(socket.local_address().is_err());
         }
 

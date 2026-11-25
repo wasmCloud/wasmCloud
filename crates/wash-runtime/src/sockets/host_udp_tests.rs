@@ -30,6 +30,15 @@ impl Default for Harness {
 }
 
 impl Harness {
+    /// A store on `network`, as the stores of one workload share theirs.
+    fn on_network(
+        network: std::sync::Arc<std::sync::Mutex<crate::sockets::loopback::Network>>,
+    ) -> Self {
+        let mut h = Self::default();
+        h.ctx.loopback = network.into();
+        h
+    }
+
     fn view(&mut self) -> WasiSocketsCtxView<'_> {
         WasiSocketsCtxView {
             ctx: &mut self.ctx,
@@ -44,8 +53,8 @@ impl Harness {
             .rep()
     }
 
-    async fn bind(&mut self, address: &str) -> (u32, SocketAddr) {
-        let addr: SocketAddr = address.parse().unwrap();
+    /// Create a socket and start binding it to `addr`.
+    async fn start_bind(&mut self, addr: SocketAddr) -> (u32, SocketResult<()>) {
         let family = if addr.is_ipv4() {
             IpAddressFamily::Ipv4
         } else {
@@ -53,14 +62,19 @@ impl Harness {
         };
         let rep = self.create(family).await;
         let network = instance_network::Host::instance_network(&mut self.view()).unwrap();
-        Socket::start_bind(
+        let result = Socket::start_bind(
             &mut self.view(),
             Resource::new_borrow(rep),
             network,
             socket_addr_to_ip_socket_address(addr),
         )
-        .await
-        .unwrap();
+        .await;
+        (rep, result)
+    }
+
+    async fn bind(&mut self, address: &str) -> (u32, SocketAddr) {
+        let (rep, result) = self.start_bind(address.parse().unwrap()).await;
+        result.unwrap();
         Socket::finish_bind(&mut self.view(), Resource::new_borrow(rep)).unwrap();
         let addr = Socket::local_address(&mut self.view(), Resource::new_borrow(rep)).unwrap();
         (rep, ip_socket_address_to_socket_addr(addr))
@@ -641,4 +655,51 @@ async fn full_receiver_releases_dropped_p2_sender_permits() {
     // queued datagram. This oversized-for-the-receiver send is dropped too.
     assert_eq!(h.send(tx, vec![4; 2], Some(peer)).unwrap(), 1);
     assert!(h.receive(rx, 10).is_empty());
+}
+
+/// Closing sockets drops their owner records while the store lives on.
+#[tokio::test]
+async fn closing_sockets_drops_their_owner_records_while_the_store_lives() {
+    let mut h = Harness::default();
+    let (v4, _) = h.bind("127.0.0.1:0").await;
+    let (v6, _) = h.bind("[::1]:0").await;
+    assert_eq!(h.ctx.loopback.lock().unwrap().owner_records(), 2);
+    Socket::drop(&mut h.view(), Resource::new_own(v4)).unwrap();
+    Socket::drop(&mut h.view(), Resource::new_own(v6)).unwrap();
+    let net = h.ctx.loopback.lock().unwrap();
+    assert!(net.udp_ports().is_empty());
+    assert_eq!(net.owner_records(), 0, "no record outlives its port");
+}
+
+/// A store torn down without dropping its sockets frees their loopback ports,
+/// so the next store on the same network can bind them.
+#[tokio::test]
+async fn store_teardown_releases_loopback_ports() {
+    let network = std::sync::Arc::default();
+    let mut first = Harness::on_network(std::sync::Arc::clone(&network));
+    let (_socket, address) = first.bind("127.0.0.1:0").await;
+    drop(first);
+
+    let mut second = Harness::on_network(network);
+    let (_socket, rebound) = second.bind(&address.to_string()).await;
+    assert_eq!(rebound, address);
+}
+
+/// Teardown frees only the ports the store still holds: a port it gave up and
+/// another store bound again stays bound.
+#[tokio::test]
+async fn store_teardown_keeps_ports_bound_by_another_store() {
+    let network = std::sync::Arc::default();
+    let mut first = Harness::on_network(std::sync::Arc::clone(&network));
+    let (socket, address) = first.bind("127.0.0.1:0").await;
+    Socket::drop(&mut first.view(), Resource::new_own(socket)).unwrap();
+
+    let mut second = Harness::on_network(std::sync::Arc::clone(&network));
+    let (_socket, rebound) = second.bind(&address.to_string()).await;
+    assert_eq!(rebound, address);
+    drop(first);
+
+    let mut third = Harness::on_network(network);
+    let (_socket, result) = third.start_bind(address).await;
+    assert_code(result, ErrorCode::AddressInUse);
 }
