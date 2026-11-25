@@ -347,8 +347,8 @@ impl HostPlugin for WasmcloudBroker {
 
         let Some(owner) = item.workload_owner().cloned() else {
             anyhow::bail!(
-                "workload {}/{} imports wasmcloud:broker, but its control plane named no owner \
-                 for it, so no broker grant can name it",
+                "workload {}/{} imports a wasmcloud:secrets broker interface, but its control \
+                 plane named no owner for it, so no broker grant can name it",
                 item.workload_namespace(),
                 item.workload_name(),
             );
