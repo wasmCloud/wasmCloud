@@ -1,0 +1,29 @@
+# Point the runtime-operator chart at a NATS server it does not install.
+#
+# The client certificates here come from the external server's CA, so the
+# chart's own certificate generation is turned off and the Secrets it would
+# have created must exist beforehand. See README.md for the full walkthrough.
+nats:
+  enabled: false
+
+global:
+  nats:
+    schedulerUrl: tls://nats.nats.svc.cluster.local:4222
+    dataUrl: tls://nats.nats.svc.cluster.local:4222
+  tls:
+    enabled: true
+  certificates:
+    generate: false
+
+# The gateway is deprecated as of 2.0.3 and HTTP routing is handled by the
+# operator; matching values.local.yaml.
+gateway:
+  enabled: false
+
+runtime:
+  hostGroups:
+    - name: default
+      replicas: 1
+      http:
+        enabled: true
+        port: 9191
