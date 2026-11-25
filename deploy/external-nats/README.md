@@ -112,6 +112,8 @@ config:
     tls:
       enabled: true
       secretName: nats-server-tls
+      merge:
+        verify: true
 tlsCA:
   enabled: true
   secretName: nats-ca-bundle
@@ -163,7 +165,9 @@ runtime-operator |tls 1.3 |subs 2
 
 `values.external-nats-auth.yaml` keeps TLS off and passes credentials through
 mounts plus `extraArgs`. Passwords are given to the operator and the hosts as
-files, so they never appear in the pod's command line.
+files, so they never appear in the pod's command line. This plaintext setup is
+intended for local development such as kind; use it with TLS when the NATS
+server is reachable outside that local test environment.
 
 ### 1. Install the external NATS
 
@@ -238,8 +242,9 @@ kubectl exec -n nats deploy/nats-box -- \
   external server does not trust that CA, so it refuses every handshake
   (`tls: bad certificate` for the operator, `tls: unknown certificate authority`
   for the hosts) and neither the operator nor a host ever connects. Either
-  supply certificates from the server's CA as above, or keep the chart's CA and
-  have the external server trust it.
+  supply certificates from the server's CA as above, or make the server
+  certificate come from the chart's CA too. Trusting only the client CA on the
+  server is not enough because the clients must also trust the server.
 - **JetStream is not required by the control plane.** With the credentials
   scenario above and JetStream disabled on the server, the operator connects,
   the host registers and the `Host` reports `READY True`. Workloads that use the

@@ -24,3 +24,6 @@ runtime:
   hostGroups:
     - name: default
       replicas: 1
+      http:
+        enabled: true
+        port: 9191
