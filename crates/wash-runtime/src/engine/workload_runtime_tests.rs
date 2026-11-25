@@ -292,6 +292,11 @@ struct RecordingPlugin {
     unbind_gate: Option<Arc<tokio::sync::Semaphore>>,
     entered: tokio::sync::Notify,
     overrides: WitWorld,
+    /// The workload it was handed, kept as a plugin may keep it.
+    kept: Mutex<Option<ResolvedWorkload>>,
+    /// A path whose presence the plugin records when it is unbound.
+    scratch: Option<std::path::PathBuf>,
+    saw_scratch: Mutex<Option<bool>>,
 }
 
 impl RecordingPlugin {
@@ -305,6 +310,9 @@ impl RecordingPlugin {
             unbind_gate: None,
             entered: tokio::sync::Notify::new(),
             overrides: WitWorld::default(),
+            kept: Mutex::default(),
+            scratch: None,
+            saw_scratch: Mutex::default(),
         }
     }
 
@@ -367,9 +375,13 @@ impl HostPlugin for RecordingPlugin {
         } else {
             assert!(workload.components.read().await[id].metadata.is_sealed());
         }
+        *self.kept.lock().unwrap() = Some(workload.clone());
         self.callback(Callback::Resolved)
     }
     async fn on_workload_unbind(&self, _: &str, _: WitInterfaces<'_>) -> anyhow::Result<()> {
+        if let Some(scratch) = &self.scratch {
+            *self.saw_scratch.lock().unwrap() = Some(scratch.exists());
+        }
         self.entered.notify_one();
         if let Some(gate) = &self.unbind_gate {
             gate.acquire().await?.forget();
@@ -457,8 +469,120 @@ async fn every_failed_plugin_callback_releases_component_and_service_bindings() 
     Ok(())
 }
 
+/// A stop removes the workload's scratch at once, while something such as a
+/// plugin still holds the workload.
+#[tokio::test]
+async fn release_removes_scratch_while_the_workload_is_held() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let resources = WorkloadResources::default();
+    let mut resolved = requesting(&[], false)
+        .with_scratch(Some(scratch))
+        .resolve_for_start(
+            None,
+            &Default::default(),
+            &crate::host::HostRef::detached(),
+            &Default::default(),
+            Some(&resources),
+        )
+        .await?;
+    resources.commit(&mut resolved);
+    WorkloadResources::for_teardown(&resolved)
+        .release("contracts")
+        .await?;
+    assert!(
+        !dir.exists(),
+        "the stop left the scratch to the last handle"
+    );
+    Ok(())
+}
+
+/// A stop removes the scratch after the plugins are unbound, as the unjournaled
+/// teardown does, and also when a plugin unbind fails.
+#[tokio::test]
+async fn release_removes_scratch_after_unbinding_even_on_failure() -> anyhow::Result<()> {
+    for fail in [false, true] {
+        let tmp = tempfile::tempdir()?;
+        let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+        let dir = scratch.path().to_path_buf();
+        let events = Arc::default();
+        let mut plugin = RecordingPlugin::new("recording", API, &events);
+        plugin.scratch = Some(dir.clone());
+        if fail {
+            plugin.unbind_failures.store(1, Ordering::SeqCst);
+        }
+        let plugin = Arc::new(plugin);
+        let registered = HashMap::from([("recording", Arc::clone(&plugin) as Arc<dyn HostPlugin>)]);
+        let resources = WorkloadResources::default();
+        let mut resolved = requesting(&[API], false)
+            .with_scratch(Some(scratch))
+            .resolve_for_start(
+                Some(&registered),
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+                Some(&resources),
+            )
+            .await?;
+        resources.commit(&mut resolved);
+        let released = WorkloadResources::for_teardown(&resolved)
+            .release("contracts")
+            .await;
+        plugin.kept.lock().unwrap().take();
+        assert_eq!(released.is_err(), fail, "{released:?}");
+        assert_eq!(
+            *plugin.saw_scratch.lock().unwrap(),
+            Some(true),
+            "fail={fail}: the scratch was gone before the plugin was unbound"
+        );
+        assert!(!dir.exists(), "fail={fail}: the stop left the scratch");
+    }
+    Ok(())
+}
+
+/// A plugin may keep the workload it is handed. When the resolve fails after
+/// that, the kept copy reads as released and its scratch is gone.
+#[tokio::test]
+async fn failed_resolve_releases_the_workload_a_plugin_kept() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let events = Arc::default();
+    let mut plugin = RecordingPlugin::new("recording", API, &events);
+    plugin.fail = Some(Callback::Resolved);
+    let plugin = Arc::new(plugin);
+    let plugins = HashMap::from([("recording", Arc::clone(&plugin) as Arc<dyn HostPlugin>)]);
+    requesting(&[API], false)
+        .with_scratch(Some(scratch))
+        .resolve(
+            Some(&plugins),
+            &Default::default(),
+            &crate::host::HostRef::detached(),
+            &Default::default(),
+        )
+        .await
+        .unwrap_err();
+    let kept = plugin
+        .kept
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the plugin was handed the workload");
+    assert!(
+        kept.released(),
+        "the failed resolve left the workload open to dispatch"
+    );
+    assert!(
+        !dir.exists(),
+        "the failed resolve left the scratch to the last handle"
+    );
+    Ok(())
+}
+
 async fn journaled_workload(
     plugins: &[Arc<RecordingPlugin>],
+    scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
 ) -> anyhow::Result<(ResolvedWorkload, WorkloadResources)> {
     let registered = plugins
         .iter()
@@ -467,6 +591,7 @@ async fn journaled_workload(
     let interfaces = plugins.iter().map(|p| p.interface).collect::<Vec<_>>();
     let resources = WorkloadResources::default();
     let mut resolved = requesting(&interfaces, false)
+        .with_scratch(scratch)
         .resolve_for_start(
             Some(&registered),
             &Default::default(),
@@ -486,7 +611,7 @@ async fn concurrent_cleanup_retries_only_the_failed_plugin_in_reverse_bind_order
     let first = Arc::new(RecordingPlugin::new("first", API, &events));
     let last = Arc::new(RecordingPlugin::new("last", MIDDLE, &events));
     last.unbind_failures.store(1, Ordering::SeqCst);
-    let (resolved, _) = journaled_workload(&[first, last]).await?;
+    let (resolved, _) = journaled_workload(&[first, last], None).await?;
     assert_eq!(resolved.teardown_bindings.len(), 2);
     let resources = WorkloadResources::for_teardown(&resolved);
     events.lock().unwrap().clear();
@@ -505,15 +630,21 @@ async fn concurrent_cleanup_retries_only_the_failed_plugin_in_reverse_bind_order
     Ok(())
 }
 
+/// A cleanup cancelled while a plugin unbinds keeps what is left, the scratch
+/// among it: the retry removes the scratch while a clone of the workload is held.
 #[tokio::test]
-async fn cancelled_cleanup_retains_the_unfinished_binding() -> anyhow::Result<()> {
+async fn cancelled_cleanup_retains_the_unfinished_binding_and_scratch() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
     let events = Arc::default();
     let first = Arc::new(RecordingPlugin::new("first", API, &events));
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let mut last = RecordingPlugin::new("last", MIDDLE, &events);
     last.unbind_gate = Some(Arc::clone(&gate));
     let last = Arc::new(last);
-    let (resolved, resources) = journaled_workload(&[first, Arc::clone(&last)]).await?;
+    let (resolved, resources) =
+        journaled_workload(&[first, Arc::clone(&last)], Some(scratch)).await?;
     events.lock().unwrap().clear();
     let task = tokio::spawn({
         let resources = resources.clone();
@@ -526,6 +657,327 @@ async fn cancelled_cleanup_retains_the_unfinished_binding() -> anyhow::Result<()
     resources.release("contracts").await?;
     assert_eq!(*events.lock().unwrap(), ["last:Unbind", "first:Unbind"]);
     assert!(resolved.released());
+    assert!(
+        !dir.exists(),
+        "the retry lost the scratch while a clone of the workload held it"
+    );
+    Ok(())
+}
+
+/// Holds a scratch's removal from another thread, as a large directory would.
+struct SlowRemoval {
+    finish: std::sync::mpsc::Sender<()>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl SlowRemoval {
+    fn start(scratch: &Arc<crate::engine::scratch::ScratchDir>) -> Self {
+        let (held, is_held) = std::sync::mpsc::channel();
+        let (finish, finished) = std::sync::mpsc::channel::<()>();
+        // The lock alone, so the test may still drop the last handle.
+        let lock = scratch.removal_lock();
+        let thread = std::thread::spawn(move || {
+            let _removal = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            held.send(()).unwrap();
+            // Bounded, so a removal run on the worker ends as a finished wait.
+            let _ = finished.recv_timeout(Duration::from_secs(5));
+        });
+        is_held.recv().unwrap();
+        Self { finish, thread }
+    }
+
+    fn finish(self) {
+        let _ = self.finish.send(());
+        self.thread.join().unwrap();
+    }
+}
+
+async fn gone(dir: &std::path::Path) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while dir.exists() {
+        if tokio::time::Instant::now() > deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    true
+}
+
+/// A stop removes the scratch on the blocking pool; a cancelled stop's removal
+/// still finishes while a clone is held, and the retry removes nothing again.
+#[tokio::test]
+async fn a_stop_removes_scratch_off_the_worker_and_a_cancelled_removal_finishes()
+-> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let (_held, resources) = journaled_workload(&[], Some(Arc::clone(&scratch))).await?;
+    let slow = SlowRemoval::start(&scratch);
+    let waited =
+        tokio::time::timeout(Duration::from_millis(500), resources.release("contracts")).await;
+    assert!(
+        waited.is_err(),
+        "the stop held its worker through the removal"
+    );
+    assert!(dir.exists());
+    slow.finish();
+    assert!(
+        gone(&dir).await,
+        "the cancelled stop's removal never finished"
+    );
+    std::fs::create_dir(&dir)?;
+    std::fs::write(dir.join("data"), "the next workload's")?;
+    resources.release("contracts").await?;
+    assert!(
+        dir.join("data").exists(),
+        "the retried stop removed the directory again"
+    );
+    assert!(resources.state.lock().unwrap().scratch.is_none());
+    Ok(())
+}
+
+/// Dropping the last handle on a runtime leaves the removal to the blocking
+/// pool, which holds the host directory until the removal finishes.
+#[tokio::test]
+async fn dropping_the_last_handle_removes_scratch_off_the_worker() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let host = dir.parent().expect("the host directory").to_path_buf();
+    let slow = SlowRemoval::start(&scratch);
+    let started = std::time::Instant::now();
+    drop(scratch);
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "the drop held its worker through the removal"
+    );
+    assert!(
+        dir.exists(),
+        "the host directory went before the drop's removal ran"
+    );
+    slow.finish();
+    assert!(gone(&dir).await, "the drop's removal never finished");
+    assert!(gone(&host).await, "the removal never let go of the root");
+    Ok(())
+}
+
+/// A failed scratch removal stays a pending step, and the retried stop removes it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_scratch_removal_stays_pending_for_the_retry() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    std::fs::create_dir(dir.join("sub"))?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500))?;
+    let (_held, resources) = journaled_workload(&[], Some(scratch)).await?;
+    let first = resources.release("contracts").await;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    first?;
+    if !dir.exists() {
+        return Ok(()); // root ignores the mode
+    }
+    assert!(resources.state.lock().unwrap().scratch.is_some());
+    resources.release("contracts").await?;
+    assert!(
+        !dir.exists(),
+        "the failed removal was dropped from the journal"
+    );
+    assert!(resources.state.lock().unwrap().scratch.is_none());
+    Ok(())
+}
+
+/// Stands in for the volume handles a live workload holds open, which Windows
+/// will not remove a directory under: read-only until this drops with the
+/// workload's last handle, and the removal then takes a while.
+#[cfg(unix)]
+struct HeldOpen(Arc<crate::engine::scratch::ScratchDir>);
+
+#[cfg(unix)]
+impl HostPlugin for HeldOpen {
+    fn id(&self) -> &'static str {
+        "held-open"
+    }
+    fn world(&self) -> WitWorld {
+        WitWorld::default()
+    }
+}
+
+#[cfg(unix)]
+impl HeldOpen {
+    fn new(scratch: Arc<crate::engine::scratch::ScratchDir>) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        Self(scratch)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HeldOpen {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(self.0.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let slow = SlowRemoval::start(&self.0);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            slow.finish();
+        });
+    }
+}
+
+/// Adds a [`HeldOpen`] to the workload's component as plugin state, so it drops
+/// with the workload's components.
+#[cfg(unix)]
+#[derive(Default)]
+struct HoldsScratchOpen {
+    scratch: Mutex<Option<Arc<crate::engine::scratch::ScratchDir>>>,
+    dir: Mutex<Option<std::path::PathBuf>>,
+}
+
+#[cfg(unix)]
+#[async_trait::async_trait]
+impl HostPlugin for HoldsScratchOpen {
+    fn id(&self) -> &'static str {
+        "holds-scratch-open"
+    }
+    fn world(&self) -> WitWorld {
+        WitWorld {
+            imports: HashSet::new(),
+            exports: HashSet::from([WitInterface::from(API)]),
+        }
+    }
+    async fn on_workload_bind(
+        &self,
+        workload: &UnresolvedWorkload,
+        _: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        *self.dir.lock().unwrap() = workload.scratch.as_ref().map(|s| s.path().to_path_buf());
+        *self.scratch.lock().unwrap() = workload.scratch.clone();
+        Ok(())
+    }
+    async fn on_workload_item_bind<'a>(
+        &self,
+        item: &mut WorkloadItem<'a>,
+        _: WitInterfaces<'_>,
+    ) -> anyhow::Result<()> {
+        if let Some(scratch) = self.scratch.lock().unwrap().take() {
+            item.add_plugin("held-open", Arc::new(HeldOpen::new(scratch)));
+        }
+        item.linker()?
+            .instance(API)?
+            .func_wrap("f", |_, (): ()| Ok(()))?;
+        Ok(())
+    }
+}
+
+/// A stop returns once the scratch is gone, also where the workload's own open
+/// handles block the removal until they close, as on Windows.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stop_removes_scratch_its_own_handles_held_open() -> anyhow::Result<()> {
+    use crate::host::HostApi as _;
+    let tmp = tempfile::tempdir()?;
+    let plugin = Arc::new(HoldsScratchOpen::default());
+    let host = crate::host::HostBuilder::new()
+        .with_engine(
+            crate::engine::Engine::builder()
+                .with_scratch_root(tmp.path())
+                .build()?,
+        )
+        .with_plugin(Arc::clone(&plugin) as Arc<dyn HostPlugin>)?
+        .build()?;
+    let wat = format!(r#"(component (import "{API}" (instance (export "f" (func)))))"#);
+    let started = host
+        .workload_start(crate::types::WorkloadStartRequest {
+            workload_id: "held-open".to_string(),
+            workload: crate::types::Workload {
+                namespace: "test".to_string(),
+                name: "held-open".to_string(),
+                annotations: HashMap::new(),
+                service: None,
+                components: vec![crate::types::Component {
+                    name: "caller".to_string(),
+                    bytes: wat::parse_str(&wat)?.into(),
+                    ..Default::default()
+                }],
+                host_interfaces: vec![WitInterface::from(API)],
+                volumes: vec![crate::types::Volume {
+                    name: "scratch".to_string(),
+                    volume_type: crate::types::VolumeType::EmptyDir(
+                        crate::types::EmptyDirVolume {},
+                    ),
+                }],
+            },
+        })
+        .await?;
+    assert_eq!(
+        started.workload_status.workload_state,
+        crate::types::WorkloadState::Running,
+        "{}",
+        started.workload_status.message
+    );
+    let dir = plugin
+        .dir
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the workload's scratch");
+    host.workload_stop(crate::types::WorkloadStopRequest {
+        workload_id: "held-open".to_string(),
+    })
+    .await?;
+    assert!(
+        !dir.exists(),
+        "the stop returned before the workload's scratch was removed"
+    );
+    Ok(())
+}
+
+/// A rolled-back resolve removes the scratch on the blocking pool too, and a
+/// removal whose resolve is cancelled still finishes.
+#[tokio::test]
+async fn a_rollback_removes_scratch_off_the_worker_and_a_cancelled_removal_finishes()
+-> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let events = Arc::default();
+    let mut plugin = RecordingPlugin::new("recording", API, &events);
+    plugin.fail = Some(Callback::Resolved);
+    let plugins = HashMap::from([("recording", Arc::new(plugin) as Arc<dyn HostPlugin>)]);
+    let slow = SlowRemoval::start(&scratch);
+    let waited = tokio::time::timeout(
+        Duration::from_millis(500),
+        requesting(&[API], false)
+            .with_scratch(Some(scratch))
+            .resolve(
+                Some(&plugins),
+                &Default::default(),
+                &crate::host::HostRef::detached(),
+                &Default::default(),
+            ),
+    )
+    .await;
+    assert!(
+        waited.is_err(),
+        "the rollback held its worker through the removal"
+    );
+    assert!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.ends_with(":Unbind")),
+        "the rollback never reached the removal"
+    );
+    slow.finish();
+    assert!(
+        gone(&dir).await,
+        "the cancelled rollback's removal never finished"
+    );
     Ok(())
 }
 
@@ -973,6 +1425,8 @@ async fn wasi_overrides_bind_last_and_restore_shadowing_after_an_error() -> anyh
 struct RecordingHttp {
     resolved: Mutex<Vec<String>>,
     unbinds: AtomicUsize,
+    /// How many unbinds fail before one succeeds.
+    unbind_failures: AtomicUsize,
     fail_resolved: bool,
 }
 
@@ -1004,6 +1458,10 @@ impl crate::host::http::HostHandler for RecordingHttp {
     }
     async fn on_workload_unbind(&self, _: &str) -> anyhow::Result<()> {
         self.unbinds.fetch_add(1, Ordering::SeqCst);
+        let failing = self
+            .unbind_failures
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        ensure!(failing.is_err(), "HTTP unbind refused");
         Ok(())
     }
     fn outgoing_request(
@@ -1095,6 +1553,93 @@ async fn http_registration_uses_manifest_order_and_failed_registration_rolls_bac
             1
         );
         assert_eq!(recording.unbinds.load(Ordering::SeqCst), 1);
+    }
+    Ok(())
+}
+
+/// A stop whose HTTP unbind fails keeps the scratch, since the route still
+/// serves requests from it; the retried stop removes it once the route is gone.
+#[tokio::test]
+async fn a_failed_http_unbind_keeps_the_scratch_for_the_retry() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let scratch = crate::engine::scratch::ScratchRoot::open(tmp.path())?.workload_dir()?;
+    let dir = scratch.path().to_path_buf();
+    let recording = Arc::new(RecordingHttp::default());
+    recording.unbind_failures.store(1, Ordering::SeqCst);
+    let handler: Arc<dyn crate::host::http::HostHandler> = recording.clone();
+    let http = r#"(component
+        (instance $http)
+        (export "wasi:http/incoming-handler@0.2.0" (instance $http)))"#;
+    let resources = WorkloadResources::default();
+    let mut resolved = UnresolvedWorkload::new(
+        "contracts",
+        "contracts",
+        "test",
+        None,
+        [component("served", http)],
+        vec![WitInterface::from("wasi:http/incoming-handler@0.2.0")],
+    )
+    .with_scratch(Some(scratch))
+    .resolve_for_start(
+        None,
+        &Default::default(),
+        &crate::host::HostRef::from_handler(&handler),
+        &Default::default(),
+        Some(&resources),
+    )
+    .await?;
+    resources.commit(&mut resolved);
+    assert_eq!(*recording.resolved.lock().unwrap(), ["served"]);
+
+    let stopped = resources.release("contracts").await;
+    assert!(stopped.is_err(), "{stopped:?}");
+    assert!(
+        dir.exists(),
+        "the stop removed the scratch while the route was still registered"
+    );
+    resources.release("contracts").await?;
+    assert_eq!(recording.unbinds.load(Ordering::SeqCst), 2);
+    assert!(!dir.exists(), "the retried stop left the scratch");
+    Ok(())
+}
+
+/// The unjournaled teardown unbinds HTTP too: the rollback of a failed HTTP
+/// registration, and a direct release as a failed workload gets.
+#[tokio::test]
+async fn the_unjournaled_teardown_unbinds_http() -> anyhow::Result<()> {
+    for fail_registration in [true, false] {
+        let recording = Arc::new(RecordingHttp {
+            fail_resolved: fail_registration,
+            ..Default::default()
+        });
+        let handler: Arc<dyn crate::host::http::HostHandler> = recording.clone();
+        let http = r#"(component
+            (instance $http)
+            (export "wasi:http/incoming-handler@0.2.0" (instance $http)))"#;
+        let resolved = UnresolvedWorkload::new(
+            "contracts",
+            "contracts",
+            "test",
+            None,
+            [component("served", http)],
+            vec![WitInterface::from("wasi:http/incoming-handler@0.2.0")],
+        )
+        .resolve(
+            None,
+            &Default::default(),
+            &crate::host::HostRef::from_handler(&handler),
+            &Default::default(),
+        )
+        .await;
+        assert_eq!(resolved.is_err(), fail_registration);
+        if let Ok(resolved) = resolved {
+            resolved.release_unjournaled().await;
+        }
+        assert_eq!(
+            recording.unbinds.load(Ordering::SeqCst),
+            1,
+            "fail_registration={fail_registration}: the route was left registered"
+        );
     }
     Ok(())
 }

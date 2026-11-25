@@ -1595,15 +1595,15 @@ impl ResolvedWorkload {
 
     /// Remove this workload's `emptyDir` volumes. Called on release, not left
     /// to whichever clone of this workload happens to drop last.
-    pub(crate) fn remove_scratch(&self) {
+    pub(crate) async fn remove_scratch(&self) {
         if let Some(scratch) = &self.scratch {
-            scratch.remove();
+            scratch.remove_on_blocking_pool().await;
         }
     }
 
     /// Let go of everything this workload is running, as the first step of
-    /// tearing it down (see `crate::host::release`, the one funnel every
-    /// teardown path goes through).
+    /// tearing it down (see [`WorkloadResources::release`] and
+    /// [`Self::release_unjournaled`], the two teardown paths).
     ///
     /// Dispatch stops here rather than when the plugins are unbound: a plugin
     /// still holding a [`DispatchTarget`] must not build — or park — an
@@ -1616,6 +1616,20 @@ impl ResolvedWorkload {
         // is about to be aborted.
         self.service_calls.shutdown();
         self.stop_service();
+    }
+
+    /// Unbind plugins and HTTP, then remove the scratch; a failed unbind is logged, not retried.
+    /// Keep the workload id reserved over the call; see [`crate::host::HostApi::workload_stop`].
+    pub(crate) async fn release_unjournaled(&self) {
+        self.begin_teardown();
+        if let Err(e) = self.unbind_all_plugins().await {
+            warn!(
+                workload_id = %self.id,
+                error = ?e,
+                "error unbinding plugins during teardown, continuing"
+            );
+        }
+        self.remove_scratch().await;
     }
 
     /// The service, for one of the few writes after resolution. Copies it
@@ -3139,6 +3153,9 @@ struct WorkloadResourceState {
     bindings: Vec<Option<PendingBinding>>,
     resolved: Option<ResolvedWorkload>,
     http_unbinds: Vec<PendingHttpUnbind>,
+    /// Pending until removed; kept apart from `resolved`, which goes once HTTP
+    /// is unbound.
+    scratch: Option<Arc<crate::engine::scratch::ScratchDir>>,
 }
 
 impl WorkloadResources {
@@ -3177,6 +3194,7 @@ impl WorkloadResources {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.resolved = Some(workload.clone());
+        state.scratch = workload.scratch.clone();
         state.http_unbinds = vec![PendingHttpUnbind::Workload];
         if workload.service.is_some() {
             state.http_unbinds.extend([
@@ -3190,13 +3208,15 @@ impl WorkloadResources {
         // Record each successful step before another await, so failed or
         // cancelled cleanup resumes without repeating completed callbacks.
         let _release = self.release_lock.lock().await;
-        let state = self
+        let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let mut failure = None;
-        if let Some(resolved) = &state.resolved {
+        // Taken, so this copy is gone before the scratch removal below: a live
+        // workload holds its volumes open, and Windows cannot remove them.
+        if let Some(resolved) = state.resolved.take() {
             resolved.begin_teardown();
             for component in resolved.components.read().await.values() {
                 component.instances.close();
@@ -3266,6 +3286,23 @@ impl WorkloadResources {
                     failure = Some(error);
                 }
             }
+        }
+        // Last, once HTTP is unbound: a live route still serves from it. A
+        // failed removal stays pending for a retry; it does not fail the stop.
+        let http_unbound = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .http_unbinds
+            .is_empty();
+        if http_unbound
+            && let Some(scratch) = &state.scratch
+            && scratch.remove_on_blocking_pool().await
+        {
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .scratch = None;
         }
         match failure {
             Some(error) => Err(error),
@@ -4164,7 +4201,7 @@ impl UnresolvedWorkload {
                 "failed to link components, unbinding all plugins"
             );
             if cleanup.is_none() {
-                let _ = resolved_workload.unbind_all_plugins().await;
+                resolved_workload.release_unjournaled().await;
             }
             bail!(e);
         }
@@ -4191,7 +4228,7 @@ impl UnresolvedWorkload {
                 "failed to resolve component volume mounts, unbinding all plugins"
             );
             if cleanup.is_none() {
-                let _ = resolved_workload.unbind_all_plugins().await;
+                resolved_workload.release_unjournaled().await;
             }
             bail!(e);
         }
@@ -4230,7 +4267,7 @@ impl UnresolvedWorkload {
                         "failed to notify plugin of resolved workload, unbinding all plugins"
                     );
                     if cleanup.is_none() {
-                        let _ = resolved_workload.unbind_all_plugins().await;
+                        resolved_workload.release_unjournaled().await;
                     }
                     bail!(e);
                 }
@@ -4249,7 +4286,7 @@ impl UnresolvedWorkload {
                 "failed to notify HTTP handler of resolved workload, unbinding all plugins"
             );
             if cleanup.is_none() {
-                let _ = resolved_workload.unbind_all_plugins().await;
+                resolved_workload.release_unjournaled().await;
             }
             bail!(e);
         }
