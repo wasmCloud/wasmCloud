@@ -162,10 +162,7 @@ let engine = Engine::builder()
     .build()?;
 let host = Host::builder()
     .with_engine(engine)
-    .with_config(HostConfig {
-        oci_cache_dir: Some("/var/cache/wash/oci".into()),
-        ..Default::default()
-    })
+    .with_config(HostConfig::default().with_oci_cache_dir(Some("/var/cache/wash/oci".into())))
     .build()?;
 # Ok(())
 # }
