@@ -1245,8 +1245,13 @@ impl PluginBindingSet {
         // label there would break named routing on every host that never wrote
         // a `host.plugins` entry, which is what makes `Deny` safe as the
         // default.
+        //
+        // Only a *named* binding closes the list. The unnamed binding is the
+        // plain-import default route, not one of the labels the operator
+        // serves, so declaring it alone leaves every label as it is with
+        // nothing declared.
         if binding != UNNAMED_BINDING
-            && !self.bindings.is_empty()
+            && self.named_binding_names().next().is_some()
             && !self.bindings.contains_key(binding)
         {
             findings.push(format!(
@@ -1638,11 +1643,20 @@ impl PluginBindingSet {
 
     /// `; this host serves ...` for an error, or nothing when it serves none.
     fn describe_available(&self) -> String {
-        if self.bindings.is_empty() {
+        let names: Vec<String> = self
+            .named_binding_names()
+            .map(|n| format!("`{n}`"))
+            .collect();
+        if names.is_empty() {
             return String::new();
         }
-        let names: Vec<String> = self.bindings.keys().map(|n| format!("`{n}`")).collect();
         format!("; it serves {}", names.join(", "))
+    }
+
+    /// The declared bindings a label can name: every one but the unnamed
+    /// binding, which is the plain-import default route.
+    pub(crate) fn named_binding_names(&self) -> impl Iterator<Item = &str> {
+        self.binding_names().filter(|name| *name != UNNAMED_BINDING)
     }
 }
 
@@ -2309,6 +2323,57 @@ mod tests {
             .to_string();
         assert!(err.contains("`shipping`"), "got: {err}");
         assert!(err.contains("it serves `orders`"), "got: {err}");
+    }
+
+    /// The unnamed binding is the plain-import default route, not a label the
+    /// operator serves: declaring only it leaves an undeclared label exactly
+    /// as it behaves with nothing declared — allowed, on the base.
+    #[test]
+    fn deny_declaring_only_the_unnamed_binding_leaves_labels_open() {
+        let set = PluginBindingSet::new("wasmcloud-nats")
+            .with_base(map(&[("servers", "nats://host:4222")]))
+            .with_binding(UNNAMED_BINDING, map(&[("subject-allow", "plain.>")]))
+            .with_workload_config(WorkloadConfigPolicy::Deny);
+
+        let resolved = set
+            .resolve(
+                "shipping",
+                &crate::wit::Config::new(),
+                &nats_schema(),
+                never_narrows(),
+            )
+            .unwrap();
+        assert_eq!(resolved.get("servers").unwrap(), "nats://host:4222");
+        assert!(
+            resolved.get("subject-allow").is_none(),
+            "an undeclared label takes the base, not the plain-import default"
+        );
+    }
+
+    /// Beside named bindings the list is closed by the named ones only, and
+    /// the refusal never lists the unnamed binding as an empty name.
+    #[test]
+    fn deny_refusal_beside_the_unnamed_binding_lists_only_named_bindings() {
+        let set = PluginBindingSet::new("wasmcloud-nats")
+            .with_binding(UNNAMED_BINDING, map(&[("subject-allow", "plain.>")]))
+            .with_binding("a", map(&[("subject-allow", "a.>")]))
+            .with_workload_config(WorkloadConfigPolicy::Deny);
+
+        let err = set
+            .resolve(
+                "b",
+                &crate::wit::Config::new(),
+                &nats_schema(),
+                never_narrows(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`b`"), "got: {err}");
+        assert!(err.contains("it serves `a` and"), "got: {err}");
+        assert!(
+            !err.contains("``"),
+            "the unnamed binding leaked into: {err}"
+        );
     }
 
     #[test]

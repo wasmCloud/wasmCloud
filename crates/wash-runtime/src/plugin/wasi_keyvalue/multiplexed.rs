@@ -9,6 +9,11 @@
 //! Each named import is resolved by a `lookup` closure to a [`KvBackend`]
 //! (the wasmtime "implements id"); the embedder-chosen id is threaded into
 //! every host method, including the `bucket` resource methods.
+//!
+//! A plain (unlabeled) import is left to the standalone `wasi-keyvalue` plugin
+//! unless this workload has a default (`""`) route here
+//! ([`Multiplexer::routes_unnamed`]): then the host routes it to this plugin,
+//! which links the plain instances to that route's backend.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -315,6 +320,12 @@ impl<'a> bindings::named_imports::wasi::keyvalue::batch::Host for ActiveCtx<'a> 
 const DEFAULT_BACKEND: &str = "in-memory";
 pub(crate) const MULTIPLEXED_KEYVALUE_ID: &str = "wasi-keyvalue-multiplexed";
 
+/// The instances a plain (unlabeled) `wasi:keyvalue` import links under — the
+/// names the standalone plugins define.
+const PLAIN_STORE: &str = "wasi:keyvalue/store@0.2.0-draft";
+const PLAIN_ATOMICS: &str = "wasi:keyvalue/atomics@0.2.0-draft";
+const PLAIN_BATCH: &str = "wasi:keyvalue/batch@0.2.0-draft";
+
 /// Page size for `list-keys` paging against the redis / NATS backends.
 const LIST_KEYS_BATCH_SIZE: usize = 1000;
 
@@ -401,6 +412,16 @@ impl HostPlugin for MultiplexedKeyValue {
         true
     }
 
+    /// A plain import comes here only when the workload has a default route
+    /// on this plugin; otherwise the standalone `wasi-keyvalue` plugin keeps it.
+    fn routes_unnamed_instance(
+        &self,
+        interface: &WitInterface,
+        declared: &crate::plugin::PluginBindingSet,
+    ) -> bool {
+        self.mux.routes_unnamed(interface, declared)
+    }
+
     async fn on_workload_item_bind<'a>(
         &self,
         item: &mut WorkloadItem<'a>,
@@ -434,6 +455,29 @@ impl HostPlugin for MultiplexedKeyValue {
             |name| self.mux.resolve(&registry, name),
             extract_active_ctx,
         )?;
+
+        // A plain import reaches this plugin only through the workload's
+        // default route (`routes_unnamed_instance`), and is the registry's `""`
+        // entry: link the plain instances to that one backend, the way a label
+        // links its own. Nothing else defines them, because the host hands a
+        // plain entry to exactly one plugin.
+        if let Some(default) = registry.get(crate::plugin::bindings::UNNAMED_BINDING) {
+            bindings::named_imports::wasi::keyvalue::store::add_to_linker_instance::<_, SharedCtx>(
+                &mut linker.instance(PLAIN_STORE)?,
+                default.clone(),
+                extract_active_ctx,
+            )?;
+            bindings::named_imports::wasi::keyvalue::atomics::add_to_linker_instance::<_, SharedCtx>(
+                &mut linker.instance(PLAIN_ATOMICS)?,
+                default.clone(),
+                extract_active_ctx,
+            )?;
+            bindings::named_imports::wasi::keyvalue::batch::add_to_linker_instance::<_, SharedCtx>(
+                &mut linker.instance(PLAIN_BATCH)?,
+                default.clone(),
+                extract_active_ctx,
+            )?;
+        }
         Ok(())
     }
 }
@@ -534,6 +578,29 @@ mod tests {
         assert!(dir.join("bucket").join("k").exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The plugin answers the host's default-route question for a plain
+    /// import through its multiplexer: a declared unnamed binding or a named
+    /// backend routes it here, nothing leaves it to the standalone
+    /// `wasi-keyvalue`.
+    #[test]
+    fn a_plain_import_routes_here_only_with_a_default_route() {
+        use crate::plugin::PluginBindingSet;
+        let plugin = MultiplexedKeyValue::new();
+        let plain = kv_iface(None, None);
+        assert!(
+            !plugin
+                .routes_unnamed_instance(&plain, &PluginBindingSet::new(MULTIPLEXED_KEYVALUE_ID))
+        );
+        let declared = PluginBindingSet::new(MULTIPLEXED_KEYVALUE_ID)
+            .with_binding(crate::plugin::bindings::UNNAMED_BINDING, Default::default());
+        assert!(plugin.routes_unnamed_instance(&plain, &declared));
+        // A plain entry naming its own backend is a route too.
+        assert!(plugin.routes_unnamed_instance(
+            &kv_iface(None, Some("redis")),
+            &PluginBindingSet::new(MULTIPLEXED_KEYVALUE_ID)
+        ));
     }
 
     #[tokio::test]
