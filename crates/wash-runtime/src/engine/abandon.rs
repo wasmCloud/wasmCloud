@@ -134,8 +134,6 @@ impl AbandonFlag {
         )))
     }
 
-    #[cfg(test)]
-    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn is_armed(&self) -> bool {
         self.armed_at().is_some()
     }

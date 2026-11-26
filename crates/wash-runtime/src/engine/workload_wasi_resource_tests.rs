@@ -216,6 +216,7 @@ async fn link_imports(
             &exports,
             &bound,
             Some(&id),
+            false,
         )
         .await?;
     assert!(linked.is_empty());

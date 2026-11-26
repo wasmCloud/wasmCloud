@@ -30,6 +30,10 @@ interface ops {
     /// must outlive the call until the returned stream drains.
     produce: async func(count: u64) -> stream<u8>;
 
+    /// Like `produce`, but traps after writing `count` bytes, before closing the
+    /// stream: the reader must not see the cut stream as finished.
+    produce-then-trap: async func(count: u64) -> stream<u8>;
+
     /// `stream<u32>` (non-`u8` element type) -> exercises `stream_factory` dispatch.
     sum: async func(data: stream<u32>) -> u64;
 
