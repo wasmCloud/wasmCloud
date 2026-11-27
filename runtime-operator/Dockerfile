@@ -11,6 +11,6 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /go/bin/runtime-operator ./cmd
 
-FROM cgr.dev/chainguard/static:latest@sha256:8658e9eaeb2294fa0e49b0667f7d66b4e21fa7690b8d2a4c30cd1d013ceb9eb7 AS release
+FROM cgr.dev/chainguard/static:latest@sha256:599c3cd7597b84aa149c4282beecc8c6d4e1cb5c95dc8d982e70cd0a2a9147a2 AS release
 COPY --from=builder /go/bin/runtime-operator /usr/local/bin/runtime-operator
 ENTRYPOINT ["/usr/local/bin/runtime-operator"]
