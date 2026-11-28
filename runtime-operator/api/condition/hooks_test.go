@@ -68,3 +68,19 @@ func TestReconcileHookOrderingAndFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestPostHookCanYieldForAnotherBatch(t *testing.T) {
+	scheme := runtime.NewScheme()
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &conditionedResource{})
+	obj := &conditionedResource{ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace, Name: testName}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).Build()
+	r := NewConditionedReconciler(c, scheme, obj, time.Minute)
+	r.AddPostHook(func(ctx context.Context, _ *conditionedResource) error {
+		ForceRequeue(ctx)
+		return nil
+	})
+	result, err := r.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+	if err != nil || result.RequeueAfter != time.Second {
+		t.Fatalf("post-hook did not schedule another batch: %+v %v", result, err)
+	}
+}

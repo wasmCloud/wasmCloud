@@ -102,7 +102,7 @@ var controllerSetups = []controllerSetup{
 	}},
 	{
 		name:    "workload-replica",
-		indexes: []string{hostIDIndex, workloadSchedulableHostsIndex, hostEnvironmentIndex, workloadUnplacedIndex},
+		indexes: []string{statusBucketIndex, hostIDIndex, workloadSchedulableHostsIndex, hostEnvironmentIndex, workloadUnplacedIndex},
 		setup: func(m *recordingManager, _ *runtime.Scheme) error {
 			return (&WorkloadReconciler{Client: m.GetClient()}).SetupWithManager(m)
 		},

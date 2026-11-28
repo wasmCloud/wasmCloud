@@ -1201,3 +1201,20 @@ pub mod workload_service_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+/// NATS subject: runtime.host.<host-id>.workload.status.batch.
+/// A complete response covers exactly the requested IDs. Each lookup uses the
+/// same authorization hook as workload.status. This is a bounded collection of
+/// observations, not an atomic snapshot of all workloads on a host.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WorkloadStatusBatchRequest {
+    /// Between 1 and 128 IDs, each at most 128 bytes.
+    #[prost(string, repeated, tag = "1")]
+    pub workload_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkloadStatusBatchResponse {
+    /// In request order. A missing workload has NOT_FOUND state; an absent entry
+    /// makes the response incomplete and must not be interpreted as healthy.
+    #[prost(message, repeated, tag = "1")]
+    pub workloads: ::prost::alloc::vec::Vec<WorkloadStatus>,
+}

@@ -7,11 +7,13 @@ package runtime
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"hash/fnv"
 	"net"
 	"reflect"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -95,16 +97,21 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		httpPort int32
 	}
 	endpoints := make(map[string]endpointInfo) // key = podIP
+	seenHosts := make(map[string]bool)
 
 	for i := range workloadList.Items {
 		workload := &workloadList.Items[i]
-		if !workload.Status.IsAvailable() {
+		if !workload.DeletionTimestamp.IsZero() || !workload.Status.IsAvailable() {
 			continue
 		}
 		if workload.Status.HostID == "" {
 			continue
 		}
 
+		if seenHosts[workload.Status.HostID] {
+			continue
+		}
+		seenHosts[workload.Status.HostID] = true
 		// Look up the Host CRD by HostID.
 		host, err := r.findHostByID(ctx, workload.Status.HostID)
 		if err != nil {
@@ -144,21 +151,6 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	sliceName := endpointSliceName(serviceName)
-
-	if len(endpoints) == 0 {
-		// No ready workloads for this service; delete our EndpointSlice if it exists.
-		es := &discoveryv1.EndpointSlice{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      sliceName,
-				Namespace: namespace,
-			},
-		}
-		if err := r.Delete(ctx, es); err != nil && !errors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("deleting empty EndpointSlice: %w", err)
-		}
-		log.Info("deleted EndpointSlice (no ready endpoints)", "endpointSlice", sliceName)
-		return ctrl.Result{}, nil
-	}
 
 	// Set the port to the first HTTPPort, since all Hosts within the same HostGroup have the same HTTPPort.
 	// Doing a range, since endpoints is a map object and can't use index.
@@ -217,39 +209,226 @@ func (r *WorkloadRouteReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 	sortEndpoints(desiredSlice.Endpoints)
 
-	existing := &discoveryv1.EndpointSlice{}
-	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: sliceName}, existing)
-	if errors.IsNotFound(err) {
-		if err := r.Create(ctx, desiredSlice); err != nil {
-			return ctrl.Result{}, fmt.Errorf("creating EndpointSlice: %w", err)
+	if err := r.syncSlices(ctx, desiredSlice); err != nil {
+		if stderrors.Is(err, errSliceNotYetCached) {
+			return ctrl.Result{RequeueAfter: time.Second}, nil
 		}
-		log.Info("created EndpointSlice", "endpointSlice", sliceName, "endpoints", len(endpoints))
-		return ctrl.Result{}, nil
-	}
-	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	sortEndpoints(existing.Endpoints)
-
-	if reflect.DeepEqual(existing.Labels, desiredSlice.Labels) &&
-		existing.AddressType == desiredSlice.AddressType &&
-		reflect.DeepEqual(existing.Ports, desiredSlice.Ports) &&
-		reflect.DeepEqual(existing.Endpoints, desiredSlice.Endpoints) {
-		return ctrl.Result{}, nil
-	}
-
-	// Update if the existing slice differs.
-	existing.Labels = desiredSlice.Labels
-	existing.AddressType = desiredSlice.AddressType
-	existing.Ports = desiredSlice.Ports
-	existing.Endpoints = desiredSlice.Endpoints
-	if err := r.Update(ctx, existing); err != nil {
-		return ctrl.Result{}, fmt.Errorf("updating EndpointSlice: %w", err)
-	}
-	log.Info("updated EndpointSlice", "endpointSlice", sliceName, "endpoints", len(endpoints))
-
 	return ctrl.Result{}, nil
+}
+
+// Preserve existing membership so deleting one endpoint changes only its slice.
+// Fill available capacity before allocating another bounded slice.
+func (r *WorkloadRouteReconciler) syncSlices(ctx context.Context, desired *discoveryv1.EndpointSlice) error {
+	// List by service name only and keep slices that carry the route-manager
+	// label or that this Service controls, so a slice whose label was removed
+	// is adopted and repaired rather than left advertising stale endpoints.
+	all := &discoveryv1.EndpointSliceList{}
+	if err := r.List(ctx, all, client.InNamespace(desired.Namespace),
+		client.MatchingLabels{discoveryv1.LabelServiceName: desired.Labels[discoveryv1.LabelServiceName]}); err != nil {
+		return err
+	}
+	// A slice another controller manages, such as the built-in one for a
+	// Service with a selector, is never adopted.
+	var ownerUID types.UID
+	if len(desired.OwnerReferences) > 0 {
+		ownerUID = desired.OwnerReferences[0].UID
+	}
+	list := &discoveryv1.EndpointSliceList{Items: make([]discoveryv1.EndpointSlice, 0, len(all.Items))}
+	for i := range all.Items {
+		if managesSlice(&all.Items[i], ownerUID) {
+			list.Items = append(list.Items, all.Items[i])
+		}
+	}
+	// Read the legacy deterministic name too, so damaged labels can be repaired.
+	legacy := &discoveryv1.EndpointSlice{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), legacy); err == nil {
+		found := false
+		for i := range list.Items {
+			if list.Items[i].Name == legacy.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			list.Items = append(list.Items, *legacy)
+		}
+	} else if !errors.IsNotFound(err) {
+		return err
+	}
+	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
+	remaining := make(map[string]discoveryv1.Endpoint, len(desired.Endpoints))
+	for _, ep := range desired.Endpoints {
+		remaining[ep.Addresses[0]] = ep
+	}
+	slices := make([]*discoveryv1.EndpointSlice, 0, len(list.Items))
+	occupied := make(map[string]bool)
+	for i := range list.Items {
+		current := &list.Items[i]
+		occupied[current.Name] = true
+		if len(current.OwnerReferences) > 0 && !reflect.DeepEqual(current.OwnerReferences, desired.OwnerReferences) {
+			if err := deleteObservedObject(ctx, r.Client, current); err != nil {
+				return err
+			}
+			continue
+		}
+		next := desired.DeepCopy()
+		next.Name = current.Name
+		next.ResourceVersion = current.ResourceVersion
+		next.Endpoints = nil
+		for _, ep := range current.Endpoints {
+			if len(ep.Addresses) != 1 || len(next.Endpoints) >= 100 {
+				continue
+			}
+			if wanted, ok := remaining[ep.Addresses[0]]; ok {
+				next.Endpoints = append(next.Endpoints, wanted)
+				delete(remaining, ep.Addresses[0])
+			}
+		}
+		slices = append(slices, next)
+	}
+	addresses := make([]string, 0, len(remaining))
+	for address := range remaining {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	slot := 0
+	for _, address := range addresses {
+		for slot < len(slices) && len(slices[slot].Endpoints) >= 100 {
+			slot++
+		}
+		if slot == len(slices) {
+			next := desired.DeepCopy()
+			next.Endpoints = nil
+			next.Name = freeSliceName(desired.Name, occupied)
+			slices = append(slices, next)
+		}
+		slices[slot].Endpoints = append(slices[slot].Endpoints, remaining[address])
+	}
+	return r.applySlices(ctx, list, slices, occupied)
+}
+
+// freeSliceName returns the first name for base, then base-1, base-2 and so
+// on, that is not in occupied, and marks it taken.
+func freeSliceName(base string, occupied map[string]bool) string {
+	for suffix := 0; ; suffix++ {
+		name := base
+		if suffix > 0 {
+			name = endpointSliceName(fmt.Sprintf("%s-%d", base, suffix))
+		}
+		if !occupied[name] {
+			occupied[name] = true
+			return name
+		}
+	}
+}
+
+// managesSlice reports whether this controller manages slice for the Service
+// with ownerUID: it carries the route-manager label, or that Service controls
+// it and no other controller claims it.
+func managesSlice(slice client.Object, ownerUID types.UID) bool {
+	labels := slice.GetLabels()
+	if labels[routeManagerLabel] == "true" {
+		return true
+	}
+	if _, managedElsewhere := labels[discoveryv1.LabelManagedBy]; managedElsewhere {
+		return false
+	}
+	owner := metav1.GetControllerOfNoCopy(slice)
+	return owner != nil && owner.UID == ownerUID
+}
+
+// managedSliceServiceRequest maps an EndpointSlice this controller manages to
+// its Service. Slices another controller manages map to nothing.
+func managedSliceServiceRequest(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	name := labels[discoveryv1.LabelServiceName]
+	if owner := metav1.GetControllerOfNoCopy(obj); owner != nil && owner.Kind == "Service" && owner.APIVersion == "v1" {
+		if !managesSlice(obj, owner.UID) {
+			return nil
+		}
+		name = owner.Name
+	} else if labels[routeManagerLabel] != "true" {
+		return nil
+	}
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: name}}}
+}
+
+// errSliceNotYetCached means a slice this controller created is not in its
+// cache yet. The pass is retried shortly rather than reported as a failure.
+var errSliceNotYetCached = stderrors.New("endpoint slice not yet in cache")
+
+// createSlice creates next, moving it to a free name when an object this
+// controller does not own already holds the generated one.
+func (r *WorkloadRouteReconciler) createSlice(ctx context.Context, next *discoveryv1.EndpointSlice, occupied map[string]bool) error {
+	base := next.Labels[discoveryv1.LabelServiceName]
+	for range 8 {
+		err := r.Create(ctx, next)
+		if !errors.IsAlreadyExists(err) {
+			return err
+		}
+		existing := &discoveryv1.EndpointSlice{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(next), existing); err != nil {
+			if errors.IsNotFound(err) {
+				// The cache has not seen the slice this name belongs to,
+				// most likely one an earlier pass just created.
+				return errSliceNotYetCached
+			}
+			return err
+		}
+		owner := metav1.GetControllerOfNoCopy(existing)
+		if owner != nil && len(next.OwnerReferences) > 0 && owner.UID == next.OwnerReferences[0].UID {
+			return errSliceNotYetCached
+		}
+		next.Name = freeSliceName(endpointSliceName(base), occupied)
+	}
+	return fmt.Errorf("no free EndpointSlice name for service %s", base)
+}
+
+func (r *WorkloadRouteReconciler) applySlices(
+	ctx context.Context, list *discoveryv1.EndpointSliceList, slices []*discoveryv1.EndpointSlice, occupied map[string]bool,
+) error {
+	existing := make(map[string]*discoveryv1.EndpointSlice, len(list.Items))
+	for i := range list.Items {
+		existing[list.Items[i].Name] = &list.Items[i]
+	}
+	for _, next := range slices {
+		current := existing[next.Name]
+		if len(next.Endpoints) == 0 {
+			if current != nil {
+				if err := deleteObservedObject(ctx, r.Client, current); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		sort.Slice(next.Endpoints, func(i, j int) bool { return next.Endpoints[i].Addresses[0] < next.Endpoints[j].Addresses[0] })
+		if current == nil {
+			if err := r.createSlice(ctx, next, occupied); err != nil {
+				return err
+			}
+			continue
+		}
+		sort.Slice(current.Endpoints, func(i, j int) bool {
+			if len(current.Endpoints[i].Addresses) == 0 || len(current.Endpoints[j].Addresses) == 0 {
+				return len(current.Endpoints[i].Addresses) < len(current.Endpoints[j].Addresses)
+			}
+			return current.Endpoints[i].Addresses[0] < current.Endpoints[j].Addresses[0]
+		})
+		if reflect.DeepEqual(current.Labels, next.Labels) && reflect.DeepEqual(current.OwnerReferences, next.OwnerReferences) && reflect.DeepEqual(current.Endpoints, next.Endpoints) && reflect.DeepEqual(current.Ports, next.Ports) && current.AddressType == next.AddressType {
+			continue
+		}
+		current.Labels, current.OwnerReferences = next.Labels, next.OwnerReferences
+		current.Endpoints, current.Ports, current.AddressType = next.Endpoints, next.Ports, next.AddressType
+		if err := r.Update(ctx, current); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // findPodByHostname locates the HostPodLabel-bearing Pod whose OS hostname
@@ -356,8 +535,25 @@ func (r *WorkloadRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	}
 
+	// Only Services some Workload routes through need a pass; the rest of the
+	// cluster's Services are not this controller's concern.
+	referencedServiceRequest := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		workloads := &runtimev1alpha1.WorkloadList{}
+		if err := r.List(ctx, workloads, client.InNamespace(obj.GetNamespace()),
+			client.MatchingFields{workloadKubernetesServiceIndex: obj.GetName()}); err != nil || len(workloads.Items) == 0 {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(obj)}}
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
-		Watches(&runtimev1alpha1.Workload{}, handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest)).
+		Watches(&runtimev1alpha1.Workload{}, coalesce(handler.EnqueueRequestsFromMapFunc(workloadToServiceRequest))).
+		Watches(&corev1.Service{}, coalesce(handler.EnqueueRequestsFromMapFunc(referencedServiceRequest))).
+		// A slice reaching the cache, or changing outside this controller,
+		// gets a pass: one planned against a cache that had not yet seen a
+		// slice it created can publish an endpoint twice, and the next pass
+		// removes the duplicate.
+		Watches(&discoveryv1.EndpointSlice{}, coalesce(handler.EnqueueRequestsFromMapFunc(managedSliceServiceRequest))).
 		Named("workload-route").
 		Complete(r)
 }

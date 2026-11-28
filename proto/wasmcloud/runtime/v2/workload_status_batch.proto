@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package wasmcloud.runtime.v2;
+
+import "wasmcloud/runtime/v2/workload_service.proto";
+
+// NATS subject: runtime.host.<host-id>.workload.status.batch.
+// A complete response covers exactly the requested IDs. Each lookup uses the
+// same authorization hook as workload.status. This is a bounded collection of
+// observations, not an atomic snapshot of all workloads on a host.
+message WorkloadStatusBatchRequest {
+  // Between 1 and 128 IDs, each at most 128 bytes.
+  repeated string workload_ids = 1;
+}
+
+message WorkloadStatusBatchResponse {
+  // In request order. A missing workload has NOT_FOUND state; an absent entry
+  // makes the response incomplete and must not be interpreted as healthy.
+  repeated WorkloadStatus workloads = 1;
+}

@@ -39,7 +39,7 @@ func TestReplicaSetScaleUpWithLaggingCacheAndMissingSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := fake.NewClientBuilder().WithScheme(scheme).
+	server := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).
 		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetOwnerIndex, replicaSetOwnerIndexValue(gvk)).
 		WithIndex(&runtimev1alpha1.Workload{}, workloadReplicaSetRevisionIndex, replicaSetRevisionIndexValue(gvk)).
 		Build()
@@ -64,6 +64,10 @@ func TestReplicaSetScaleUpWithLaggingCacheAndMissingSlot(t *testing.T) {
 	}
 	if len(workloads.Items) != 2 {
 		t.Fatalf("created %d replicas through stale cache, want two", len(workloads.Items))
+	}
+	workloads.Items[0].Finalizers = nil
+	if err := server.Update(t.Context(), &workloads.Items[0]); err != nil {
+		t.Fatal(err)
 	}
 	if err := server.Delete(t.Context(), &workloads.Items[0]); err != nil {
 		t.Fatal(err)
